@@ -26,7 +26,7 @@ interface ICortexRegistry {
 ///           closes for that epoch. Calling fundEpoch() before the window closes reverts.
 ///         - Per epoch the coordinator posts a Merkle root of (miner, bonusBOTCOIN, capBOTCOIN)
 ///           leaves. On-chain verification checks bonus ≤ cap.
-///         - MERGE_MULTIPLIER stored as basis points; 15000 = 1.5×. Cap = (MERGE_MULTIPLIER − 10000)
+///         - MERGE_MULTIPLIER stored as basis points; 20000 = 2.0×. Cap = (MERGE_MULTIPLIER − 10000)
 ///           × claimBase / 10000 is encoded into each Merkle leaf (capBOTCOIN field).
 ///
 ///         The SWCP receipt path and BotcoinMiningV3 are NOT touched.
@@ -36,7 +36,7 @@ contract CortexMergeBonus is Ownable, Pausable, ReentrancyGuard {
     // ── Constants ─────────────────────────────────────────────────────────
 
     uint256 public constant MAX_CLAIM_EPOCHS    = 64;
-    uint256 public constant MERGE_MULTIPLIER_BPS = 15000; // 1.5× in basis points
+    uint256 public constant MERGE_MULTIPLIER_BPS = 20000; // 2.0× in basis points (V0 setting)
 
     // ── Immutables ────────────────────────────────────────────────────────
 

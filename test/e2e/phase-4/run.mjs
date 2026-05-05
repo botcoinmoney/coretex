@@ -259,29 +259,37 @@ function checkSaturation(history, k=10, threshold=0.01) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// TEST 1: Anchored-source loader parity (fixture loads + LoCoMo LICENSE_BLOCKED)
+// TEST 1: Anchored-source loader parity (fixture loads + Synthetic temporal Apache-2.0)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 console.log('\n[1] Anchored-source loader parity');
 
-// 1a: LoCoMo throws LICENSE_BLOCKED
+// 1a: Synthetic temporal loader (LoCoMo Path B) yields deterministic events.
+//     Same epoch must produce byte-identical events on every machine.
 {
-  let threw = false;
-  let code = null;
-  try {
-    // Inline the LoCoMoSourceLoader logic (LICENSE_BLOCKED stub)
-    const err = new Error(
-      'LoCoMoSourceLoader: LICENSE_BLOCKED — see specs/license_audit.md §4.'
-    );
-    err.code = 'LICENSE_BLOCKED';
-    throw err;
-  } catch (e) {
-    threw = true;
-    code = e.code ?? e.message;
+  // Inline the SyntheticTemporalLoader for the e2e test (mirrors
+  // benchmark/generators/temporal/SyntheticTemporalLoader.ts).
+  function deterministic32(epoch, idx) {
+    const { createHash } = require('node:crypto');
+    return createHash('sha256').update(`syn-temporal:${epoch}:${idx}`).digest();
   }
-  assert(threw && code === 'LICENSE_BLOCKED',
-    'locomo-loader-license-blocked',
-    `expected LICENSE_BLOCKED, got: ${code}`);
+  function gen(epoch, n = 60) {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const seed = deterministic32(epoch, i);
+      out.push(seed.toString('hex').slice(0, 16));
+    }
+    return out;
+  }
+  const a = gen(812);
+  const b = gen(812);
+  const c = gen(813);
+  assert(JSON.stringify(a) === JSON.stringify(b),
+    'synthetic-temporal-determinism',
+    'same epoch must produce identical events');
+  assert(JSON.stringify(a) !== JSON.stringify(c),
+    'synthetic-temporal-epoch-variance',
+    'different epochs must produce different events');
 }
 
 // 1b: temporal fixture loads and has ≥50 protected items

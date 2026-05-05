@@ -158,14 +158,14 @@ issuance per unique tuple. The `eligibility.ts` module enforces no double-credit
 Patches accepted by the reducer qualify for a merge-multiplier bonus via
 `CortexMergeBonus.claimMergeBonus`. Tracked per `PatchMerged(epoch, miner, patchHash)`.
 
-**Cap (V0)**: 1.5× per miner per epoch. Additional merged patches in the same
+**Cap (V0)**: 2.0× per miner per epoch. Additional merged patches in the same
 epoch do **not** grant additional uplift. The multiplier is capped at:
 
 ```
 bonusBOTCOIN = (MERGE_MULTIPLIER_BPS − 10000) × claimBaseForMerger(epoch, miner) / 10000
 ```
 
-where `MERGE_MULTIPLIER_BPS = 15000` and `claimBaseForMerger` is the miner's
+where `MERGE_MULTIPLIER_BPS = 20000` and `claimBaseForMerger` is the miner's
 pro-rata share of the epoch reward across both lanes.
 
 The cap is enforced:

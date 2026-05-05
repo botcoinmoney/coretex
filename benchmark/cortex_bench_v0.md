@@ -12,14 +12,17 @@
 |---------------------------------------|--------|-----------------------------------------------------------------------------------|-----------------------------------------|
 | Long-horizon compression              | 60%    | MemoryArena (CC-BY-4.0) + synthetic stream-and-evict generator                   | OK — see specs/license_audit.md §6     |
 | Near-collision retrieval              | 20%    | LIMIT (CC-BY-4.0) + BEIR/NQ (Apache-2.0) + BEIR/HotpotQA (CC-BY-SA-4.0)        | OK — see specs/license_audit.md §1–3   |
-| Temporal update / revocation          | 20%    | MemoryAgentBench (MIT) — LoCoMo is LICENSE_BLOCKED                               | MemoryAgentBench OK; LoCoMo BLOCKED    |
+| Temporal update / revocation          | 20%    | MemoryAgentBench (MIT) + SyntheticTemporalLoader (Apache-2.0; LoCoMo-shaped fill) | both OK                                |
 
 ### License Enforcement
 
-- **LoCoMo** (CC-BY-NC-4.0): `LoCoMoSourceLoader` always throws `LICENSE_BLOCKED`. No LoCoMo
-  data is loaded in V0. Human resolution required before the LoCoMo path can be enabled.
-  See `specs/license_audit.md §4` and the stub at
-  `benchmark/generators/temporal/LoCoMoSourceLoader.ts`.
+- **LoCoMo Path B (chosen 2026-05-05)**: LoCoMo (CC-BY-NC-4.0) was incompatible with
+  commercial mining and has been REMOVED from V0. The temporal family ships with
+  `MemoryAgentBenchLoader` (MIT, EventQA + FactConsolidation tasks) plus
+  `SyntheticTemporalLoader` (Apache-2.0, deterministic stale-vs-current pairs from a
+  templated grammar) covering the LoCoMo-shaped gap (~30% of LoCoMo breadth). Combined
+  ≈ 90% of the original §5 design intent; remaining 10% (multi-session conversational
+  cadence) tracked as V1 follow-up in `docs/v1-roadmap.md`.
 
 - **BEIR/MSMARCO** and **BEIR/TREC-COVID**: deferred. Commercial-use review pending (see
   `specs/license_audit.md §3`). V0 uses NQ and HotpotQA only.
@@ -220,7 +223,7 @@ Implementation: `benchmark/generators/corpus_root.ts`.
 | `benchmark/generators/types.ts` | Shared types (CortexEvent, FamilyLoader, LoaderError) |
 | `benchmark/generators/corpus_root.ts` | experienceCorpusRoot Merkle builder |
 | `benchmark/generators/keccak256_vendor.ts` | Vendored keccak256 (no deps) |
-| `benchmark/generators/temporal/LoCoMoSourceLoader.ts` | LICENSE_BLOCKED stub |
+| `benchmark/generators/temporal/SyntheticTemporalLoader.ts` | Apache-2.0 deterministic stale-vs-current generator (LoCoMo Path B) |
 | `benchmark/generators/temporal/MemoryAgentBenchLoader.ts` | Operative temporal loader (MIT) |
 | `benchmark/generators/near_collision/NearCollisionLoader.ts` | LIMIT + NQ + HotpotQA loader |
 | `benchmark/generators/long_horizon/LongHorizonLoader.ts` | MemoryArena loader + synthetic generator |

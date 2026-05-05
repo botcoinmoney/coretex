@@ -289,8 +289,25 @@ contract CortexRegistry is Ownable, Pausable, ReentrancyGuard {
 
     // ── Audit-window revert (multisig, 2-of-N) ───────────────────────────
 
-    /// @notice Cast a revert vote. Requires MULTISIG_THRESHOLD votes to
-    ///         actually unwind the epoch. Must be called within CHALLENGE_WINDOW_SECONDS.
+    /// @notice [V0] Owner-only revert within the audit window.
+    ///         Per the V0 launch decision the multisig lever is deferred — the
+    ///         owner alone may revert a divergent epoch within
+    ///         CHALLENGE_WINDOW_SECONDS. The 2-of-N multisig path
+    ///         (`voteRevertEpoch`) below is retained as dead V1 wiring; once
+    ///         operator multisig is published it becomes the canonical lever
+    ///         and `ownerRevertEpoch` is removed.
+    function ownerRevertEpoch(uint64 epoch) external onlyOwner {
+        if (!epochFinalized[epoch]) revert NotFinalized();
+        if (epochReverted[epoch])   revert EpochAlreadyReverted();
+        if (block.timestamp > finalizedAt[epoch] + CHALLENGE_WINDOW_SECONDS) {
+            revert AuditWindowClosed();
+        }
+        _executeRevert(epoch);
+    }
+
+    /// @notice [V1] Multisig revert vote. Requires MULTISIG_THRESHOLD votes to
+    ///         unwind the epoch. Must be called within CHALLENGE_WINDOW_SECONDS.
+    ///         Wiring retained for V1 reactivation; not relied on at V0 launch.
     function voteRevertEpoch(uint64 epoch) external onlyOperatorOrOwner {
         if (!epochFinalized[epoch]) revert NotFinalized();
         if (epochReverted[epoch])   revert EpochAlreadyReverted();

@@ -20,24 +20,27 @@ This is the launch checklist for Botcoin Cortex V0 on Base mainnet. Each numbere
   - *Actions*: deploy to testnet, run synthetic miners via `scripts/testnet/feed-synthetic-traffic.mjs`, verify ≥10 finalized epochs reproduce via `scripts/testnet/auditor-reproduce.mjs`, run latch/unlatch rehearsals × 2.
   - *Pass criteria*: golden e2e fixture green; saturation alarm fires on synthetic flat sequence; multiplier-distribution gate (no single miner > 25% of merge bonus); pass-rate band hold.
 
-- [ ] **3. Publish operator multisig key set**
-  - *Deliverable*: `docs/multisig-key-set.md` (template).
-  - *Actions*: assemble ≥3 operators. Each signs a no-op test multisig transaction via their own wallet. Record the signing tx hashes in the operator table. Replace all `<TBD>` placeholders.
-  - *Commit*: filled `docs/multisig-key-set.md` to main.
+- [ ] **3. ~~Publish operator multisig key set~~** — **DEFERRED to V1.**
+  V0 ships with a single-owner audit-window override (`ownerRevertEpoch`).
+  The multisig wiring (`voteRevertEpoch`) remains in the contract for V1
+  reactivation. Until then, the V0 owner alone calls `ownerRevertEpoch`
+  within `CHALLENGE_WINDOW_SECONDS`. See `ops/multisig.md` for the
+  V1 plan; `docs/multisig-key-set.md` template is dormant until V1.
 
 ## Mainnet deploy
 
 - [ ] **4. Mainnet deploy of `CortexRegistry` + `CortexMergeBonus`**
   ```bash
   MAINNET_CONFIRM=I-UNDERSTAND \
-  MULTISIG_OPERATOR_ADDRESSES=0xaaa...,0xbbb...,0xccc... \
+  OWNER_ADDRESS=0x...                 # V0 single-owner revert authority
+  COORDINATOR_ADDRESS=0x...           # existing SWCP coordinator EOA
   BOTCOIN_TOKEN_ADDRESS=0x... \
-  CHALLENGE_WINDOW_SECONDS=21600 \
-  SNAPSHOT_EPOCH_INTERVAL=100 \
-  MERGE_MULTIPLIER_BPS=15000 \
   forge script contracts/script/DeployMainnet.s.sol \
     --rpc-url $BASE_RPC_URL --broadcast --verify
   ```
+  `MERGE_MULTIPLIER_BPS` (2.0× = `20000`), `CHALLENGE_WINDOW_SECONDS` (`21600`),
+  and `SNAPSHOT_EPOCH_INTERVAL` (`100`) are compile-time constants in the
+  contracts — change in source + redeploy if a different value is required.
   - Record `CortexRegistry` and `CortexMergeBonus` addresses in `docs/contract-addresses.md` (replace `<TBD>`).
   - Run `node scripts/post-deploy-smoke.mjs` to verify bytecode + selectors.
 
@@ -53,15 +56,19 @@ This is the launch checklist for Botcoin Cortex V0 on Base mainnet. Each numbere
   - Confirm `EpochFunded` is **NOT** emitted (lane disabled before audit window closes).
   - Disable lane: `sudo systemctl stop cortex-server`, remove nginx include, reload.
 
-- [ ] **6. Multisig revert rehearsal**
-  - Operators announce a synthetic divergence ≥24h in advance.
+- [ ] **6. Owner-revert rehearsal (V0)**
+  - Announce a synthetic divergence ≥24h in advance.
   ```bash
-  MAINNET_CONFIRM=I-UNDERSTAND-THIS-IS-MAINNET-DRILL \
   CORTEX_REGISTRY_ADDRESS=0x... \
-  node scripts/mainnet/multisig-revert-rehearsal.mjs
+  OWNER_PK=0x... \
+  cast send $CORTEX_REGISTRY_ADDRESS "ownerRevertEpoch(uint64)" $TEST_EPOCH \
+    --rpc-url $BASE_RPC_URL --private-key $OWNER_PK
   ```
-  - Verify 2-of-N revert succeeds; bonus funding for that epoch is blocked.
+  - Verify the targeted epoch is reverted (`epochReverted[epoch] == true`,
+    `epochFinalized[epoch] == false`); bonus funding for that epoch is blocked.
   - Public post-mortem within 72h.
+  - V1: replace this step with the `voteRevertEpoch` 2-of-N rehearsal once the
+    multisig key set is published.
 
 - [ ] **7. Emergency disable rehearsal**
   ```bash
@@ -105,4 +112,4 @@ This is the launch checklist for Botcoin Cortex V0 on Base mainnet. Each numbere
 
 ---
 
-A green Phase 8 testnet run + clean rehearsals (steps 6 + 7) + filled multisig key set are the **pre-conditions** for step 8 (go-live). Do not proceed without all three.
+A green Phase 8 testnet run + clean rehearsals (steps 6 + 7) are the **pre-conditions** for step 8 (go-live). The multisig key set is **deferred to V1**; V0 ships with single-owner revert.

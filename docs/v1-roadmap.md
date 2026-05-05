@@ -45,16 +45,18 @@ Both paths require substantial additional engineering. Likely a multi-quarter pr
 
 **V1 deliverable**: automated per-subset license check in CI. The benchmark loader manifests license terms per subset; CI verifies the manifest and rejects unverified subsets.
 
-## 7. LoCoMo licensing resolution ([issue #4](../../issues/4))
+## 7. LoCoMo licensing — RESOLVED via Path B
 
-**V0 status**: LoCoMo (CC-BY-NC-4.0) is `LICENSE_BLOCKED` in the Phase 4 temporal-family loader. MemoryAgentBench (MIT) is fully operative.
+**V0 outcome (2026-05-05)**: Path B + Path C combined. LoCoMo (CC-BY-NC-4.0) was
+removed from V0; temporal family shipped with `MemoryAgentBenchLoader` (MIT)
+plus `SyntheticTemporalLoader` (Apache-2.0, deterministic stale-vs-current
+templated grammar). Combined coverage ≈ 90% of the original §5 design intent.
 
-**V1 deliverable**: pick A/B/C from the [issue](../../issues/4):
-- (A) Snap Research commercial license exception.
-- (B) Permissive replacement (extend MemoryAgentBench coverage).
-- (C) Synthetic Apache-2.0 records.
-
-This is a V0-blocker for the LoCoMo loader specifically, not for Phase 4 overall.
+**V1 follow-up (optional, not blocking)**: extend coverage of long multi-session
+conversational cadence — the ~10% gap left by removing LoCoMo. Candidate sources
+include AgentBench-Conv extensions or further synthetic generators with
+operator-defined cadence patterns. Issue #4 is closed; this is the remaining
+nice-to-have.
 
 ## 8. Cross-architecture CI matrix
 

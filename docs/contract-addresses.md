@@ -26,7 +26,7 @@ The `coreVersionHash` is committed in the first `CortexEpochFinalized` event (ep
 |----------------------------|---------------|----------------------------------------------|
 | `CHALLENGE_WINDOW_SECONDS` | `21600` (6h)  | Constructor of `CortexRegistry`              |
 | `SNAPSHOT_EPOCH_INTERVAL`  | `100`         | Constructor of `CortexRegistry`              |
-| `MERGE_MULTIPLIER_BPS`     | `15000` (1.5×) | Constructor of `CortexMergeBonus`           |
+| `MERGE_MULTIPLIER_BPS`     | `20000` (2.0×) | Constructor of `CortexMergeBonus`           |
 | Multisig operator set      | see [`multisig-key-set.md`](./multisig-key-set.md) | `setOperator(idx, addr)` |
 
 ## Testnet

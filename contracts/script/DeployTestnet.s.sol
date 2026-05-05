@@ -10,17 +10,17 @@ import {CortexMergeBonus} from "../src/CortexMergeBonus.sol";
 /// Reads addresses from environment variables.
 /// Outputs a deployment manifest summary to stdout (JSON captured to
 /// ops/testnet-deployment.json by the wrapping deploy-testnet.mjs script).
-/// ops/testnet-deployment.json is gitignored — do NOT commit live addresses.
+/// ops/testnet-deployment.json is gitignored -- do NOT commit live addresses.
 ///
 /// Required env vars:
-///   DEPLOYER_ADDRESS     — msg.sender / deployer EOA
-///   DEPLOYER_PK          — private key of deployer
-///   BASE_TESTNET_RPC_URL — testnet RPC endpoint (e.g. Base Sepolia)
-///   COORDINATOR_ADDRESS  — coordinator EOA granted submitPatchAccepted / finalizeEpoch
-///   BOTCOIN_TOKEN        — BOTCOIN ERC-20 address (testnet mock is fine)
+///   DEPLOYER_ADDRESS     -- msg.sender / deployer EOA
+///   DEPLOYER_PK          -- private key of deployer
+///   BASE_TESTNET_RPC_URL -- testnet RPC endpoint (e.g. Base Sepolia)
+///   COORDINATOR_ADDRESS  -- coordinator EOA granted submitPatchAccepted / finalizeEpoch
+///   BOTCOIN_TOKEN        -- BOTCOIN ERC-20 address (testnet mock is fine)
 ///
 /// Optional env vars (operators added post-deploy):
-///   OPERATOR_1 … OPERATOR_5 — multisig operator addresses for audit-window revert
+///   OPERATOR_1 ... OPERATOR_5 -- multisig operator addresses for audit-window revert
 ///
 /// Phase 9 mainnet deployment uses contracts/script/DeployMainnet.s.sol (not this file).
 ///
@@ -35,7 +35,7 @@ contract DeployTestnet is Script {
         address coordinator = vm.envAddress("COORDINATOR_ADDRESS");
         address botcoin     = vm.envAddress("BOTCOIN_TOKEN");
 
-        console2.log("=== CortexRegistry + CortexMergeBonus — TESTNET DEPLOY ===");
+        console2.log("=== CortexRegistry + CortexMergeBonus -- TESTNET DEPLOY ===");
         console2.log("Deployer:    ", deployer);
         console2.log("Coordinator: ", coordinator);
         console2.log("BotcoinToken:", botcoin);

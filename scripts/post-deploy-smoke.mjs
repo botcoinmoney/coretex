@@ -29,7 +29,7 @@ const MERGE_BONUS        = env('CORTEX_MERGE_BONUS_ADDRESS');
 const EXPECTED_OPERATORS = env('MULTISIG_OPERATOR_ADDRESSES').split(',').map((s) => s.trim().toLowerCase());
 const EXPECTED_WINDOW    = env('CHALLENGE_WINDOW_SECONDS', '21600');
 const EXPECTED_SNAPSHOT  = env('SNAPSHOT_EPOCH_INTERVAL', '100');
-const EXPECTED_MULT_BPS  = env('MERGE_MULTIPLIER_BPS', '15000');
+const EXPECTED_MULT_BPS  = env('MERGE_MULTIPLIER_BPS', '20000');
 
 async function rpc(method, params) {
   const r = await fetch(RPC, {

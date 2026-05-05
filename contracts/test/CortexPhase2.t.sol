@@ -277,6 +277,48 @@ contract CortexPhase2Test is Test {
         registry.voteRevertEpoch(EPOCH);
     }
 
+    // ── V0 owner-revert path (multisig deferred to V1) ────────────────────
+
+    function test_ownerRevert_succeeds() public {
+        _finalizeEpoch(EPOCH);
+        // OWNER calls ownerRevertEpoch — single call, no votes needed.
+        vm.prank(OWNER);
+        registry.ownerRevertEpoch(EPOCH);
+        assertTrue(registry.epochReverted(EPOCH));
+        assertFalse(registry.epochFinalized(EPOCH));
+    }
+
+    function test_ownerRevert_nonOwner_fails() public {
+        _finalizeEpoch(EPOCH);
+        vm.prank(ATTACKER);
+        vm.expectRevert();
+        registry.ownerRevertEpoch(EPOCH);
+        // Single-operator vote also can't bypass — operator path needs 2-of-N.
+        vm.prank(OPERATOR_A);
+        vm.expectRevert();
+        registry.ownerRevertEpoch(EPOCH);
+    }
+
+    function test_ownerRevert_afterWindowClose_fails() public {
+        _finalizeEpoch(EPOCH);
+        vm.warp(block.timestamp + 21601);
+        vm.prank(OWNER);
+        vm.expectRevert(CortexRegistry.AuditWindowClosed.selector);
+        registry.ownerRevertEpoch(EPOCH);
+    }
+
+    function test_ownerRevert_preventsBonus_funding() public {
+        _finalizeEpoch(EPOCH);
+        vm.prank(OWNER);
+        registry.ownerRevertEpoch(EPOCH);
+        vm.warp(block.timestamp + 21601);
+        vm.startPrank(COORDINATOR);
+        token.approve(address(bonus), 100 ether);
+        vm.expectRevert(CortexMergeBonus.EpochWasReverted.selector);
+        bonus.fundEpoch(EPOCH, bytes32("root"), 100 ether);
+        vm.stopPrank();
+    }
+
     function test_revert_preventsBonus_funding() public {
         _finalizeEpoch(EPOCH);
 

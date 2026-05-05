@@ -77,44 +77,28 @@
 
 ---
 
-## 4. LoCoMo
+## 4. LoCoMo — REMOVED FROM V0 (Path B chosen, 2026-05-05)
 
-| Field               | Value |
-|---------------------|-------|
-| Full name           | Evaluating Very Long-Term Conversational Memory of LLM Agents |
-| Authors             | Adyasha Maharana et al. |
-| Paper DOI / arXiv   | arXiv:2402.17753 (ACL 2024) |
-| Repository          | https://github.com/snap-research/LoCoMo |
-| Code / Data SPDX    | **CC-BY-NC-4.0** (NonCommercial) |
-| Pinned commit       | `3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376` (main, 2024-08-13) |
-| Redistribution OK?  | **NO — NonCommercial restriction** |
-| Attribution req.    | Cite Maharana et al. arXiv:2402.17753; include CC-BY-NC-4.0 notice |
-| Subset used (V0)    | Temporal update / revocation family (stale-vs-current labels) |
-| **STATUS**          | **REVIEW REQUIRED — POTENTIAL PHASE 4 BLOCKER** |
+**Decision**: LoCoMo (CC-BY-NC-4.0, NonCommercial) is **incompatible with the
+commercial mining context** of Botcoin Cortex and was removed from V0 ahead
+of any data loading. The temporal family ships with two operative sources:
 
-### LoCoMo Action Required (Phase 4)
+1. `MemoryAgentBenchLoader` — MIT, EventQA + FactConsolidation tasks
+2. `SyntheticTemporalLoader` — Apache-2.0, deterministic stale-vs-current
+   templated grammar (LoCoMo Path B fill)
 
-CC-BY-NC-4.0 prohibits use "primarily intended for or directed toward commercial advantage or
-monetary compensation." Botcoin Cortex is a commercial mining protocol; embedding LoCoMo data
-in the canonical `experienceCorpusRoot` corpus likely constitutes commercial use.
+Combined coverage ≈ 90% of the original §5 design intent. The remaining
+~10% (long multi-session conversational cadence) is documented as a V1
+follow-up in `docs/v1-roadmap.md`.
 
-**Required before Phase 4 data loader is written:**
+**Implication for the §11 thesis**: family weights (60/20/20) unchanged.
+Pass-rate targets unchanged. The temporal family's structural property
+(stale-vs-current discrimination) is still tested; the source has just
+shifted from CC-BY-NC LoCoMo to an MIT + Apache-2.0 stack.
 
-Option A — Contact Snap Research for a commercial license exception:
-- Authors: Adyasha Maharana (adymaharana@cs.unc.edu, per GitHub profile)
-- Request: written permission for commercial use of the LoCoMo dataset for benchmark evaluation
-  purposes in a cryptocurrency mining protocol
-
-Option B — Replace LoCoMo with a fully permissive alternative:
-- Candidate replacements: any CC-BY or Apache-2.0 long-conversational-memory dataset
-- MemoryAgentBench (MIT) partially covers the temporal use case; a CC-BY long-conversation
-  dataset (e.g., a suitable subset of SODA, DailyDialog, or an equivalent) could substitute
-- This would change the Family 2 anchor documentation in `research_brief_v0.md`
-
-Option C — Derive LoCoMo-format records synthetically under Apache-2.0, drawing on the
-public paper's methodology without redistributing the dataset
-
-**This is a blocker for Phase 4 data loading. It is not a blocker for Phases 0–3.**
+For historical record, the LoCoMo source (Maharana et al., arXiv:2402.17753,
+ACL 2024) is **not** redistributed in this repo and the loader stub at
+`benchmark/generators/temporal/LoCoMoSourceLoader.ts` has been deleted.
 
 ---
 
@@ -208,7 +192,8 @@ is Zexue He (zexueh@stanford.edu).
 | LIMIT               | Apache-2.0      | CC-BY-4.0         | OK             | Attribute; pin hash     |
 | MTEB                | Apache-2.0      | N/A (framework)   | OK             | Per-task data varies    |
 | BEIR (code)         | Apache-2.0      | Per-subset        | Varies         | **Per-subset review**   |
-| LoCoMo              | CC-BY-NC-4.0    | CC-BY-NC-4.0      | **NO (NC)**    | **BLOCKER — see §4**    |
+| ~~LoCoMo~~          | (removed V0)    | (removed V0)      | n/a            | RESOLVED via Path B (§4) |
+| SyntheticTemporal   | Apache-2.0      | Apache-2.0        | YES            | OK (in-tree generator)   |
 | MemoryAgentBench    | MIT (HF card)   | MIT               | OK             | Verify repo LICENSE     |
 | MemoryArena         | Unresolved      | CC-BY-4.0         | OK (data)      | Confirm code repo URL   |
 | WARP / XTR-WARP     | MIT             | N/A               | OK (code only) | No data redistribution  |
@@ -220,7 +205,7 @@ is Zexue He (zexueh@stanford.edu).
 
 Before Phase 4 data loader development begins, the following must be resolved:
 
-- [ ] **LoCoMo NC clause** — obtain commercial use permission OR replace with a permissive
+- [x] **LoCoMo NC clause** — RESOLVED 2026-05-05 via Path B (removed; Synthetic + MemoryAgentBench)
       alternative dataset (BLOCKER)
 - [ ] **BEIR per-subset verification** — confirm only Apache-2.0 / CC-BY subsets are loaded
       (NQ and HotpotQA recommended); flag MSMARCO and TREC-COVID for commercial review
