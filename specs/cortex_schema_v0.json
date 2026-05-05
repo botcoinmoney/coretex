@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://botcoinmoney.github.io/cortex/specs/cortex_schema_v0.json",
+  "title": "CortexState V0 — typed slot schema",
+  "description": "Phase 1 deliverable. Skeleton — full schema lands in Phase 1 implementation. The active CortexState is 1024 uint256 words.",
+  "type": "object",
+  "required": ["version", "wordCount", "ranges"],
+  "properties": {
+    "version": { "const": "v0" },
+    "wordCount": { "const": 1024 },
+    "ranges": {
+      "type": "object",
+      "properties": {
+        "header":               { "type": "object", "required": ["start", "end"] },
+        "memoryIndexSlots":     { "type": "object", "required": ["start", "end"] },
+        "retrievalKeys":        { "type": "object", "required": ["start", "end"] },
+        "relationsAndRouting":  { "type": "object", "required": ["start", "end"] },
+        "temporalValidity":     { "type": "object", "required": ["start", "end"] },
+        "codebook":             { "type": "object", "required": ["start", "end"] },
+        "reserved":             { "type": "object", "required": ["start", "end"] }
+      }
+    }
+  }
+}
