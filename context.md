@@ -4,19 +4,37 @@
 
 ## Current state
 
-**Phase 0 — Research lock + benchmark anchoring** (in progress) and **Phase 1 — Cortex state spec** (in progress) running in parallel as background subagents.
+**Phase 2 — CortexRegistry + CortexMergeBonus** COMPLETE on branch `phase-2/contracts`.
 
-Repo created at `botcoinmoney/cortex` (private), cloned to `/root/cortex`, default branch `main`. Top-level scaffold per §13.2 in place: `README.md`, `LICENSE` (Apache-2.0), `instructions.md`, `context.md`, `package.json` (npm workspaces), `tsconfig.base.json`, `.github/workflows/ci.yml` (lint→type→unit→contracts→phase-scoped E2E→e2e:all merge gate), `scripts/run-e2e.mjs` phase aggregator, `scripts/check-context-freshness.mjs` PR gate. `packages/{cortex,cortex-server,cortex-handler}/`, `contracts/{src,script,test}/`, `specs/`, `benchmark/{generators,fixtures}/`, `ops/`, `test/e2e/` directories created. No phase-deliverable code yet.
+Both contracts are fully implemented, compiled (Solc 0.8.26, no errors), and tested:
+- `contracts/src/CortexRegistry.sol` — full implementation: header storage, patch submission, finalization, snapshot emission, 2-of-N multisig audit-window revert, emergency pause, shard commit/reveal.
+- `contracts/src/CortexMergeBonus.sol` — full implementation: Merkle-root funded epochs, `claimMergeBonus`, pool-mode `triggerMergeBonusClaim`, audit-window enforcement via ICortexRegistry, per-miner cap enforcement, emergency pause.
+- `contracts/script/DeployCortex.s.sol` — Forge deploy script.
+- `contracts/test/CortexPhase2.t.sol` — 42 tests (all pass), 2 fuzz tests.
+- `contracts/test/CortexFork.t.sol` — 7 fork tests (skipped when BASE_RPC_URL absent; live on Base mainnet fork when set).
+- `contracts/test/GasBudget.t.sol` — 4 gas ceiling gate tests (all pass).
+- `contracts/test/GAS_BUDGETS.md` — documented gas ceilings.
+- `test/e2e/phase-2/run.mjs` — updated to invoke `forge test --root contracts`.
 
-`BotcoinMiningV3` is and will remain unchanged. Cortex is a parallel lane behind the same coordinator origin.
+46 tests pass, 0 fail, 7 fork tests skipped (need BASE_RPC_URL). `BotcoinMiningV3` untouched.
+
+Phase 0 (Research) and Phase 1 (Protocol) are still in progress as background subagents.
 
 ## Next steps
 
-1. Spawn Phase 0 (Research) subagent — write `specs/research_brief_v0.md`, `specs/non_goals_v0.md`, lock benchmark licenses + family weights + pass-rate targets.
-2. Spawn Phase 1 (Protocol) subagent — write the five state-spec docs and stub the TS reference impl in `packages/cortex/src/state/`.
-3. Spawn Phase 2 (EVM) subagent — write `contracts/src/CortexRegistry.sol` + `contracts/src/CortexMergeBonus.sol` skeletons with the §9 Phase 2 events and the audit-window/multisig override.
-4. Begin `packages/cortex-handler` skeleton (the single-line drop-in router) so §13.4 plug-and-play stays honest from day one.
-5. Wire foundry submodules (`forge-std`, `openzeppelin-contracts`) and a Base mainnet fork test harness for P2 E2Es.
+1. Wire `BASE_RPC_URL` as a CI secret so fork tests run in GitHub Actions.
+2. Spawn Phase 0 (Research) subagent — `specs/research_brief_v0.md`, benchmark license/weight lock.
+3. Spawn Phase 1 (Protocol) subagent — five state-spec docs + TS reference impl.
+4. Phase 3 (Core decoder) — `botcoin-cortex verify-epoch` needed to unlock the log-replay E2E gate.
+5. Add multisig operator key addresses to `ops/multisig.md` before Phase 9 first reward epoch.
+
+## Open questions / blockers
+
+- **BASE_RPC_URL**: must be set as a GitHub Actions secret for fork tests to run. Documented in PR.
+- **Multisig operator keys**: TBD — needed before Phase 9 first reward epoch (not Phase 2 blocker).
+- **Log-replay test** (`test_fork_SKIP_logReplayReconstruction`): skipped — requires Phase 3 Core decoder. Placeholder in CortexFork.t.sol.
+- **License**: Apache-2.0 (set earlier).
+- **Package manager**: npm workspaces (not pnpm).
 
 ## Open questions / blockers
 
@@ -32,16 +50,20 @@ Repo created at `botcoinmoney/cortex` (private), cloned to `/root/cortex`, defau
 - 2026-05-05 — Package manager: npm workspaces (not pnpm) — pnpm install was blocked by user permission denial; npm workspaces is the on-host equivalent. All plan references to `pnpm` map to `npm run`.
 - 2026-05-05 — CI matrix: phase-scoped E2E jobs `e2e-phase-{1..5}` + an aggregate `e2e-all` merge gate, mirroring §13.6 — implemented as GitHub Actions matrix in `.github/workflows/ci.yml`.
 - 2026-05-05 — `scripts/check-context-freshness.mjs` enforces §13.5 "checklist flipped → context.md touched" rule on PRs.
+- 2026-05-05 — Phase 2 complete: CortexRegistry + CortexMergeBonus fully implemented, 46/46 non-fork tests pass, 7 fork tests gate on BASE_RPC_URL. Gas ceilings measured and documented. Log-replay test marked SKIP (Phase 3 dependency).
+- 2026-05-05 — Merkle leaf encoding: keccak256(abi.encodePacked(miner, bonusBOTCOIN, capBOTCOIN)) — cap enforced as bonusAmt ≤ capAmt in CortexMergeBonus.claimMergeBonus.
+- 2026-05-05 — fundEpoch checks epochReverted before epochFinalized — revert unsets epochFinalized, so order matters for correct error propagation.
+- 2026-05-05 — finalizeEpoch gas ceiling set to 250K (measured 210K warm) — 7 SSTOREs for CortexHeader struct + flags + ReentrancyGuard overhead.
 
 ## How to resume
 
 ```bash
-cd /root/cortex
-git status                       # confirm branch + clean tree
-git log --oneline -10            # see recent commits
-cat context.md                   # this file (already)
-# Then read ORGANISM_CORTEX_STATE_PLAN.md for the relevant phase only.
-# Do NOT skim the whole repo — context.md exists to make that unnecessary.
+cd /root/cortex-p2                # Phase 2 worktree (branch: phase-2/contracts)
+git status
+git log --oneline -10
+# Run tests to confirm green baseline:
+forge test --root contracts -vv
+# Then read ORGANISM_CORTEX_STATE_PLAN.md §9 Phase 3 for next deliverable.
 ```
 
 If context-window pressure forces a handoff:
