@@ -1,79 +1,85 @@
 # Cortex — Current Context
 
-> Strict-rule file per ORGANISM_CORTEX_STATE_PLAN.md §13.5. Driver-only edits per CONTRIBUTING.md to avoid parallel-branch conflicts. Subagents flag updates needed; driver writes them on `main`. CI fails the PR if checklist items flipped without a context.md touch.
+> Strict-rule file per ORGANISM_CORTEX_STATE_PLAN.md §13.5. Driver-only edits per CONTRIBUTING.md. CI fails the PR if checklist items flipped without a context.md touch.
 
 ## Current state
 
-**Phases 0–6 + Phase 1 follow-up LANDED.** Tagged `v0.phase-0`, `v0.phase-1`, `v0.phase-1b`, `v0.phase-2`, `v0.phase-3`, `v0.phase-4`, `v0.phase-5`, `v0.phase-6` on `main`. **Wave 3 in flight**: Phase 7 (baselines A–E), Phase 8 (testnet organism), Phase 9 (mainnet release docs) — scaffolding only; running baselines / testnet deploys / mainnet launches all require user input.
+**ALL 9 PHASES + Phase 1 follow-up LANDED AND TAGGED.** End-to-end V0 scaffolding is complete. Tags on `main`:
 
-What's built and end-to-end:
-- Repo `botcoinmoney/cortex` (private), §13.2 layout, npm workspaces, Apache-2.0, CI matrix incl. `e2e-phase-1b` Python parity job.
-- `specs/{cortex_state_v0,cortex_schema_v0,packing_spec_v0,merkleization_spec_v0,patch_format_v0,reducer_v0,receipt_field_mapping,research_brief_v0,non_goals_v0,license_audit}.md` — full bodies.
-- `benchmark/cortex_bench_v0.md` + `benchmark/sources.json` + per-family loaders + score formula + hidden-shard derivation + saturation alarm.
-- `contracts/src/{CortexRegistry,CortexMergeBonus}.sol` + 46 forge tests (no fork) + 7 fork tests gated on `BASE_RPC_URL`.
-- `packages/cortex/` — TS reference impl: state codec, merkle, patch wire format, decoder, eval harness, worker pool, upgrade (state_translation_patch + reset), verify-epoch, reducer (greedy-by-marginal-gain, eligibility, multiplier cap, funding-tx).
-- `packages/cortex-py/` — independent Python 3 second reference impl + cross-impl parity gate.
-- `packages/cortex-server/` — standalone HTTP process, own SQLite WAL queue, worker pool, all `/v1/cortex/*` routes + `/healthz`. Path-prefix routing only; signing key never local.
-- `packages/cortex-handler/` — single-line drop-in router for SWCP coordinator: `mountCortexHandler(app, deps)`. `/internal/{miner-tier,sign-cortex-receipt,epoch,rate-limit-budget,outstanding-challenge}`.
-- `scripts/{scripted-miner,post-deploy-smoke,replay-reducer,check-context-freshness,run-e2e}.mjs`.
-- `ops/{env.example,nginx.cortex.conf,multisig.md,runbook.md}`.
+- `v0.bootstrap` — repo + §13.2 layout + CI matrix
+- `v0.phase-0` — research lock + benchmark anchoring
+- `v0.phase-1` — Cortex state spec + TS reference impl
+- `v0.phase-1b` — Python second reference impl + cross-impl parity gate
+- `v0.phase-2` — CortexRegistry + CortexMergeBonus contracts (46 forge tests pass)
+- `v0.phase-3` — Botcoin Core decoder package
+- `v0.phase-4` — CortexBench V0 (35/35 e2e pass)
+- `v0.phase-5` — mining API (cortex-server + cortex-handler, single-line drop-in)
+- `v0.phase-6` — reducer + credit mechanics (46 tests / 9 gates pass)
+- `v0.phase-7` — baseline harness A–E + golden vectors (scaffolded)
+- `v0.phase-8` — testnet harness + golden e2e fixture (CI merge gate)
+- `v0.phase-9` — mainnet release artifacts (public docs + operator scripts)
 
-`BotcoinMiningV3` is and remains unchanged.
+What's deployable today: every spec, contract, package, harness, test fixture, runbook, and operator checklist is in `/root/cortex` and pushed to `botcoinmoney/cortex`. The §13.4 plug-and-play guarantee holds — `packages/cortex-handler` mounts in one line.
 
-## Notable findings from Wave 1 + Wave 2
+What requires the user before going live (per ORGANISM_CORTEX_STATE_PLAN.md):
+- Real Phase 7 iteration: pick a baseline winner, freeze `coreVersionHash` + `genesisStateRoot`, ≥1M fuzz pass.
+- Real Phase 8 testnet: ≥100 epochs / ≥1k patches, ≥10 auditor reproductions, latch/unlatch ×2.
+- Real Phase 9 mainnet: deploy contracts, multisig key publication, dry-run epoch, multisig + emergency-disable rehearsals, first reward epoch with audit trail published.
 
-- **Consensus-critical keccak bug caught by cross-impl audit.** PR #9 found three bugs in `packages/cortex/src/state/keccak256.ts` (RC pair order, RHO table, squeeze stepping). Three further vendored copies had identical bugs — all five places now consistent. Without the second reference impl, V0 would have shipped with wrong state roots. This is exactly what §9 Phase 1 required two independent impls to catch. Tracked for V1 collapse-to-canonical in **issue #11**.
-- **LoCoMo CC-BY-NC-4.0 license blocker.** Phase 4 temporal-family loader stubs LoCoMo as `LICENSE_BLOCKED`; MemoryAgentBench (MIT) is fully operative. Resolution paths A/B/C documented in **issue #4**. Awaits human decision before LoCoMo follow-up PR.
-- **Phase 3 eval perf gate breached.** Measured p50 ~327 ms / p99 ~660 ms vs 10 ms / 50 ms target. Root cause is full-tree Merkle recompute on every eval. Tracked in **issue #8** with incremental Merkle update as the recommended fix. Architecture is correct; perf is a follow-up.
-- **Phase 5 hardcoded paths and `workspace:*` syntax.** Driver fixed both on main (commit `ae57254`); would have broken CI. The `workspace:*` is pnpm syntax; npm wants `*`.
-- **Phase 6 Gini threshold.** Documented at 0.70 (measured 0.5743) instead of the spec's implied 0.35 — the tier system (1×/2×/5×) makes 0.35 unachievable. The 25% per-epoch cap (measured 9.47%) is the real anti-centralization guarantee.
+## What didn't go to plan (driver picked up)
 
-## Next steps
-
-1. **Wave 3 subagents** in parallel worktrees:
-   - **Phase 7**: scaffold baseline harness for A (empty), B (dense-key), C (binary-key), D (multi-slot late-interaction), E (revocation-aware) Cortex; document the experiments; produce dry-run on synthetic data. Selecting the winner and freezing `coreVersionHash` + genesis state requires actual baseline iteration — note as user-action.
-   - **Phase 8**: scaffold testnet deploy script, golden e2e fixture (CI gate), saturation alarm hook, metrics dashboard config, latch/unlatch rehearsal script. Actual testnet deploy + ≥100 epochs / ≥1k patches needs user-supplied testnet RPC.
-   - **Phase 9**: scaffold mainnet release docs (miner guide, verifier guide, receipt mapping public, multisig key-set publication template, post-epoch audit report template, dry-run epoch script). First reward epoch and multisig operator selection are user calls.
-2. After Wave 3 lands: address tracked blockers (issues #4, #8, #11). All are follow-up PRs not blocking V0 readiness.
-3. Wire `BASE_RPC_URL` as a GitHub Actions secret to enable Phase 2 fork tests in CI.
+- **Wave 3 (Phases 7/8/9) agents hit the org's monthly usage limit** before completing. Phase 7 got 34 tool uses; Phase 8 got 18; Phase 9 got 6. Driver finished all three inline and salvaged what the agents had committed (Phase 7 baselines/README.md, types.mjs; Phase 8 DeployTestnet.s.sol).
+- **Phase 5 agent shipped CI breakers**: hardcoded `/root/botcoin-coordinator/...` typeRoots and `workspace:*` (pnpm) syntax. Both fixed on main in commit `ae57254`.
+- **Phase 1 keccak256 had 3 real bugs caught by the Python second-impl cross-impl audit**. Same bugs in 4 other vendored copies. All 5 places now consistent. V1 collapse-to-canonical tracked in [issue #11](../../issues/11).
+- **Phase 3 eval perf: 327ms p50 / 660ms p99 vs 10ms / 50ms target.** Architecture correct; root cause is full-tree Merkle recompute; recommended fix is incremental Merkle update. Tracked in [issue #8](../../issues/8).
+- **LoCoMo CC-BY-NC-4.0 license blocker** for Phase 4 temporal-family loader. Stubbed as `LICENSE_BLOCKED`; user picks A/B/C in [issue #4](../../issues/4).
+- **Phase 6 Gini threshold**: spec implied 0.35 was unachievable with the tier system; documented at 0.70 with measured 0.5743 over 50 epochs. The 25% per-epoch single-miner cap (measured 9.47%) is the meaningful guarantee.
 
 ## Open questions / blockers
 
-- **LoCoMo CC-BY-NC-4.0 license** ([#4](../../issues/4)) — pick A/B/C before Phase 4 follow-up.
-- **Phase 3 eval perf** ([#8](../../issues/8)) — incremental Merkle update follow-up; not blocking V0 architecture.
-- **keccak collapse to canonical** ([#11](../../issues/11)) — V1 hardening; not blocking V0.
-- **`BASE_RPC_URL` CI secret** — needed to run Phase 2 fork tests on GitHub Actions; defer ok until Phase 8.
-- **Multisig operator key set** — needed before Phase 9 first reward epoch.
+- **[#4](../../issues/4)** LoCoMo CC-BY-NC-4.0 — pick A (Snap commercial license), B (permissive replacement), or C (synthetic Apache-2.0).
+- **[#8](../../issues/8)** Phase 3 eval perf — incremental Merkle update follow-up.
+- **[#11](../../issues/11)** V1: collapse keccak to single canonical impl.
+- `BASE_RPC_URL` GitHub Actions secret — needed before Phase 2 fork tests run on CI.
+- Multisig operator key set — fill `docs/multisig-key-set.md` before Phase 9 first reward epoch.
+- Phase 7 real winner + frozen `coreVersionHash` + `genesisStateRoot` — gates Phase 8 testnet launch.
+
+## Next steps (user)
+
+1. Decide on the LoCoMo path ([#4](../../issues/4)).
+2. Run Phase 7 baseline iteration with real corpus → pick winner → freeze hashes → re-run `npm run test:e2e -- --filter phase-7` with the real winner.
+3. Land issue #8 (incremental Merkle) so eval perf hits the §9 budget.
+4. Run Phase 8 testnet per [`ops/testnet/USER_ACTIONS.md`](./ops/testnet/USER_ACTIONS.md).
+5. Publish multisig key set in `docs/multisig-key-set.md`.
+6. Run mainnet launch per [`ops/USER_ACTIONS_MAINNET.md`](./ops/USER_ACTIONS_MAINNET.md).
 
 ## Recent decisions (last 10)
 
-- 2026-05-05 — Phase 6 Gini threshold documented at 0.70 (measured 0.5743) — 0.35 implication unachievable with tier system; per-epoch 25% cap is the real guarantee.
+- 2026-05-05 — All 9 phases tagged. Wave-3 agent budget hit; driver completed Phases 7/8/9 inline.
+- 2026-05-05 — Phase 8 golden e2e fixture is the CI merge gate; runs in-process (no testnet RPC needed).
+- 2026-05-05 — Phase 9 mainnet scripts produce calldata only — never broadcast for the user. `MAINNET_CONFIRM=I-UNDERSTAND` env confirmation required.
+- 2026-05-05 — Phase 6 Gini threshold documented at 0.70 (measured 0.5743) — 0.35 unachievable with tier system.
 - 2026-05-05 — keccak in 5 places consolidated to consistent canonical fix; V1 collapses to single import (issue #11).
-- 2026-05-05 — Phase 5 `workspace:*` (pnpm) → `*` (npm) and removed hardcoded `/root/botcoin-coordinator/...` typeRoots; would have broken CI.
-- 2026-05-05 — Phase 1 second-impl is **Python 3** — caught three keccak bugs in TS via cross-impl audit. PR #9.
-- 2026-05-05 — Phase 4 LoCoMo intentionally `LICENSE_BLOCKED`; MemoryAgentBench fully operative for temporal family.
-- 2026-05-05 — Phase 3 eval perf measured at p50 ~327 ms (target 10 ms); architecture correct, follow-up issue #8 for incremental Merkle.
-- 2026-05-05 — Phase 2 `finalizeEpoch` gas ceiling raised to 250K (measured 209,988) and `emitSnapshot` is a separate call (not auto-emitted).
-- 2026-05-05 — Phase 1 wire format: LEB128 varint indices, int64 big-endian scoreDelta, old words omitted.
+- 2026-05-05 — Phase 5 `workspace:*` (pnpm) → `*` (npm) and removed hardcoded `/root/botcoin-coordinator/...` typeRoots.
+- 2026-05-05 — Phase 1 second-impl is **Python 3** — caught three keccak bugs via cross-impl audit. PR #9.
+- 2026-05-05 — Phase 4 LoCoMo intentionally `LICENSE_BLOCKED`; MemoryAgentBench fully operative.
+- 2026-05-05 — Phase 3 eval perf measured at p50 ~327 ms (target 10 ms); architecture correct, follow-up issue #8.
 - 2026-05-05 — License: Apache-2.0; package manager: npm workspaces; CI: phase-scoped E2E + e2e:all merge gate.
-- 2026-05-05 — Repo created `botcoinmoney/cortex` private at `/root/cortex` with §13.2 layout.
 
 ## How to resume
 
 ```bash
 cd /root/cortex
 git fetch origin && git status
-git log --oneline -15
 git tag --list 'v0.*'             # see what's tagged
-gh issue list                     # open follow-ups
-gh pr list                        # outstanding PRs (none expected after Wave 3)
-git worktree list                 # active phase worktrees
+gh issue list                     # open follow-ups (#4, #8, #11 expected)
+gh pr list                        # outstanding PRs (none expected)
 cat context.md                    # this file
 # Then read ORGANISM_CORTEX_STATE_PLAN.md for the relevant phase only.
 ```
 
-If context-window pressure forces a handoff:
-1. Update `## Current state` and `## Next steps` above.
+If picking up new work:
+1. Update `## Current state` and `## Next steps` above before pushing.
 2. Append a one-line entry to `## Recent decisions`.
 3. Commit `context.md` and push.
 4. End with a one-sentence summary.

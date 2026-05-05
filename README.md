@@ -18,9 +18,11 @@ Pre-V0. See [`context.md`](./context.md) for current state and [`ORGANISM_CORTEX
 | 5 — Mining API + cortex-server + cortex-handler | landed | `v0.phase-5` |
 | 6 — Reducer + credit mechanics | landed | `v0.phase-6` |
 | 1 — Python second reference impl + cross-impl parity | landed | `v0.phase-1b` |
-| 7 — Pre-release local iteration (baselines A–E) | scaffolding |  |
-| 8 — Testnet Cortex organism | scaffolding |  |
-| 9 — Mainnet sidecar launch | scaffolding |  |
+| 7 — Pre-release local iteration (baselines A–E) | scaffolded | `v0.phase-7` |
+| 8 — Testnet Cortex organism | scaffolded | `v0.phase-8` |
+| 9 — Mainnet sidecar launch | scaffolded | `v0.phase-9` |
+
+> Phases 7/8/9 ship the harnesses and release artifacts; **running** the baselines, deploying to testnet, and launching mainnet are user actions documented in [`experiments/PHASE_7_USER_ACTIONS.md`](./experiments/PHASE_7_USER_ACTIONS.md), [`ops/testnet/USER_ACTIONS.md`](./ops/testnet/USER_ACTIONS.md), and [`ops/USER_ACTIONS_MAINNET.md`](./ops/USER_ACTIONS_MAINNET.md).
 
 Tracked open blockers: see [issues](../../issues). Notably **issue #4** — LoCoMo CC-BY-NC-4.0 license decision needed before Phase 4 temporal-family loader ships.
 

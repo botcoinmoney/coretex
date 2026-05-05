@@ -5,8 +5,8 @@ All notable changes to Botcoin Cortex are documented here. The format follows
 
 ## [Unreleased]
 
-### Added
-- **Wave 3 in flight**: Phase 7 (baselines A–E), Phase 8 (testnet), Phase 9 (mainnet release docs). Scaffolding only — running baselines / testnet deploys / mainnet launches all require user input.
+### Notes
+- All 9 phases (0–9) plus the Phase 1 Python second-impl follow-up are landed and tagged. Pre-V0 scaffolding is complete. Running baselines (Phase 7), testnet (Phase 8), and mainnet launch (Phase 9) are user actions.
 
 ### Tracked blockers
 - **Issue #4** — LoCoMo CC-BY-NC-4.0 license decision. Phase 4 temporal-family loader ships with LoCoMo intentionally stubbed; resolution required before follow-up PR.
@@ -14,6 +14,45 @@ All notable changes to Botcoin Cortex are documented here. The format follows
 - **Issue #11** — V1 follow-up: collapse all keccak256 implementations onto a single canonical copy (currently 5 separate copies; 3 had identical bugs caught by cross-impl audit).
 - `BASE_RPC_URL` GitHub Actions secret needed before Phase 2 fork tests run in CI; safe to defer to Phase 8.
 - Multisig operator key set needed before Phase 9 first reward epoch.
+
+## [v0.phase-9] — 2026-05-05
+
+### Added
+- `docs/` — public docs: miner-guide, verifier-guide, state-spec, benchmark-spec, contract-addresses (template), receipt-mapping, multisig-key-set (template), v1-roadmap.
+- `contracts/script/DeployMainnet.s.sol` — strict mainnet deploy (requires `MAINNET_CONFIRM=I-UNDERSTAND`).
+- `scripts/mainnet/{dry-run-epoch,first-reward-audit-trail,multisig-revert-rehearsal,emergency-disable-rehearsal}.mjs` — operator-driven, no broadcast for the user.
+- `test/e2e/phase-9/run.mjs` — gate that self-skips without mainnet env; receipt-mapping + multisig-key-set checks always run.
+- `ops/USER_ACTIONS_MAINNET.md` — 11-step launch checklist gating on issues #4 and #8.
+
+### Notes
+- Audit-window trust assumption documented honestly across all public docs.
+- Wave-3 agent budget hit the org's monthly limit; driver completed scaffolds inline.
+
+## [v0.phase-8] — 2026-05-05
+
+### Added
+- `test/e2e/phase-8/golden-fixture.mjs` — **CI MERGE GATE** per §9 Phase 8: synthetic in-process chain, 2-epoch full pipeline (genesis → challenge → submit → screener → reducer → finalize → verify-epoch reproduces from chain alone).
+- `test/e2e/phase-8/sparse-replay.mjs` — 35-epoch chain with snapshots every 10; replay 3 mid-history target epochs from snapshots, not from genesis.
+- `test/e2e/phase-8/saturation-alarm.mjs` — K=10 / threshold=1% rule against healthy/flat/edge/short cases.
+- `test/e2e/phase-8/run.mjs` — gate aggregator; mainnet/testnet-RPC tests self-skip.
+- `contracts/script/DeployTestnet.s.sol` — testnet deploy script.
+- `scripts/testnet/{deploy-testnet,feed-synthetic-traffic,auditor-reproduce,latch-unlatch-rehearsal}.mjs` — testnet operator harness.
+- `ops/testnet/{dashboard.json,prometheus.yml,runbook-testnet.md,USER_ACTIONS.md}` — observability + runbook + 9-step launch checklist.
+
+### Notes
+- Cortex-server `/metrics` Prometheus endpoint is V1 (see v1-roadmap §9). Dashboard JSON is a template.
+
+## [v0.phase-7] — 2026-05-05
+
+### Added
+- `experiments/baselines/{a..e}/index.mjs` — five baselines, each with `genesisState()` + `mineCandidatePatch()`. Baseline E (revocation-aware) is the placeholder winner per §9.
+- `experiments/baselines/types.mjs` — shared helpers (RANGES, PATCH_TYPE, LEB128, header word builder, deterministic xorShift32 RNG).
+- `experiments/harness/{runBaseline,compareBaselines,goldenVectors}.mjs` — harness with markdown + CSV reports and a 10-triple golden vectors bundle.
+- `test/e2e/phase-7/run.mjs` — Phase 7 E2E: dry-run + golden-vectors emission/replay + genesis-encoding round-trip + 10k adversarial fuzz (gap from §9-spec'd 1M documented).
+- `experiments/PHASE_7_USER_ACTIONS.md` — 10-step user action plan: real iteration (LoCoMo blocker), winner pick, freeze `coreVersionHash` + `genesisStateRoot`, ≥1M fuzz, sensitivity + adversarial reports.
+
+### Notes
+- Synthetic scoring uses StubCorpusLoader; the goal is harness correctness, not real winner selection. Real iteration needs Phase 4 corpus + issue #8 perf fix.
 
 ## [v0.phase-6] — 2026-05-05
 
