@@ -1,0 +1,88 @@
+{
+  "title": "Botcoin Cortex — Testnet Dashboard",
+  "description": "Grafana template for the §9 Phase 8 metrics. Wire to a Prometheus scrape of cortex-server /metrics.",
+  "tags": ["cortex", "testnet", "phase-8"],
+  "uid": "cortex-testnet-v0",
+  "schemaVersion": 38,
+  "panels": [
+    {
+      "title": "Pass rate (overall)",
+      "type": "stat",
+      "metric_ref": "pass_rate_overall",
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "cortex_pass_rate_overall" }],
+      "thresholds": { "steps": [{ "value": null, "color": "red" }, { "value": 0.05, "color": "yellow" }, { "value": 0.20, "color": "green" }] }
+    },
+    {
+      "title": "Pass rate per family",
+      "type": "timeseries",
+      "metric_ref": "pass_rate_overall",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "cortex_pass_rate_per_family{family=\"long_horizon\"}" },
+        { "expr": "cortex_pass_rate_per_family{family=\"near_collision\"}" },
+        { "expr": "cortex_pass_rate_per_family{family=\"temporal\"}" }
+      ]
+    },
+    {
+      "title": "Pass rate per tier",
+      "type": "timeseries",
+      "metric_ref": "pass_rate_overall",
+      "targets": [{ "expr": "cortex_pass_rate_per_tier" }]
+    },
+    {
+      "title": "Score delta distribution",
+      "type": "histogram",
+      "metric_ref": "score_delta_distribution",
+      "targets": [{ "expr": "cortex_score_delta_bucket" }]
+    },
+    {
+      "title": "Protected-regression rate",
+      "type": "stat",
+      "metric_ref": "protected_regression_rate",
+      "targets": [{ "expr": "cortex_protected_regression_rate" }]
+    },
+    {
+      "title": "Reducer rejects",
+      "type": "timeseries",
+      "metric_ref": "reducer_rejects",
+      "targets": [
+        { "expr": "rate(cortex_reducer_rejects_total{reason=\"R01_TARGET_OVERLAP\"}[5m])" },
+        { "expr": "rate(cortex_reducer_rejects_total{reason=\"R02_SEMANTIC_CONFLICT\"}[5m])" }
+      ]
+    },
+    {
+      "title": "Eval latency p50",
+      "type": "stat",
+      "metric_ref": "eval_latency_p50",
+      "targets": [{ "expr": "histogram_quantile(0.50, sum(rate(cortex_eval_latency_seconds_bucket[5m])) by (le))" }],
+      "thresholds": { "steps": [{ "value": null, "color": "green" }, { "value": 0.010, "color": "yellow" }, { "value": 0.025, "color": "red" }] }
+    },
+    {
+      "title": "Eval latency p99",
+      "type": "stat",
+      "metric_ref": "eval_latency_p99",
+      "targets": [{ "expr": "histogram_quantile(0.99, sum(rate(cortex_eval_latency_seconds_bucket[5m])) by (le))" }],
+      "thresholds": { "steps": [{ "value": null, "color": "green" }, { "value": 0.050, "color": "yellow" }, { "value": 0.100, "color": "red" }] }
+    },
+    {
+      "title": "State root per epoch",
+      "type": "table",
+      "metric_ref": "state_root_per_epoch",
+      "targets": [{ "expr": "cortex_state_root_per_epoch" }]
+    },
+    {
+      "title": "Corpus snapshot hash",
+      "type": "stat",
+      "metric_ref": "corpus_snapshot_hash",
+      "targets": [{ "expr": "cortex_corpus_snapshot_hash" }]
+    },
+    {
+      "title": "Merge multiplier distribution",
+      "type": "barchart",
+      "metric_ref": "merge_multiplier_distribution",
+      "targets": [{ "expr": "topk(20, sum by (miner) (cortex_merge_bonus_paid_total))" }]
+    }
+  ],
+  "_note": "cortex-server does not yet expose /metrics in V0 (Phase 5 used node:http for zero-dep bootstrap). Tracked in V1 roadmap §9. Until then, the metric exprs above are templates."
+}
