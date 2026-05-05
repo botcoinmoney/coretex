@@ -1,0 +1,22 @@
+{
+  "description": "Determinism fixture: blank state + single word patch at index 400.",
+  "note": "arm64/macOS validation deferred until CI matrix is widened.",
+  "platform": "linux/x64",
+  "nodeVersion": "v22.22.1",
+  "inputs": {
+    "stateRoot": "0xba16e5b65b9f225724dc99734e4beca30233cb534b11ede816baf3441125f040",
+    "patchIndex": 400,
+    "patchNewWord": "0xdeadbeef",
+    "shardId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "corpusRoot": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "outputs": {
+    "parentStateRoot": "0xba16e5b65b9f225724dc99734e4beca30233cb534b11ede816baf3441125f040",
+    "newStateRoot": "0x4c9a8f59ee30248d58826e8b076361798e48bc2a9d21a646cef749b375390a14",
+    "patchHash": "0xc6d6324850b4927fc4e68a955eccaf9b17a6f4cdcc26f0c09b1b4cf7eb8cce1c",
+    "accepted": true,
+    "baselineScore": "500000",
+    "candidateScore": "500000",
+    "scoreDelta": "0"
+  }
+}
