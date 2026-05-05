@@ -1,6 +1,6 @@
 {
   "name": "@botcoin/cortex-handler",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Single-line drop-in router for the SWCP coordinator. Adds /internal/* RPCs and merge-bonus claim-calldata; never touches /v1/challenge or /v1/submit.",
   "license": "Apache-2.0",
