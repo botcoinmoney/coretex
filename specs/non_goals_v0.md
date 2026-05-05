@@ -1,25 +1,121 @@
 # Cortex V0 Non-Goals
 
-> Phase 0 deliverable. The list of things V0 explicitly does **not** ship, so the design does not sprawl.
+> Phase 0 deliverable. Verified and tightened by Research subagent, 2026-05-05.
+> The list of things V0 explicitly does NOT ship, so the design does not sprawl.
 
-V0 is a **memory-codec improvement lane that pays through the existing receipt path**. Not a model-training lane.
+V0 is a **memory-codec improvement lane that pays through the existing receipt path**. Not a
+model-training lane.
 
-## Hard rejected
+---
 
-- Weights on-chain.
-- LoRA mining.
-- Arbitrary memory text storage on-chain.
-- Miner-to-miner mandatory coordination.
-- Subjective AI judging in canonical scoring.
-- Constantly mutable Botcoin Core (Core upgrades publish a `state_translation_patch` or explicit reset; ambiguity is not acceptable — §3 Phase 3).
-- Separate Cortex reward currency.
-- New EIP-712 domain. (Cortex receipts ride the existing `BotcoinMining` domain with the §6 receipt field mapping, `rulesVersion = 0xC0`.)
-- Editing `BotcoinMiningV3`. The contract is unmodified.
-- On-chain fraud proofs for the audit window in V0. (V1 path: bond-based or ZK fraud proofs.)
+## Hard Rejected for V0
 
-## Tracked V1 paths (not blocking V0)
+The following items are explicitly out of scope for V0. Each entry includes the rejection rationale
+and, where applicable, the V1 tracked path.
 
-- `BotcoinMining.submitCortexReceipt(...)` sister function with explicit Cortex field names.
-- Bond-based or ZK fraud proofs replacing the multisig audit-window override.
+### 1. Weights on-chain
+**Rejected because:** Full model weights are orders of magnitude too large for on-chain storage
+and defeat the purpose of a compact codec. The organism is a 32 KB memory codec, not a model.
+CortexState stores *how to find, route, update, and invalidate memory* — not model parameters.
 
-These are listed in [`ORGANISM_CORTEX_STATE_PLAN.md`](../ORGANISM_CORTEX_STATE_PLAN.md) §9 Phase 9 release notes.
+### 2. LoRA mining
+**Rejected because:** LoRA mining turns Cortex into a model-training lane and introduces
+subjective quality judgments (which model is better?). The canonical verifier cannot
+deterministically evaluate model quality without an API model in consensus — which is explicitly
+rejected (see §3 ORGANISM_CORTEX_STATE_PLAN.md).
+
+### 3. Arbitrary memory text stored on-chain
+**Rejected because:** Raw text storage on-chain is expensive, non-deterministic in value, and
+breaks the codec design. CortexState stores compact binary representations (keys, routing weights,
+validity intervals), not prose. The `experienceCorpusRoot` commits the off-chain corpus hash; the
+corpus itself is not stored on-chain.
+
+### 4. Miner-to-miner mandatory coordination
+**Rejected because:** Mandatory coordination creates a cartel vector and reintroduces the
+centralization the tier system is designed to prevent. Miners compete independently; the
+deterministic reducer handles conflict resolution without requiring miners to communicate.
+
+### 5. Subjective AI judging in canonical scoring
+**Rejected because:** Any API model in the canonical verification path breaks determinism. Two
+machines running the same Core version with the same state and same benchmark seed must produce
+byte-identical results. A frontier model API cannot guarantee this. Miners may use any LLM
+externally to *propose* patches; the canonical *verifier* is fully deterministic.
+
+### 6. Constantly mutable Botcoin Core (ambiguous upgrade semantics)
+**Rejected because:** Core upgrades without a defined migration path create a moving-target that
+rewards tracking Core versions rather than improving the codec. V0 requires that every Core upgrade
+either (a) publishes a `state_translation_patch` mapping V_n → V_{n+1}, or (b) explicitly resets
+the organism with documented rationale. Ambiguity is a hard non-goal.
+
+### 7. Separate Cortex reward currency
+**Rejected because:** A separate token fragments the economic spine and adds regulatory/liquidity
+complexity. Cortex credits are denominated in the existing Botcoin tier system; merge bonuses are
+paid in BOTCOIN via `CortexMergeBonus`. No new token, no new claim flow.
+
+### 8. New EIP-712 domain
+**Rejected because:** A new signing domain requires new contract audit surface and new miner SDK
+changes. Cortex receipts ride the existing `BotcoinMining` EIP-712 domain with the §6 receipt
+field mapping (`rulesVersion = 0xC0` as the Cortex discriminator). Auditors and explorers
+disambiguate via `rulesVersion`. Soft-coupling is explicitly acknowledged and is acceptable for V0
+because the contract does not introspect field semantics — only the signature.
+**V1 path:** `BotcoinMining.submitCortexReceipt(...)` sister function with explicit Cortex field
+names, tracked in Phase 9 release notes.
+
+### 9. Editing BotcoinMiningV3
+**Rejected because:** `BotcoinMiningV3` is deployed and unchanged. All Cortex mechanics are
+additive (two new contracts: `CortexRegistry` and `CortexMergeBonus`). The existing `claim()` math
+reads `epochReward × minerCredits / totalCredits` directly from on-chain state and cannot be
+retroactively reweighted — that is why the merge multiplier is paid via a sister contract, not via
+V3.
+
+### 10. On-chain fraud proofs for the audit window (V0)
+**Rejected because:** The EVM cannot re-run Botcoin Core. A full ZK or bond-based fraud proof
+system requires substantial additional engineering and is out of scope for V0. The V0 audit window
+is a 6-hour delay with a 2-of-N operator multisig override (`revertEpoch`); this trust assumption
+is documented honestly in miner-facing docs.
+**V1 path:** Bond-based or ZK fraud proofs replacing the multisig audit-window override, tracked
+in Phase 9 release notes.
+
+### 11. `?lane=cortex` query-string routing
+**Rejected because:** Query-string lane selection creates a misroute risk where a deliberately or
+accidentally malformed query string could silently fall through to the SWCP handler. Cortex routing
+is path-prefix only: `/v1/cortex/*` → `cortex-server` upstream (nginx path-prefix routing). No
+`?lane=` parameter exists anywhere in the system.
+
+### 12. Score-threshold-free screener (any patch earns credits)
+**Rejected because:** Without a score threshold, random mutation and no-op patches pass and earn
+credits. The screener enforces `candidateScore > baselineScore + threshold`, non-noop, non-overfit,
+non-protected-regression, within-budget. This is the core anti-gaming mechanism.
+
+---
+
+## Tracked V1 Paths (Not Blocking V0)
+
+These are not rejections — they are deferred improvements that are explicitly out of V0 scope and
+tracked for V1.
+
+| V1 Path | Rationale for V0 deferral | Where tracked |
+|---------|--------------------------|---------------|
+| `BotcoinMining.submitCortexReceipt(...)` sister function with explicit Cortex field names | V0 field-alias approach is acceptable because the contract only checks the signature; V1 adds clarity for explorers and removes the soft-coupling. | §9 Phase 9 release notes |
+| Bond-based or ZK fraud proofs for the audit window | Requires significant additional engineering; V0 multisig override is adequate for the trust assumptions of the launch window. | §9 Phase 9 release notes |
+| Adaptive compression across ECS levels (memory ↔ skills ↔ rules) | The ECS "missing diagonal" is the research frontier; V0 encodes all three levels in the state layout but does not implement adaptive cross-level compression. | Research brief §2.8 |
+| Per-subset BEIR license verification and automated per-subset loader | V0 loader uses manually verified subsets; V1 automates the per-subset license check in CI. | `specs/license_audit.md` Phase 4 note |
+
+---
+
+## What V0 IS
+
+To make the non-goals concrete, here is the positive definition:
+
+V0 Botcoin Cortex is:
+- A **compact on-chain-rooted memory codec** (1024 uint256 words = 32 KB active state)
+- A **deterministic proof-of-improvement verifier** (Botcoin Core, pinned version, no API model)
+- A **credit-unified mining lane** (screener-pass receipts via existing `BotcoinMining.submitReceipt`;
+  merge multiplier via `CortexMergeBonus`)
+- An **anchored benchmark** (LIMIT + MTEB/BEIR for near-collision; LoCoMo + MemoryAgentBench for
+  temporal; MemoryArena for long-horizon)
+- A **parallel lane** (separate `cortex-server` process, separate SQLite, separate worker pool;
+  SWCP unchanged and unaffected)
+
+Done when: all subagents agree V0 is a memory-codec improvement lane that pays through the existing
+receipt path, not a model-training lane.
