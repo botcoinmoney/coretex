@@ -2,7 +2,12 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    "typeRoots": [
+      "../../node_modules/@types",
+      "/root/botcoin-coordinator/node_modules/@types",
+      "/root/botcoin-coordinator/node_modules/ethers/node_modules/@types"
+    ]
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*", "src/types/**/*"]
 }

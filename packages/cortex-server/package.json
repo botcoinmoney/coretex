@@ -1,6 +1,6 @@
 {
   "name": "@botcoin/cortex-server",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Standalone HTTP process serving /v1/cortex/* — own PID, own SQLite, own worker pool.",
   "license": "Apache-2.0",
@@ -9,9 +9,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js",
     "test:unit": "node --test --test-reporter=spec ./test/unit"
   },
+  "dependencies": {
+    "@botcoin/cortex": "workspace:*"
+  },
   "engines": {
-    "node": ">=20.10"
-  }
+    "node": ">=22.5"
+  },
+  "_fastifyNote": "Production deployment should add: fastify@^4, @fastify/formbody. The current implementation uses node:http for zero-dependency bootstrap; Fastify is recommended for performance (see src/index.ts)."
 }
