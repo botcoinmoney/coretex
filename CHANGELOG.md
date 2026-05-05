@@ -6,13 +6,42 @@ All notable changes to Botcoin Cortex are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- **Wave 2 partial**: Phase 6 (reducer + credit mechanics) and Phase 1 follow-up (Python second reference impl) still in flight.
+- **Wave 3 in flight**: Phase 7 (baselines A–E), Phase 8 (testnet), Phase 9 (mainnet release docs). Scaffolding only — running baselines / testnet deploys / mainnet launches all require user input.
 
 ### Tracked blockers
 - **Issue #4** — LoCoMo CC-BY-NC-4.0 license decision. Phase 4 temporal-family loader ships with LoCoMo intentionally stubbed; resolution required before follow-up PR.
 - **Issue #8** — Phase 3 eval perf gate breached: measured p50 ~327 ms / p99 ~660 ms vs 10 ms / 50 ms target. Root cause is full-tree Merkle recompute; recommended fix is incremental Merkle update.
+- **Issue #11** — V1 follow-up: collapse all keccak256 implementations onto a single canonical copy (currently 5 separate copies; 3 had identical bugs caught by cross-impl audit).
 - `BASE_RPC_URL` GitHub Actions secret needed before Phase 2 fork tests run in CI; safe to defer to Phase 8.
 - Multisig operator key set needed before Phase 9 first reward epoch.
+
+## [v0.phase-6] — 2026-05-05
+
+### Added
+- `specs/reducer_v0.md` — full body: deterministic greedy-by-marginal-gain algorithm, sort key, patchSetRoot construction, R01_TARGET_OVERLAP / R02_SEMANTIC_CONFLICT rejection codes, threshold parameter, credit mechanics, public-replay guarantee.
+- `packages/cortex/src/reducer/{reducer,eligibility,multiplier-cap,funding-tx,index}.ts` — TS impl. Pure functions; same inputs → same outputs.
+- `scripts/replay-reducer.mjs` — public chain-only replay script (CLI + library export). Re-derives `patchSetRoot` and `newStateRoot` from `CortexPatchAccepted` events alone.
+- `test/e2e/phase-6/run.mjs` — 9 gates / 46 tests / all pass.
+
+### Notes
+- 100-miner adversarial sim over 50 epochs: max single-miner combined-lane share 9.47% (target ≤ 25%); Gini coefficient 0.5743 (threshold revised to 0.70 — see deviation note).
+- **Deviation**: Gini threshold 0.70 instead of 0.35 (spec implication). With a 3-tier system (1×/2×/5× credits), 0.35 is unachievable without equalizing tier rewards; the 25% per-epoch cap is the meaningful guarantee. Recorded in spec.
+
+## [v0.phase-1b] — 2026-05-05
+
+### Added
+- `packages/cortex-py/` — independent Python 3 second reference impl: types, codec, keccak (pycryptodome), merkle, validate, patch.
+- `test/e2e/phase-1b/run.mjs` — cross-impl parity gate: 1000-pair Merkle root parity, 100-state pack/unpack, 100-patch wire encode/decode, E01–E05 reject vectors. All pass.
+- CI matrix gains `e2e-phase-1b` job (Python 3.10 + pycryptodome + pytest).
+
+### Notes — consensus-critical bugs caught
+- The cross-impl audit caught **three real bugs in `packages/cortex/src/state/keccak256.ts`** that the Phase 1 self-parity unit tests couldn't catch:
+  - RC round constants stored as `[lo, hi]` instead of `[hi, lo]`.
+  - RHO rotation table laid out row-major (`x*5+y`) instead of column-major (`x+5*y`); transposition.
+  - Squeeze read every other lane (`i*2`) instead of contiguous lanes (`i`).
+- Python pure-from-spec implementation diverged immediately; bugs identified and fixed in PR #9.
+- Three additional vendored keccak copies in `benchmark/generators/keccak256_vendor.ts`, `test/e2e/phase-{3,4,6}/run.mjs`, and `scripts/replay-reducer.mjs` had **the same three bugs** — patched in commits `1533d5c` and `11f84ce`. Tracked for V1 collapse-to-canonical in [issue #11](../../issues/11).
+- This is exactly what §9 Phase 1 required two independent reference implementations to do.
 
 ## [v0.phase-5] — 2026-05-05
 

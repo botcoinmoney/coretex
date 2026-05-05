@@ -16,10 +16,11 @@ Pre-V0. See [`context.md`](./context.md) for current state and [`ORGANISM_CORTEX
 | 3 — Botcoin Core decoder package | landed (perf follow-up [#8](../../issues/8)) | `v0.phase-3` |
 | 4 — CortexBench V0 | landed | `v0.phase-4` |
 | 5 — Mining API + cortex-server + cortex-handler | landed | `v0.phase-5` |
-| 6 — Reducer + credit mechanics | in flight |  |
-| 7 — Pre-release local iteration (baselines A–E) | pending |  |
-| 8 — Testnet Cortex organism | pending |  |
-| 9 — Mainnet sidecar launch | pending |  |
+| 6 — Reducer + credit mechanics | landed | `v0.phase-6` |
+| 1 — Python second reference impl + cross-impl parity | landed | `v0.phase-1b` |
+| 7 — Pre-release local iteration (baselines A–E) | scaffolding |  |
+| 8 — Testnet Cortex organism | scaffolding |  |
+| 9 — Mainnet sidecar launch | scaffolding |  |
 
 Tracked open blockers: see [issues](../../issues). Notably **issue #4** — LoCoMo CC-BY-NC-4.0 license decision needed before Phase 4 temporal-family loader ships.
 
