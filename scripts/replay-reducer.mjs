@@ -57,14 +57,14 @@ import { readFileSync, writeFileSync } from 'node:fs';
 // Identical implementation to packages/cortex/src/state/keccak256.ts
 function keccak256(data) {
   const RC = [
-    [0x00000001,0x00000000],[0x00008082,0x00000000],[0x0000808A,0x80000000],[0x80008000,0x80000000],
-    [0x0000808B,0x00000000],[0x80000001,0x00000000],[0x80008081,0x80000000],[0x00008009,0x80000000],
-    [0x0000008A,0x00000000],[0x00000088,0x00000000],[0x80008009,0x00000000],[0x8000000A,0x00000000],
-    [0x8000808B,0x00000000],[0x0000008B,0x80000000],[0x00008089,0x80000000],[0x00008003,0x80000000],
-    [0x00008002,0x80000000],[0x00000080,0x80000000],[0x0000800A,0x00000000],[0x8000000A,0x80000000],
-    [0x80008081,0x80000000],[0x00008080,0x80000000],[0x80000001,0x00000000],[0x80008008,0x80000000],
+    [0x00000000,0x00000001],[0x00000000,0x00008082],[0x80000000,0x0000808A],[0x80000000,0x80008000],
+    [0x00000000,0x0000808B],[0x00000000,0x80000001],[0x80000000,0x80008081],[0x80000000,0x00008009],
+    [0x00000000,0x0000008A],[0x00000000,0x00000088],[0x00000000,0x80008009],[0x00000000,0x8000000A],
+    [0x00000000,0x8000808B],[0x80000000,0x0000008B],[0x80000000,0x00008089],[0x80000000,0x00008003],
+    [0x80000000,0x00008002],[0x80000000,0x00000080],[0x00000000,0x0000800A],[0x80000000,0x8000000A],
+    [0x80000000,0x80008081],[0x80000000,0x00008080],[0x00000000,0x80000001],[0x80000000,0x80008008],
   ];
-  const RHO=[0,36,3,41,18,1,44,10,45,2,62,6,43,15,61,28,55,25,21,56,27,20,39,8,14];
+  const RHO=[0,1,62,28,27,36,44,6,55,20,3,10,43,25,39,41,45,15,21,8,18,2,61,56,14];
   const PI =[0,10,20,5,15,16,1,11,21,6,7,17,2,12,22,23,8,18,3,13,14,24,9,19,4];
   function rot64(hi,lo,n){n=((n%64)+64)%64;if(n===0)return[hi,lo];if(n===32)return[lo,hi];if(n<32)return[((hi<<n)|(lo>>>(32-n)))>>>0,((lo<<n)|(hi>>>(32-n)))>>>0];n-=32;return[((lo<<n)|(hi>>>(32-n)))>>>0,((hi<<n)|(lo>>>(32-n)))>>>0];}
   function kF(sH,sL){const bH=new Uint32Array(5),bL=new Uint32Array(5);for(let r=0;r<24;r++){for(let x=0;x<5;x++){let h=0,l=0;for(let y=0;y<5;y++){h^=sH[x+5*y];l^=sL[x+5*y];}bH[x]=h;bL[x]=l;}for(let x=0;x<5;x++){const[th,tl]=rot64(bH[(x+1)%5],bL[(x+1)%5],1);const dh=bH[(x+4)%5]^th,dl=bL[(x+4)%5]^tl;for(let y=0;y<5;y++){sH[x+5*y]^=dh;sL[x+5*y]^=dl;}}const tH=new Uint32Array(25),tL=new Uint32Array(25);for(let i=0;i<25;i++){const[rh,rl]=rot64(sH[i],sL[i],RHO[i]);tH[PI[i]]=rh;tL[PI[i]]=rl;}for(let y=0;y<5;y++)for(let x=0;x<5;x++){const i=x+5*y;sH[i]=tH[i]^((~tH[(x+1)%5+5*y])&tH[(x+2)%5+5*y]);sL[i]=tL[i]^((~tL[(x+1)%5+5*y])&tL[(x+2)%5+5*y]);}sH[0]^=RC[r][0];sL[0]^=RC[r][1];}}
@@ -72,7 +72,7 @@ function keccak256(data) {
   function absorb(buf,off,len){for(let i=0;i<len/8;i++){const b=off+i*8;let lo=0,hi=0;for(let j=0;j<4;j++){lo|=((buf[b+j]??0)<<(j*8));hi|=((buf[b+4+j]??0)<<(j*8));}sL[i]^=lo>>>0;sH[i]^=hi>>>0;}}
   let off=0;while(off+rate<=data.length){absorb(data,off,rate);kF(sH,sL);off+=rate;}
   const last=new Uint8Array(rate);last.set(data.subarray(off));last[data.length-off]=0x01;last[rate-1]|=0x80;absorb(last,0,rate);kF(sH,sL);
-  const out=new Uint8Array(32);for(let i=0;i<4;i++){const lane=i*2,bo=i*8,lo=sL[lane],hi=sH[lane];out[bo]=lo&0xff;out[bo+1]=(lo>>8)&0xff;out[bo+2]=(lo>>16)&0xff;out[bo+3]=(lo>>24)&0xff;out[bo+4]=hi&0xff;out[bo+5]=(hi>>8)&0xff;out[bo+6]=(hi>>16)&0xff;out[bo+7]=(hi>>24)&0xff;}
+  const out=new Uint8Array(32);for(let i=0;i<4;i++){const lane=i,bo=i*8,lo=sL[lane],hi=sH[lane];out[bo]=lo&0xff;out[bo+1]=(lo>>8)&0xff;out[bo+2]=(lo>>16)&0xff;out[bo+3]=(lo>>24)&0xff;out[bo+4]=hi&0xff;out[bo+5]=(hi>>8)&0xff;out[bo+6]=(hi>>16)&0xff;out[bo+7]=(hi>>24)&0xff;}
   return out;
 }
 
