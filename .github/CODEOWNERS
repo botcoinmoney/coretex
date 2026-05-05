@@ -1,0 +1,35 @@
+# Code ownership — see ORGANISM_CORTEX_STATE_PLAN.md §10 subagent assignments
+# for the canonical mapping between code areas and the agent role responsible.
+
+* @botcoinmoney
+
+# Specs
+/specs/cortex_state_v0.md           @botcoinmoney
+/specs/cortex_schema_v0.json        @botcoinmoney
+/specs/packing_spec_v0.md           @botcoinmoney
+/specs/merkleization_spec_v0.md     @botcoinmoney
+/specs/patch_format_v0.md           @botcoinmoney
+/specs/reducer_v0.md                @botcoinmoney
+/specs/receipt_field_mapping.md     @botcoinmoney
+/specs/research_brief_v0.md         @botcoinmoney
+/specs/non_goals_v0.md              @botcoinmoney
+/specs/license_audit.md             @botcoinmoney
+
+# Contracts (BotcoinMiningV3 lives outside this repo and is unchanged)
+/contracts/                         @botcoinmoney
+
+# Packages
+/packages/cortex/                   @botcoinmoney
+/packages/cortex-server/            @botcoinmoney
+/packages/cortex-handler/           @botcoinmoney
+
+# Benchmark
+/benchmark/                         @botcoinmoney
+
+# Ops + release surface
+/ops/                               @botcoinmoney
+/instructions.md                    @botcoinmoney
+
+# Strict §13.5 file — driver-only updates
+/context.md                         @botcoinmoney
+/context-archive.md                 @botcoinmoney
