@@ -2,11 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "typeRoots": [
-      "../../node_modules/@types",
-      "/root/botcoin-coordinator/node_modules/@types",
-      "/root/botcoin-coordinator/node_modules/ethers/node_modules/@types"
-    ]
+    "rootDir": "src",
+    "composite": true,
+    "references": [{ "path": "../cortex" }]
   },
-  "include": ["src/**/*", "../cortex/src/**/*"]
+  "include": ["src/**/*"],
+  "references": [{ "path": "../cortex" }]
 }
