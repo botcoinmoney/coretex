@@ -1,0 +1,17 @@
+{
+  "name": "@botcoin/cortex-server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Standalone HTTP process serving /v1/cortex/* — own PID, own SQLite, own worker pool.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:unit": "node --test --test-reporter=spec ./test/unit"
+  },
+  "engines": {
+    "node": ">=20.10"
+  }
+}
