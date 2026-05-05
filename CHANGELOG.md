@@ -6,12 +6,54 @@ All notable changes to Botcoin Cortex are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- **Wave 2 in flight**: Phase 3 (Core decoder), Phase 4 (CortexBench), Phase 5 (mining API + cortex-server + cortex-handler), Phase 6 (reducer + credit mechanics), Phase 1 follow-up (Python second reference impl).
+- **Wave 2 partial**: Phase 6 (reducer + credit mechanics) and Phase 1 follow-up (Python second reference impl) still in flight.
 
 ### Tracked blockers
 - **Issue #4** — LoCoMo CC-BY-NC-4.0 license decision. Phase 4 temporal-family loader ships with LoCoMo intentionally stubbed; resolution required before follow-up PR.
+- **Issue #8** — Phase 3 eval perf gate breached: measured p50 ~327 ms / p99 ~660 ms vs 10 ms / 50 ms target. Root cause is full-tree Merkle recompute; recommended fix is incremental Merkle update.
 - `BASE_RPC_URL` GitHub Actions secret needed before Phase 2 fork tests run in CI; safe to defer to Phase 8.
 - Multisig operator key set needed before Phase 9 first reward epoch.
+
+## [v0.phase-5] — 2026-05-05
+
+### Added
+- `packages/cortex-server/` — standalone HTTP process (own PID, own SQLite WAL queue, own `worker_threads` pool). Endpoints: `/v1/cortex/{challenge,submit,state,epoch/:id,eval-report/:hash,merge-bonus/claim-calldata}` + `/healthz`. Path-prefix routing only; `?lane=cortex` query strings on the SWCP path NEVER reach this process.
+- `packages/cortex-handler/` — single-line drop-in router for the SWCP coordinator: `mountCortexHandler(app, deps)`. Adds `/internal/{miner-tier,sign-cortex-receipt,epoch,rate-limit-budget,outstanding-challenge,outstanding-challenge/clear}`. The signing key lives exclusively in the SWCP `receiptSigner` — never duplicated. Cortex receipts ride the existing `BotcoinMining` EIP-712 domain with `rulesVersion = 0xC0` (§6 mapping); the sign endpoint rejects any other rulesVersion.
+- `packages/cortex-handler/migrations/001_cortex_store.sql` + `apply-migrations.mjs` — cross-lane bookkeeping schema (outstanding-challenge state, merge-bonus funding receipts, multiplier-claim ledger).
+- `test/e2e/phase-5/run.mjs` — fake SWCP harness + cortex-server launcher; 18 gates (3 PASS / 15 self-skip behind `npm run build` and `BASE_RPC_URL`).
+
+### Notes
+- HTTP framework: shipped with Node.js built-in `http` for zero-dependency bootstrap. **Fastify is recommended for production**; route handler signatures are Fastify-compatible. Documented in `src/index.ts`.
+- Hardcoded `/root/botcoin-coordinator/...` typeRoots and `workspace:*` (pnpm) syntax fixed in a follow-up commit on main; would have broken CI.
+
+## [v0.phase-4] — 2026-05-05
+
+### Added
+- `benchmark/cortex_bench_v0.md` — full body: anchored sources, score formula, hidden-shard derivation, protected-regression set, pass-rate targets, saturation alarm.
+- `benchmark/sources.json`-driven loaders in `benchmark/generators/{near_collision,temporal,long_horizon}/` covering LIMIT (CC-BY-4.0) + BEIR/NQ (Apache-2.0) + BEIR/HotpotQA (CC-BY-SA-4.0); MemoryAgentBench (MIT); MemoryArena (CC-BY-4.0). LoCoMo loader is intentionally `LICENSE_BLOCKED` pending issue #4.
+- `benchmark/score.ts` — composite score with frozen weights (Phase 0).
+- `benchmark/shards.ts` — `deriveShardId` mirroring `deriveWorldSeedU128(...)`.
+- `benchmark/saturation.ts` — median-score-delta-<1%-over-K=10 alarm.
+- `test/e2e/phase-4/run.mjs` — 35/35 gates pass (synthetic-fixture mode).
+
+### Notes
+- 99th-pct synthetic-miner pass rates measured at random=0.0%, weak=6.5%, strong=27.0% — within the locked target bands (±3%).
+- BEIR MSMARCO and TREC-COVID deferred (commercial-use review pending).
+- `PINNED_CORPUS_HASH = FIXTURE_HASH_PLACEHOLDER` in dev mode; loaders skip hash check until `scripts/fetch-fixtures.mjs` is run with real external data.
+
+## [v0.phase-3] — 2026-05-05
+
+### Added
+- `packages/cortex/src/decoder/` — typed-slot decoder over the 1024-word state.
+- `packages/cortex/src/eval/` — eval harness, eval report, deterministic `reportHash = keccak256(canonicalJson(report))`. `StubCorpusLoader` until Phase 4 lands; the corpus-loader interface is documented.
+- `packages/cortex/src/workers/` — `worker_threads` pool + worker entrypoint. Default size = `os.cpus().length - 1` clamped [1, 8].
+- `packages/cortex/src/upgrade/` — `state_translation_patch` reader + explicit reset path. Core upgrades MUST publish one or the other; ambiguity is a documented non-goal.
+- `packages/cortex/src/verify-epoch/` — replays a finalized epoch from chain events alone (parent snapshot + accepted patches + reducer order + `H_e` reveal + `experienceCorpusRoot` + Core version → re-derives `stateRoot`).
+- `packages/cortex/src/cli.ts` — `botcoin-cortex {decode,apply-patch,eval,reduce-epoch,verify-epoch,snapshot,upgrade}` dispatcher.
+- `test/e2e/phase-3/run.mjs` — T1..T7; 15 PASS / 1 SKIP (Base mainnet RPC) / 0 FAIL.
+
+### Notes — known issue
+- **Eval perf budget breached** — measured p50 ~327 ms / p99 ~660 ms vs 10 ms / 50 ms target. Tracked in [issue #8](../../issues/8). Root cause is full-tree Merkle recompute; recommended fix is incremental Merkle update.
 
 ## [v0.phase-2] — 2026-05-05
 

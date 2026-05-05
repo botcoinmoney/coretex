@@ -13,9 +13,9 @@ Pre-V0. See [`context.md`](./context.md) for current state and [`ORGANISM_CORTEX
 | 0 — Research lock + benchmark anchoring | landed | `v0.phase-0` |
 | 1 — Cortex state spec + TS reference impl | landed | `v0.phase-1` |
 | 2 — CortexRegistry + CortexMergeBonus contracts | landed | `v0.phase-2` |
-| 3 — Botcoin Core decoder package | in flight |  |
-| 4 — CortexBench V0 | in flight |  |
-| 5 — Mining API + cortex-server + cortex-handler | in flight |  |
+| 3 — Botcoin Core decoder package | landed (perf follow-up [#8](../../issues/8)) | `v0.phase-3` |
+| 4 — CortexBench V0 | landed | `v0.phase-4` |
+| 5 — Mining API + cortex-server + cortex-handler | landed | `v0.phase-5` |
 | 6 — Reducer + credit mechanics | in flight |  |
 | 7 — Pre-release local iteration (baselines A–E) | pending |  |
 | 8 — Testnet Cortex organism | pending |  |
