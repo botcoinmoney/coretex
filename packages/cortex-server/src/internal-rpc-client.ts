@@ -7,10 +7,13 @@
  *
  * Endpoints (all on the SWCP side):
  *   GET  /internal/miner-tier?miner=0x...
+ *   GET  /internal/miner-receipt-chain?miner=0x...
  *   POST /internal/sign-cortex-receipt
  *   GET  /internal/epoch
  *   GET  /internal/rate-limit-budget?miner=0x...&lane=cortex
  *   GET  /internal/outstanding-challenge?miner=0x...
+ *   POST /internal/outstanding-challenge/set
+ *   POST /internal/outstanding-challenge/clear
  */
 
 const INTERNAL_RPC_URL = process.env['INTERNAL_RPC_URL'] ?? 'http://127.0.0.1:8080';
@@ -56,6 +59,12 @@ export interface MinerTierResponse {
   creditsPerSolve: number;
 }
 
+export interface MinerReceiptChainResponse {
+  miner: string;
+  solveIndex: number;
+  prevReceiptHash: string;
+}
+
 export interface EpochStateResponse {
   epochId: number;
   parentStateRoot: string;
@@ -89,6 +98,14 @@ export interface OutstandingChallengeResponse {
   outstanding: boolean;
   lane: 'swcp' | 'cortex' | null;
   expiresAt: number | null;
+  shardOrChallengeId?: string | null;
+}
+
+export interface SetOutstandingChallengeRequest {
+  miner: string;
+  lane: 'cortex';
+  expiresAt: number;
+  shardOrChallengeId: string;
 }
 
 export interface SignCortexReceiptRequest {
@@ -123,6 +140,10 @@ export async function getMinerTier(miner: string): Promise<MinerTierResponse> {
   return rpcGet<MinerTierResponse>(`/internal/miner-tier?miner=${encodeURIComponent(miner)}`);
 }
 
+export async function getMinerReceiptChain(miner: string): Promise<MinerReceiptChainResponse> {
+  return rpcGet<MinerReceiptChainResponse>(`/internal/miner-receipt-chain?miner=${encodeURIComponent(miner)}`);
+}
+
 export async function getEpochState(): Promise<EpochStateResponse> {
   return rpcGet<EpochStateResponse>('/internal/epoch');
 }
@@ -133,6 +154,14 @@ export async function getRateLimitBudget(miner: string): Promise<RateLimitBudget
 
 export async function getOutstandingChallenge(miner: string): Promise<OutstandingChallengeResponse> {
   return rpcGet<OutstandingChallengeResponse>(`/internal/outstanding-challenge?miner=${encodeURIComponent(miner)}`);
+}
+
+export async function setOutstandingChallenge(req: SetOutstandingChallengeRequest): Promise<{ ok: true; miner: string }> {
+  return rpcPost<{ ok: true; miner: string }>('/internal/outstanding-challenge/set', req);
+}
+
+export async function clearOutstandingChallenge(miner: string): Promise<{ ok: true; miner: string }> {
+  return rpcPost<{ ok: true; miner: string }>('/internal/outstanding-challenge/clear', { miner });
 }
 
 export async function signCortexReceipt(req: SignCortexReceiptRequest): Promise<SignCortexReceiptResponse> {

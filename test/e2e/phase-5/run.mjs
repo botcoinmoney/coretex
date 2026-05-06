@@ -103,6 +103,15 @@ function startFakeSwcp(overrides = {}) {
         return;
       }
 
+      if (req.method === 'GET' && path === '/internal/miner-receipt-chain') {
+        json(200, {
+          miner,
+          solveIndex: overrides.solveIndex ?? 0,
+          prevReceiptHash: overrides.prevReceiptHash ?? '0x' + '00'.repeat(32),
+        });
+        return;
+      }
+
       if (req.method === 'GET' && path === '/internal/epoch') {
         json(200, {
           epochId: overrides.epochId ?? 812,
@@ -110,6 +119,7 @@ function startFakeSwcp(overrides = {}) {
           experienceCorpusRoot: overrides.experienceCorpusRoot ?? '0x' + 'cd'.repeat(32),
           coreVersionHash: overrides.coreVersionHash ?? '0x' + 'ef'.repeat(32),
           hiddenSeedCommit: overrides.hiddenSeedCommit ?? '0x' + '12'.repeat(32),
+          epochSecret: overrides.epochSecret ?? '0x' + '34'.repeat(32),
           secretRevealed: overrides.secretRevealed ?? false,
         });
         return;
@@ -134,9 +144,23 @@ function startFakeSwcp(overrides = {}) {
         return;
       }
 
+      if (req.method === 'POST' && path === '/internal/outstanding-challenge/set') {
+        readBody().then((raw) => {
+          const body = JSON.parse(raw);
+          _outstandingByMiner.set(String(body.miner).toLowerCase(), {
+            lane: body.lane,
+            expiresAt: body.expiresAt,
+            shardOrChallengeId: body.shardOrChallengeId,
+          });
+          json(200, { ok: true, miner: String(body.miner).toLowerCase() });
+        });
+        return;
+      }
+
       if (req.method === 'POST' && path === '/internal/outstanding-challenge/clear') {
-        readBody().then(() => {
-          _outstandingByMiner.delete(miner);
+        readBody().then((raw) => {
+          const body = JSON.parse(raw || '{}');
+          _outstandingByMiner.delete(String(body.miner ?? miner).toLowerCase());
           json(200, { ok: true });
         });
         return;
@@ -445,6 +469,11 @@ await (async () => {
     // miner-tier
     const tier = await get(port, `/internal/miner-tier?miner=${miner}`);
     assert(tier.status === 200 && typeof tier.body.creditsPerSolve === 'number', 'miner-tier failed');
+
+    // miner-receipt-chain
+    const chain = await get(port, `/internal/miner-receipt-chain?miner=${miner}`);
+    assert(chain.status === 200 && typeof chain.body.solveIndex === 'number', 'miner-receipt-chain failed');
+    assert(typeof chain.body.prevReceiptHash === 'string', 'miner-receipt-chain prevReceiptHash missing');
 
     // epoch
     const ep = await get(port, '/internal/epoch');

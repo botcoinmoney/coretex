@@ -31,7 +31,9 @@ import type { CortexDb } from '../queue/sqlite.js';
 import {
   getEpochState,
   getMinerTier,
+  getMinerReceiptChain,
   getOutstandingChallenge,
+  setOutstandingChallenge,
 } from '../internal-rpc-client.js';
 import { deriveShardIdHex, hexToBytes } from '@botcoin/cortex';
 
@@ -115,11 +117,12 @@ export function handleChallenge(db: CortexDb) {
       }
 
       // 2. Fetch epoch state and miner tier
-      let epochState, tierInfo;
+      let epochState, tierInfo, receiptChain;
       try {
-        [epochState, tierInfo] = await Promise.all([
+        [epochState, tierInfo, receiptChain] = await Promise.all([
           getEpochState(),
           getMinerTier(miner),
+          getMinerReceiptChain(miner),
         ]);
       } catch (err) {
         console.error('[challenge] internal-rpc epoch/tier fetch failed:', err);
@@ -140,7 +143,7 @@ export function handleChallenge(db: CortexDb) {
         }));
         return;
       }
-      const solveIndex = 0; // TODO(Phase 6): derive from miner's lastReceiptHash chain position
+      const solveIndex = receiptChain.solveIndex;
       const shardId = deriveCanonicalShardId(
         epochState.epochSecret,
         miner,
@@ -157,8 +160,33 @@ export function handleChallenge(db: CortexDb) {
 
       const expiresAt = Math.floor(Date.now() / 1000) + CHALLENGE_TTL_SECONDS;
 
-      // 4. Record outstanding challenge in local DB
-      db.setOutstandingChallenge(miner, epochState.epochId, shardId, expiresAt);
+      // 4. Record outstanding challenge in the SWCP-side cross-lane store
+      // before returning it to the miner. If this fails, fail closed: SWCP
+      // must know about Cortex challenges or the single-outstanding invariant
+      // does not hold across lanes.
+      try {
+        await setOutstandingChallenge({
+          miner,
+          lane: 'cortex',
+          expiresAt,
+          shardOrChallengeId: shardId,
+        });
+      } catch (err) {
+        console.error('[challenge] internal-rpc outstanding-challenge/set failed:', err);
+        res.writeHead(503, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'internal-rpc-unavailable', detail: String(err) }));
+        return;
+      }
+
+      // 5. Record outstanding challenge in local DB
+      db.setOutstandingChallenge(
+        miner,
+        epochState.epochId,
+        shardId,
+        solveIndex,
+        receiptChain.prevReceiptHash.toLowerCase(),
+        expiresAt,
+      );
 
       const body = {
         lane: 'cortex',
@@ -172,6 +200,8 @@ export function handleChallenge(db: CortexDb) {
         shardDescriptor,
         submissionFormat: 'cortex-patch-v0',
         creditsPerSolve: tierInfo.creditsPerSolve,
+        solveIndex,
+        prevReceiptHash: receiptChain.prevReceiptHash.toLowerCase(),
         _expiresAt: expiresAt,
       };
 

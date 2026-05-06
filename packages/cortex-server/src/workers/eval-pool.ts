@@ -18,12 +18,14 @@
  * Hard performance budget (§4): <10 ms p50, <50 ms p99 per eval.
  */
 
-import { Worker, workerData, isMainThread, parentPort } from 'node:worker_threads';
+import { Worker, type WorkerOptions } from 'node:worker_threads';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const keccakModulePath = path.resolve(__dirname, '../../../cortex/dist/state/keccak256.js');
+const keccakModuleUrl = pathToFileURL(keccakModulePath).href;
 
 export interface EvalInput {
   /** Hex-encoded patch wire bytes */
@@ -69,12 +71,10 @@ export interface EvalResult {
 
 const WORKER_INLINE_CODE = `
 import { parentPort } from 'node:worker_threads';
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-const { keccak256 } = require(${JSON.stringify(
-  // Resolve the dist path of @botcoin/cortex from the cortex-server location.
-  // Stays inside the repo — no runtime network deps.
-  '/root/cortex/packages/cortex/dist/state/keccak256.js',
+const { keccak256 } = await import(${JSON.stringify(
+  // Resolved relative to the compiled cortex-server worker module. This stays
+  // inside the deployed workspace without hardcoding /root/cortex.
+  keccakModuleUrl,
 )});
 
 parentPort.on('message', (msg) => {
@@ -108,6 +108,7 @@ parentPort.on('message', (msg) => {
 
 interface PendingTask {
   id: number;
+  input: EvalInput;
   resolve: (r: EvalResult) => void;
   reject: (e: Error) => void;
 }
@@ -145,8 +146,8 @@ export class EvalPool {
 
     for (let i = 0; i < poolSize; i++) {
       const worker = new Worker(
-        `data:text/javascript,${encodeURIComponent(WORKER_INLINE_CODE)}`,
-        { eval: true },
+        WORKER_INLINE_CODE,
+        { eval: true, type: 'module' } as WorkerOptions & { type: 'module' },
       );
 
       const slot = { busy: false, queue: [] as PendingTask[] };
@@ -183,7 +184,7 @@ export class EvalPool {
     const slot = this.queues[workerIdx]!;
     slot.busy = true;
     this.pending.set(task.id, task);
-    this.workers[workerIdx]!.postMessage({ id: task.id, input: null }); // input is part of task data
+    this.workers[workerIdx]!.postMessage({ id: task.id, input: task.input });
   }
 
   eval(input: EvalInput): Promise<EvalResult> {
@@ -195,7 +196,7 @@ export class EvalPool {
 
     return new Promise((resolve, reject) => {
       const id = nextId();
-      const task: PendingTask = { id, resolve, reject };
+      const task: PendingTask = { id, input, resolve, reject };
       this.pending.set(id, task);
 
       // Round-robin to find a non-busy worker; otherwise queue it
@@ -219,7 +220,7 @@ export class EvalPool {
         this.workerIndex = (this.workerIndex + 1) % this.workers.length;
         const idx = this.workerIndex;
         this.pending.delete(id); // Will be re-added when dispatched
-        this.queues[idx]!.queue.push({ id, resolve, reject });
+        this.queues[idx]!.queue.push({ id, input, resolve, reject });
       }
     });
   }

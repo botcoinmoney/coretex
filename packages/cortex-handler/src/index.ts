@@ -11,10 +11,12 @@
  *
  * Adds:
  *   GET  /internal/miner-tier?miner=0x...
+ *   GET  /internal/miner-receipt-chain?miner=0x...
  *   POST /internal/sign-cortex-receipt
  *   GET  /internal/epoch
  *   GET  /internal/rate-limit-budget?miner=0x...&lane=cortex
  *   GET  /internal/outstanding-challenge?miner=0x...
+ *   POST /internal/outstanding-challenge/set        (cortex-server calls after issuing a challenge)
  *   POST /internal/outstanding-challenge/clear      (cortex-server calls to clear after submit)
  *
  * Never modifies /v1/challenge or /v1/submit.
@@ -61,7 +63,15 @@ export interface EpochStateAccessor {
     experienceCorpusRoot: string;
     coreVersionHash: string;
     hiddenSeedCommit: string;
+    epochSecret?: string;
     secretRevealed: boolean;
+  }>;
+}
+
+export interface ReceiptChainAccessor {
+  getReceiptChain(miner: string): Promise<{
+    solveIndex: number;
+    prevReceiptHash: string;
   }>;
 }
 
@@ -87,6 +97,8 @@ export interface CortexHandlerDeps {
   epochState: EpochStateAccessor;
   /** Shared rate-limit budget accessor. */
   rateLimitBudget: RateLimitBudgetAccessor;
+  /** Current BotcoinMiningV3 nextIndex/lastReceiptHash cursor. */
+  receiptChain: ReceiptChainAccessor;
   /** Optional: path to the cortex-store SQLite DB. Defaults to CORTEX_STORE_DB_PATH env. */
   cortexStorePath?: string;
   /** Optional: shared secret to validate /internal/* requests. If set, x-internal-secret header required. */
@@ -160,7 +172,7 @@ function sendJson(res: Res, code: number, body: unknown): void {
  * existing routes.
  */
 export function mountCortexHandler(app: MinimalApp, deps: CortexHandlerDeps): void {
-  const { receiptSigner, epochState, rateLimitBudget, cortexStorePath, internalSecret } = deps;
+  const { receiptSigner, epochState, rateLimitBudget, receiptChain, cortexStorePath, internalSecret } = deps;
   const store = getCortexStore(cortexStorePath);
   const checkAuth = makeAuthCheck(internalSecret);
 
@@ -182,6 +194,38 @@ export function mountCortexHandler(app: MinimalApp, deps: CortexHandlerDeps): vo
         sendJson(res, 200, { miner, ...tier });
       } catch (err) {
         sendJson(res, 500, { error: 'tier-lookup-failed', detail: String(err) });
+      }
+    })();
+  });
+
+  // ── GET /internal/miner-receipt-chain?miner=0x... ─────────────────────────────
+  app.get('/internal/miner-receipt-chain', (req, res) => {
+    void (async () => {
+      if (!checkAuth(req, res)) return;
+
+      const url = new URL(req.url ?? '/', 'http://localhost');
+      const miner = (url.searchParams.get('miner') ?? '').toLowerCase();
+
+      if (!/^0x[0-9a-fA-F]{40}$/.test(miner)) {
+        sendJson(res, 400, { error: 'invalid miner address' });
+        return;
+      }
+
+      try {
+        const chain = await receiptChain.getReceiptChain(miner);
+        if (!Number.isSafeInteger(chain.solveIndex) || chain.solveIndex < 0) {
+          throw new Error(`invalid solveIndex from receiptChain: ${chain.solveIndex}`);
+        }
+        if (!/^0x[0-9a-fA-F]{64}$/.test(chain.prevReceiptHash)) {
+          throw new Error('invalid prevReceiptHash from receiptChain');
+        }
+        sendJson(res, 200, {
+          miner,
+          solveIndex: chain.solveIndex,
+          prevReceiptHash: chain.prevReceiptHash.toLowerCase(),
+        });
+      } catch (err) {
+        sendJson(res, 500, { error: 'receipt-chain-lookup-failed', detail: String(err) });
       }
     })();
   });
@@ -220,11 +264,33 @@ export function mountCortexHandler(app: MinimalApp, deps: CortexHandlerDeps): vo
       }
 
       try {
+        const miner = String(b['miner'] ?? '').toLowerCase();
+        if (!/^0x[0-9a-fA-F]{40}$/.test(miner)) {
+          sendJson(res, 400, { error: 'invalid miner address' });
+          return;
+        }
+        const solveIndex = BigInt(String(b['solveIndex'] ?? '0'));
+        const prevReceiptHash = String(b['prevReceiptHash'] ?? '0x' + '00'.repeat(32)).toLowerCase();
+        if (!/^0x[0-9a-fA-F]{64}$/.test(prevReceiptHash)) {
+          sendJson(res, 400, { error: 'invalid prevReceiptHash' });
+          return;
+        }
+
+        const chain = await receiptChain.getReceiptChain(miner);
+        if (solveIndex !== BigInt(chain.solveIndex) || prevReceiptHash !== chain.prevReceiptHash.toLowerCase()) {
+          sendJson(res, 409, {
+            error: 'stale-receipt-chain',
+            expected: { solveIndex: chain.solveIndex, prevReceiptHash: chain.prevReceiptHash.toLowerCase() },
+            got: { solveIndex: solveIndex.toString(), prevReceiptHash },
+          });
+          return;
+        }
+
         const signed = await receiptSigner.signReceipt({
-          miner:           String(b['miner'] ?? ''),
+          miner,
           epochId:         BigInt(String(b['epochId'] ?? '0')),
-          solveIndex:      BigInt(String(b['solveIndex'] ?? '0')),
-          prevReceiptHash: String(b['prevReceiptHash'] ?? '0x' + '00'.repeat(32)),
+          solveIndex,
+          prevReceiptHash,
           challengeId:     String(b['challengeId'] ?? '0x' + '00'.repeat(32)),
           commit:          String(b['commit'] ?? '0x' + '00'.repeat(32)),
           docHash:         String(b['docHash'] ?? '0x' + '00'.repeat(32)),
@@ -313,6 +379,64 @@ export function mountCortexHandler(app: MinimalApp, deps: CortexHandlerDeps): vo
 
   // ── POST /internal/outstanding-challenge/clear ──────────────────────────────
   // Called by cortex-server after a successful submit (clears the cortex-side entry)
+  app.post('/internal/outstanding-challenge/set', (req, res) => {
+    void (async () => {
+      if (!checkAuth(req, res)) return;
+
+      let body: unknown;
+      try {
+        const raw = await readBody(req);
+        body = JSON.parse(raw);
+      } catch {
+        sendJson(res, 400, { error: 'invalid-json' });
+        return;
+      }
+
+      if (typeof body !== 'object' || body === null) {
+        sendJson(res, 400, { error: 'body-must-be-object' });
+        return;
+      }
+
+      const b = body as Record<string, unknown>;
+      const miner = String(b['miner'] ?? '').toLowerCase();
+      const lane = String(b['lane'] ?? '');
+      const expiresAt = Number(b['expiresAt'] ?? 0);
+      const shardOrChallengeId = String(b['shardOrChallengeId'] ?? '');
+
+      if (!/^0x[0-9a-fA-F]{40}$/.test(miner)) {
+        sendJson(res, 400, { error: 'invalid miner address' });
+        return;
+      }
+      if (lane !== 'cortex') {
+        sendJson(res, 400, { error: 'invalid lane', expected: 'cortex' });
+        return;
+      }
+      if (!Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)) {
+        sendJson(res, 400, { error: 'invalid expiresAt' });
+        return;
+      }
+      if (!/^0x[0-9a-fA-F]{32}$/.test(shardOrChallengeId)) {
+        sendJson(res, 400, { error: 'invalid shardOrChallengeId' });
+        return;
+      }
+
+      store.clearExpired();
+      const existing = store.getOutstanding(miner);
+      if (existing) {
+        sendJson(res, 409, {
+          error: 'outstanding-challenge',
+          lane: existing.lane,
+          expiresAt: existing.expiresAt,
+          shardOrChallengeId: existing.shardOrChallengeId,
+        });
+        return;
+      }
+
+      store.setOutstanding(miner, 'cortex', expiresAt, shardOrChallengeId);
+      sendJson(res, 200, { ok: true, miner });
+    })();
+  });
+
   app.post('/internal/outstanding-challenge/clear', (req, res) => {
     void (async () => {
       if (!checkAuth(req, res)) return;

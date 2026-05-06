@@ -55,7 +55,7 @@ try {
 
 const {
   pack, unpack, merkleizeState, bytesToHex, hexToBytes,
-  encodePatch, decodePatch, applyPatch,
+  encodePatch, decodePatch, applyPatch, applyPatchOntoCurrent,
   RANGES, PATCH_TYPE,
 } = _state;
 
@@ -73,7 +73,14 @@ const {
 
 const {
   verifyEpoch,
-} = _state._verifyMod ?? buildInlineVerifyEpoch({ unpack, decodePatch, applyPatch, merkleizeState, bytesToHex });
+} = _state._verifyMod ?? buildInlineVerifyEpoch({
+  unpack,
+  decodePatch,
+  applyPatchOntoCurrent,
+  merkleizeState,
+  bytesToHex,
+  keccak256: _state.keccak256,
+});
 
 const {
   WorkerPool, defaultPoolSize,
@@ -134,9 +141,10 @@ function randomBigInt(bits) {
 
 function makeRandomState() {
   const words = new Array(1024).fill(0n);
-  // Fill non-reserved regions with random data (avoid reserved bits for simplicity)
-  // Only fill RETRIEVAL_KEYS range (384-671) fully to avoid reserved-bit issues
+  // Fill only RetrievalKeys KEY_VECTOR words. Slot word 0 carries reserved flag
+  // bits, so unrestricted random data there would make the state invalid.
   for (let i = RANGES.RETRIEVAL_KEYS_START; i <= RANGES.RETRIEVAL_KEYS_END; i++) {
+    if ((i - RANGES.RETRIEVAL_KEYS_START) % 8 === 0) continue;
     words[i] = randomBigInt(256);
   }
   return { words };
@@ -144,7 +152,9 @@ function makeRandomState() {
 
 function makeValidPatch(state) {
   const root = merkleizeState(state);
-  const idx = RANGES.RETRIEVAL_KEYS_START + Math.floor(Math.random() * (RANGES.RETRIEVAL_KEYS_END - RANGES.RETRIEVAL_KEYS_START + 1));
+  const slot = Math.floor(Math.random() * 36);
+  const slotWord = 1 + Math.floor(Math.random() * 7);
+  const idx = RANGES.RETRIEVAL_KEYS_START + slot * 8 + slotWord;
   const newWord = randomBigInt(256);
   return {
     patchType: PATCH_TYPE.KEY_UPDATE,
@@ -543,14 +553,16 @@ await runTest('verify-epoch: local synthetic chain, genesis → state root match
   const genesis = makeBlankState();
   const genesisRoot = bytesToHex(merkleizeState(genesis));
 
-  // Build 3 independent patches all with the same parent root (genesis).
+  // Build 5 independent patches all with the same parent root (genesis).
   // The reducer picks them all up since they target non-overlapping indices.
   // Sort by scoreDelta desc: 1000 > 900 > 800 → apply in that order.
   const parentRoot = merkleizeState(genesis);
   const patchDefs = [
-    { idx: 400, newWord: 1n, scoreDelta: 1000n },
-    { idx: 401, newWord: 2n, scoreDelta: 900n },
-    { idx: 402, newWord: 3n, scoreDelta: 800n },
+    { idx: 401, newWord: 1n, scoreDelta: 1000n },
+    { idx: 402, newWord: 2n, scoreDelta: 900n },
+    { idx: 403, newWord: 3n, scoreDelta: 800n },
+    { idx: 404, newWord: 4n, scoreDelta: 700n },
+    { idx: 405, newWord: 5n, scoreDelta: 600n },
   ];
 
   const patches = [];
@@ -575,17 +587,18 @@ await runTest('verify-epoch: local synthetic chain, genesis → state root match
     });
   }
 
-  // The reducer applies patches in order of scoreDelta desc; since all share the same
-  // parentStateRoot (genesis), only the first (highest scoreDelta=1000) can be applied.
-  // Subsequent patches fail E01 (wrong parent root after state changes).
-  // Expected: only patch at idx=400, newWord=1 is applied.
+  // The reducer applies patches in order of scoreDelta desc. Every screener-pass
+  // patch shares the epoch parentStateRoot, then non-overlapping writes apply
+  // onto the running current state.
   const expectedFinalState = { words: [...genesis.words] };
-  expectedFinalState.words[400] = 1n; // only the highest-scoreDelta patch applied
+  for (let i = 0; i < 5; i++) {
+    expectedFinalState.words[401 + i] = BigInt(i + 1);
+  }
   const finalRoot = bytesToHex(merkleizeState(expectedFinalState));
 
   const finalizedEvent = {
     epoch: 1n,
-    parentStateRoot: '0x' + genesisRoot,
+    parentStateRoot: genesisRoot,
     patchSetRoot: '0x' + '00'.repeat(32),
     newStateRoot: finalRoot,
     coreVersionHash: '0x' + '00'.repeat(32),
@@ -602,6 +615,53 @@ await runTest('verify-epoch: local synthetic chain, genesis → state root match
 
   if (!result.ok) throw new Error(`verifyEpoch failed: ${result.code} — ${result.message}`);
   if (!result.match) throw new Error(`Root mismatch:\n  reproduced: ${result.reproducedStateRoot}\n  expected:   ${result.expectedStateRoot}`);
+  if (result.acceptedPatchHashes.length !== 5) {
+    throw new Error(`Expected 5 accepted patches, got ${result.acceptedPatchHashes.length}`);
+  }
+});
+
+await runTest('verify-epoch: rejects forged patchHash metadata', async () => {
+  const genesis = makeBlankState();
+  const parentRoot = merkleizeState(genesis);
+  const patch = {
+    patchType: PATCH_TYPE.KEY_UPDATE,
+    wordCount: 1,
+    scoreDelta: 1000n,
+    parentStateRoot: parentRoot,
+    indices: [410],
+    newWords: [123n],
+  };
+  const patchWire = encodePatch(patch);
+
+  const finalizedEvent = {
+    epoch: 1n,
+    parentStateRoot: bytesToHex(parentRoot),
+    patchSetRoot: '0x' + '00'.repeat(32),
+    newStateRoot: bytesToHex(merkleizeState(genesis)),
+    coreVersionHash: '0x' + '00'.repeat(32),
+    experienceCorpusRoot: '0x' + '00'.repeat(32),
+  };
+
+  const result = verifyEpoch({
+    epoch: 1n,
+    finalizedEvent,
+    patchEvents: [{
+      epoch: 1n,
+      miner: '0x0000000000000000000000000000000000000001',
+      parentStateRoot: bytesToHex(parentRoot),
+      patchHash: '0x' + 'ff'.repeat(32),
+      evalReportHash: '0x' + '00'.repeat(32),
+      compactPatchBytes: patchWire,
+    }],
+    snapshotEvent: null,
+    genesisState: genesis,
+  });
+
+  if (!result.ok) throw new Error(`verifyEpoch failed: ${result.code} — ${result.message}`);
+  if (!result.match) throw new Error('Forged patchHash event changed replayed state');
+  if (result.acceptedPatchHashes.length !== 0) {
+    throw new Error(`Expected forged patchHash to be rejected, accepted ${result.acceptedPatchHashes.length}`);
+  }
 });
 
 await runTest('verify-epoch: from snapshot (not genesis)', async () => {
@@ -615,7 +675,7 @@ await runTest('verify-epoch: from snapshot (not genesis)', async () => {
   // Snapshot event
   const snapshotEvent = {
     epoch: 50n,
-    stateRoot: '0x' + snapRoot,
+    stateRoot: snapRoot,
     fullStateBytes: pack(snapState),
   };
 
@@ -626,7 +686,7 @@ await runTest('verify-epoch: from snapshot (not genesis)', async () => {
     wordCount: 1,
     scoreDelta: 1000n,
     parentStateRoot: parentRoot,
-    indices: [600],
+    indices: [601],
     newWords: [0xABCDn],
   };
   const patchWire = encodePatch(patch);
@@ -638,7 +698,7 @@ await runTest('verify-epoch: from snapshot (not genesis)', async () => {
 
   const finalizedEvent = {
     epoch: 51n,
-    parentStateRoot: '0x' + snapRoot,
+    parentStateRoot: snapRoot,
     patchSetRoot: '0x' + '00'.repeat(32),
     newStateRoot: expectedRoot,
     coreVersionHash: '0x' + '00'.repeat(32),
@@ -980,7 +1040,24 @@ function buildInlineState() {
     return{ok:true,state:rs};
   }
 
-  return { pack, unpack, merkleizeState, bytesToHex, hexToBytes, encodePatch, decodePatch, applyPatch, RANGES, PATCH_TYPE, MAGIC, SCHEMA_VERSION_V0, WORD_COUNT_VALUE, keccak256, getField };
+  function applyPatchOntoCurrent(state,patch){
+    if(patch.wordCount<1||patch.wordCount>4)return{ok:false,code:'E03',message:'OVER_BUDGET'};
+    let any=false;
+    for(let i=0;i<patch.wordCount;i++){if((state.words[patch.indices[i]]??0n)!==(patch.newWords[i]??0n)){any=true;break;}}
+    if(!any)return{ok:false,code:'E05',message:'NOOP_PATCH'};
+    const nw=[...state.words];
+    for(let i=0;i<patch.wordCount;i++){
+      const idx=patch.indices[i];
+      if(idx>=992&&idx<=1023)return{ok:false,code:'E02',message:'WRONG_TYPE_FIELD'};
+      if(idx<0||idx>=1024)return{ok:false,code:'E02',message:'WRONG_TYPE_FIELD'};
+      nw[idx]=patch.newWords[i]??0n;
+    }
+    const rs={words:nw};
+    if(hasReserved(rs))return{ok:false,code:'E04',message:'RESERVED_BIT_SET'};
+    return{ok:true,state:rs};
+  }
+
+  return { pack, unpack, merkleizeState, bytesToHex, hexToBytes, encodePatch, decodePatch, applyPatch, applyPatchOntoCurrent, RANGES, PATCH_TYPE, MAGIC, SCHEMA_VERSION_V0, WORD_COUNT_VALUE, keccak256, getField };
 }
 
 function buildInlineEval({ merkleizeState, bytesToHex, applyPatch, keccak256 }) {
@@ -1123,25 +1200,35 @@ function buildInlineUpgrade({ merkleizeState, bytesToHex, hexToBytes, applyPatch
   return { parseStatTranslationPatch, applyStatTranslationPatch, encodeStatTranslationPatch, executeReset, UPGRADE_MAGIC, RESET_EVENT_MARKER };
 }
 
-function buildInlineVerifyEpoch({ unpack, decodePatch, applyPatch, merkleizeState, bytesToHex }) {
+function buildInlineVerifyEpoch({ unpack, decodePatch, applyPatchOntoCurrent, merkleizeState, bytesToHex, keccak256 }) {
+  function hexEq(a, b) { return a.toLowerCase() === b.toLowerCase(); }
+  function hashHex(bytes) {
+    return bytesToHex(keccak256 ? keccak256(bytes) : new Uint8Array(32).fill(0));
+  }
   function runReducer(parentState, patches) {
     const pr = merkleizeState(parentState);
     const parentRoot = bytesToHex(pr);
-    const elig = patches.filter(p => p.parentStateRoot.toLowerCase() === parentRoot.toLowerCase());
-    const dec = elig.map(ev => ({ ev, patch: decodePatch(ev.compactPatchBytes) }));
+    const elig = patches.filter(p => {
+      if (!hexEq(p.parentStateRoot, parentRoot)) return false;
+      let patch;
+      try { patch = decodePatch(p.compactPatchBytes); } catch { return false; }
+      if (!hexEq(bytesToHex(patch.parentStateRoot), parentRoot)) return false;
+      return hexEq(p.patchHash, hashHex(p.compactPatchBytes));
+    });
+    const dec = elig.map(ev => ({ ev, patch: decodePatch(ev.compactPatchBytes), computedPatchHash: hashHex(ev.compactPatchBytes) }));
     dec.sort((a, b) => {
       if (a.patch.scoreDelta > b.patch.scoreDelta) return -1;
       if (a.patch.scoreDelta < b.patch.scoreDelta) return 1;
       if (a.patch.wordCount !== b.patch.wordCount) return a.patch.wordCount - b.patch.wordCount;
-      return a.ev.patchHash < b.ev.patchHash ? -1 : 1;
+      return a.computedPatchHash < b.computedPatchHash ? -1 : 1;
     });
     const used = new Set(); let cur = parentState; const acc = [];
-    for (const { ev, patch } of dec) {
+    for (const { patch, computedPatchHash } of dec) {
       if (patch.indices.some(i => used.has(i))) continue;
-      const r = applyPatch(cur, patch);
+      const r = applyPatchOntoCurrent(cur, patch);
       if (!r.ok) continue;
       for (const i of patch.indices) used.add(i);
-      cur = r.state; acc.push(ev.patchHash);
+      cur = r.state; acc.push(computedPatchHash);
     }
     return { state: cur, acceptedHashes: acc };
   }

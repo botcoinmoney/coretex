@@ -42,9 +42,11 @@ contract DeployMainnet is Script {
         vm.startBroadcast();
 
         CortexRegistry registry = new CortexRegistry(owner_, coordinator_);
+        // Constructor signature: (_botcoin, _registry, _operator) — order
+        // matches CortexMergeBonus.sol and the rest of the test/deploy scripts.
         CortexMergeBonus mergeBonus = new CortexMergeBonus(
-            address(registry),
             botcoinToken,
+            address(registry),
             coordinator_
         );
 

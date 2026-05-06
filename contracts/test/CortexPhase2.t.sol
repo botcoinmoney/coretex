@@ -950,4 +950,43 @@ contract CortexPhase2Test is Test {
 
         proofB; proofC; // silence unused warnings
     }
+
+    function test_fundEpoch_zeroMerkleRoot_reverts() public {
+        _finalizeEpoch(EPOCH);
+        vm.warp(block.timestamp + 21601);
+
+        vm.startPrank(COORDINATOR);
+        token.approve(address(bonus), 1 ether);
+        vm.expectRevert(CortexMergeBonus.ZeroMerkleRoot.selector);
+        bonus.fundEpoch(EPOCH, bytes32(0), 1 ether);
+        vm.stopPrank();
+    }
+
+    function test_claimMergeBonus_arrayLengthMismatch_reverts() public {
+        (bytes32 root, bytes32[] memory proof) = _buildSingleLeafMerkle(MINER_A, 10 ether, 10 ether);
+        _finalizeAndFund(EPOCH, root, 10 ether);
+
+        uint64[] memory epochs = new uint64[](1);
+        epochs[0] = EPOCH;
+        uint256[] memory bonuses = new uint256[](0);
+        uint256[] memory caps = new uint256[](1);
+        caps[0] = 10 ether;
+        bytes32[][] memory proofs = new bytes32[][](1);
+        proofs[0] = proof;
+
+        vm.prank(MINER_A);
+        vm.expectRevert(CortexMergeBonus.ArrayLengthMismatch.selector);
+        bonus.claimMergeBonus(epochs, bonuses, caps, proofs);
+    }
+
+    function test_triggerMergeBonusClaim_zeroMiner_reverts() public {
+        uint64[] memory epochs = new uint64[](0);
+        uint256[] memory bonuses = new uint256[](0);
+        uint256[] memory caps = new uint256[](0);
+        bytes32[][] memory proofs = new bytes32[][](0);
+
+        vm.prank(POOL);
+        vm.expectRevert(CortexMergeBonus.ZeroAddress.selector);
+        bonus.triggerMergeBonusClaim(epochs, address(0), bonuses, caps, proofs);
+    }
 }

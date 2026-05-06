@@ -92,9 +92,9 @@ let exitCode = 0;
 try {
   // 1. Deploy CortexRegistry + CortexMergeBonus via fork.
   const reg   = deploy('src/CortexRegistry.sol:CortexRegistry', DEPLOYER, DEPLOYER);
-  // CortexMergeBonus(registry, botcoinToken, operator)
+  // CortexMergeBonus signature: (_botcoin, _registry, _operator).
   const tok   = '0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed'; // any deployed Base mainnet ERC-20; the rehearsal won't transfer
-  const bonus = deploy('src/CortexMergeBonus.sol:CortexMergeBonus', reg, tok, DEPLOYER);
+  const bonus = deploy('src/CortexMergeBonus.sol:CortexMergeBonus', tok, reg, DEPLOYER);
   console.log('[revert-drill]   CortexRegistry  ', reg);
   console.log('[revert-drill]   CortexMergeBonus', bonus);
 

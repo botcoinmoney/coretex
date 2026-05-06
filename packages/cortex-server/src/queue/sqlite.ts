@@ -48,8 +48,8 @@ export interface CortexDb {
   getSubmission(id: number): QueueRow | undefined;
   getPendingSubmissions(): QueueRow[];
   getSubmissionByMinerEpoch(miner: string, epoch: number, solveIndex: number): QueueRow | undefined;
-  getOutstandingChallenge(miner: string): { epoch: number; shardId: string; expiresAt: number } | undefined;
-  setOutstandingChallenge(miner: string, epoch: number, shardId: string, expiresAt: number): void;
+  getOutstandingChallenge(miner: string): { epoch: number; shardId: string; solveIndex: number; prevReceiptHash: string; expiresAt: number } | undefined;
+  setOutstandingChallenge(miner: string, epoch: number, shardId: string, solveIndex: number, prevReceiptHash: string, expiresAt: number): void;
   clearOutstandingChallenge(miner: string): void;
   close(): void;
 }
@@ -92,12 +92,25 @@ export function openDatabase(dbPath?: string): CortexDb {
     CREATE INDEX IF NOT EXISTS idx_submissions_miner    ON submissions(miner, epoch);
 
     CREATE TABLE IF NOT EXISTS outstanding_challenges (
-      miner       TEXT    PRIMARY KEY,
-      epoch       INTEGER NOT NULL,
-      shard_id    TEXT    NOT NULL,
-      expires_at  INTEGER NOT NULL
-    );
-  `);
+	      miner       TEXT    PRIMARY KEY,
+	      epoch       INTEGER NOT NULL,
+	      shard_id    TEXT    NOT NULL,
+	      solve_index INTEGER NOT NULL DEFAULT 0,
+	      prev_receipt_hash TEXT NOT NULL DEFAULT '0x0000000000000000000000000000000000000000000000000000000000000000',
+	      expires_at  INTEGER NOT NULL
+	    );
+	  `);
+
+  try {
+    db.exec(`ALTER TABLE outstanding_challenges ADD COLUMN solve_index INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    // Column already exists.
+  }
+  try {
+    db.exec(`ALTER TABLE outstanding_challenges ADD COLUMN prev_receipt_hash TEXT NOT NULL DEFAULT '0x0000000000000000000000000000000000000000000000000000000000000000'`);
+  } catch {
+    // Column already exists.
+  }
 
   const insertStmt = db.prepare(`
     INSERT INTO submissions
@@ -126,14 +139,16 @@ export function openDatabase(dbPath?: string): CortexDb {
   const getByMinerEpochStmt = db.prepare(`SELECT * FROM submissions WHERE miner = ? AND epoch = ? AND solve_index = ?`);
 
   const getOutstandingStmt = db.prepare(`SELECT * FROM outstanding_challenges WHERE miner = ?`);
-  const setOutstandingStmt = db.prepare(`
-    INSERT INTO outstanding_challenges (miner, epoch, shard_id, expires_at)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(miner) DO UPDATE SET
-      epoch = excluded.epoch,
-      shard_id = excluded.shard_id,
-      expires_at = excluded.expires_at
-  `);
+	  const setOutstandingStmt = db.prepare(`
+	    INSERT INTO outstanding_challenges (miner, epoch, shard_id, solve_index, prev_receipt_hash, expires_at)
+	    VALUES (?, ?, ?, ?, ?, ?)
+	    ON CONFLICT(miner) DO UPDATE SET
+	      epoch = excluded.epoch,
+	      shard_id = excluded.shard_id,
+	      solve_index = excluded.solve_index,
+	      prev_receipt_hash = excluded.prev_receipt_hash,
+	      expires_at = excluded.expires_at
+	  `);
   const clearOutstandingStmt = db.prepare(`DELETE FROM outstanding_challenges WHERE miner = ?`);
 
   function rowToQueueRow(r: Record<string, unknown>): QueueRow {
@@ -191,12 +206,18 @@ export function openDatabase(dbPath?: string): CortexDb {
         clearOutstandingStmt.run(miner);
         return undefined;
       }
-      return { epoch: r['epoch'] as number, shardId: r['shard_id'] as string, expiresAt };
-    },
+	      return {
+	        epoch: r['epoch'] as number,
+	        shardId: r['shard_id'] as string,
+	        solveIndex: r['solve_index'] as number,
+	        prevReceiptHash: r['prev_receipt_hash'] as string,
+	        expiresAt,
+	      };
+	    },
 
-    setOutstandingChallenge(miner, epoch, shardId, expiresAt) {
-      setOutstandingStmt.run(miner, epoch, shardId, expiresAt);
-    },
+	    setOutstandingChallenge(miner, epoch, shardId, solveIndex, prevReceiptHash, expiresAt) {
+	      setOutstandingStmt.run(miner, epoch, shardId, solveIndex, prevReceiptHash, expiresAt);
+	    },
 
     clearOutstandingChallenge(miner) {
       clearOutstandingStmt.run(miner);

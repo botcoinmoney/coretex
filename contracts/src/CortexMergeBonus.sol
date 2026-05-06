@@ -95,6 +95,8 @@ contract CortexMergeBonus is Ownable, Pausable, ReentrancyGuard {
     error BonusExceedsCap();
     error TooManyEpochs();
     error NothingFunded();
+    error ArrayLengthMismatch();
+    error ZeroMerkleRoot();
 
     // ── Constructor ───────────────────────────────────────────────────────
 
@@ -151,6 +153,7 @@ contract CortexMergeBonus is Ownable, Pausable, ReentrancyGuard {
 
         if (epochMerkleRoot[epoch] != bytes32(0)) revert AlreadyFunded();
         if (amount == 0) revert ZeroAmount();
+        if (minerBonusRoot == bytes32(0)) revert ZeroMerkleRoot();
 
         epochMerkleRoot[epoch]  = minerBonusRoot;
         epochTotalBonus[epoch]  = amount;
@@ -177,6 +180,9 @@ contract CortexMergeBonus is Ownable, Pausable, ReentrancyGuard {
     ) external whenNotPaused nonReentrant {
         uint256 len = epochIds.length;
         if (len > MAX_CLAIM_EPOCHS) revert TooManyEpochs();
+        if (bonusAmounts.length != len || capAmounts.length != len || proofs.length != len) {
+            revert ArrayLengthMismatch();
+        }
 
         address miner = msg.sender;
         uint256 totalPayout;
@@ -227,6 +233,10 @@ contract CortexMergeBonus is Ownable, Pausable, ReentrancyGuard {
     ) external whenNotPaused nonReentrant {
         uint256 len = epochIds.length;
         if (len > MAX_CLAIM_EPOCHS) revert TooManyEpochs();
+        if (miner == address(0)) revert ZeroAddress();
+        if (bonusAmounts.length != len || capAmounts.length != len || proofs.length != len) {
+            revert ArrayLengthMismatch();
+        }
 
         uint256 totalPayout;
 

@@ -49,6 +49,8 @@ import {
   getRateLimitBudget,
   signCortexReceipt,
   getEpochState,
+  getMinerReceiptChain,
+  clearOutstandingChallenge,
   type SignCortexReceiptRequest,
 } from '../internal-rpc-client.js';
 import { getPool } from '../workers/eval-pool.js';
@@ -73,6 +75,14 @@ function readBody(req: IncomingMessage): Promise<string> {
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
+}
+
+function isHexBytes(value: string, bytes: number): boolean {
+  return new RegExp(`^0x[0-9a-fA-F]{${bytes * 2}}$`).test(value);
+}
+
+function normalizeHex(value: string): string {
+  return value.startsWith('0x') ? value.toLowerCase() : `0x${value.toLowerCase()}`;
 }
 
 /** Map string patchType to numeric code */
@@ -101,6 +111,9 @@ function buildPatchHex(patch: {
   // [1] patchType [1] wordCount [8] scoreDelta [32] parentStateRoot [for each: LEB128 idx + 32 newWord]
   const wordCount = patch.targetIndices.length;
   if (wordCount < 1 || wordCount > 4) throw new RangeError(`invalid wordCount ${wordCount}`);
+  if (patch.newWords.length !== wordCount) {
+    throw new RangeError(`targetIndices/newWords length mismatch: ${wordCount} vs ${patch.newWords.length}`);
+  }
 
   const patchTypeCode = parsePatchType(patch.patchType);
   const scoreDelta = BigInt(patch.scoreDelta);
@@ -116,12 +129,17 @@ function buildPatchHex(patch: {
   // scoreDelta lo
   parts.push((sdLo >>> 24) & 0xff, (sdLo >>> 16) & 0xff, (sdLo >>> 8) & 0xff, sdLo & 0xff);
   // parentStateRoot (32 bytes)
-  const psr = patch.parentStateRoot.startsWith('0x') ? patch.parentStateRoot.slice(2) : patch.parentStateRoot;
-  if (psr.length !== 64) throw new RangeError('parentStateRoot must be 32 bytes (64 hex chars)');
+  if (!isHexBytes(normalizeHex(patch.parentStateRoot), 32)) {
+    throw new RangeError('parentStateRoot must be 32 bytes (0x + 64 hex chars)');
+  }
+  const psr = normalizeHex(patch.parentStateRoot).slice(2);
   for (let i = 0; i < 64; i += 2) parts.push(parseInt(psr.slice(i, i + 2), 16));
 
   for (let i = 0; i < wordCount; i++) {
     const idx = patch.targetIndices[i]!;
+    if (!Number.isSafeInteger(idx) || idx < 0) {
+      throw new RangeError(`targetIndices[${i}] must be a non-negative safe integer`);
+    }
     // LEB128 encode index
     let n = idx;
     do {
@@ -131,10 +149,9 @@ function buildPatchHex(patch: {
       parts.push(b);
     } while (n !== 0);
 
-    const wh = (patch.newWords[i] ?? '0x' + '00'.repeat(32)).startsWith('0x')
-      ? (patch.newWords[i] ?? '0x' + '00'.repeat(32)).slice(2)
-      : (patch.newWords[i] ?? '00'.repeat(32));
-    if (wh.length !== 64) throw new RangeError(`newWords[${i}] must be 32 bytes`);
+    const word = normalizeHex(patch.newWords[i]!);
+    if (!isHexBytes(word, 32)) throw new RangeError(`newWords[${i}] must be 32 bytes`);
+    const wh = word.slice(2);
     for (let j = 0; j < 64; j += 2) parts.push(parseInt(wh.slice(j, j + 2), 16));
   }
 
@@ -237,10 +254,24 @@ export function handleSubmit(db: CortexDb) {
       }
 
       const epoch = Number(challenge['epoch'] ?? 0);
-      const parentStateRoot = String(challenge['parentStateRoot'] ?? '');
-      const experienceCorpusRoot = String(challenge['experienceCorpusRoot'] ?? '');
-      const coreVersionHash = String(challenge['coreVersionHash'] ?? '');
-      const shardId = String(challenge['shardId'] ?? '');
+      const parentStateRoot = normalizeHex(String(challenge['parentStateRoot'] ?? ''));
+      const experienceCorpusRoot = normalizeHex(String(challenge['experienceCorpusRoot'] ?? ''));
+      const coreVersionHash = normalizeHex(String(challenge['coreVersionHash'] ?? ''));
+      const shardId = normalizeHex(String(challenge['shardId'] ?? ''));
+      const solveIndex = Number(challenge['solveIndex'] ?? -1);
+      const prevReceiptHash = normalizeHex(String(challenge['prevReceiptHash'] ?? ''));
+
+      if (!Number.isSafeInteger(epoch) || epoch <= 0 || !Number.isSafeInteger(solveIndex) || solveIndex < 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'invalid-challenge', detail: 'epoch must be positive and solveIndex must be a non-negative safe integer' }));
+        return;
+      }
+      if (!isHexBytes(parentStateRoot, 32) || !isHexBytes(experienceCorpusRoot, 32) ||
+          !isHexBytes(coreVersionHash, 32) || !isHexBytes(shardId, 16) || !isHexBytes(prevReceiptHash, 32)) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'invalid-challenge', detail: 'challenge roots/prevReceiptHash must be 32-byte hex and shardId must be 16-byte hex' }));
+        return;
+      }
 
       // Fetch epoch state from the SWCP coordinator at SUBMIT time.
       // The miner's posted challenge carries only public fields; the
@@ -264,6 +295,67 @@ export function handleSubmit(db: CortexDb) {
       }
       const hiddenSeedCommit = epochStateAtSubmit.hiddenSeedCommit;
       const epochSecret = epochStateAtSubmit.epochSecret;
+
+      const outstanding = db.getOutstandingChallenge(miner);
+      if (!outstanding) {
+        res.writeHead(409, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'no-outstanding-cortex-challenge',
+          message: 'Request /v1/cortex/challenge before submitting a Cortex patch.',
+        }));
+        return;
+      }
+      if (outstanding.epoch !== epoch ||
+          normalizeHex(outstanding.shardId) !== shardId ||
+          outstanding.solveIndex !== solveIndex ||
+          normalizeHex(outstanding.prevReceiptHash) !== prevReceiptHash) {
+        res.writeHead(409, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'challenge-mismatch',
+          expected: {
+            epoch: outstanding.epoch,
+            shardId: normalizeHex(outstanding.shardId),
+            solveIndex: outstanding.solveIndex,
+            prevReceiptHash: normalizeHex(outstanding.prevReceiptHash),
+          },
+          got: { epoch, shardId, solveIndex, prevReceiptHash },
+        }));
+        return;
+      }
+
+      let receiptChainAtSubmit;
+      try {
+        receiptChainAtSubmit = await getMinerReceiptChain(miner);
+      } catch (err) {
+        res.writeHead(503, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'receipt-chain-unavailable', detail: String(err) }));
+        return;
+      }
+      if (receiptChainAtSubmit.solveIndex !== solveIndex ||
+          normalizeHex(receiptChainAtSubmit.prevReceiptHash) !== prevReceiptHash) {
+        res.writeHead(409, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'stale-receipt-chain',
+          expected: {
+            solveIndex: receiptChainAtSubmit.solveIndex,
+            prevReceiptHash: normalizeHex(receiptChainAtSubmit.prevReceiptHash),
+          },
+          got: { solveIndex, prevReceiptHash },
+        }));
+        return;
+      }
+
+      if (epochStateAtSubmit.epochId !== epoch ||
+          normalizeHex(epochStateAtSubmit.parentStateRoot) !== parentStateRoot ||
+          normalizeHex(epochStateAtSubmit.experienceCorpusRoot) !== experienceCorpusRoot ||
+          normalizeHex(epochStateAtSubmit.coreVersionHash) !== coreVersionHash) {
+        res.writeHead(409, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'stale-or-forged-challenge',
+          message: 'Challenge fields no longer match the active epoch state.',
+        }));
+        return;
+      }
 
       // 1. Check rate-limit budget
       let budget;
@@ -290,12 +382,15 @@ export function handleSubmit(db: CortexDb) {
       let patchHex: string;
       try {
         const patchInput = {
-          parentStateRoot: String(patchBody['parentStateRoot'] ?? ''),
+          parentStateRoot: normalizeHex(String(patchBody['parentStateRoot'] ?? '')),
           targetIndices: (patchBody['targetIndices'] as number[] | undefined) ?? [],
           newWords: (patchBody['newWords'] as string[] | undefined) ?? [],
           patchType: String(patchBody['patchType'] ?? 'KEY_UPDATE'),
           scoreDelta: String(patchBody['scoreDelta'] ?? '0'),
         };
+        if (patchInput.parentStateRoot !== parentStateRoot) {
+          throw new RangeError('patch.parentStateRoot must match challenge.parentStateRoot');
+        }
         patchHex = buildPatchHex(patchInput);
       } catch (err) {
         res.writeHead(400, { 'content-type': 'application/json' });
@@ -309,7 +404,7 @@ export function handleSubmit(db: CortexDb) {
       const submissionId = db.upsertSubmission({
         miner,
         epoch,
-        solveIndex: 0, // TODO(Phase 6): derive from chain position
+        solveIndex,
         patchHex,
         parentStateRoot,
         shardId,
@@ -367,7 +462,6 @@ export function handleSubmit(db: CortexDb) {
       db.updateStatus(submissionId, 'screener_pass');
 
       // 5. Derive worldSeed via canonical Keccak-256 path (Steps 4 + 6).
-      const solveIndex = 0;
       const worldSeed = deriveWorldSeed(epochSecret, miner, solveIndex, parentStateRoot, epoch);
 
       // shardCommitment = keccak256(shardId ‖ parentStateRoot) using canonical Keccak.
@@ -379,7 +473,7 @@ export function handleSubmit(db: CortexDb) {
         miner,
         epochId: epoch,
         solveIndex,
-        prevReceiptHash: '0x' + '00'.repeat(32), // TODO(Phase 6): derive from chain position
+        prevReceiptHash,
         challengeId: shardId,
         commit: hiddenSeedCommit,
         docHash: parentStateRoot,              // §6: docHash = parentStateRoot
@@ -405,8 +499,15 @@ export function handleSubmit(db: CortexDb) {
       const receiptJson = JSON.stringify(signedReceipt);
       db.updateStatus(submissionId, 'signed', { receiptJson });
 
-      // 7. Clear outstanding challenge
+      // 7. Clear outstanding challenge in both local Cortex queue and SWCP-side
+      // cross-lane store. Remote clear failure is non-fatal after signing, but
+      // it is surfaced so operators can repair stale outstanding records.
       db.clearOutstandingChallenge(miner);
+      try {
+        await clearOutstandingChallenge(miner);
+      } catch (err) {
+        console.error('[submit] internal-rpc outstanding-challenge/clear failed:', err);
+      }
 
       // 8. Write to dataset namespace (Cortex only — never SWCP)
       writeDatasetArtifact(epoch, miner, patchHex, receiptJson);
