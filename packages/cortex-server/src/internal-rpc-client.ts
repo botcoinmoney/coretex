@@ -61,7 +61,20 @@ export interface EpochStateResponse {
   parentStateRoot: string;
   experienceCorpusRoot: string;
   coreVersionHash: string;
+  /** keccak256(epochSecret) — what's published on-chain at epoch start. */
   hiddenSeedCommit: string;
+  /**
+   * The active epoch secret (32-byte 0x-prefixed hex). The SWCP coordinator
+   * shares this with cortex-server over the trusted internal RPC so the
+   * canonical deriveShardIdU128(epochSecret, miner, …) can produce
+   * shardIds at challenge time. After on-chain reveal, the same value is
+   * publicly visible via CortexShardRevealed and any auditor can re-derive.
+   *
+   * Required for production. Pre-V1 cortex-server fails 503 if this is
+   * missing — the alternative is using hiddenSeedCommit, which is public
+   * and breaks the hidden-shard property.
+   */
+  epochSecret: string;
   secretRevealed: boolean;
 }
 

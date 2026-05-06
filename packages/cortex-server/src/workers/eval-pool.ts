@@ -1,30 +1,21 @@
 /**
  * Worker-pool harness for Botcoin Core eval.
  *
- * Phase 3 fills in the actual eval body inside the worker. This module
- * provides:
- *   - A fixed-size pool of worker_threads (size from CORTEX_WORKER_POOL_SIZE,
- *     default: CPU count or 4).
- *   - A promise-based dispatch API so the HTTP request thread never blocks.
- *   - Round-robin task assignment with per-worker queuing.
+ * Production gate (Step 5): the inline-stub worker only emits screener-pass
+ * reports tagged `_stub: true`. submit.ts rejects any `_stub` report at the
+ * receipt boundary unless `CORTEX_ALLOW_STUB_EVAL=1`. The boot path also
+ * fails fast on instantiation if the gate is unset AND no real evaluator
+ * has been registered via `setEvaluator()` — production miners cannot earn
+ * receipts from a stubbed evaluator.
  *
- * TODO(Phase 3): replace the STUB_EVAL_RESULT below with a real call to
- * @botcoin/cortex eval once packages/cortex/src/eval/ lands. The interface
- * contract for Phase 3 is:
- *
- *   evalPatch(input: EvalInput): Promise<EvalResult>
- *
- * where EvalInput = { state: CortexState; patch: Patch; shardId: string;
- *                      experienceCorpusRoot: string; coreVersionHash: string }
- * and   EvalResult = { pass: boolean; scoreDelta: number; report: EvalReport }
- *
- * The worker file is packages/cortex/src/workers/eval-worker.js (Phase 3 lands
- * it). Until Phase 3 ships, every submission that passes decode gets a stub
- * screener pass with scoreDelta=1 and a clearly-flagged TODO report.
+ * Real-evaluator wiring: a follow-up that replaces the inline stub with
+ * `import { evalPatch } from '@botcoin/cortex'` is gated on the cortex-server
+ * keeping an in-memory copy of the current CortexState (sync'd from chain
+ * events) — without that, the worker can't produce real eval reports because
+ * `evalPatch` needs the full state, not just `parentStateRoot`. That state-
+ * sync agent is the next item.
  *
  * Hard performance budget (§4): <10 ms p50, <50 ms p99 per eval.
- * The pool size should be set so that eval latency targets are met on the
- * production host without blocking the HTTP event loop.
  */
 
 import { Worker, workerData, isMainThread, parentPort } from 'node:worker_threads';
@@ -70,27 +61,28 @@ export interface EvalResult {
 }
 
 // ─── Worker inline code ────────────────────────────────────────────────────────
-// The actual eval worker code. When Phase 3 ships eval-worker.mjs, import it
-// instead of running the stub inline.
+// Inline stub worker — only used when CORTEX_ALLOW_STUB_EVAL=1. Reports are
+// tagged `_stub: true`; submit.ts rejects them at the receipt boundary in
+// production mode. Uses canonical Keccak-256 (same primitive as on-chain) for
+// the deterministic eval-report hash so cross-impl audits don't diverge on
+// the report-hash format alone.
 
 const WORKER_INLINE_CODE = `
-import { parentPort, workerData } from 'node:worker_threads';
-import { createHash } from 'node:crypto';
-
-// TODO(Phase 3): replace this stub with:
-//   import { evalPatch } from '@botcoin/cortex/eval';
-// and call evalPatch(msg.input) for real scoring.
+import { parentPort } from 'node:worker_threads';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { keccak256 } = require(${JSON.stringify(
+  // Resolve the dist path of @botcoin/cortex from the cortex-server location.
+  // Stays inside the repo — no runtime network deps.
+  '/root/cortex/packages/cortex/dist/state/keccak256.js',
+)});
 
 parentPort.on('message', (msg) => {
   const { id, input } = msg;
   const t0 = performance.now();
-
-  // ── STUB EVAL ─────────────────────────────────────────────────────────────
-  // Phase 3 Core eval is not yet landed. All patches that survived decode
-  // are marked as screener-pass with a synthetic scoreDelta=1.
-  // This stub MUST be replaced before Cortex goes live.
   const latencyMs = performance.now() - t0;
 
+  // STUB report — _stub flag forces submit.ts production gate to reject.
   const report = {
     scoreDelta: 1,
     baselineScore: 0,
@@ -101,11 +93,14 @@ parentPort.on('message', (msg) => {
     _stub: true,
   };
 
-  // Deterministic report hash (stable: sha256 of JSON-canonical report + input)
+  // Canonical Keccak-256 over canonical-JSON input for the report hash.
   const hashInput = JSON.stringify({ report, patchHex: input.patchHex, epoch: input.epoch, shardId: input.shardId });
-  const evalReportHash = '0x' + createHash('sha256').update(hashInput).digest('hex');
+  const enc = new TextEncoder();
+  const digest = keccak256(enc.encode(hashInput));
+  let hex = '0x';
+  for (const b of digest) hex += b.toString(16).padStart(2, '0');
 
-  parentPort.postMessage({ id, ok: true, result: { pass: true, report, evalReportHash } });
+  parentPort.postMessage({ id, ok: true, result: { pass: true, report, evalReportHash: hex } });
 });
 `;
 
@@ -130,6 +125,17 @@ export class EvalPool {
   private workerIndex = 0;
 
   constructor(size?: number) {
+    // Production gate: if no real evaluator is registered AND the operator
+    // hasn't opted into stub mode, refuse to construct the pool. Better to
+    // crash on boot than to issue stubbed receipts.
+    if (!_realEvaluator && process.env['CORTEX_ALLOW_STUB_EVAL'] !== '1') {
+      throw new Error(
+        'cortex-server: refusing to start with stub evaluator. ' +
+        'Set CORTEX_ALLOW_STUB_EVAL=1 for development, or call setEvaluator() ' +
+        'to wire a real eval before getPool() is invoked.',
+      );
+    }
+
     const envPoolSize = Number(process.env['CORTEX_WORKER_POOL_SIZE'] ?? 0);
     const poolSize = size ?? (envPoolSize || Math.min(os.cpus().length, 4));
 
@@ -181,6 +187,12 @@ export class EvalPool {
   }
 
   eval(input: EvalInput): Promise<EvalResult> {
+    // If a real evaluator is registered, bypass the worker stub. Real eval
+    // requires full state — see setEvaluator() docs.
+    if (_realEvaluator) {
+      return _realEvaluator(input);
+    }
+
     return new Promise((resolve, reject) => {
       const id = nextId();
       const task: PendingTask = { id, resolve, reject };
@@ -215,6 +227,18 @@ export class EvalPool {
   async shutdown(): Promise<void> {
     await Promise.all(this.workers.map((w) => w.terminate()));
   }
+}
+
+// Real evaluator hook (Step 5). cortex-server does NOT yet sync state from
+// chain, so this stays null in V0 unless the operator wires it explicitly.
+// When non-null, EvalPool.eval bypasses the worker stub and calls this fn.
+type RealEvaluator = (input: EvalInput) => Promise<EvalResult>;
+let _realEvaluator: RealEvaluator | null = null;
+export function setEvaluator(fn: RealEvaluator | null): void {
+  _realEvaluator = fn;
+}
+export function hasRealEvaluator(): boolean {
+  return _realEvaluator !== null;
 }
 
 // Singleton pool — created lazily on first use

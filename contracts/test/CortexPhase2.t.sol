@@ -823,4 +823,131 @@ contract CortexPhase2Test is Test {
         root  = keccak256(abi.encodePacked(miner, bonusAmt, capAmt));
         proof = new bytes32[](0); // single-leaf Merkle: no siblings needed
     }
+
+    function _leafHash(address m, uint256 b, uint256 c) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(m, b, c));
+    }
+
+    function _hashPair(bytes32 a, bytes32 b) internal pure returns (bytes32) {
+        return a < b
+            ? keccak256(abi.encodePacked(a, b))
+            : keccak256(abi.encodePacked(b, a));
+    }
+
+    /// @notice Build the OZ-compatible binary Merkle tree over THREE leaves.
+    ///         Returns the root plus per-miner proofs in the same order as
+    ///         (leafA, leafB, leafC). 3-leaf tree shape (odd tail):
+    ///
+    ///           level 0:  L0   L1   L2
+    ///           level 1:  H(L0,L1)        L2          (L2 carried up)
+    ///           root:     H(H(L0,L1), L2)
+    ///
+    /// Proofs (bottom-to-top, sibling order):
+    ///   L0 proof = [L1, L2]
+    ///   L1 proof = [L0, L2]
+    ///   L2 proof = [H(L0,L1)]
+    function _buildThreeLeafMerkle(
+        address mA, uint256 bA, uint256 cA,
+        address mB, uint256 bB, uint256 cB,
+        address mC, uint256 bC, uint256 cC
+    ) internal pure returns (
+        bytes32 root,
+        bytes32[] memory proofA,
+        bytes32[] memory proofB,
+        bytes32[] memory proofC
+    ) {
+        bytes32 L0 = _leafHash(mA, bA, cA);
+        bytes32 L1 = _leafHash(mB, bB, cB);
+        bytes32 L2 = _leafHash(mC, bC, cC);
+
+        bytes32 lvl1_0 = _hashPair(L0, L1);
+        // lvl1[1] = L2 (unpaired tail carried up unchanged)
+        root = _hashPair(lvl1_0, L2);
+
+        proofA = new bytes32[](2);
+        proofA[0] = L1;
+        proofA[1] = L2;
+
+        proofB = new bytes32[](2);
+        proofB[0] = L0;
+        proofB[1] = L2;
+
+        proofC = new bytes32[](1);
+        proofC[0] = lvl1_0;
+    }
+
+    // ── 3-miner end-to-end test (production-shape Merkle proof path) ─────
+
+    address constant MINER_C = address(0x7);
+
+    function _claimSingle(
+        address miner,
+        uint64 epoch,
+        uint256 bonusAmt,
+        uint256 capAmt,
+        bytes32[] memory proof
+    ) internal {
+        uint64[]   memory ep = new uint64[](1);   ep[0] = epoch;
+        uint256[]  memory bs = new uint256[](1);  bs[0] = bonusAmt;
+        uint256[]  memory cs = new uint256[](1);  cs[0] = capAmt;
+        bytes32[][] memory ps = new bytes32[][](1); ps[0] = proof;
+        vm.prank(miner);
+        bonus.claimMergeBonus(ep, bs, cs, ps);
+    }
+
+    function test_threeMinerClaim_singleFundedEpochDistributesAll() public {
+        // Three miners share one funded epoch. Each submits its own Merkle
+        // proof; the contract must distribute the full pot.
+        bytes32 root;
+        bytes32[] memory proofA;
+        bytes32[] memory proofB;
+        bytes32[] memory proofC;
+        (root, proofA, proofB, proofC) = _buildThreeLeafMerkle(
+            MINER_A, 30 ether, 30 ether,
+            MINER_B, 50 ether, 50 ether,
+            MINER_C, 20 ether, 20 ether
+        );
+
+        _finalizeAndFund(EPOCH, root, 100 ether);
+        assertEq(token.balanceOf(address(bonus)), 100 ether);
+
+        _claimSingle(MINER_A, EPOCH, 30 ether, 30 ether, proofA);
+        assertEq(token.balanceOf(MINER_A), 30 ether);
+        assertTrue(bonus.claimed(EPOCH, MINER_A));
+
+        _claimSingle(MINER_B, EPOCH, 50 ether, 50 ether, proofB);
+        assertEq(token.balanceOf(MINER_B), 50 ether);
+        assertTrue(bonus.claimed(EPOCH, MINER_B));
+
+        _claimSingle(MINER_C, EPOCH, 20 ether, 20 ether, proofC);
+        assertEq(token.balanceOf(MINER_C), 20 ether);
+        assertTrue(bonus.claimed(EPOCH, MINER_C));
+
+        // Full distribution — contract balance back to zero.
+        assertEq(token.balanceOf(address(bonus)), 0);
+    }
+
+    function test_threeMinerClaim_swappedProofRevertsInvalidProof() public {
+        bytes32 root;
+        bytes32[] memory proofA;
+        bytes32[] memory proofB;
+        bytes32[] memory proofC;
+        (root, proofA, proofB, proofC) = _buildThreeLeafMerkle(
+            MINER_A, 30 ether, 30 ether,
+            MINER_B, 50 ether, 50 ether,
+            MINER_C, 20 ether, 20 ether
+        );
+        _finalizeAndFund(EPOCH, root, 100 ether);
+
+        // Miner B presents Miner A's proof — must revert InvalidProof.
+        uint64[]   memory ep = new uint64[](1);   ep[0] = EPOCH;
+        uint256[]  memory b  = new uint256[](1);  b[0]  = 50 ether;
+        uint256[]  memory c  = new uint256[](1);  c[0]  = 50 ether;
+        bytes32[][] memory p = new bytes32[][](1); p[0]  = proofA;
+        vm.prank(MINER_B);
+        vm.expectRevert(CortexMergeBonus.InvalidProof.selector);
+        bonus.claimMergeBonus(ep, b, c, p);
+
+        proofB; proofC; // silence unused warnings
+    }
 }

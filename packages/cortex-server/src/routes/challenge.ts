@@ -27,30 +27,50 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createHash } from 'node:crypto';
 import type { CortexDb } from '../queue/sqlite.js';
 import {
   getEpochState,
   getMinerTier,
   getOutstandingChallenge,
 } from '../internal-rpc-client.js';
+import { deriveShardIdHex, hexToBytes } from '@botcoin/cortex';
 
 /** Default challenge TTL: 10 minutes */
 const CHALLENGE_TTL_SECONDS = Number(process.env['CHALLENGE_TTL_SECONDS'] ?? 600);
 
-/** Derive shardId from epoch hidden seed (H_e), miner address, solveIndex, parentStateRoot.
- *  Mirrors deriveWorldSeedU128 pattern from epoch.ts:257.
- *  Since H_e is the hidden seed commit (not yet revealed), we use the commit.
- *  The revealed seed is validated at submit time.
+/**
+ * Canonical challenge-time shard derivation (Step 6 fix).
+ *
+ * Uses the same `deriveShardIdU128` (Keccak-256 over ABI-packed
+ * (epochSecret, miner, epochId, solveIndex, parentStateRoot, rulesVersion=0xC0))
+ * as benchmark/shards.ts and the post-reveal auditor path. Returns the
+ * lower 128 bits as a 0x-prefixed 16-byte hex.
+ *
+ * The `epochSecret` is provided by the SWCP coordinator over the trusted
+ * internal RPC. Pre-reveal, only the coordinator + cortex-server see the
+ * secret; the public sees only `hiddenSeedCommit = keccak256(epochSecret)`.
+ * After CortexShardRevealed lands on-chain, anyone can re-derive byte-identically.
  */
-function deriveShardId(
-  hiddenSeedCommit: string,
+function deriveCanonicalShardId(
+  epochSecretHex: string,
   miner: string,
   solveIndex: number,
   parentStateRoot: string,
+  epochId: number,
 ): string {
-  const packed = hiddenSeedCommit + miner.toLowerCase() + solveIndex.toString(16).padStart(16, '0') + parentStateRoot.replace('0x', '');
-  return '0x' + createHash('sha256').update(packed).digest('hex');
+  const epochSecret = hexToBytes(
+    epochSecretHex.startsWith('0x') ? epochSecretHex : '0x' + epochSecretHex,
+  );
+  const psr = hexToBytes(
+    parentStateRoot.startsWith('0x') ? parentStateRoot : '0x' + parentStateRoot,
+  );
+  return deriveShardIdHex({
+    epochSecret,
+    miner,
+    epochId: BigInt(epochId),
+    solveIndex: BigInt(solveIndex),
+    parentStateRoot: psr,
+  });
 }
 
 function extractMiner(req: IncomingMessage): string | null {
@@ -108,13 +128,25 @@ export function handleChallenge(db: CortexDb) {
         return;
       }
 
-      // 3. Derive shard
+      // 3. Derive shard via canonical Keccak path (Steps 4 + 6).
+      //    Requires `epochSecret` from the SWCP coordinator's internal RPC.
+      //    Fail closed if missing — using hiddenSeedCommit (the public hash)
+      //    breaks the hidden-shard property.
+      if (!epochState.epochSecret) {
+        res.writeHead(503, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'epoch-secret-unavailable',
+          message: 'SWCP /internal/epoch did not return epochSecret. Update SWCP coordinator to expose it; canonical hidden-shard derivation requires it.',
+        }));
+        return;
+      }
       const solveIndex = 0; // TODO(Phase 6): derive from miner's lastReceiptHash chain position
-      const shardId = deriveShardId(
-        epochState.hiddenSeedCommit,
+      const shardId = deriveCanonicalShardId(
+        epochState.epochSecret,
         miner,
         solveIndex,
         epochState.parentStateRoot,
+        epochState.epochId,
       );
 
       const shardDescriptor = {

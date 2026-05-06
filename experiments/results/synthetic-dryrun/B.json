@@ -1,0 +1,57 @@
+{
+  "baselineId": "B",
+  "baselineName": "dense-key",
+  "seed": 42,
+  "epochs": [
+    {
+      "epoch": 1,
+      "accepted": true,
+      "errorCode": null,
+      "scoreDelta": 0.0105,
+      "latencyMs": 232.002943,
+      "parentStateRoot": "0xcf287e6b525995ac100e9d310460e4a17711f0111024384fb3776bc9f016ffc6"
+    },
+    {
+      "epoch": 2,
+      "accepted": true,
+      "errorCode": null,
+      "scoreDelta": 0.011,
+      "latencyMs": 199.016944,
+      "parentStateRoot": "0xf6c0ab3381568f0803a08b3e457cf4423a4ed62126ea576d3ba09430595d2655"
+    },
+    {
+      "epoch": 3,
+      "accepted": true,
+      "errorCode": null,
+      "scoreDelta": 0.0111,
+      "latencyMs": 250.214098,
+      "parentStateRoot": "0x5e45c92ca76520a8d4192e1a65f27689951384d9d7541198a7b3237c852d862d"
+    },
+    {
+      "epoch": 4,
+      "accepted": true,
+      "errorCode": null,
+      "scoreDelta": 0.0108,
+      "latencyMs": 195.883112,
+      "parentStateRoot": "0xb67f2ecb9d7b03400f58d8f8e5c8ecea51b76abdfce76e9873c3134da576d797"
+    },
+    {
+      "epoch": 5,
+      "accepted": true,
+      "errorCode": null,
+      "scoreDelta": 0.0109,
+      "latencyMs": 226.942762,
+      "parentStateRoot": "0x09386e9d979857a36787463d60a29b68bdad5d91cc76c9856b16365f65cc728b"
+    }
+  ],
+  "summary": {
+    "totalEpochs": 5,
+    "accepted": 5,
+    "rejected": 0,
+    "avgScoreDelta": 0.010859999999999998,
+    "p50LatencyMs": 226.942762,
+    "finalStateRoot": "0x09386e9d979857a36787463d60a29b68bdad5d91cc76c9856b16365f65cc728b"
+  },
+  "generatedAt": "2026-05-06T00:33:06.284Z",
+  "caveat": "Synthetic scoring (StubCorpusLoader). Real scoring requires Phase 4 corpus + LoCoMo resolution."
+}

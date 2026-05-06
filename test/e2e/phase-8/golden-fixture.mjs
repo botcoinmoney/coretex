@@ -35,24 +35,31 @@ function makeGenesisState() {
   const words = new Array(RANGES.WORD_COUNT).fill(0n);
   // Header word 0: MAGIC (255:240) + WORD_COUNT (223:208).
   words[0] = (0xC07En << 240n) | (1024n << 208n);
-  // Some retrieval-key slot data so a patch can do something.
-  words[400] = 1n;
-  words[408] = 2n;
+  // Payload words inside RetrievalKeys slots — these positions accept
+  // arbitrary 256-bit values (no reserved-bit constraints, unlike each
+  // slot's word-0 which has a reserved tail in bits 79:0).
+  // slot k (0..35), payload word offset 1..7 → idx = 384 + 8k + off.
+  words[385] = 1n;  // slot 0, word 1
+  words[393] = 2n;  // slot 1, word 1
   return { words };
 }
 
 // ─── Mining ───────────────────────────────────────────────────────────────────
 
-function mineSimplePatch(state) {
+function mineSimplePatch(state, epoch) {
   const root = merkleizeState(state);
-  const idx = 412; // RetrievalKeys range, not yet populated
+  // Pick a payload word inside a different RetrievalKeys slot per epoch so
+  // back-to-back epochs never produce no-op patches (E05). slot k word 3,
+  // k = epoch (mod 32), idx = 384 + 8*k + 3.
+  const slot = epoch % 32;
+  const idx = 384 + 8 * slot + 3;
   return {
     patchType: PATCH_TYPE.KEY_UPDATE,
     wordCount: 1,
     scoreDelta: 100n,
     parentStateRoot: root,
     indices: [idx],
-    newWords: [(state.words[idx] ?? 0n) | (1n << 100n)],
+    newWords: [(state.words[idx] ?? 0n) ^ (1n << BigInt(50 + (epoch % 100)))],
   };
 }
 
@@ -61,8 +68,9 @@ function mineSimplePatch(state) {
 function runEpoch(epoch, state) {
   const parentRoot = merkleizeState(state);
 
-  // Single miner submits a patch.
-  const patch = mineSimplePatch(state);
+  // Single miner submits a patch (epoch-indexed slot so consecutive epochs
+  // never produce identical no-op patches against the same word).
+  const patch = mineSimplePatch(state, epoch);
   const compactBytes = encodePatch(patch);
 
   // Screener: applyPatch must succeed.
@@ -72,15 +80,15 @@ function runEpoch(epoch, state) {
   }
 
   // Emit accepted event with full compactPatchBytes.
-  const patchHash = '0x' + bytesToHex(keccak(compactBytes));
-  const evalReportHash = '0x' + bytesToHex(keccak(new TextEncoder().encode(JSON.stringify({
-    epoch, parentRoot: '0x' + bytesToHex(parentRoot), accepted: true,
+  const patchHash = bytesToHex(keccak(compactBytes));
+  const evalReportHash = bytesToHex(keccak(new TextEncoder().encode(JSON.stringify({
+    epoch, parentRoot: bytesToHex(parentRoot), accepted: true,
   }))));
   chain.emit('CortexPatchAccepted', {
     epoch, miner: '0x' + 'a'.repeat(40),
-    parentStateRoot: '0x' + bytesToHex(parentRoot),
+    parentStateRoot: bytesToHex(parentRoot),
     patchHash, evalReportHash,
-    compactPatchBytes: '0x' + bytesToHex(compactBytes),
+    compactPatchBytes: bytesToHex(compactBytes),
   });
 
   // Reducer: trivial (1 patch, no conflicts).
@@ -90,9 +98,9 @@ function runEpoch(epoch, state) {
 
   chain.emit('CortexEpochFinalized', {
     epoch,
-    parentStateRoot: '0x' + bytesToHex(parentRoot),
-    patchSetRoot:    '0x' + bytesToHex(patchSetRoot),
-    newStateRoot:    '0x' + bytesToHex(newRoot),
+    parentStateRoot: bytesToHex(parentRoot),
+    patchSetRoot:    bytesToHex(patchSetRoot),
+    newStateRoot:    bytesToHex(newRoot),
     coreVersionHash: '0x' + 'c'.repeat(64),
     experienceCorpusRoot: '0x' + 'e'.repeat(64),
   });
@@ -116,7 +124,7 @@ function verifyEpoch(epoch, genesisState) {
       state = r.state;
     }
   }
-  return { state, root: '0x' + bytesToHex(merkleizeState(state)) };
+  return { state, root: bytesToHex(merkleizeState(state)) };
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -144,11 +152,11 @@ const genesisRoot = merkleizeState(genesis);
 
 const e1 = runEpoch(1, genesis);
 const finalized1 = chain.filter('CortexEpochFinalized')[0];
-assert.equal(finalized1.args.newStateRoot, '0x' + bytesToHex(e1.newRoot), 'epoch 1 finalized root mismatch');
+assert.equal(finalized1.args.newStateRoot, bytesToHex(e1.newRoot), 'epoch 1 finalized root mismatch');
 
 const e2 = runEpoch(2, e1.newState);
 const finalized2 = chain.filter('CortexEpochFinalized')[1];
-assert.equal(finalized2.args.newStateRoot, '0x' + bytesToHex(e2.newRoot), 'epoch 2 finalized root mismatch');
+assert.equal(finalized2.args.newStateRoot, bytesToHex(e2.newRoot), 'epoch 2 finalized root mismatch');
 
 console.log(`[golden-fixture]   genesis root:      0x${bytesToHex(genesisRoot).slice(0,16)}...`);
 console.log(`[golden-fixture]   epoch 1 newRoot:   ${finalized1.args.newStateRoot.slice(0,18)}...`);

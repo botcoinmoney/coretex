@@ -72,7 +72,7 @@ if (existsSync('experiments/results/synthetic-dryrun/golden-vectors.json')) {
     if (mismatch) check('genesis-roundtrip', false, 'pack/unpack mismatch');
     else check('genesis-roundtrip', true);
     if (!mismatch) {
-      console.log(`     placeholder genesisStateRoot = 0x${bytesToHex(merkleizeState(state)).slice(0, 32)}...`);
+      console.log(`     placeholder genesisStateRoot = ${bytesToHex(merkleizeState(state)).slice(0, 34)}...`);
     }
   }
 }

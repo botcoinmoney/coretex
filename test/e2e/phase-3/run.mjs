@@ -36,12 +36,17 @@ const repoRoot = path.resolve(__dirname, '../../..');
 let _state;
 try {
   const distBase = path.join(repoRoot, 'packages/cortex/dist');
-  _state = await import(`file://${distBase}/state/index.js`);
-  _state._evalMod = await import(`file://${distBase}/eval/index.js`);
-  _state._decoderMod = await import(`file://${distBase}/decoder/index.js`);
-  _state._upgradeMod = await import(`file://${distBase}/upgrade/index.js`);
-  _state._verifyMod = await import(`file://${distBase}/verify-epoch/index.js`);
-  _state._workersMod = await import(`file://${distBase}/workers/pool.js`);
+  // ESM module namespaces are sealed — wrap into a plain object so we can
+  // attach the sub-module references without "Cannot assign to read only
+  // property" throwing the import block into the inline-fallback branch.
+  const stateMod    = await import(`file://${distBase}/state/index.js`);
+  const evalMod     = await import(`file://${distBase}/eval/index.js`);
+  const decoderMod  = await import(`file://${distBase}/decoder/index.js`);
+  const upgradeMod  = await import(`file://${distBase}/upgrade/index.js`);
+  const verifyMod   = await import(`file://${distBase}/verify-epoch/index.js`);
+  const workersMod  = await import(`file://${distBase}/workers/pool.js`);
+  _state = { ...stateMod, _evalMod: evalMod, _decoderMod: decoderMod,
+             _upgradeMod: upgradeMod, _verifyMod: verifyMod, _workersMod: workersMod };
   console.log('[phase-3] using compiled dist/');
 } catch (_e) {
   console.log('[phase-3] dist not available; using inline JS implementations');
@@ -246,7 +251,7 @@ await runTest('record expected-hashes.json fixture', async () => {
     platform: `${process.platform}/${process.arch}`,
     nodeVersion: process.version,
     inputs: {
-      stateRoot: '0x' + bytesToHex(merkleizeState(state)),
+      stateRoot: bytesToHex(merkleizeState(state)),
       patchIndex: 400,
       patchNewWord: '0xdeadbeef',
       shardId: '0x' + '00'.repeat(32),
@@ -559,11 +564,11 @@ await runTest('verify-epoch: local synthetic chain, genesis → state root match
       newWords: [newWord],
     };
     const patchWire = encodePatch(patch);
-    const patchHash = '0x' + bytesToHex(computeKeccak256(patchWire));
+    const patchHash = bytesToHex(computeKeccak256(patchWire));
     patches.push({
       epoch: 1n,
       miner: '0xdeadbeef0000000000000000000000000000cafe',
-      parentStateRoot: '0x' + bytesToHex(parentRoot),
+      parentStateRoot: bytesToHex(parentRoot),
       patchHash,
       evalReportHash: '0x' + '00'.repeat(32),
       compactPatchBytes: patchWire,
@@ -576,7 +581,7 @@ await runTest('verify-epoch: local synthetic chain, genesis → state root match
   // Expected: only patch at idx=400, newWord=1 is applied.
   const expectedFinalState = { words: [...genesis.words] };
   expectedFinalState.words[400] = 1n; // only the highest-scoreDelta patch applied
-  const finalRoot = '0x' + bytesToHex(merkleizeState(expectedFinalState));
+  const finalRoot = bytesToHex(merkleizeState(expectedFinalState));
 
   const finalizedEvent = {
     epoch: 1n,
@@ -625,11 +630,11 @@ await runTest('verify-epoch: from snapshot (not genesis)', async () => {
     newWords: [0xABCDn],
   };
   const patchWire = encodePatch(patch);
-  const patchHash = '0x' + bytesToHex(computeKeccak256(patchWire));
+  const patchHash = bytesToHex(computeKeccak256(patchWire));
 
   const result = applyPatch(snapState, patch);
   if (!result.ok) throw new Error('patch application failed in setup');
-  const expectedRoot = '0x' + bytesToHex(merkleizeState(result.state));
+  const expectedRoot = bytesToHex(merkleizeState(result.state));
 
   const finalizedEvent = {
     epoch: 51n,
@@ -643,7 +648,7 @@ await runTest('verify-epoch: from snapshot (not genesis)', async () => {
   const patchAccepted = {
     epoch: 51n,
     miner: '0x0000000000000000000000000000000000000001',
-    parentStateRoot: '0x' + bytesToHex(parentRoot),
+    parentStateRoot: bytesToHex(parentRoot),
     patchHash,
     evalReportHash: '0x' + '00'.repeat(32),
     compactPatchBytes: patchWire,
@@ -690,13 +695,14 @@ console.log('\n[T7] Core upgrade transition');
 await runTest('state_translation_patch: V0→V1 produces matching root on both sides', async () => {
   const stateV0 = makeBlankState();
 
-  // Build a translation patch: change word 400 from 0 to 0xABCD
+  // Translation patch on a payload word (RetrievalKeys slot k word 3 has no
+  // reserved-bit constraints). idx = 384 + 8*1 + 3 = 395.
   const patchForTranslation = {
     patchType: PATCH_TYPE.KEY_UPDATE,
     wordCount: 1,
     scoreDelta: 0n,
     parentStateRoot: merkleizeState(stateV0),
-    indices: [400],
+    indices: [395],
     newWords: [0xABCDn],
   };
 
@@ -721,7 +727,7 @@ await runTest('state_translation_patch: V0→V1 produces matching root on both s
   // "Both Core versions agree" means the reference impl (direct applyPatch) matches
   const refResult = applyPatch(stateV0, patchForTranslation);
   if (!refResult.ok) throw new Error('Reference patch failed');
-  const refRoot = '0x' + bytesToHex(merkleizeState(refResult.state));
+  const refRoot = bytesToHex(merkleizeState(refResult.state));
 
   if (applyResult.newStateRoot.toLowerCase() !== refRoot.toLowerCase()) {
     throw new Error(`Root mismatch: translation=${applyResult.newStateRoot} ref=${refRoot}`);
@@ -743,7 +749,7 @@ await runTest('explicit reset path: emits CORTEX_RESET event', async () => {
 
   if (event.marker !== RESET_EVENT_MARKER) throw new Error(`marker=${event.marker}`);
   if (event.epoch !== 100n) throw new Error(`epoch=${event.epoch}`);
-  const expectedNewRoot = '0x' + bytesToHex(merkleizeState(newGenesis));
+  const expectedNewRoot = bytesToHex(merkleizeState(newGenesis));
   if (event.newGenesisStateRoot.toLowerCase() !== expectedNewRoot.toLowerCase()) {
     throw new Error(`newGenesisStateRoot mismatch`);
   }
@@ -1008,8 +1014,8 @@ function buildInlineEval({ merkleizeState, bytesToHex, applyPatch, keccak256 }) 
     const patchWireBytes = opts.patchWireBytes;
 
     const parentRootBytes = merkleizeState(state);
-    const parentStateRoot = '0x' + bytesToHex(parentRootBytes);
-    const patchHash = '0x' + bytesToHex(keccak256 ? keccak256(patchWireBytes) : new Uint8Array(32));
+    const parentStateRoot = bytesToHex(parentRootBytes);
+    const patchHash = bytesToHex(keccak256 ? keccak256(patchWireBytes) : new Uint8Array(32));
 
     const baselineScore = BigInt(Math.round(loader.score({}, shardId) * 1_000_000));
     const patchResult = applyPatch(state, patch);
@@ -1019,7 +1025,7 @@ function buildInlineEval({ merkleizeState, bytesToHex, applyPatch, keccak256 }) 
 
     if (patchResult.ok) {
       accepted = true;
-      newStateRoot = '0x' + bytesToHex(merkleizeState(patchResult.state));
+      newStateRoot = bytesToHex(merkleizeState(patchResult.state));
       candidateScore = BigInt(Math.round(loader.score({}, shardId) * 1_000_000));
     } else {
       errorCode = patchResult.code;
@@ -1036,12 +1042,12 @@ function buildInlineEval({ merkleizeState, bytesToHex, applyPatch, keccak256 }) 
       version: 'cortex-eval-v0',
       parentStateRoot, newStateRoot, patchHash, accepted,
       errorCode, errorMessage, baselineScore, candidateScore, scoreDelta,
-      corpusRoot: loader.corpusRoot, shardId: '0x' + bytesToHex(shardId),
+      corpusRoot: loader.corpusRoot, shardId: bytesToHex(shardId),
       evalTimestampMs, evalDurationUs,
     };
 
     const canonBytes = canonicalJson(reportWithoutHash);
-    const reportHash = '0x' + bytesToHex(keccak256 ? keccak256(canonBytes) : new Uint8Array(32));
+    const reportHash = bytesToHex(keccak256 ? keccak256(canonBytes) : new Uint8Array(32));
     return { ...reportWithoutHash, reportHash };
   }
 
@@ -1082,8 +1088,8 @@ function buildInlineUpgrade({ merkleizeState, bytesToHex, hexToBytes, applyPatch
     if (data.length < 67) return { ok: false, code: 'TOO_SHORT', message: 'too short' };
     if (data[0] !== UPGRADE_MAGIC) return { ok: false, code: 'BAD_MAGIC', message: `bad magic 0x${data[0].toString(16)}` };
     const fromVersion = data[1], toVersion = data[2];
-    const fromCoreVersionHash = '0x' + bytesToHex(data.subarray(3, 35));
-    const toCoreVersionHash = '0x' + bytesToHex(data.subarray(35, 67));
+    const fromCoreVersionHash = bytesToHex(data.subarray(3, 35));
+    const toCoreVersionHash = bytesToHex(data.subarray(35, 67));
     const patches = []; let off = 67;
     while (off < data.length) {
       if (off + 2 > data.length) break;
@@ -1105,12 +1111,12 @@ function buildInlineUpgrade({ merkleizeState, bytesToHex, hexToBytes, applyPatch
       if (!r.ok) return { ok: false, code: 'PATCH_APPLY_ERROR', message: `${r.code}: ${r.message}` };
       cur = r.state; n++;
     }
-    return { ok: true, state: cur, newStateRoot: '0x' + bytesToHex(merkleizeState(cur)), patchesApplied: n };
+    return { ok: true, state: cur, newStateRoot: bytesToHex(merkleizeState(cur)), patchesApplied: n };
   }
 
   function executeReset(old, gen, epoch, oldCvh, newCvh) {
-    const oldRoot = '0x' + bytesToHex(merkleizeState(old));
-    const newRoot = '0x' + bytesToHex(merkleizeState(gen));
+    const oldRoot = bytesToHex(merkleizeState(old));
+    const newRoot = bytesToHex(merkleizeState(gen));
     return { event: { marker: RESET_EVENT_MARKER, epoch, oldCoreVersionHash: oldCvh, newCoreVersionHash: newCvh, oldStateRoot: oldRoot, newGenesisStateRoot: newRoot }, state: gen };
   }
 
@@ -1120,7 +1126,7 @@ function buildInlineUpgrade({ merkleizeState, bytesToHex, hexToBytes, applyPatch
 function buildInlineVerifyEpoch({ unpack, decodePatch, applyPatch, merkleizeState, bytesToHex }) {
   function runReducer(parentState, patches) {
     const pr = merkleizeState(parentState);
-    const parentRoot = '0x' + bytesToHex(pr);
+    const parentRoot = bytesToHex(pr);
     const elig = patches.filter(p => p.parentStateRoot.toLowerCase() === parentRoot.toLowerCase());
     const dec = elig.map(ev => ({ ev, patch: decodePatch(ev.compactPatchBytes) }));
     dec.sort((a, b) => {
@@ -1149,7 +1155,7 @@ function buildInlineVerifyEpoch({ unpack, decodePatch, applyPatch, merkleizeStat
     } else if (input.genesisState) { startState = input.genesisState; source = 'genesis'; }
     else return { ok: false, code: 'NO_SNAPSHOT_OR_GENESIS', message: 'no snapshot or genesis' };
     const { state: finalState, acceptedHashes } = runReducer(startState, [...input.patchEvents]);
-    const reproduced = ('0x' + bytesToHex(merkleizeState(finalState))).toLowerCase();
+    const reproduced = (bytesToHex(merkleizeState(finalState))).toLowerCase();
     const expected = input.finalizedEvent.newStateRoot.toLowerCase();
     return { ok: true, epoch: input.epoch, reproducedStateRoot: reproduced, expectedStateRoot: expected, match: reproduced === expected, patchesProcessed: input.patchEvents.length, acceptedPatchHashes: acceptedHashes, source };
   }

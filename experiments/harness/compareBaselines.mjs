@@ -4,7 +4,7 @@
 //
 // Usage: node experiments/harness/compareBaselines.mjs [--epochs N] [--seed N]
 
-import { spawnSync, exit } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { exit as procExit, argv } from 'node:process';
 import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';

@@ -37,23 +37,18 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createHash } from 'node:crypto';
-// PATCH_TYPE constants — inline to avoid workspace dependency resolution issues
-// before @botcoin/cortex is built. Values must match packages/cortex/src/state/types.ts.
-const PATCH_TYPE = {
-  KEY_UPDATE:      0x01,
-  SLOT_REPLACE:    0x02,
-  TEMPORAL_UPDATE: 0x03,
-  RELATION_UPDATE: 0x04,
-  CODEBOOK_UPDATE: 0x05,
-  HEADER_UPDATE:   0x06,
-  MIXED:           0xFF,
-} as const;
+import {
+  PATCH_TYPE,
+  keccak256,
+  bytesToHex,
+  hexToBytes,
+  deriveWorldSeedU128,
+} from '@botcoin/cortex';
 import type { CortexDb } from '../queue/sqlite.js';
-import type { EvalPool } from '../workers/eval-pool.js';
 import {
   getRateLimitBudget,
   signCortexReceipt,
+  getEpochState,
   type SignCortexReceiptRequest,
 } from '../internal-rpc-client.js';
 import { getPool } from '../workers/eval-pool.js';
@@ -146,23 +141,41 @@ function buildPatchHex(patch: {
   return Buffer.from(parts).toString('hex');
 }
 
-/** keccak256 via SHA256 as a placeholder (deterministic; Phase 3 can swap in real keccak) */
-function keccak256Hex(data: Buffer | string): string {
-  const buf = typeof data === 'string' ? Buffer.from(data, 'hex') : data;
-  return createHash('sha256').update(buf).digest('hex');
+/** Canonical Keccak-256 — replaces the SHA-256 placeholder. */
+function keccak256Hex(data: Uint8Array | string): string {
+  const buf = typeof data === 'string'
+    ? hexToBytes(data.startsWith('0x') ? data : '0x' + data)
+    : data;
+  return bytesToHex(keccak256(buf)).slice(2); // 0x stripped for caller-side concat
 }
 
+/**
+ * Canonical worldSeed (Steps 4 + 6): same Keccak-256 ABI-packed formula as
+ * deriveShardIdU128 in @botcoin/cortex. Uses the active epoch SECRET (NOT the
+ * public hiddenSeedCommit) — the SWCP coordinator hands it to cortex-server
+ * over the trusted internal RPC. Returns 0x + 32 hex chars (16 bytes / uint128).
+ */
 function deriveWorldSeed(
-  hiddenSeedCommit: string,
+  epochSecretHex: string,
   miner: string,
   solveIndex: number,
   parentStateRoot: string,
+  epochId: number,
 ): string {
-  const packed = hiddenSeedCommit + miner.toLowerCase() + solveIndex.toString(16).padStart(16, '0') + parentStateRoot.replace('0x', '');
-  const full = createHash('sha256').update(packed).digest('hex');
-  // Take lower 16 bytes (128 bits) as uint128
-  const u128Hex = full.slice(32); // last 128 bits
-  return '0x' + u128Hex;
+  const epochSecret = hexToBytes(
+    epochSecretHex.startsWith('0x') ? epochSecretHex : '0x' + epochSecretHex,
+  );
+  const psr = hexToBytes(
+    parentStateRoot.startsWith('0x') ? parentStateRoot : '0x' + parentStateRoot,
+  );
+  const u128 = deriveWorldSeedU128({
+    epochSecret,
+    miner,
+    epochId: BigInt(epochId),
+    solveIndex: BigInt(solveIndex),
+    parentStateRoot: psr,
+  });
+  return '0x' + u128.toString(16).padStart(32, '0');
 }
 
 /** Write submission artifact to dataset/v2/cortex/epoch/{N}/ — NEVER to swcp */
@@ -228,7 +241,29 @@ export function handleSubmit(db: CortexDb) {
       const experienceCorpusRoot = String(challenge['experienceCorpusRoot'] ?? '');
       const coreVersionHash = String(challenge['coreVersionHash'] ?? '');
       const shardId = String(challenge['shardId'] ?? '');
-      const hiddenSeedCommit = String(challenge['hiddenSeedCommit'] ?? '0x' + '00'.repeat(32));
+
+      // Fetch epoch state from the SWCP coordinator at SUBMIT time.
+      // The miner's posted challenge carries only public fields; the
+      // canonical worldSeed must be derived from the active epoch SECRET
+      // held by the coordinator, NOT the client-supplied hiddenSeedCommit.
+      let epochStateAtSubmit;
+      try {
+        epochStateAtSubmit = await getEpochState();
+      } catch (err) {
+        res.writeHead(503, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'internal-rpc-unavailable', detail: String(err) }));
+        return;
+      }
+      if (!epochStateAtSubmit.epochSecret) {
+        res.writeHead(503, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'epoch-secret-unavailable',
+          message: 'SWCP /internal/epoch did not return epochSecret. Update SWCP coordinator.',
+        }));
+        return;
+      }
+      const hiddenSeedCommit = epochStateAtSubmit.hiddenSeedCommit;
+      const epochSecret = epochStateAtSubmit.epochSecret;
 
       // 1. Check rate-limit budget
       let budget;
@@ -268,7 +303,7 @@ export function handleSubmit(db: CortexDb) {
         return;
       }
 
-      const patchHash = '0x' + keccak256Hex(Buffer.from(patchHex, 'hex'));
+      const patchHash = '0x' + keccak256Hex(patchHex);
 
       // 3. Store submission as pending
       const submissionId = db.upsertSubmission({
@@ -315,15 +350,29 @@ export function handleSubmit(db: CortexDb) {
         return;
       }
 
+      // Production gate (Step 5): a stub-tagged report can never produce a
+      // signed receipt unless the operator explicitly opted in via
+      // CORTEX_ALLOW_STUB_EVAL=1. Defence-in-depth — pool construction also
+      // refuses without the flag, so this is belt-and-suspenders.
+      if (evalResult.report._stub && process.env['CORTEX_ALLOW_STUB_EVAL'] !== '1') {
+        db.updateStatus(submissionId, 'screener_fail', { rejectCode: 'E_STUB_EVAL' });
+        res.writeHead(503, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'stub-eval-disabled',
+          message: 'cortex-server eval is the stub evaluator; production must wire a real eval. Set CORTEX_ALLOW_STUB_EVAL=1 for development only.',
+        }));
+        return;
+      }
+
       db.updateStatus(submissionId, 'screener_pass');
 
-      // 5. Derive worldSeed (§6 mapping)
+      // 5. Derive worldSeed via canonical Keccak-256 path (Steps 4 + 6).
       const solveIndex = 0;
-      const worldSeed = deriveWorldSeed(hiddenSeedCommit, miner, solveIndex, parentStateRoot);
+      const worldSeed = deriveWorldSeed(epochSecret, miner, solveIndex, parentStateRoot, epoch);
 
-      // shardCommitment = keccak256(shardId ‖ parentStateRoot)
+      // shardCommitment = keccak256(shardId ‖ parentStateRoot) using canonical Keccak.
       const shardCommitment = '0x' + keccak256Hex(
-        Buffer.from(shardId.replace('0x', '') + parentStateRoot.replace('0x', ''), 'hex')
+        shardId.replace(/^0x/, '') + parentStateRoot.replace(/^0x/, ''),
       );
 
       const receiptRequest: SignCortexReceiptRequest = {

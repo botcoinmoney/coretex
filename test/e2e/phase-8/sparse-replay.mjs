@@ -32,14 +32,17 @@ function makeGenesis() {
 }
 
 function makePatchAt(state, idxOffset, scoreDelta) {
-  const idx = 400 + (idxOffset % 100);
+  // RetrievalKeys payload words only — slot k word 3, where slot is
+  // 0..31 cycled by idxOffset. Avoids slot-word-0 reserved tails (E04).
+  const slot = idxOffset % 32;
+  const idx = 384 + 8 * slot + 3;
   return {
     patchType: PATCH_TYPE.KEY_UPDATE,
     wordCount: 1,
     scoreDelta: BigInt(scoreDelta),
     parentStateRoot: merkleizeState(state),
     indices: [idx],
-    newWords: [(state.words[idx] ?? 0n) ^ (1n << BigInt(idxOffset % 200))],
+    newWords: [(state.words[idx] ?? 0n) ^ (1n << BigInt(50 + (idxOffset % 200)))],
   };
 }
 
@@ -62,16 +65,16 @@ for (let e = 1; e <= TOTAL_EPOCHS; e++) {
   const root = merkleizeState(state);
 
   chain.emit('CortexPatchAccepted', {
-    epoch: e, compactPatchBytes: '0x' + bytesToHex(wire),
+    epoch: e, compactPatchBytes: bytesToHex(wire),
   });
   chain.emit('CortexEpochFinalized', {
-    epoch: e, newStateRoot: '0x' + bytesToHex(root),
+    epoch: e, newStateRoot: bytesToHex(root),
   });
-  finalizedRoots[e] = '0x' + bytesToHex(root);
+  finalizedRoots[e] = bytesToHex(root);
 
   if (e % SNAPSHOT_INTERVAL === 0) {
     chain.emit('CortexStateSnapshot', {
-      epoch: e, stateRoot: '0x' + bytesToHex(root), fullStateBytes: '0x' + bytesToHex(pack(state)),
+      epoch: e, stateRoot: bytesToHex(root), fullStateBytes: bytesToHex(pack(state)),
     });
   }
 }
@@ -95,7 +98,7 @@ for (const target of TARGET_EPOCHS) {
       st = r.state;
     }
   }
-  const reproducedRoot = '0x' + bytesToHex(merkleizeState(st));
+  const reproducedRoot = bytesToHex(merkleizeState(st));
   assert.equal(reproducedRoot, finalizedRoots[target],
     `sparse replay diverged at target epoch ${target} (started from snapshot at epoch ${startEpoch})`);
   console.log(`[sparse-replay] target=${target} from snapshot=${startEpoch}: OK`);

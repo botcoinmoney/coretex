@@ -18,6 +18,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { exit, env } from 'node:process';
+import { readFileSync } from 'node:fs';
 
 let pass = 0, fail = 0, skip = 0;
 function check(name, ok, reason) {
@@ -63,21 +64,21 @@ if (env.BASE_TESTNET_RPC_URL) {
 
 // T9. Metrics dashboard correctness — synthetic
 {
-  const dashOk = (() => {
-    try {
-      const fs = require('node:fs');
-      const j = JSON.parse(fs.readFileSync('ops/testnet/dashboard.json', 'utf8'));
-      const required = ['pass_rate_overall', 'score_delta_distribution', 'protected_regression_rate',
-        'reducer_rejects', 'eval_latency_p50', 'eval_latency_p99', 'state_root_per_epoch',
-        'corpus_snapshot_hash', 'merge_multiplier_distribution'];
-      // The dashboard JSON should reference each metric by name somewhere.
-      const text = JSON.stringify(j);
-      return required.every((m) => text.includes(m));
-    } catch (e) {
-      return false;
-    }
-  })();
-  check('metrics-dashboard-correctness', dashOk, 'expected metric names missing from ops/testnet/dashboard.json');
+  let dashOk = false;
+  let dashReason = '';
+  try {
+    const j = JSON.parse(readFileSync('ops/testnet/dashboard.json', 'utf8'));
+    const required = ['pass_rate_overall', 'score_delta_distribution', 'protected_regression_rate',
+      'reducer_rejects', 'eval_latency_p50', 'eval_latency_p99', 'state_root_per_epoch',
+      'corpus_snapshot_hash', 'merge_multiplier_distribution'];
+    const text = JSON.stringify(j);
+    const missing = required.filter((m) => !text.includes(m));
+    dashOk = missing.length === 0;
+    dashReason = missing.length ? `missing: ${missing.join(',')}` : '';
+  } catch (e) {
+    dashReason = String(e);
+  }
+  check('metrics-dashboard-correctness', dashOk, dashReason);
 }
 
 // T10. Storage namespace non-interference — gates on running coordinator

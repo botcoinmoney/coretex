@@ -86,7 +86,7 @@ for (let e = 1; e <= EPOCHS; e++) {
     errorCode,
     scoreDelta,
     latencyMs,
-    parentStateRoot: '0x' + bytesToHex(merkleizeState(state)),
+    parentStateRoot: bytesToHex(merkleizeState(state)),
   });
 }
 

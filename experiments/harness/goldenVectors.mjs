@@ -41,19 +41,19 @@ for (let i = 0; i < 10; i++) {
   const newRoot = merkleizeState(r.state);
   // Synthetic eval-report hash: keccak of canonical JSON of {parentRoot, patchHash, accepted=true}.
   const canonical = JSON.stringify({
-    parentRoot: '0x' + bytesToHex(patch.parentStateRoot),
-    patchHash: '0x' + bytesToHex(keccak256(wire)),
-    newRoot: '0x' + bytesToHex(newRoot),
+    parentRoot: bytesToHex(patch.parentStateRoot),
+    patchHash: bytesToHex(keccak256(wire)),
+    newRoot: bytesToHex(newRoot),
     accepted: true,
   });
   const reportHash = keccak256(new TextEncoder().encode(canonical));
 
   triples.push({
     index: i,
-    parentStateRoot: '0x' + bytesToHex(patch.parentStateRoot),
-    patchWireHex: '0x' + bytesToHex(wire),
-    expectedNewStateRoot: '0x' + bytesToHex(newRoot),
-    expectedReportHash: '0x' + bytesToHex(reportHash),
+    parentStateRoot: bytesToHex(patch.parentStateRoot),
+    patchWireHex: bytesToHex(wire),
+    expectedNewStateRoot: bytesToHex(newRoot),
+    expectedReportHash: bytesToHex(reportHash),
   });
   state = r.state;
 }
