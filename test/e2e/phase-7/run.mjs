@@ -77,16 +77,16 @@ if (existsSync('experiments/results/synthetic-dryrun/golden-vectors.json')) {
   }
 }
 
-// T5. Adversarial fuzz (10k instead of 1M per documented gap).
-//     Phase 7 spec asks for ≥1M; for V0 dry-run we run 10k and document.
+// T5. Adversarial fuzz (10k in CI, 1M when EXTENDED_FUZZ=1).
 {
   const mod = await import('../../../packages/cortex/dist/state/index.js').catch(() => null);
   if (!mod) {
-    check('adversarial-fuzz-10k', null, 'dist not built');
+    check('adversarial-fuzz', null, 'dist not built');
   } else {
     const { encodePatch, decodePatch, RANGES, PATCH_TYPE } = mod;
+    const N = process.env.EXTENDED_FUZZ === '1' ? 1_000_000 : 10_000;
     let panic = 0, nondeterminism = 0;
-    for (let i = 0; i < 10_000; i++) {
+    for (let i = 0; i < N; i++) {
       try {
         const wc = 1 + (i & 3);
         const indices = [];
@@ -107,8 +107,100 @@ if (existsSync('experiments/results/synthetic-dryrun/golden-vectors.json')) {
         panic++;
       }
     }
-    check('adversarial-fuzz-10k', panic === 0 && nondeterminism === 0, `panics=${panic}, nondeterminism=${nondeterminism}`);
-    console.log('     (§9 spec asks for ≥1M; V0 dry-run runs 10k — gap documented in PR)');
+    check(`adversarial-fuzz-${N}`, panic === 0 && nondeterminism === 0, `panics=${panic}, nondeterminism=${nondeterminism}`);
+    if (N < 1_000_000) console.log('     set EXTENDED_FUZZ=1 for the ≥1M release run');
+  }
+}
+
+// T6. Baseline validity: every baseline genesis is reserved-bit-clean; every
+// candidate patch either cleanly applies or explicitly returns null.
+{
+  const mod = await import('../../../packages/cortex/dist/state/index.js').catch(() => null);
+  if (!mod) {
+    check('baseline-validity', null, 'dist not built');
+  } else {
+    const { hasNonZeroReservedBits, merkleizeState, applyPatch } = mod;
+    const baselineDefs = [
+      ['A', '../../../experiments/baselines/baseline_a_empty/index.mjs'],
+      ['B', '../../../experiments/baselines/baseline_b_dense_key/index.mjs'],
+      ['C', '../../../experiments/baselines/baseline_c_binary_key/index.mjs'],
+      ['D', '../../../experiments/baselines/baseline_d_late_interaction/index.mjs'],
+      ['E', '../../../experiments/baselines/baseline_e_revocation_aware/index.mjs'],
+    ];
+    let failures = 0;
+    for (const [id, p] of baselineDefs) {
+      const baseline = await import(p);
+      const state = baseline.genesisState();
+      if (hasNonZeroReservedBits(state)) {
+        console.error(`     baseline ${id}: reserved bits set in genesis`);
+        failures++;
+        continue;
+      }
+      const patch = baseline.mineCandidatePatch(state, { epoch: 1, solveIndex: 43 });
+      if (patch) {
+        patch.parentStateRoot = merkleizeState(state);
+        const result = applyPatch(state, patch);
+        if (!result.ok) {
+          console.error(`     baseline ${id}: candidate rejected with ${result.code}`);
+          failures++;
+        }
+      }
+    }
+    check('baseline-validity', failures === 0, `${failures} baseline failures`);
+  }
+}
+
+// T7. Live epoch semantics: two different-area improvements in the same 24h
+// epoch both advance state; a no-improvement candidate earns no credits.
+{
+  const stateMod = await import('../../../packages/cortex/dist/state/index.js').catch(() => null);
+  const liveMod = await import('../../../packages/cortex/dist/reducer/live-epoch.js').catch(() => null);
+  if (!stateMod || !liveMod) {
+    check('live-epoch-mid-epoch-advances', null, 'dist not built');
+  } else {
+    const { merkleizeState, encodePatch, PATCH_TYPE } = stateMod;
+    const { advanceEpochState, makeLiveEpochInput } = liveMod;
+    const state = { words: new Array(1024).fill(0n) };
+    const p1 = {
+      patchType: PATCH_TYPE.KEY_UPDATE,
+      wordCount: 1,
+      scoreDelta: 10n,
+      parentStateRoot: merkleizeState(state),
+      indices: [401],
+      newWords: [1n],
+    };
+    const afterFirst = { words: [...state.words] };
+    afterFirst.words[401] = 1n;
+    const p2 = {
+      patchType: PATCH_TYPE.KEY_UPDATE,
+      wordCount: 1,
+      scoreDelta: 100n,
+      parentStateRoot: merkleizeState(afterFirst),
+      indices: [402],
+      newWords: [2n],
+    };
+    const afterSecond = { words: [...afterFirst.words] };
+    afterSecond.words[402] = 2n;
+    const bogus = {
+      patchType: PATCH_TYPE.KEY_UPDATE,
+      wordCount: 1,
+      scoreDelta: 999n,
+      parentStateRoot: merkleizeState(afterSecond),
+      indices: [403],
+      newWords: [3n],
+    };
+    const result = advanceEpochState(state, [
+      makeLiveEpochInput('0xaaaa', p1, encodePatch(p1)),
+      makeLiveEpochInput('0xbbbb', p2, encodePatch(p2)),
+      makeLiveEpochInput('0xcccc', bogus, encodePatch(bogus), () => 0n),
+    ]);
+    const ok = result.advances.length === 2
+      && result.rejected.length === 1
+      && result.rejected[0].reason === 'L01_NOT_IMPROVEMENT'
+      && result.newState.words[401] === 1n
+      && result.newState.words[402] === 2n
+      && result.newState.words[403] === 0n;
+    check('live-epoch-mid-epoch-advances', ok, `advances=${result.advances.length}, rejected=${result.rejected.length}`);
   }
 }
 

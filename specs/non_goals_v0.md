@@ -49,8 +49,8 @@ the organism with documented rationale. Ambiguity is a hard non-goal.
 
 ### 7. Separate Cortex reward currency
 **Rejected because:** A separate token fragments the economic spine and adds regulatory/liquidity
-complexity. Cortex credits are denominated in the existing Botcoin tier system; merge bonuses are
-paid in BOTCOIN via `CortexMergeBonus`. No new token, no new claim flow.
+complexity. Cortex credits are denominated in the existing Botcoin tier system and paid through
+normal state-advance receipts. No new token, no new claim flow.
 
 ### 8. New EIP-712 domain
 **Rejected because:** A new signing domain requires new contract audit surface and new miner SDK
@@ -63,10 +63,10 @@ names, tracked in Phase 9 release notes.
 
 ### 9. Editing BotcoinMiningV3
 **Rejected because:** `BotcoinMiningV3` is deployed and unchanged. All Cortex mechanics are
-additive (two new contracts: `CortexRegistry` and `CortexMergeBonus`). The existing `claim()` math
-reads `epochReward × minerCredits / totalCredits` directly from on-chain state and cannot be
-retroactively reweighted — that is why the merge multiplier is paid via a sister contract, not via
-V3.
+additive (the live-state anchor is `CortexRegistry`; `CortexMergeBonus` remains only as a legacy
+compatibility rail). The existing `claim()` math reads `epochReward × minerCredits / totalCredits`
+directly from on-chain state, so V0 pays useful Cortex improvements as normal credits instead of a
+separate multiplier.
 
 ### 10. On-chain fraud proofs for the audit window (V0)
 **Rejected because:** The EVM cannot re-run Botcoin Core. A full ZK or bond-based fraud proof
@@ -110,8 +110,7 @@ To make the non-goals concrete, here is the positive definition:
 V0 Botcoin Cortex is:
 - A **compact on-chain-rooted memory codec** (1024 uint256 words = 32 KB active state)
 - A **deterministic proof-of-improvement verifier** (Botcoin Core, pinned version, no API model)
-- A **credit-unified mining lane** (screener-pass receipts via existing `BotcoinMining.submitReceipt`;
-  merge multiplier via `CortexMergeBonus`)
+- A **credit-unified mining lane** (state-advance receipts via existing `BotcoinMining.submitReceipt`)
 - An **anchored benchmark** (LIMIT + MTEB/BEIR for near-collision; LoCoMo + MemoryAgentBench for
   temporal; MemoryArena for long-horizon)
 - A **parallel lane** (separate `cortex-server` process, separate SQLite, separate worker pool;

@@ -40,18 +40,43 @@ if (MODE === 'mainnet') {
 const BASE_RPC = env.BASE_RPC_URL ?? 'https://mainnet.base.org';
 const ANVIL_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
 const DEPLOYER  = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266';
-const RPC = 'http://127.0.0.1:8554';
+const PORT = env.CORTEX_REHEARSAL_PORT ?? '8554';
+const RPC = `http://127.0.0.1:${PORT}`;
 
 console.log('[pause-drill] launching anvil fork…');
-const anvil = spawn('anvil', ['--fork-url', BASE_RPC, '--port', '8554', '--silent'], {
-  stdio: ['ignore', 'ignore', 'ignore'], detached: false,
+const anvil = spawn('anvil', ['--fork-url', BASE_RPC, '--port', PORT, '--silent'], {
+  stdio: ['ignore', 'ignore', 'pipe'], detached: false,
 });
-await sleep(4000);
 
 function sh(...args) {
   const r = spawnSync(args[0], args.slice(1), { encoding: 'utf8' });
   return { stdout: r.stdout, stderr: r.stderr, status: r.status };
 }
+
+async function waitForRpc() {
+  const started = Date.now();
+  let lastErr = '';
+  while (Date.now() - started < 30_000) {
+    if (anvil.exitCode !== null) {
+      const stderr = anvil.stderr.read()?.toString?.() ?? '';
+      throw new Error(`anvil exited early on port ${PORT}: ${stderr || `code ${anvil.exitCode}`}`);
+    }
+    try {
+      const r = await fetch(RPC, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'web3_clientVersion', params: [] }),
+      });
+      const j = await r.json();
+      if (j.result) return;
+    } catch (e) {
+      lastErr = e.message;
+    }
+    await sleep(250);
+  }
+  throw new Error(`anvil RPC did not become ready on ${RPC}: ${lastErr}`);
+}
+
+await waitForRpc();
 
 function deploy(name, ...args) {
   const r = sh('forge', 'create',
@@ -117,5 +142,6 @@ try {
   exitCode = 3;
 } finally {
   anvil.kill();
+  await sleep(250);
 }
 exit(exitCode);

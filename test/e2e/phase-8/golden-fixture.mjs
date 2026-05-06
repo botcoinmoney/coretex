@@ -158,7 +158,7 @@ const e2 = runEpoch(2, e1.newState);
 const finalized2 = chain.filter('CortexEpochFinalized')[1];
 assert.equal(finalized2.args.newStateRoot, bytesToHex(e2.newRoot), 'epoch 2 finalized root mismatch');
 
-console.log(`[golden-fixture]   genesis root:      0x${bytesToHex(genesisRoot).slice(0,16)}...`);
+console.log(`[golden-fixture]   genesis root:      ${bytesToHex(genesisRoot).slice(0,18)}...`);
 console.log(`[golden-fixture]   epoch 1 newRoot:   ${finalized1.args.newStateRoot.slice(0,18)}...`);
 console.log(`[golden-fixture]   epoch 2 newRoot:   ${finalized2.args.newStateRoot.slice(0,18)}...`);
 

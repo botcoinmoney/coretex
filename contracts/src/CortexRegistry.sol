@@ -7,15 +7,15 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 /// @title CortexRegistry
 /// @notice On-chain anchor for Botcoin Cortex state. Stores headers, emits
-///         accepted-patch records with full compactPatchBytes payloads, emits
-///         periodic full-state snapshots, finalizes epochs with an audit-and-
-///         multisig-override window before merge-bonus funding can occur.
+///         live state-advance records with full compactPatchBytes payloads,
+///         emits periodic full-state snapshots, and finalizes epochs with an
+///         audit-and-multisig-override window.
 /// @dev    Zero reward logic. Credit issuance flows through the existing
 ///         BotcoinMiningV3.submitReceipt path with the §6 receipt field mapping.
 ///         The audit window is NOT an on-chain fraud proof — it is a public delay
 ///         during which any party runs `botcoin-cortex verify-epoch` and, if
-///         divergence is found, the operator multisig calls revertEpoch(). V1
-///         replaces this with bond-based or ZK fraud proofs.
+///         divergence is found, the owner or operator multisig calls a revert
+///         function. V1 replaces this with bond-based or ZK fraud proofs.
 contract CortexRegistry is Ownable, Pausable, ReentrancyGuard {
 
     // ── Frozen struct — names/types MUST NOT change ───────────────────────
@@ -73,6 +73,12 @@ contract CortexRegistry is Ownable, Pausable, ReentrancyGuard {
     /// @notice Number of accepted patches emitted per epoch.
     mapping(uint64 => uint256) public patchCount;
 
+    /// @notice Number of live state advances emitted per epoch.
+    mapping(uint64 => uint256) public advanceCount;
+
+    /// @notice Latest intra-epoch live state root. Empty until first advance.
+    mapping(uint64 => bytes32) public liveStateRoot;
+
     // ── Shard commit/reveal ───────────────────────────────────────────────
 
     mapping(uint64 => bytes32) public shardCommit;
@@ -101,6 +107,17 @@ contract CortexRegistry is Ownable, Pausable, ReentrancyGuard {
         bytes32         experienceCorpusRoot
     );
 
+    event CortexStateAdvanced(
+        uint64  indexed epoch,
+        address indexed miner,
+        bytes32         parentStateRoot,
+        bytes32         patchHash,
+        bytes32         evalReportHash,
+        bytes32         newStateRoot,
+        uint256         improvementCredits,
+        bytes           compactPatchBytes
+    );
+
     event CortexStateSnapshot(
         uint64  indexed epoch,
         bytes32         stateRoot,
@@ -123,6 +140,7 @@ contract CortexRegistry is Ownable, Pausable, ReentrancyGuard {
     error AuditWindowOpen();
     error AuditWindowClosed();
     error TooManyPatches();
+    error LiveStateRootMismatch();
     error ZeroAddress();
     error InvalidStateBytes();
     error ShardAlreadyCommitted();
@@ -225,6 +243,52 @@ contract CortexRegistry is Ownable, Pausable, ReentrancyGuard {
         );
     }
 
+    /// @notice Record a verified improvement and advance the live state root
+    ///         during the still-open 24-hour epoch. This emits the legacy
+    ///         CortexPatchAccepted event for data availability, then emits a
+    ///         CortexStateAdvanced checkpoint that auditors replay in order.
+    ///         Credits are normal epoch credits, not a separate merge bonus.
+    function submitStateAdvance(
+        uint64  epoch,
+        address miner,
+        bytes32 parentStateRoot,
+        bytes32 patchHash,
+        bytes32 evalReportHash,
+        bytes32 newStateRoot,
+        uint256 improvementCredits,
+        bytes calldata compactPatchBytes
+    ) external onlyCoordinator whenNotPaused nonReentrant {
+        if (epochFinalized[epoch]) revert AlreadyFinalized();
+        if (patchCount[epoch] >= MAX_PATCHES_PER_EPOCH) revert TooManyPatches();
+        if (advanceCount[epoch] != 0 && parentStateRoot != liveStateRoot[epoch]) {
+            revert LiveStateRootMismatch();
+        }
+
+        patchCount[epoch]++;
+        advanceCount[epoch]++;
+        liveStateRoot[epoch] = newStateRoot;
+
+        emit CortexPatchAccepted(
+            epoch,
+            miner,
+            parentStateRoot,
+            patchHash,
+            evalReportHash,
+            compactPatchBytes
+        );
+
+        emit CortexStateAdvanced(
+            epoch,
+            miner,
+            parentStateRoot,
+            patchHash,
+            evalReportHash,
+            newStateRoot,
+            improvementCredits,
+            compactPatchBytes
+        );
+    }
+
     // ── Epoch finalization ────────────────────────────────────────────────
 
     /// @notice Finalize epoch. Header is provisional for CHALLENGE_WINDOW_SECONDS.
@@ -242,6 +306,9 @@ contract CortexRegistry is Ownable, Pausable, ReentrancyGuard {
     ) external onlyCoordinator whenNotPaused nonReentrant {
         if (epochFinalized[epoch]) revert AlreadyFinalized();
         if (epochReverted[epoch])  revert EpochReverted_();
+        if (advanceCount[epoch] != 0 && newStateRoot != liveStateRoot[epoch]) {
+            revert LiveStateRootMismatch();
+        }
 
         _headers[epoch] = CortexHeader({
             epoch:               epoch,

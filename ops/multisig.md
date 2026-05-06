@@ -28,7 +28,7 @@ Published before first reward epoch (Phase 9 deliverable). 2-of-N threshold.
    ```solidity
    CortexRegistry.revertEpoch(uint64 epoch);
    ```
-   This unwinds finalization. `CortexMergeBonus` cannot be funded for that epoch.
+   This unwinds finalization. No V0 legacy merge-bonus funding is expected for that epoch.
 
 4. **Coordinator re-finalizes.** The coordinator re-runs the reducer on the same input set and re-submits the corrected `CortexEpochFinalized` event. Audit window restarts.
 
@@ -36,11 +36,11 @@ Published before first reward epoch (Phase 9 deliverable). 2-of-N threshold.
 
 - **No revert after the audit window closes.** Expired finalizations are canonical.
 - **No revert without divergence demonstrated publicly.** Operators do not act on private reports.
-- **No revert touches `BotcoinMiningV3`.** Screener-pass receipts are already settled through the existing `BotcoinMining.submitReceipt` path; the revert is scoped to the merge-bonus funding only.
+- **No revert touches `BotcoinMiningV3`.** State-advance receipts are settled through the existing `BotcoinMining.submitReceipt` path; the revert is scoped to the Cortex state root.
 - **Disclosure**: every revert must be followed by a public post-mortem within 72h.
 
 ## Pause vs revert
 
-`CortexRegistry.pause()` and `CortexMergeBonus.pause()` halt new state at any time. `revertEpoch` retroactively unwinds a finalized header within the audit window. They are independent powers; pause does not require multisig (single owner key is acceptable for emergency halt), revert does.
+`CortexRegistry.pause()` halts live state advances and finalization at any time. `CortexMergeBonus.pause()` only matters for legacy funded bonus epochs. `revertEpoch` retroactively unwinds a finalized header within the audit window. They are independent powers; pause does not require multisig (single owner key is acceptable for emergency halt), revert does.
 
 See [`runbook.md`](./runbook.md) for emergency-pause vs revert decision flow.

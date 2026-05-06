@@ -2,7 +2,7 @@
   "description": "Determinism fixture: blank state + single word patch at index 400.",
   "note": "arm64/macOS validation deferred until CI matrix is widened.",
   "platform": "linux/x64",
-  "nodeVersion": "v22.22.1",
+  "nodeVersion": "v22.22.2",
   "inputs": {
     "stateRoot": "0xe026cc5a4aed3c22a58cbd3d2ac754c9352c5436f638042dca99034e83636516",
     "patchIndex": 400,

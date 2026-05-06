@@ -54,7 +54,7 @@ try {
 }
 
 const {
-  pack, unpack, merkleizeState, bytesToHex, hexToBytes,
+  pack, unpack, merkleizeState, buildMerkleCache, bytesToHex, hexToBytes,
   encodePatch, decodePatch, applyPatch, applyPatchOntoCurrent,
   RANGES, PATCH_TYPE,
 } = _state;
@@ -200,8 +200,7 @@ await runTest(`${T1_N} round-trip: output root matches reference impl`, async ()
       continue;
     }
 
-    const evalRoot = report.newStateRoot.replace(/^0x/, '');
-    if (evalRoot !== refRoot) mismatch++;
+    if (report.newStateRoot.toLowerCase() !== refRoot.toLowerCase()) mismatch++;
   }
   if (mismatch > 0) throw new Error(`${mismatch} root mismatches`);
 });
@@ -292,8 +291,9 @@ await runTest(`${T3_N} eval fuzz: p50 < 10ms, p99 < 50ms`, async () => {
   const durations = [];
 
   const state = makeBlankState();
-  // Pre-compute parent root once (it doesn't change since we evaluate against same state)
-  const parentRoot = merkleizeState(state);
+  // Pre-compute parent tree once; every fuzz patch targets this same parent.
+  const parentCache = buildMerkleCache ? buildMerkleCache(state) : null;
+  const parentRoot = parentCache?.root ?? merkleizeState(state);
   for (let i = 0; i < N; i++) {
     // Vary the patch each iteration for a realistic fuzz
     const idx = RANGES.RETRIEVAL_KEYS_START + (i % (RANGES.RETRIEVAL_KEYS_END - RANGES.RETRIEVAL_KEYS_START + 1));
@@ -308,7 +308,11 @@ await runTest(`${T3_N} eval fuzz: p50 < 10ms, p99 < 50ms`, async () => {
     const patchWire = encodePatch(patch);
 
     const t0 = process.hrtime.bigint();
-    evalPatch(state, patch, { loader: new StubCorpusLoader(), patchWireBytes: patchWire });
+    evalPatch(state, patch, {
+      loader: new StubCorpusLoader(),
+      patchWireBytes: patchWire,
+      ...(parentCache ? { merkleCache: parentCache } : {}),
+    });
     const t1 = process.hrtime.bigint();
 
     durations.push(Number(t1 - t0) / 1e6); // ms
@@ -501,7 +505,7 @@ await runTest('E03 OVER_BUDGET (wordCount=5)', async () => {
     indices: [400, 401, 402, 403, 404],
     newWords: [1n, 2n, 3n, 4n, 5n],
   };
-  const patchWire = encodePatch(patch);
+  const patchWire = new Uint8Array(0);
   const report = evalPatch(state, patch, { loader: new StubCorpusLoader(), patchWireBytes: patchWire });
   if (report.accepted) throw new Error('Expected rejection');
   if (report.errorCode !== 'E03') throw new Error(`Expected E03 got ${report.errorCode}`);

@@ -14,7 +14,7 @@
  *   4. Public-replay equivalence: replay script produces same output.
  *   5. No double-credit: same (epoch, miner, patchHash) never double-issues.
  *   6. Multiplier cap (off-chain & on-chain parity): single uplift capped at
- *      (MERGE_MULTIPLIER_BPS - 10000) × claimBase / 10000.
+ *      Default V0 setting is 1.0x, so separate merge-bonus uplift is zero.
  *   7. 100-miner adversarial sim: weak/medium/strong mix over 50 epochs;
  *      Gini < 0.35; no single miner > 25% combined-lane credits in any epoch.
  *   8. Filler-rejection battery: no-op, random-mutation, public-test-overfit,
@@ -395,7 +395,7 @@ function buildEpochEligibility(screenerEvents, mergedEvents, tierCreditsFor) {
 
 // ── 0.11 Multiplier cap ───────────────────────────────────────────────────────
 
-const MERGE_MULTIPLIER_BPS = 15_000n;
+const MERGE_MULTIPLIER_BPS = 10_000n;
 const BPS_DIVISOR = 10_000n;
 
 function computeMinerBonus(miner, claimBase, multiplierBps = MERGE_MULTIPLIER_BPS) {
@@ -415,7 +415,9 @@ function buildEpochBonusLeaves(eligibility, claimBases, multiplierBps = MERGE_MU
     seenMiners.add(miner);
     const claimBase = claimBaseMap.get(miner) ?? 0n;
     if (claimBase === 0n) continue;
-    leaves.push(computeMinerBonus(miner, claimBase, multiplierBps));
+    const leaf = computeMinerBonus(miner, claimBase, multiplierBps);
+    if (leaf.bonusBotcoin === 0n) continue;
+    leaves.push(leaf);
   }
   leaves.sort((a,b) => a.miner.localeCompare(b.miner));
   return leaves;
@@ -779,7 +781,7 @@ console.log('\n=== Gate 5: No double-credit ===');
 // SECTION 7: Gate 6 — Multiplier cap
 // ═══════════════════════════════════════════════════════════════════════════════
 
-console.log('\n=== Gate 6: Multiplier cap (off-chain & on-chain parity) ===');
+console.log('\n=== Gate 6: No separate merge multiplier (off-chain parity) ===');
 
 {
   const epoch = 2n;
@@ -808,25 +810,27 @@ console.log('\n=== Gate 6: Multiplier cap (off-chain & on-chain parity) ===');
   const eligibilityOne = buildEpochEligibility(screenerEvents, mergedOnce, () => 10n);
   const leavesOne = buildEpochBonusLeaves(eligibilityOne, claimBases);
 
-  const expectedBonus = (5000n * claimBase) / 10_000n; // 0.5× claimBase
+  const expectedBonus = 0n;
 
-  test('exactly 1 bonus leaf despite 2 merged patches (single-uplift cap)', () => {
-    assert.equal(leavesTwo.length, 1, `Expected 1 leaf, got ${leavesTwo.length}`);
+  test('default no-uplift setting emits no bonus leaves', () => {
+    assert.equal(leavesTwo.length, 0, `Expected 0 leaves, got ${leavesTwo.length}`);
   });
-  test('bonusBotcoin = 0.5 × claimBase = 500_000', () => {
-    assert.equal(leavesTwo[0].bonusBotcoin, expectedBonus);
+  test('computeMinerBonus default bonusBotcoin = 0', () => {
+    assert.equal(computeMinerBonus(miner, claimBase).bonusBotcoin, expectedBonus);
   });
-  test('capBotcoin equals bonusBotcoin (V0)', () => {
-    assert.equal(leavesTwo[0].capBotcoin, leavesTwo[0].bonusBotcoin);
+  test('computeMinerBonus cap equals bonusBotcoin (V0)', () => {
+    const leaf = computeMinerBonus(miner, claimBase);
+    assert.equal(leaf.capBotcoin, leaf.bonusBotcoin);
   });
-  test('1 merge and 2 merges → identical bonus (single-uplift cap honored)', () => {
-    assert.equal(leavesOne[0]?.bonusBotcoin ?? -1n, leavesTwo[0].bonusBotcoin);
+  test('1 merge and 2 merges → identical no-uplift funding set', () => {
+    assert.equal(leavesOne.length, leavesTwo.length);
   });
-  test('bonus ≤ cap (on-chain parity)', () => {
-    assert.ok(leavesTwo[0].bonusBotcoin <= leavesTwo[0].capBotcoin);
+  test('legacy explicit bonus leaf cap check remains valid', () => {
+    const leaf = { miner, bonusBotcoin: 1n, capBotcoin: 1n };
+    assert.ok(leaf.bonusBotcoin <= leaf.capBotcoin);
   });
-  test('MERGE_MULTIPLIER_BPS = 15000 (1.5×)', () => {
-    assert.equal(MERGE_MULTIPLIER_BPS, 15_000n);
+  test('MERGE_MULTIPLIER_BPS = 10000 (1.0×, no separate uplift)', () => {
+    assert.equal(MERGE_MULTIPLIER_BPS, 10_000n);
   });
 }
 

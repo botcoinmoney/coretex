@@ -98,7 +98,7 @@ Dashboard panels populated and reflecting reality:
 - eval latency p50 / p99
 - state root per epoch
 - corpus snapshot hash
-- merge-multiplier distribution
+- live state-advance distribution
 
 ## Pass/fail gates (per §9 Phase 8)
 
@@ -108,7 +108,7 @@ Dashboard panels populated and reflecting reality:
 - [ ] Saturation alarm fires on synthetic flat-score sequence.
 - [ ] Multisig revert drill succeeds (2-of-N) and is rejected (1-of-N).
 - [ ] Pass-rate per tier within ±5% over the run.
-- [ ] No single miner > 25% of merge bonus.
+- [ ] No single miner > 25% of state-advance credits.
 - [ ] Latch/unlatch rehearsals × 2 with SWCP unaffected.
 
 A green Phase 8 gate is the precondition for the Phase 9 mainnet checklist.

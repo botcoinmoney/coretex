@@ -12,19 +12,19 @@
  * For pool contracts: also accepts ?pool=0x... for triggerMergeBonusClaim(uint64[])
  *   selector: keccak256("triggerMergeBonusClaim(uint64[])") → first 4 bytes
  *
+ * V0 production uses state-advance credits through the normal receipt path.
+ * This endpoint remains for legacy funded bonus epochs and deployment
+ * compatibility only.
+ *
  * The miner identity comes from x-miner header (same as all other endpoints).
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createHash } from 'node:crypto';
+import { keccak256 } from '@botcoin/cortex';
 
 /** 4-byte keccak256 selector from function signature */
 function selector(sig: string): Buffer {
-  // Use SHA256 as a keccak256 approximation for off-chain calldata construction.
-  // The real keccak256 is used when this lands with ethers/viem in Phase 9.
-  // TODO(Phase 9): swap for real keccak256 (ethers.id or viem keccak256)
-  const hash = createHash('sha256').update(sig).digest();
-  return hash.subarray(0, 4);
+  return Buffer.from(keccak256(new TextEncoder().encode(sig)).slice(0, 4));
 }
 
 /**
@@ -99,7 +99,7 @@ export function handleMergeBonus() {
         calldata,
         target: process.env['CORTEX_MERGE_BONUS_ADDRESS'] ?? null,
         fnSignature: fnSig,
-        _note: 'selector computed with SHA256 placeholder; Phase 9 will use real keccak256',
+        _note: 'legacy no-uplift bonus rail; V0 production credits settle through state advances',
       };
       if (poolAddress) {
         body['pool'] = poolAddress;

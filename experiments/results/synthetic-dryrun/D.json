@@ -8,7 +8,7 @@
       "accepted": true,
       "errorCode": null,
       "scoreDelta": 0.0111,
-      "latencyMs": 209.882351,
+      "latencyMs": 146.224965,
       "parentStateRoot": "0x092faca6d4ec385ef2ca5bcf0157a6616d276940cdb127b8cbe3a71b07cf21d6"
     },
     {
@@ -16,7 +16,7 @@
       "accepted": true,
       "errorCode": null,
       "scoreDelta": 0.0104,
-      "latencyMs": 208.531352,
+      "latencyMs": 135.552865,
       "parentStateRoot": "0x647432e6f62b4e8c6d030771401c824b3981c2384ba05c4c6e401dfc71a5517e"
     },
     {
@@ -24,7 +24,7 @@
       "accepted": true,
       "errorCode": null,
       "scoreDelta": 0.0105,
-      "latencyMs": 204.025404,
+      "latencyMs": 132.131118,
       "parentStateRoot": "0x272ca7625acc4fbc8b6fabd77d98327b1d94f5e8812ff8006480b54cdd666b63"
     },
     {
@@ -32,7 +32,7 @@
       "accepted": true,
       "errorCode": null,
       "scoreDelta": 0.0106,
-      "latencyMs": 211.195609,
+      "latencyMs": 127.982921,
       "parentStateRoot": "0xfee7b360653a58fa0f264c9b2ad07d915966ae52352321246245359d31fab3f7"
     },
     {
@@ -40,7 +40,7 @@
       "accepted": true,
       "errorCode": null,
       "scoreDelta": 0.0107,
-      "latencyMs": 275.366049,
+      "latencyMs": 129.302726,
       "parentStateRoot": "0x4817b9fdab596e2a5967f0ad3423dcd941b9aeeee5fd26b34c6294de1c1eeab5"
     }
   ],
@@ -49,9 +49,9 @@
     "accepted": 5,
     "rejected": 0,
     "avgScoreDelta": 0.01066,
-    "p50LatencyMs": 209.882351,
+    "p50LatencyMs": 132.131118,
     "finalStateRoot": "0x4817b9fdab596e2a5967f0ad3423dcd941b9aeeee5fd26b34c6294de1c1eeab5"
   },
-  "generatedAt": "2026-05-06T00:33:09.584Z",
+  "generatedAt": "2026-05-06T08:38:13.928Z",
   "caveat": "Synthetic scoring (StubCorpusLoader). Real scoring requires Phase 4 corpus + LoCoMo resolution."
 }

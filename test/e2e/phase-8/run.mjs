@@ -11,7 +11,7 @@
 //   T4. External auditor reproduction     — gates on BASE_TESTNET_RPC_URL
 //   T5. Multisig override drill on testnet — gates on testnet RPC + funded keys
 //   T6. Pass-rate band hold               — gates on real testnet run
-//   T7. Multiplier-distribution gate      — gates on real testnet run
+//   T7. State-advance distribution gate   — gates on real testnet run
 //   T8. Latch/unlatch rehearsal           — gates on running cortex-server
 //   T9. Metrics dashboard correctness     — synthetic, always runs
 //   T10. Storage/HF export non-interference — gates on running SWCP coordinator
@@ -52,13 +52,13 @@ if (env.BASE_TESTNET_RPC_URL) {
   check('external-auditor-reproduction', null, 'requires real testnet run output (≥10 finalized epochs)');
   check('multisig-override-drill-testnet', null, 'requires testnet + funded multisig');
   check('pass-rate-band-hold', null, 'requires testnet ≥100 epochs');
-  check('multiplier-distribution-gate', null, 'requires testnet ≥100 epochs');
+  check('state-advance-distribution-gate', null, 'requires testnet ≥100 epochs');
   check('latch-unlatch-rehearsal', null, 'requires running cortex-server + SWCP coordinator');
 } else {
   check('external-auditor-reproduction', null, 'BASE_TESTNET_RPC_URL not set');
   check('multisig-override-drill-testnet', null, 'BASE_TESTNET_RPC_URL not set');
   check('pass-rate-band-hold', null, 'BASE_TESTNET_RPC_URL not set');
-  check('multiplier-distribution-gate', null, 'BASE_TESTNET_RPC_URL not set');
+  check('state-advance-distribution-gate', null, 'BASE_TESTNET_RPC_URL not set');
   check('latch-unlatch-rehearsal', null, 'BASE_TESTNET_RPC_URL not set');
 }
 
@@ -70,7 +70,7 @@ if (env.BASE_TESTNET_RPC_URL) {
     const j = JSON.parse(readFileSync('ops/testnet/dashboard.json', 'utf8'));
     const required = ['pass_rate_overall', 'score_delta_distribution', 'protected_regression_rate',
       'reducer_rejects', 'eval_latency_p50', 'eval_latency_p99', 'state_root_per_epoch',
-      'corpus_snapshot_hash', 'merge_multiplier_distribution'];
+      'corpus_snapshot_hash', 'state_advance_credit_distribution'];
     const text = JSON.stringify(j);
     const missing = required.filter((m) => !text.includes(m));
     dashOk = missing.length === 0;

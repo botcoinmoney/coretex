@@ -78,10 +78,10 @@
       "targets": [{ "expr": "cortex_corpus_snapshot_hash" }]
     },
     {
-      "title": "Merge multiplier distribution",
+      "title": "State-advance credit distribution",
       "type": "barchart",
-      "metric_ref": "merge_multiplier_distribution",
-      "targets": [{ "expr": "topk(20, sum by (miner) (cortex_merge_bonus_paid_total))" }]
+      "metric_ref": "state_advance_credit_distribution",
+      "targets": [{ "expr": "topk(20, sum by (miner) (cortex_state_advance_credits_total))" }]
     }
   ],
   "_note": "cortex-server does not yet expose /metrics in V0 (Phase 5 used node:http for zero-dep bootstrap). Tracked in V1 roadmap §9. Until then, the metric exprs above are templates."

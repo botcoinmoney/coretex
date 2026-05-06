@@ -10,8 +10,8 @@
 
 1. Reducer runs greedy-by-marginal-gain on the screener-pass set (§7 Layer B).
 2. `CortexEpochFinalized` is provisional for `CHALLENGE_WINDOW_SECONDS` (default 6h).
-3. If no public divergence report within the window, `CortexMergeBonus` is funded.
-4. Miners claim via `claimMergeBonus(uint64[] epochIds)` or pool-mode `triggerMergeBonusClaim`.
+3. If no public divergence report within the window, the epoch state root becomes canonical.
+4. V0 state-advance credits are already settled through the normal Botcoin receipt path; no legacy merge-bonus funding is expected.
 
 ## Pause `(P2)`
 
@@ -20,12 +20,12 @@
 cast send $CORTEX_REGISTRY_ADDRESS "pause()" \
   --rpc-url $BASE_RPC_URL --private-key $OWNER_KEY
 
-# Pause merge-bonus claims separately.
+# Pause legacy merge-bonus claims separately, if any prior legacy epochs were funded.
 cast send $CORTEX_MERGE_BONUS_ADDRESS "pause()" \
   --rpc-url $BASE_RPC_URL --private-key $OWNER_KEY
 ```
 
-The pause matrix is independent: pausing `CortexRegistry` blocks finalization but not merge-bonus claims for already-funded prior epochs. Pausing `CortexMergeBonus` blocks claims but not screener receipts.
+The pause matrix is independent: pausing `CortexRegistry` blocks live state advances and finalization but not legacy bonus claims for already-funded prior epochs. Pausing `CortexMergeBonus` blocks legacy claims but not normal state-advance receipts.
 
 ## Revert (audit-window override)
 

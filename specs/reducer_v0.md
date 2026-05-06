@@ -8,10 +8,10 @@
 
 ## Overview
 
-The reducer is a **deterministic, public-replayable** function that selects a
-non-conflicting set of screener-pass patches for a given epoch and produces:
+The reducer is a **deterministic, public-replayable** function that seals the
+state-advance checkpoints emitted during a 24-hour epoch and produces:
 
-- `accepted` — ordered list of merged patches
+- `accepted` — ordered list of state-advancing patches
 - `rejected` — list of skipped patches with stable rejection codes
 - `patchSetRoot` — Merkle root committing to the accepted set
 - `newStateRoot` — Merkle root of the updated CortexState
@@ -144,50 +144,49 @@ No coordinator data. No off-chain state. Same output as the coordinator reducer.
 
 ## Credit mechanics
 
-### Layer A — Screener credits (broad)
+### Layer A — State-advance credits
 
-Every screener-pass patch earns a `ScreenerPassed` credit via
-`BotcoinMiningV3.submitReceipt`. Credits = miner's current on-chain tier credits
-(from `BotcoinMiningV3.getTier()`). No separate Cortex credit table.
+A patch earns a `StateAdvance` credit only when it is verified as a real
+marginal improvement on the current live state and emitted as
+`CortexStateAdvanced`. Credits = miner's current on-chain tier credits, or a
+published function of `improvementCredits`, paid through the existing
+`BotcoinMiningV3.submitReceipt` path. A screener-looking patch that does not
+advance the live state receives a stable rejection code and earns no receipt.
 
-`ScreenerPassed` tracking per `(epoch, miner, patchHash)` — exactly one credit
-issuance per unique tuple. The `eligibility.ts` module enforces no double-credit.
+The epoch remains 24 hours. The state may advance many times inside that epoch;
+epoch end seals the ordered checkpoint list into `patchSetRoot` and
+`newStateRoot`.
 
-### Layer B — Merge multiplier (selective)
+### Layer B — Legacy merge bonus disabled
 
-Patches accepted by the reducer qualify for a merge-multiplier bonus via
-`CortexMergeBonus.claimMergeBonus`. Tracked per `PatchMerged(epoch, miner, patchHash)`.
-
-**Cap (V0)**: 2.0× per miner per epoch. Additional merged patches in the same
-epoch do **not** grant additional uplift. The multiplier is capped at:
+The separate merge multiplier is disabled for V0 production:
 
 ```
-bonusBOTCOIN = (MERGE_MULTIPLIER_BPS − 10000) × claimBaseForMerger(epoch, miner) / 10000
+MERGE_MULTIPLIER_BPS = 10000
+bonusBOTCOIN = 0
 ```
 
-where `MERGE_MULTIPLIER_BPS = 20000` and `claimBaseForMerger` is the miner's
-pro-rata share of the epoch reward across both lanes.
-
-The cap is enforced:
-- **Off-chain** in `multiplier-cap.ts` when building the funding-tx Merkle leaves
-- **On-chain** in `CortexMergeBonus.claimMergeBonus` via the Merkle leaf's `capBOTCOIN` field
+`CortexMergeBonus` remains in-tree for compatibility and legacy proof testing,
+but coordinators should not fund zero-uplift epochs. This removes the incentive
+to skim weak screener passes, withhold a better patch for a future multiplier,
+or optimize for an end-of-epoch jackpot instead of advancing the organism now.
 
 ### No double-credit invariant
 
 For any `(epoch, miner, patchHash)`:
-- `ScreenerPassed` produces exactly one tier-credit issuance
-- `PatchMerged` produces at most one multiplier accrual
-- A patch that is both screener-passed **and** merged produces one credit issuance
-  **plus** at most one multiplier accrual — never two of either
+- `CortexStateAdvanced` produces at most one credit issuance
+- duplicate state-advance events for the same tuple are skipped in replay
+- screener-only candidates produce no credits
 
 ---
 
 ## Anti-centralization properties
 
-1. **Screener credits** are distributed broadly (all passing miners earn at tier rate).
-2. **Merge multiplier** is an uplift on the miner's own solves, not a winner-take-all pool reweighting.
-3. The single-uplift cap prevents a miner with many merged patches from disproportionately
-   benefiting relative to their screener-credit base.
+1. **State-advance credits** are distributed to verified improvements, not mere submissions.
+2. **No separate multiplier** means there is no extra payout to game by withholding.
+3. Multiple non-overlapping improvements in the same epoch can all advance state.
+   Later overlapping improvements can also advance if they rebase on the current
+   live root and improve it further.
 4. Simulation target (verified in Phase 6 E2E): no single miner captures > 25% of any
    epoch's combined-lane credits (measured 9.47%); Gini coefficient stays below
    the documented threshold of 0.70 over 50 epochs with a 100-miner weak/medium/strong

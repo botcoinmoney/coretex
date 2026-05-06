@@ -18,15 +18,16 @@ interface ICortexRegistry {
 }
 
 /// @title CortexMergeBonus
-/// @notice Multiplier-uplift bonus for miners whose Cortex patches are merged
-///         by the epoch reducer. Mirrors the existing BonusEpoch pattern.
+/// @notice Legacy bonus rail for miners whose Cortex patches are merged.
+///         V0 production sets MERGE_MULTIPLIER_BPS to 10000 (1.0x), so normal
+///         state-advance credits replace the separate merge-uplift incentive.
 ///
 ///         Funding model:
 ///         - Coordinator funds the contract AFTER the CortexRegistry audit window
 ///           closes for that epoch. Calling fundEpoch() before the window closes reverts.
 ///         - Per epoch the coordinator posts a Merkle root of (miner, bonusBOTCOIN, capBOTCOIN)
 ///           leaves. On-chain verification checks bonus ≤ cap.
-///         - MERGE_MULTIPLIER stored as basis points; 20000 = 2.0×. Cap = (MERGE_MULTIPLIER − 10000)
+///         - MERGE_MULTIPLIER stored as basis points; 10000 = 1.0× / no uplift. Cap = (MERGE_MULTIPLIER − 10000)
 ///           × claimBase / 10000 is encoded into each Merkle leaf (capBOTCOIN field).
 ///
 ///         The SWCP receipt path and BotcoinMiningV3 are NOT touched.
@@ -36,7 +37,7 @@ contract CortexMergeBonus is Ownable, Pausable, ReentrancyGuard {
     // ── Constants ─────────────────────────────────────────────────────────
 
     uint256 public constant MAX_CLAIM_EPOCHS    = 64;
-    uint256 public constant MERGE_MULTIPLIER_BPS = 20000; // 2.0× in basis points (V0 setting)
+    uint256 public constant MERGE_MULTIPLIER_BPS = 10000; // 1.0× / no separate uplift (V0 setting)
 
     // ── Immutables ────────────────────────────────────────────────────────
 

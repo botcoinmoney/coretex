@@ -31,12 +31,11 @@ substrate improved.
 
 ### Credit unification with SWCP
 
-Screener-pass Cortex receipts flow through the same `BotcoinMining.submitReceipt` EIP-712 path that
-SWCP already uses. No new reward currency, no new claim flow, no new tier table. The miner's
-current on-chain tier (from `BotcoinMiningV3.getTier()`) determines the credit value. A merge
-multiplier (1.5× cap, per-miner per-epoch) is paid via a peer `CortexMergeBonus` contract that
-mirrors the existing `BonusEpoch` pattern — because `BotcoinMiningV3.claim()` reads epoch reward
-math directly from on-chain state and cannot be retroactively reweighted.
+State-advance Cortex receipts flow through the same `BotcoinMining.submitReceipt` EIP-712 path that
+SWCP already uses. No new reward currency, no new tier table. The miner's current on-chain tier
+(from `BotcoinMiningV3.getTier()`) determines the base credit value. A candidate must advance the
+live state to earn credits; screener-only candidates do not get paid. The legacy merge-bonus rail is
+set to 1.0× / no uplift in V0 production.
 
 ### Why this state shape is research-backed
 
@@ -294,9 +293,8 @@ creates the right incentive structure.
 3. **Anti-overfit:** Hidden shards (per-epoch `H_e` commit/reveal) prevent a miner from learning
    the specific test items and gaming them. Protected-regression on K=4 random other shards at
    merge time catches epoch-specific overfit.
-4. **Anti-centralization:** Screener-pass credits at tier rate mean broad participation. The 1.5×
-   merge multiplier uplifts only the miner's own solves — it does not redirect the epoch pool
-   away from other miners.
+4. **Anti-centralization:** State-advance credits at tier rate mean broad participation without an
+   end-of-epoch multiplier jackpot. Non-overlapping improvements can all advance in the same epoch.
 
 **Pass-rate calibration:** The 5–10% weak / 20–30% strong targets are derived from the benchmark
 family difficulty under the 1024-word constraint. A random/no-op patch fails because:
@@ -408,12 +406,11 @@ mutations cannot improve exact retrieval (which requires intentional key design)
 cause protected-regression failures. Screener rejects no-op, random mutation, public-test overfit,
 and protected-regression patches explicitly.
 
-**7.4 Multiplier stacking via merge gaming**
-Risk: a single miner floods the epoch with many small patches, winning the merge multiplier
-repeatedly.
-Mitigation: multiplier is capped at 1.5× per miner per epoch (single merge sufficient). Additional
-merges in the same epoch grant no extra uplift. The greedy reducer skips conflicting patches by
-target-index overlap and semantic-conflict marginal gain.
+**7.4 Merge gaming / withholding**
+Risk: a miner submits weak screener passes for rewards, or withholds a stronger patch to preserve a
+future merge multiplier.
+Mitigation: V0 pays only state advances and sets the legacy multiplier rail to 1.0× / no uplift.
+Useful patches are best submitted immediately because another miner can advance the live root first.
 
 **7.5 Core version instability**
 Risk: Core upgrades invalidate previously-good patches, creating a moving-target that rewards

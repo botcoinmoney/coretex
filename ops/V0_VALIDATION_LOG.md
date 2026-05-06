@@ -1,7 +1,12 @@
 # V0 Validation Log
 
 End-to-end validations performed against the V0 contracts after the
-2026-05-05 policy changes (LoCoMo Path B, multisig deferred, 2.0× multiplier).
+2026-05-05 policy changes (LoCoMo Path B, multisig deferred).
+
+> Superseded note (2026-05-06): V0 production now uses live mid-epoch
+> `CortexStateAdvanced` checkpoints and no separate merge uplift
+> (`MERGE_MULTIPLIER_BPS = 10000`). The `20000` value below is historical
+> pre-no-uplift validation evidence, not the current production target.
 
 > All addresses and tx hashes below are from a local anvil fork of Base
 > mainnet at block ~45 616 600. They are not persistent. The point of this

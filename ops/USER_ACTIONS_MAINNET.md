@@ -18,7 +18,7 @@ This is the launch checklist for Botcoin Cortex V0 on Base mainnet. Each numbere
 - [ ] **2. Run Phase 8 testnet for ≥100 epochs / ≥1k patches**
   - *Deliverables*: `contracts/script/DeployTestnet.s.sol`, `scripts/testnet/*`, `test/e2e/phase-8/run.mjs` (golden fixture).
   - *Actions*: deploy to testnet, run synthetic miners via `scripts/testnet/feed-synthetic-traffic.mjs`, verify ≥10 finalized epochs reproduce via `scripts/testnet/auditor-reproduce.mjs`, run latch/unlatch rehearsals × 2.
-  - *Pass criteria*: golden e2e fixture green; saturation alarm fires on synthetic flat sequence; multiplier-distribution gate (no single miner > 25% of merge bonus); pass-rate band hold.
+  - *Pass criteria*: golden e2e fixture green; saturation alarm fires on synthetic flat sequence; live state-advance distribution gate (no single miner > 25% of state-advance credits); pass-rate band hold.
 
 - [ ] **3. ~~Publish operator multisig key set~~** — **DEFERRED to V1.**
   V0 ships with a single-owner audit-window override (`ownerRevertEpoch`).
@@ -29,7 +29,7 @@ This is the launch checklist for Botcoin Cortex V0 on Base mainnet. Each numbere
 
 ## Mainnet deploy
 
-- [ ] **4. Mainnet deploy of `CortexRegistry` + `CortexMergeBonus`**
+- [ ] **4. Mainnet deploy of `CortexRegistry` + legacy `CortexMergeBonus`**
   ```bash
   MAINNET_CONFIRM=I-UNDERSTAND \
   OWNER_ADDRESS=0x...                 # V0 single-owner revert authority
@@ -38,13 +38,13 @@ This is the launch checklist for Botcoin Cortex V0 on Base mainnet. Each numbere
   forge script contracts/script/DeployMainnet.s.sol \
     --rpc-url $BASE_RPC_URL --broadcast --verify
   ```
-  `MERGE_MULTIPLIER_BPS` (2.0× = `20000`), `CHALLENGE_WINDOW_SECONDS` (`21600`),
+  `MERGE_MULTIPLIER_BPS` (`10000`, no separate uplift), `CHALLENGE_WINDOW_SECONDS` (`21600`),
   and `SNAPSHOT_EPOCH_INTERVAL` (`100`) are compile-time constants in the
   contracts — change in source + redeploy if a different value is required.
   - Record `CortexRegistry` and `CortexMergeBonus` addresses in `docs/contract-addresses.md` (replace `<TBD>`).
   - Run `node scripts/post-deploy-smoke.mjs` to verify bytecode + selectors.
 
-- [ ] **5. Mainnet dry-run epoch (zero merge-bonus funding)**
+- [ ] **5. Mainnet dry-run epoch (zero legacy-bonus funding)**
   ```bash
   CORTEX_REGISTRY_ADDRESS=0x... \
   CORTEX_MERGE_BONUS_ADDRESS=0x... \
@@ -83,7 +83,7 @@ This is the launch checklist for Botcoin Cortex V0 on Base mainnet. Each numbere
 
 - [ ] **8. Re-enable cortex-server + first reward epoch**
   - Restart `cortex-server`; restore nginx upstream.
-  - Allow the first paying epoch to finalize. After audit window closes, the coordinator funds `CortexMergeBonus` for that epoch.
+  - Allow the first paying epoch to finalize. No V0 legacy merge-bonus funding is expected; state-advance credits settle through the normal receipt path.
 
 - [ ] **9. Publish first-reward audit trail**
   ```bash
@@ -101,7 +101,7 @@ This is the launch checklist for Botcoin Cortex V0 on Base mainnet. Each numbere
 - [ ] **10. Saturation alarm + dashboard**
   - Watch `ops/testnet/dashboard.json` (Grafana template) translated to mainnet metrics. Saturation alarm fires on median score-delta < 1% over 10 epochs.
   - Pass-rate band hold (per tier ±5%).
-  - Multiplier distribution (no single miner > 25% of total merge bonus across the run).
+  - State-advance distribution (no single miner > 25% of total state-advance credits across the run).
 
 ## What to do if something goes wrong
 

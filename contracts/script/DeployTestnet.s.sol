@@ -5,7 +5,7 @@ import {Script, console2} from "forge-std/Script.sol";
 import {CortexRegistry} from "../src/CortexRegistry.sol";
 import {CortexMergeBonus} from "../src/CortexMergeBonus.sol";
 
-/// @notice Deploy CortexRegistry and CortexMergeBonus to a testnet.
+/// @notice Deploy CortexRegistry and legacy CortexMergeBonus to a testnet.
 ///
 /// Reads addresses from environment variables.
 /// Outputs a deployment manifest summary to stdout (JSON captured to
@@ -35,7 +35,7 @@ contract DeployTestnet is Script {
         address coordinator = vm.envAddress("COORDINATOR_ADDRESS");
         address botcoin     = vm.envAddress("BOTCOIN_TOKEN");
 
-        console2.log("=== CortexRegistry + CortexMergeBonus -- TESTNET DEPLOY ===");
+        console2.log("=== CortexRegistry + legacy CortexMergeBonus -- TESTNET DEPLOY ===");
         console2.log("Deployer:    ", deployer);
         console2.log("Coordinator: ", coordinator);
         console2.log("BotcoinToken:", botcoin);
@@ -47,7 +47,7 @@ contract DeployTestnet is Script {
         CortexRegistry registry = new CortexRegistry(deployer, coordinator);
         console2.log("CortexRegistry:    ", address(registry));
 
-        // 2. Deploy CortexMergeBonus (multiplier payout, mirrors BonusEpoch)
+        // 2. Deploy legacy CortexMergeBonus (no-uplift compatibility rail)
         CortexMergeBonus bonus = new CortexMergeBonus(botcoin, address(registry), coordinator);
         console2.log("CortexMergeBonus:  ", address(bonus));
 

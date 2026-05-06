@@ -10,8 +10,8 @@ import {CortexMergeBonus} from "../src/CortexMergeBonus.sol";
 ///   V0 launch decision: multisig audit-window override is DEFERRED. The
 ///   contract still has multisig wiring (voteRevertEpoch) for V1 reactivation,
 ///   but V0 uses ownerRevertEpoch (single-owner). MERGE_MULTIPLIER_BPS is
-///   hardcoded at 20000 (2.0x) — change the constant in CortexMergeBonus.sol
-///   and redeploy if you want a different value at launch.
+///   hardcoded at 10000 (1.0x / no separate uplift). State-advance credits
+///   are paid through the normal Botcoin receipt path.
 ///
 ///   Stricter than testnet: requires `MAINNET_CONFIRM=I-UNDERSTAND` env var
 ///   to broadcast.
@@ -42,8 +42,8 @@ contract DeployMainnet is Script {
         vm.startBroadcast();
 
         CortexRegistry registry = new CortexRegistry(owner_, coordinator_);
-        // Constructor signature: (_botcoin, _registry, _operator) — order
-        // matches CortexMergeBonus.sol and the rest of the test/deploy scripts.
+        // Constructor signature: (_botcoin, _registry, _operator). This is a
+        // legacy no-uplift rail retained for compatibility.
         CortexMergeBonus mergeBonus = new CortexMergeBonus(
             botcoinToken,
             address(registry),

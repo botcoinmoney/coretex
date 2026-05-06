@@ -100,6 +100,45 @@ contract CortexPhase2Test is Test {
         vm.stopPrank();
     }
 
+    function test_submitStateAdvance_updatesLiveRootAndCounts() public {
+        bytes memory pb = abi.encodePacked("patch-1");
+        bytes32 patchHash = keccak256(pb);
+        bytes32 reportHash = keccak256("report-1");
+
+        vm.prank(COORDINATOR);
+        registry.submitStateAdvance(EPOCH, MINER_A, PARENT_STATE, patchHash, reportHash, NEW_STATE, 123, pb);
+
+        assertEq(registry.patchCount(EPOCH), 1);
+        assertEq(registry.advanceCount(EPOCH), 1);
+        assertEq(registry.liveStateRoot(EPOCH), NEW_STATE);
+    }
+
+    function test_submitStateAdvance_requiresParentToMatchLiveRoot() public {
+        bytes memory pb1 = abi.encodePacked("patch-1");
+        bytes memory pb2 = abi.encodePacked("patch-2");
+
+        vm.startPrank(COORDINATOR);
+        registry.submitStateAdvance(EPOCH, MINER_A, PARENT_STATE, keccak256(pb1), keccak256("r1"), NEW_STATE, 123, pb1);
+
+        vm.expectRevert(CortexRegistry.LiveStateRootMismatch.selector);
+        registry.submitStateAdvance(EPOCH, MINER_B, PARENT_STATE, keccak256(pb2), keccak256("r2"), keccak256("next"), 111, pb2);
+        vm.stopPrank();
+    }
+
+    function test_finalizeEpoch_requiresLiveRootAfterAdvances() public {
+        bytes memory pb = abi.encodePacked("patch-1");
+
+        vm.startPrank(COORDINATOR);
+        registry.submitStateAdvance(EPOCH, MINER_A, PARENT_STATE, keccak256(pb), keccak256("r1"), NEW_STATE, 123, pb);
+
+        vm.expectRevert(CortexRegistry.LiveStateRootMismatch.selector);
+        registry.finalizeEpoch(EPOCH, PARENT_STATE, PATCH_SET, keccak256("wrong"), CORE_HASH, BENCHMARK, CORPUS_ROOT, SCORE_ROOT);
+
+        registry.finalizeEpoch(EPOCH, PARENT_STATE, PATCH_SET, NEW_STATE, CORE_HASH, BENCHMARK, CORPUS_ROOT, SCORE_ROOT);
+        assertTrue(registry.epochFinalized(EPOCH));
+        vm.stopPrank();
+    }
+
     function test_finalizeEpoch_emitsEvent() public {
         _finalizeEpoch(EPOCH);
 

@@ -4,9 +4,9 @@ This guide is for miners participating in the Botcoin Cortex lane. It is the pub
 
 ## What Cortex mining is
 
-Cortex mining proves: **I improved the shared memory substrate that future Botcoin agents read through Core — and I get paid through the same receipt path I already use, plus a sister-contract bonus when my patch is merged.**
+Cortex mining proves: **I improved the shared memory substrate that future Botcoin agents read through Core — and I get paid through the same receipt path I already use when that improvement advances the live state.**
 
-The shared memory substrate is a **compact 1024-word on-chain-rooted memory codec** (≈32 KB active state). You propose a small patch to it (1–4 word changes per patch). Botcoin Core deterministically verifies that your patch improves the codec against an anchored benchmark. If your patch passes the screener, you earn credits at your current on-chain tier rate through the existing `BotcoinMining.submitReceipt` path. If the epoch reducer also accepts ("merges") your patch, you additionally qualify for a **1.5× merge multiplier** paid through the peer `CortexMergeBonus` contract.
+The shared memory substrate is a **compact 1024-word on-chain-rooted memory codec** (≈32 KB active state). You propose a small patch to it (1–4 word changes per patch). Botcoin Core deterministically verifies that your patch improves the codec against an anchored benchmark and the current live state root. If it does, the coordinator emits a `CortexStateAdvanced` checkpoint during the still-open 24-hour epoch and issues normal Botcoin credits for that state advance. There is **no separate merge multiplier** in V0 production.
 
 `BotcoinMiningV3` is **unchanged**. The SWCP challenge system is **unchanged**. Cortex is a parallel lane — same auth, same tier system, same RPC origin (`/v1/cortex/*`), same signing key.
 
@@ -55,7 +55,7 @@ curl -s "$COORDINATOR/v1/cortex/submit" \
      -d "$(cat patch.json)"
 ```
 
-Response: a signed receipt that you submit on-chain via `BotcoinMiningV3.submitReceipt(...)`. Credits accrue through the same `claim()` math you already use.
+Response: a signed receipt that you submit on-chain via `BotcoinMiningV3.submitReceipt(...)` only after the patch advances the live Cortex state. Credits accrue through the same `claim()` math you already use.
 
 ## Receipt field mapping (V0)
 
@@ -74,28 +74,15 @@ Block explorers will see `doc/questions/constraints/answers` labels — that is 
 
 ## Credits
 
-**Layer A — screener credits (broad)**: every screener-pass patch earns your current on-chain tier credits via `BotcoinMiningV3.submitReceipt`. The same value SWCP solves earn.
+**State-advance credits**: a patch earns credits only when it is verified as a real marginal improvement on the current live state and is emitted as `CortexStateAdvanced`. A cheap screener pass by itself is not enough; if the patch does not improve the live state, it receives a stable rejection code and no receipt.
 
-**Layer B — merge multiplier (selective)**: if the epoch reducer accepts your patch into the canonical `patchSetRoot`, you additionally qualify for a 1.5× uplift on your own pro-rata epoch reward, paid via:
+**No separate merge multiplier**: `MERGE_MULTIPLIER_BPS` is set to `10000` (1.0×, zero separate uplift). The old `CortexMergeBonus` rail is retained only as legacy/deployment compatibility and should not be funded for V0 production epochs.
 
-```solidity
-CortexMergeBonus.claimMergeBonus(uint64[] epochIds);
-```
-
-UX is identical to the existing `BonusEpoch.claimBonus`. The coordinator returns pre-encoded calldata via:
-
-```bash
-curl -s "$COORDINATOR/v1/cortex/merge-bonus/claim-calldata?epochs=812,813"
-```
-
-**Multiplier cap**: 1.5× per miner per epoch. Additional merged patches in the same epoch do **not** grant additional uplift. The cap is enforced both off-chain (in the coordinator funding tx) and on-chain (in `CortexMergeBonus.claimMergeBonus` via the Merkle leaf's `capBOTCOIN` field).
-
-**Worked example**: A miner with 200 SWCP solves + 20 Cortex screener passes in epoch `e`, with one merged patch, earns:
+**Worked example**: A miner with 200 SWCP solves + 20 Cortex state advances in epoch `e` earns:
 
 - Their normal `(200 + 20) × tierCredits` from `BotcoinMiningV3.claim()`.
-- An additional `0.5 × claimBaseForMerger(e, miner)` from `CortexMergeBonus.claimMergeBonus([e])`.
 
-Strong but not pool-dominating, and structurally separable in audits.
+The incentive is now direct: advance useful state early, earn normal credits. There is no extra end-of-epoch jackpot to withhold for.
 
 ## Cross-lane rules
 
@@ -115,7 +102,7 @@ derived through the existing `deriveWorldSeedU128(...)` machinery. `H_e` is reve
 
 **Continuous shard generation**: shards are derived on demand from `H_e`, not drawn from a static pool. Probing across many epochs cannot enumerate the space because each `H_e` is fresh.
 
-You see your `shardId` at challenge time. Your patch is silently re-evaluated against `K=4` random other shards as protected-regression at merge time. A patch that overfits to your assigned shard will fail merge.
+You see your `shardId` at challenge time. Your patch is silently re-evaluated against protected-regression shards before it can advance live state. A patch that overfits to your assigned shard will fail and earns no credits.
 
 ## Audit window (V0 trust assumption — disclosed honestly)
 
@@ -123,11 +110,11 @@ Each epoch's finalization is **provisional for `CHALLENGE_WINDOW_SECONDS` (V0 de
 
 - Any party can run `botcoin-cortex verify-epoch <epoch>` from chain alone and demonstrate divergence.
 - If divergence is shown, a **2-of-N operator multisig** (key set published in [`docs/multisig-key-set.md`](./multisig-key-set.md)) calls `revertEpoch(epoch)` and the coordinator re-finalizes.
-- After the window, finalization is canonical and `CortexMergeBonus` is funded.
+- After the window, finalization is canonical. No V0 merge-bonus funding is required.
 
 **This is not an on-chain fraud proof.** The EVM cannot re-run Botcoin Core. The audit window is a public delay during which divergence can be demonstrated and the multisig can act. **V1 path**: bond-based or ZK fraud proofs replace the multisig override. See [V1 roadmap](./v1-roadmap.md).
 
-`CortexMergeBonus` is **not funded** for an epoch until that epoch's audit window closes without a successful revert. Screener-pass receipts are NOT subject to the window — they are settled through the existing `BotcoinMining.submitReceipt` path immediately.
+State-advance receipts are settled through the existing `BotcoinMining.submitReceipt` path. The audit window protects the epoch state root; if the epoch is reverted, the coordinator replays from the last valid state and re-finalizes.
 
 ## Filler / abuse rejection
 
@@ -145,7 +132,7 @@ Stable error codes: `E01` (wrong parent root), `E02` (wrong-type field), `E03` (
 ## Fail-safes
 
 - **Lane disable**: the operator can stop `cortex-server` or remove the nginx upstream at any time. SWCP claims are unaffected. Your queued submissions are preserved in the cortex SQLite queue and resume on restart.
-- **Emergency pause**: `CortexRegistry.pause()` halts new state finalization. `CortexMergeBonus.pause()` halts merge-bonus claims separately.
+- **Emergency pause**: `CortexRegistry.pause()` halts new state advances and finalization.
 - **Multisig override**: see "Audit window" above.
 
 ## See also
@@ -153,4 +140,4 @@ Stable error codes: `E01` (wrong parent root), `E02` (wrong-type field), `E03` (
 - [`verifier-guide.md`](./verifier-guide.md) — how to audit an epoch from chain alone.
 - [`receipt-mapping.md`](./receipt-mapping.md) — the §6 receipt field mapping in detail.
 - [`v1-roadmap.md`](./v1-roadmap.md) — what's deferred.
-- [`contract-addresses.md`](./contract-addresses.md) — mainnet `CortexRegistry`, `CortexMergeBonus`, and `BotcoinMiningV3` addresses.
+- [`contract-addresses.md`](./contract-addresses.md) — mainnet `CortexRegistry` and `BotcoinMiningV3` addresses.

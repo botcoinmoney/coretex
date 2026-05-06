@@ -666,6 +666,7 @@ await (async () => {
     assert(r.status === 200, `expected 200 got ${r.status}`);
     assert(typeof r.body.calldata === 'string', 'calldata must be string');
     assert(r.body.calldata.startsWith('0x'), 'calldata must start with 0x');
+    assert(r.body.calldata.startsWith('0x47b85545'), 'selector must be keccak256 claimMergeBonus(uint64[])');
     assert(r.body.epochs.length === 2, 'epochs must have 2 entries');
     assert(r.body.fnSignature === 'claimMergeBonus(uint64[])', 'fnSignature must match');
   }, serverSkipReason);

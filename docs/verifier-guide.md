@@ -86,12 +86,12 @@ If `verify-epoch` reports `matchesOnChain: false` within `CHALLENGE_WINDOW_SECON
 
 3. **Notify the multisig.** Operator addresses are published in [`docs/multisig-key-set.md`](./multisig-key-set.md). 2-of-N agreement is required to call `CortexRegistry.revertEpoch(<EPOCH>)`.
 
-4. **Operator response.** Operators verify your report independently. If 2-of-N agree, they call `revertEpoch(<EPOCH>)`. The coordinator re-finalizes, the audit window restarts, `CortexMergeBonus` is not funded for that epoch.
+4. **Operator response.** Operators verify your report independently. If 2-of-N agree, they call `revertEpoch(<EPOCH>)`. The coordinator re-finalizes and the audit window restarts.
 
 **Hard rules** (per [`ops/multisig.md`](../ops/multisig.md)):
 - No revert after the audit window closes.
 - No revert without divergence demonstrated publicly.
-- No revert touches `BotcoinMiningV3`. Screener-pass receipts are already settled.
+- No revert touches `BotcoinMiningV3`. State-advance receipts are already settled.
 - Every revert must be followed by a public post-mortem within 72h.
 
 ## What does *not* trigger a revert
@@ -121,17 +121,18 @@ $ jq '{epoch, parentStateRoot, patchSetRoot: .reproduced.patchSetRoot, onChainPa
 
 You'd see exactly which root diverges. File the divergence report against the multisig.
 
-## Reproducing the merge-bonus funding root
+## Reproducing state-advance credits
 
-Funding for an epoch posts a Merkle root of `(miner, bonusBOTCOIN, capBOTCOIN)` leaves. You can reproduce it:
+V0 production does not fund a separate merge-bonus root. To audit rewards, reproduce the ordered
+`CortexStateAdvanced` events and their `improvementCredits`:
 
 ```bash
 node packages/cortex/dist/cli.js reduce-epoch \
-  <state.bin> <patches.json> \
-  --emit-funding-root
+  <state.bin> <patches.json>
 ```
 
-The output should match the funding tx's `EpochFunded(epoch, minerBonusRoot, totalBonus)` event for the same epoch. If it doesn't, that's also reportable divergence — same revert procedure.
+The output should match the finalized `patchSetRoot`, `newStateRoot`, and state-advance credit
+ledger for the same epoch. If it doesn't, that's reportable divergence.
 
 ## See also
 

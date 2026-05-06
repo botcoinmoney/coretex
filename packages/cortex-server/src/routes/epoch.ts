@@ -6,7 +6,7 @@
  *   - patchSetRoot
  *   - hiddenSeed (if revealed)
  *   - screener pass count
- *   - merge bonus funding status
+ *   - live state-advance count
  *
  * For Phase 5 this is a minimal stub that returns what we have from the
  * epoch state. Full reducer output tracking lands in Phase 6.
@@ -53,7 +53,7 @@ export function handleEpoch() {
           experienceCorpusRoot: epochState.experienceCorpusRoot,
           coreVersionHash: epochState.coreVersionHash,
           secretRevealed: epochState.secretRevealed,
-          // TODO(Phase 6): add patchSetRoot, newStateRoot, screenerPassCount, mergeBonusFunded
+          // TODO(Phase 6): add patchSetRoot, newStateRoot, screenerPassCount, advanceCount
         }));
       } else if (epochId < epochState.epochId) {
         // Historical epoch — Phase 6 will query CortexRegistry events

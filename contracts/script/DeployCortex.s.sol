@@ -5,7 +5,7 @@ import {Script, console2} from "forge-std/Script.sol";
 import {CortexRegistry} from "../src/CortexRegistry.sol";
 import {CortexMergeBonus} from "../src/CortexMergeBonus.sol";
 
-/// @notice Deploy CortexRegistry and CortexMergeBonus.
+/// @notice Deploy CortexRegistry and legacy CortexMergeBonus.
 ///
 /// Required env vars:
 ///   DEPLOYER_PK          — private key of deployer
@@ -27,7 +27,7 @@ contract DeployCortex is Script {
         CortexRegistry registry = new CortexRegistry(deployer, coordinator);
         console2.log("CortexRegistry deployed at:", address(registry));
 
-        // 2. Deploy CortexMergeBonus (registry address wired immediately)
+        // 2. Deploy legacy CortexMergeBonus (registry address wired immediately)
         CortexMergeBonus bonus = new CortexMergeBonus(botcoin, address(registry), coordinator);
         console2.log("CortexMergeBonus deployed at:", address(bonus));
 
