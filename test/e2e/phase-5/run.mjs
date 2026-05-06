@@ -219,6 +219,7 @@ async function startCortexServer(extra = {}) {
     INTERNAL_RPC_SHARED_SECRET: '',
     CORTEX_DB_PATH: _cortexDbPath,
     CORTEX_WORKER_POOL_SIZE: '1',
+    CORTEX_ALLOW_STUB_EVAL: '1',
     ...extra.env,
   };
 
@@ -343,7 +344,7 @@ await (async () => {
       challenge: ch.body,
       patch: {
         parentStateRoot: psr,
-        targetIndices: [42],
+        targetIndices: [401],
         newWords: ['0x0000000000000000000000000000000000000000000000000000000000000001'],
         patchType: 'KEY_UPDATE',
         scoreDelta: '1',
@@ -417,7 +418,7 @@ await (async () => {
       challenge: ch.body,
       patch: {
         parentStateRoot: ch.body.parentStateRoot,
-        targetIndices: [100],
+        targetIndices: [402],
         newWords: ['0x0000000000000000000000000000000000000000000000000000000000000002'],
         patchType: 'KEY_UPDATE',
         scoreDelta: '1',
@@ -442,7 +443,7 @@ await (async () => {
       challenge: ch.body,
       patch: {
         parentStateRoot: ch.body.parentStateRoot,
-        targetIndices: [200],
+        targetIndices: [403],
         newWords: ['0x0000000000000000000000000000000000000000000000000000000000000003'],
         patchType: 'KEY_UPDATE',
         scoreDelta: '1',

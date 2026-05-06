@@ -59,7 +59,8 @@ async function post(path, body) {
 
   const required = ['lane', 'epoch', 'parentStateRoot', 'experienceCorpusRoot',
     'coreVersionHash', 'patchObjective', 'patchBudget', 'shardId',
-    'shardDescriptor', 'submissionFormat', 'creditsPerSolve'];
+    'shardDescriptor', 'submissionFormat', 'creditsPerSolve',
+    'solveIndex', 'prevReceiptHash'];
   const missing = required.filter((k) => !(k in challenge));
   if (missing.length) {
     console.error('[scripted-miner] challenge missing fields:', missing);
@@ -75,7 +76,7 @@ async function post(path, body) {
   //    patch that the test corpus knows passes.
   const patch = {
     parentStateRoot: challenge.parentStateRoot,
-    targetIndices: [42],
+    targetIndices: [401],
     newWords: ['0x0000000000000000000000000000000000000000000000000000000000000001'],
     patchType: 'KEY_UPDATE',
     scoreDelta: '0',
