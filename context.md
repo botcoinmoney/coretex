@@ -26,7 +26,8 @@
 | Phase 1 E2E | **6/6 gates green** |
 | Phase 5 E2E | **17 pass, 1 SKIP** (fork receipt test needs `BASE_RPC_URL`) |
 | Phase 6 E2E | **46/46 pass**; no-uplift gate asserts `MERGE_MULTIPLIER_BPS = 10000` |
-| Phase 7 synthetic E2E | **7/7 pass** including baseline validity + live mid-epoch advance semantics |
+| Phase 7 E2E (real corpus) | **8/8 pass** with `CORTEX_E2E_LIVE=1`; 7/7 + 1 SKIP without anvil. Includes baseline validity, 1M-patch adversarial fuzz under `EXTENDED_FUZZ=1`, and live mine→submit→advance over Anvil |
+| Real Phase 7 winner pick | **Baseline A** across seeds 1, 7, 42, 99, 1234. `coreVersionHash` + `genesisStateRoot` frozen in `ops/v0-frozen.json` |
 | Phase 8 E2E | **4 pass, 6 SKIP** (testnet/operator gates self-skip without RPC/live run) |
 | Phase 9 E2E | **3 pass, 5 SKIP** (mainnet-only gates self-skip) |
 | `forge test` (no-fork): `CortexPhase2` + `GasBudget` | **58/58 pass** (54 + 4) |
@@ -46,7 +47,6 @@ Records in `ops/V0_VALIDATION_LOG.md` and `ops/AUDIT_HANDOFF.md`. The anvil-fork
 |---|------|----------|
 | [#11](../../issues/11) | V1: collapse 5 vendored keccak copies to one canonical | Soft hardening |
 | BASE_RPC_URL CI secret | Wire to GitHub Actions secrets so fork tests run on every PR | Operator action |
-| Real Phase 7 baseline iteration | Pick winner, freeze `coreVersionHash` + `genesisStateRoot`, ≥1M fuzz | User research task |
 | Real Phase 8 testnet run | ≥100 epochs / ≥1k patches / ≥10 auditor reproductions / latch-unlatch ×2 | User operator task |
 | Mainnet deploy (Phase 9) | Operator-only; `ops/USER_ACTIONS_MAINNET.md` 11-step checklist | User operator task |
 
@@ -54,9 +54,11 @@ Records in `ops/V0_VALIDATION_LOG.md` and `ops/AUDIT_HANDOFF.md`. The anvil-fork
 
 - Issue #8 — Phase 3 eval perf. Incremental Merkle cache landed; perf now p50 0.509 ms / p99 0.995 ms on 10k compiled-dist fuzz.
 - Issue #4 — LoCoMo CC-BY-NC-4.0 (Path B). Closed.
+- **Phase 7 baseline iteration** — DONE. Real CortexBench V0 evaluator picked **Baseline A (empty)** across 5 stability seeds (1, 7, 42, 99, 1234). `coreVersionHash` = `0xe1a957805f855828338a2a9d1f90c46eb78c378d85f10c8d8c83a1ce6eb388d3` and `genesisStateRoot` = `0x7e704f76d6156405800141206cec1e6d7804daa8bf4e7da1542a1e431958504e` frozen in `ops/v0-frozen.json` and mirrored into `docs/contract-addresses.md`. 1M-patch adversarial fuzz: 0 panics, 0 nondeterminism. Live mine→submit→advance e2e on Anvil: 15/15 PASS via `scripts/e2e-real-improvement.mjs`.
 
 ## Recent decisions (last 10)
 
+- 2026-05-06 — Phase 7 real baseline iteration completed. Winner: Baseline A. Real-corpus scorer in `experiments/harness/cortex-bench-eval.mjs` replaces synthetic SEED-XOR; baselines mine corpus-aware 4-word patches; freeze script in `scripts/freeze-core-version.mjs`; reports under `experiments/results/phase7-real-30/` (comparison + patch sensitivity + adversarial). End-to-end live-improvement script `scripts/e2e-real-improvement.mjs` exercises mine→submit→advance + stale-parent rebase + no-credit bogus.
 - 2026-05-06 — Protocol policy changed from end-of-epoch merge uplift to live mid-epoch state advances. Verified improvements update `liveStateRoot` immediately, stale-parent suggestions must rebase, and V0 uses no separate merge multiplier (`MERGE_MULTIPLIER_BPS=10000`).
 - 2026-05-06 — Phase 7 synthetic gate expanded: baseline A-E validity checks plus live-epoch tests for non-overlap, stale-parent rejection, and no-credit bogus improvements.
 - 2026-05-06 — Phase 3 incremental Merkle update landed. Eval now caches the 1024-word tree and recomputes only touched leaf paths; worker cache is keyed by parent state root, not packed-state prefix.
@@ -82,6 +84,6 @@ cat ops/AUDIT_HANDOFF.md          # current audit/testing handoff
 ```
 
 For the next operator session:
-1. Run Phase 7 real baseline iteration (`experiments/PHASE_7_USER_ACTIONS.md`).
+1. ~~Phase 7 real baseline iteration~~ — DONE (winner Baseline A, see `experiments/PHASE_7_USER_ACTIONS.md`).
 2. Phase 8 testnet (`ops/testnet/USER_ACTIONS.md`).
 3. Phase 9 mainnet (`ops/USER_ACTIONS_MAINNET.md`).

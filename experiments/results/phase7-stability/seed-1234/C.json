@@ -1,0 +1,1226 @@
+{
+  "baselineId": "C",
+  "baselineName": "binary-key",
+  "seed": 1234,
+  "epochs": [
+    {
+      "epoch": 1,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0,
+      "afterComposite": 0.023529411764705882,
+      "marginalDelta": 0.023529411764705882,
+      "latencyMs": 140.510533,
+      "components": {
+        "exactRetrieval": 0.0784313725490196,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x5dcbb9514c849d275d4bc8747f26d2d15e9b82207ef34783bd613af601365872",
+      "patchHashHex": "0x53b60020921803d94e023f0a2ca62a3ec58c6bf2405934bb5d4293167fa7b81d"
+    },
+    {
+      "epoch": 2,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.023529411764705882,
+      "afterComposite": 0.029411764705882353,
+      "marginalDelta": 0.0058823529411764705,
+      "latencyMs": 132.557072,
+      "components": {
+        "exactRetrieval": 0.09803921568627451,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0xb78183c52f33c5894a77c20f8d4a6d75e1163605ef86d98174133511db386cdc",
+      "patchHashHex": "0x99dd819f1d7ef1da25825e0713f0fb6794e458d845433bad914d44c3e70987ee"
+    },
+    {
+      "epoch": 3,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.029411764705882353,
+      "afterComposite": 0.03529411764705882,
+      "marginalDelta": 0.0058823529411764705,
+      "latencyMs": 132.167278,
+      "components": {
+        "exactRetrieval": 0.11764705882352941,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0xcd78c5f254c0717f439074b4d03ffdcf5bccefb80f3960964ae3a57d4c81c77a",
+      "patchHashHex": "0x2c5825658fed9f87b3ef9f84b396daa7a3549c2730468595a89b16fe2052d816"
+    },
+    {
+      "epoch": 4,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.03529411764705882,
+      "afterComposite": 0.041176470588235294,
+      "marginalDelta": 0.0058823529411764705,
+      "latencyMs": 132.59793,
+      "components": {
+        "exactRetrieval": 0.13725490196078433,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0xadbb13cd3d7d12d7b5b81393aa0cdf689f97596452cee5a2a4ade744e3da111c",
+      "patchHashHex": "0xe66ca16a1590c393ba35ed8a94ffedee124783f9a016d19cfa1cccb33c097a2b"
+    },
+    {
+      "epoch": 5,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.041176470588235294,
+      "afterComposite": 0.047058823529411764,
+      "marginalDelta": 0.0058823529411764705,
+      "latencyMs": 140.035772,
+      "components": {
+        "exactRetrieval": 0.1568627450980392,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0xd29a515b55cfd48502d50c202c7648faa56a26549683f4f4209da458bfa67b2d",
+      "patchHashHex": "0xcad6a240c473843d60a4b5325afd86069b10224c11cbe9ec936a158b3a3fa414"
+    },
+    {
+      "epoch": 6,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.047058823529411764,
+      "afterComposite": 0.052941176470588235,
+      "marginalDelta": 0.0058823529411764705,
+      "latencyMs": 131.542036,
+      "components": {
+        "exactRetrieval": 0.17647058823529413,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x44786523be56627f1d29102eb063dd1603831e31688c3e9bc57818bd084fe2f5",
+      "patchHashHex": "0xa1a5086efd9bd211ca4e1c21ed78a61ac44a6c877545164cfc982659abf02658"
+    },
+    {
+      "epoch": 7,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.052941176470588235,
+      "afterComposite": 0.058823529411764705,
+      "marginalDelta": 0.0058823529411764705,
+      "latencyMs": 131.447507,
+      "components": {
+        "exactRetrieval": 0.19607843137254902,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x171ccac7ee67a93162fd8b26333f1b01c4a5a7de880d0440f13bddfae38d2e8f",
+      "patchHashHex": "0x7d81ec56588cc8410e6bcf449a1aae188d6c2b4b2cdb3b395b7aaa86825af3fe"
+    },
+    {
+      "epoch": 8,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.058823529411764705,
+      "afterComposite": 0.06470588235294118,
+      "marginalDelta": 0.0058823529411764774,
+      "latencyMs": 131.030102,
+      "components": {
+        "exactRetrieval": 0.21568627450980393,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x3fbf2852cf2461a2201d8df981207f9a56dd8761289bcfbbc1a7bee963ba21e0",
+      "patchHashHex": "0x7350c932a917b9937f1b469626f5f4b0d36d55a575f99935e7b936697681fbdd"
+    },
+    {
+      "epoch": 9,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.06470588235294118,
+      "afterComposite": 0.07058823529411765,
+      "marginalDelta": 0.005882352941176464,
+      "latencyMs": 130.076269,
+      "components": {
+        "exactRetrieval": 0.23529411764705882,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0xd622e504a1d7f05d8f862d48b6ec3bd6487daae7bbf98fe7bfbac50d40d74a11",
+      "patchHashHex": "0x1dd61191802600d4e5b37a7d448d196267b12f82c5945c36b5d789ecb6beb917"
+    },
+    {
+      "epoch": 10,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.07058823529411765,
+      "afterComposite": 0.07647058823529411,
+      "marginalDelta": 0.005882352941176464,
+      "latencyMs": 128.446569,
+      "components": {
+        "exactRetrieval": 0.2549019607843137,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0xc253152815b5cdb90c9e39b328ca8719f96370d4484ecbced41da350d2616e90",
+      "patchHashHex": "0x24c8d6d8f89c57753979459f8380bf52049e4d9f54c2f8752d7b356d4305ca70"
+    },
+    {
+      "epoch": 11,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.07647058823529411,
+      "afterComposite": 0.08235294117647059,
+      "marginalDelta": 0.0058823529411764774,
+      "latencyMs": 128.670015,
+      "components": {
+        "exactRetrieval": 0.27450980392156865,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x2ccbd7444edc880b12bb9c4beb63cfe7116cb317e7e3be3c237b8adbd3cf85e2",
+      "patchHashHex": "0x789f57cfe6502b6dc0bd22ef7c5bb78bd455055d64d8e6f37372024552f608dc"
+    },
+    {
+      "epoch": 12,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.08235294117647059,
+      "afterComposite": 0.08823529411764706,
+      "marginalDelta": 0.0058823529411764774,
+      "latencyMs": 128.766419,
+      "components": {
+        "exactRetrieval": 0.29411764705882354,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x411abb0cf76c61bc296ddef34df4b0fedd5b6ca90b737d9133d28e961def4c1e",
+      "patchHashHex": "0xea6f418b0d22428f87f33e18b8940794c33515f7ed32964ec9116701124e1e84"
+    },
+    {
+      "epoch": 13,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.08823529411764706,
+      "afterComposite": 0.09411764705882353,
+      "marginalDelta": 0.005882352941176464,
+      "latencyMs": 128.190947,
+      "components": {
+        "exactRetrieval": 0.3137254901960784,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x9f8f886e1488726303427a0fdc17b9b17171b0557059dda2bd12601b770e9d1e",
+      "patchHashHex": "0xafbad84ea97d6fc7656b1009c7e4904d909ecbf3a081cffb679e4228b0889e99"
+    },
+    {
+      "epoch": 14,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.09411764705882353,
+      "afterComposite": 0.09999999999999999,
+      "marginalDelta": 0.005882352941176464,
+      "latencyMs": 131.279385,
+      "components": {
+        "exactRetrieval": 0.3333333333333333,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x95f6543959e43cc1d2d58bc952c0479df903a518266e52b85cbf6286b172718c",
+      "patchHashHex": "0xdc864cb83af253242c814a9df10b5a54eb0a72c06aa7baada0e068a568fb849b"
+    },
+    {
+      "epoch": 15,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.09999999999999999,
+      "afterComposite": 0.10588235294117647,
+      "marginalDelta": 0.0058823529411764774,
+      "latencyMs": 133.36978,
+      "components": {
+        "exactRetrieval": 0.35294117647058826,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0xb6711699c58a770808bec5afd89d79f2c8b82b8cc36afa781564ed0683ae5a58",
+      "patchHashHex": "0x10224d777bf3bc7daf0407746982eeafce20f697400881d8b707e20d7e79ac74"
+    },
+    {
+      "epoch": 16,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.10588235294117647,
+      "afterComposite": 0.11176470588235295,
+      "marginalDelta": 0.0058823529411764774,
+      "latencyMs": 130.908494,
+      "components": {
+        "exactRetrieval": 0.37254901960784315,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0xe8dcc13ece91f61dc382cec80936ed5473bd9fdb2ffc75f45de59501a4c2e1b5",
+      "patchHashHex": "0x8d8f4ab6bb9ce4d87e1b8b12ae8535be483f9a59f2302a0391e6081e9edcf725"
+    },
+    {
+      "epoch": 17,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.11176470588235295,
+      "afterComposite": 0.11764705882352941,
+      "marginalDelta": 0.005882352941176464,
+      "latencyMs": 135.984669,
+      "components": {
+        "exactRetrieval": 0.39215686274509803,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x0f02c984d90e695dfea6a3e45eec2ab839b785b887f6ed7f25432d0753596f01",
+      "patchHashHex": "0xb7b5907c4afac99d8e9e45f1a562529533c6674ec907f0bbcae119e72a5c7c84"
+    },
+    {
+      "epoch": 18,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.11764705882352941,
+      "afterComposite": 0.12352941176470587,
+      "marginalDelta": 0.005882352941176464,
+      "latencyMs": 133.857752,
+      "components": {
+        "exactRetrieval": 0.4117647058823529,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x91713d455257d7e6e44b682c99f2475876c6785075794ec93d82b356896a3720",
+      "patchHashHex": "0x64e1401d0bf3bc9972c5756b45afefa94d6de41382ea55dd3d70df31cc549836"
+    },
+    {
+      "epoch": 19,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.12352941176470587,
+      "afterComposite": 0.12941176470588237,
+      "marginalDelta": 0.005882352941176491,
+      "latencyMs": 135.129502,
+      "components": {
+        "exactRetrieval": 0.43137254901960786,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x4fd942ee6c505b89c12f49fb3fe0b81cdbcce67368c6faa0942051eaceddcecb",
+      "patchHashHex": "0x5114ae8161e5558905c56064cc754a512a9df95d327c0b82306f896e2520bf8c"
+    },
+    {
+      "epoch": 20,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.12941176470588237,
+      "afterComposite": 0.13529411764705881,
+      "marginalDelta": 0.00588235294117645,
+      "latencyMs": 132.961209,
+      "components": {
+        "exactRetrieval": 0.45098039215686275,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x6d8110a446533e459eb6d39723ef77704f623b3e877d3097afd155398b8d68f7",
+      "patchHashHex": "0x8fe7105bd7c8e654955a40e0b1a1321968e7fe853dcc04dbfff8a97ccff980c7"
+    },
+    {
+      "epoch": 21,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.13529411764705881,
+      "afterComposite": 0.1411764705882353,
+      "marginalDelta": 0.0058823529411764774,
+      "latencyMs": 135.752009,
+      "components": {
+        "exactRetrieval": 0.47058823529411764,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x633b39dc7f5b12347086ea477fbaf72da2afa3179313db8bddbbdfb2c27b7f4a",
+      "patchHashHex": "0xc4c6c4075f36cf2df4b1d9894090d0ed3e908764ea6737b145a7d8f4a80ba7aa"
+    },
+    {
+      "epoch": 22,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.1411764705882353,
+      "afterComposite": 0.14705882352941174,
+      "marginalDelta": 0.00588235294117645,
+      "latencyMs": 131.289258,
+      "components": {
+        "exactRetrieval": 0.49019607843137253,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0xb8593659d7e84b0338cb976e30a55a4db7922a8ec1a56fbe60fbe4873ef84895",
+      "patchHashHex": "0xcaef4823035b40b325580680c92a1538234c741295aa7450ff8728ffcd0a6a2c"
+    },
+    {
+      "epoch": 23,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.14705882352941174,
+      "afterComposite": 0.15294117647058822,
+      "marginalDelta": 0.0058823529411764774,
+      "latencyMs": 133.109513,
+      "components": {
+        "exactRetrieval": 0.5098039215686274,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0xcc1f97ef9775a10ce039c93a082cfac02b2c90eca4d42542f2b24371a4c7aafa",
+      "patchHashHex": "0x8187003bdeae82a1462fffb47e1df1aed5487c86c7d5cae59541cb1a42bb057e"
+    },
+    {
+      "epoch": 24,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.15294117647058822,
+      "afterComposite": 0.1588235294117647,
+      "marginalDelta": 0.0058823529411764774,
+      "latencyMs": 134.912363,
+      "components": {
+        "exactRetrieval": 0.5294117647058824,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0xd9552fe1ea8680b3b7675dbf45f7421f1240374339266e51da5eb4e5ec709b7e",
+      "patchHashHex": "0xbb9d474f465826757e4316c6fef81c03b07cadfa0e8fadb2b6d7c6111d8a5e4b"
+    },
+    {
+      "epoch": 25,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.1588235294117647,
+      "afterComposite": 0.16470588235294117,
+      "marginalDelta": 0.0058823529411764774,
+      "latencyMs": 134.579935,
+      "components": {
+        "exactRetrieval": 0.5490196078431373,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0xf0a727e37749541768ac068903873bd157f2d07bd45ceaec16c0a263494fa35a",
+      "patchHashHex": "0x7647042a6293716486190104840d1a6f68e29629383b5141ca401093850ce6b9"
+    },
+    {
+      "epoch": 26,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.16470588235294117,
+      "afterComposite": 0.17058823529411762,
+      "marginalDelta": 0.00588235294117645,
+      "latencyMs": 135.874836,
+      "components": {
+        "exactRetrieval": 0.5686274509803921,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x0464bd8756fd132b935d9b40fb118ec38cf8198eaca67cd3899052532446074d",
+      "patchHashHex": "0xc78de72de64f9b97687b01377cea83d95909c8d0581aaec8218ce700adb7a2ba"
+    },
+    {
+      "epoch": 27,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.17058823529411762,
+      "afterComposite": 0.17647058823529413,
+      "marginalDelta": 0.005882352941176505,
+      "latencyMs": 129.848396,
+      "components": {
+        "exactRetrieval": 0.5882352941176471,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x90464136496dd186ebf06361a2d2929ee65f0c74e13380e1426722a8da2f3206",
+      "patchHashHex": "0x2c5e9ef1ac4db39e28cf63f6776bb2fa9f03e9c51fb22dc902db03c7cbde2fd5"
+    },
+    {
+      "epoch": 28,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.17647058823529413,
+      "afterComposite": 0.18235294117647058,
+      "marginalDelta": 0.00588235294117645,
+      "latencyMs": 126.69637,
+      "components": {
+        "exactRetrieval": 0.6078431372549019,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0xc07020208ba94025e8a7abe9d972fac4b9db24d7913fd1edc381a47d60b6a54d",
+      "patchHashHex": "0x8141b63f1ffe59452d2b94b7ebf49653752dbb607ae639cbf41cdf224b7df242"
+    },
+    {
+      "epoch": 29,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.18235294117647058,
+      "afterComposite": 0.18823529411764706,
+      "marginalDelta": 0.0058823529411764774,
+      "latencyMs": 130.470103,
+      "components": {
+        "exactRetrieval": 0.6274509803921569,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x045af5802ead438d9b7880ecbc1b5e738ac0feae3fa247b1ed3f32b8b9188477",
+      "patchHashHex": "0xf05678190b4a302bd94b5b2b1ef7c63879b1d92e96bf024e367f4cdfaf99183f"
+    },
+    {
+      "epoch": 30,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.18823529411764706,
+      "afterComposite": 0.19411764705882353,
+      "marginalDelta": 0.0058823529411764774,
+      "latencyMs": 132.086715,
+      "components": {
+        "exactRetrieval": 0.6470588235294118,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x2d2981b2e272ec37d1e39486a9db2458e54a92456fa78260872a246dbb1f802d",
+      "patchHashHex": "0xce248f63d4f25dea628446d00b66da64aa0aec8c236066acf40fec73e539fad7"
+    },
+    {
+      "epoch": 31,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.19411764705882353,
+      "afterComposite": 0.19999999999999998,
+      "marginalDelta": 0.00588235294117645,
+      "latencyMs": 136.231117,
+      "components": {
+        "exactRetrieval": 0.6666666666666666,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x1b2c0c9f0ca6091c39f19d2176b36568a5550221c4205c3b38e24dfa69d472af",
+      "patchHashHex": "0x14b63e730212760f08cd3651172bf7f83999638df8c424de02970b46aa25c0cb"
+    },
+    {
+      "epoch": 32,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.19999999999999998,
+      "afterComposite": 0.20588235294117646,
+      "marginalDelta": 0.0058823529411764774,
+      "latencyMs": 128.672278,
+      "components": {
+        "exactRetrieval": 0.6862745098039216,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x9c9265ac758cb8742665c0164f120a16569e00c8a36f49fe5742339335a0ea04",
+      "patchHashHex": "0xb1ed5a41e15d5f492d5092f578e98b32a76411abe0f81222e70fdaa10b070250"
+    },
+    {
+      "epoch": 33,
+      "accepted": true,
+      "errorCode": null,
+      "beforeComposite": 0.20588235294117646,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0.0058823529411764774,
+      "latencyMs": 134.697789,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x96083275cb63f81e0888b4210b6c4edbae529d2b8eed679fb67dfa5aa56b2953"
+    },
+    {
+      "epoch": 34,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 133.270634,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0xeafafb4b44677838af565083acee2a3ed4f523bdd44bc5e903c3d47d34cc4058"
+    },
+    {
+      "epoch": 35,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 135.177658,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x65b1648cd727007aa047f72f2eba5afe6c825ab8766a918c444efc61fe4551b3"
+    },
+    {
+      "epoch": 36,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 134.195036,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x989b81780593b82244813f380c47e7c034036465dba01046463d443e31f99e94"
+    },
+    {
+      "epoch": 37,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 131.589181,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0xee0c137c592057cd0d80bf7d022fe8e53d14b5b87eddabc4a8f2a91a227936f5"
+    },
+    {
+      "epoch": 38,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 131.713152,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x46adbb450561c377e0e83f431b93376f3018c0d2cbf7a384e79db3a02bec7ad6"
+    },
+    {
+      "epoch": 39,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 130.689483,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x81bfe102720f627000072ddd1373bcd3416c58e88d486e8be514a4ae13f2cc2b"
+    },
+    {
+      "epoch": 40,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 133.193297,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x11d3ab2845e1e679306ec948cab499febe4f8130b520fde2b1153fed82e1e748"
+    },
+    {
+      "epoch": 41,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 128.883618,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0xc742b57fcac530c6e801413f864e88b29ee1e832835340a0bc75d5e5cdc6bbc9"
+    },
+    {
+      "epoch": 42,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 129.94634,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x420d72d83b45b90f82668ab194cc1761d2c113b8f0e02eb42e22a053b289d419"
+    },
+    {
+      "epoch": 43,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 130.905581,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x04bb5843498f5046d91c6bb6f9227dfabdb4e5337b35fcc8aae57dcd15bbe268"
+    },
+    {
+      "epoch": 44,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 135.935851,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0xcbe2a049b4a47a6638daa643fb1405781b174975b658e5290e8046c13a3f4021"
+    },
+    {
+      "epoch": 45,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 132.529945,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x19a551d9471fd81a20566463a30a45a28fbefe02029d9e520ce6f548bd450483"
+    },
+    {
+      "epoch": 46,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 130.548809,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0xe66326ac84a83adca8dad89fa1750fe6a645ae2282966a516c9dd0ae518c9ff9"
+    },
+    {
+      "epoch": 47,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 128.6879,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x8887846f4013d7954d17b82da5388598a731fb5c12d6d2d64486aae6613b6863"
+    },
+    {
+      "epoch": 48,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 127.505232,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x5790cd471dd5fb53ba98360cdbc783abb1dcc4163fe8ace22f3b35ec025c59a0"
+    },
+    {
+      "epoch": 49,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 129.395913,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0xc1c3a2c204fecde7abe139e3e8605bbdb693ed2148277f82684e78e54fc8193e"
+    },
+    {
+      "epoch": 50,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 128.219505,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x63a9b4d810218b5f5b744fa55f762cfb9ca05734fa3d66d579653247668723ce"
+    },
+    {
+      "epoch": 51,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 128.153054,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x53a0436e703e46c1d0b57f0a9934eb462a44c82b1468268bad42c8a03b03b949"
+    },
+    {
+      "epoch": 52,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 130.489678,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x0171f4127e5b0e8d4bab49a38f697f5d608de5059dd8191166f143b42089ddd9"
+    },
+    {
+      "epoch": 53,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 130.191049,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x74408a2efdb6142f22577b6faaf804a5da4e417a58beddaac9416e0055ba8ec7"
+    },
+    {
+      "epoch": 54,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 131.42861,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0xf30bfc4f270ee1b5bd966d75f9e4e63eef9c0b095405b3462fbbf64e99aaada0"
+    },
+    {
+      "epoch": 55,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 134.56961,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x554109e2a972313eb9549f89fdf9970717eb62c24573d62b5d0e4d1befc290f8"
+    },
+    {
+      "epoch": 56,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 135.360309,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0xb6663dfeeea46c9315ed8ed3e773bdcc2a6d0188d657f9c63a4868af99b44da0"
+    },
+    {
+      "epoch": 57,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 132.567737,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x6a333eb042c0a866357161c2cfaf420e50677c12b883faaefea04107bd4ec92b"
+    },
+    {
+      "epoch": 58,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 129.070235,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x293caba77a78c5ffca3c2fe9a73666f6cd287c4ded9d3bc38609c0e094795f07"
+    },
+    {
+      "epoch": 59,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 128.914251,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0x1d5f1e28817702d90b30afb32531ebc85c7e8cbdad8f015ec74aef8a69df2eb8"
+    },
+    {
+      "epoch": 60,
+      "accepted": false,
+      "errorCode": null,
+      "beforeComposite": 0.21176470588235294,
+      "afterComposite": 0.21176470588235294,
+      "marginalDelta": 0,
+      "latencyMs": 131.02863,
+      "components": {
+        "exactRetrieval": 0.7058823529411765,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+      "patchHashHex": "0xaa520818e6674831e81070c7f7ba3420704baa98efa07e28a52328f740f1beb4"
+    }
+  ],
+  "summary": {
+    "totalEpochs": 60,
+    "accepted": 33,
+    "rejected": 27,
+    "genesisComposite": 0,
+    "finalComposite": 0.21176470588235294,
+    "netImprovement": 0.21176470588235294,
+    "avgScoreDelta": 0.0035294117647058825,
+    "p50LatencyMs": 131.542036,
+    "p99LatencyMs": 140.035772,
+    "finalStateRoot": "0x8b35cd07d242bee8ea779c982186cc6df918b2c1c36aaf8d046822436fce3c40",
+    "genesisStateRoot": "0x8f95fbcdcb26e5f851db700ac001d010e0cad41f7dc599975d85c3b7f4f3d697",
+    "familyContribution": {
+      "near_collision": 0,
+      "temporal": 0,
+      "long_horizon": 0,
+      "routing": 0,
+      "exact": 0.7058823529411765,
+      "stale": 0,
+      "current": 0
+    },
+    "finalComponents": {
+      "exactRetrieval": 0.7058823529411765,
+      "staleMemoryRejection": 0,
+      "temporalUpdateCorrectness": 0,
+      "compressionSurvival": 0,
+      "routingAccuracy": 0,
+      "latencyMs": 0
+    },
+    "finalFamilyScores": {
+      "near_collision": 0.7058823529411765,
+      "temporal": 0,
+      "long_horizon": 0
+    },
+    "finalHits": {
+      "near_collision": 36,
+      "stale": 0,
+      "current": 0,
+      "long_horizon": 0,
+      "relations": 0
+    },
+    "finalTotals": {
+      "near_collision": 51,
+      "stale": 55,
+      "current": 57,
+      "long_horizon": 51,
+      "relations": 128
+    }
+  },
+  "generatedAt": "2026-05-06T09:35:50.057Z",
+  "corpusSources": {
+    "near_collision": {
+      "path": "benchmark/fixtures/near_collision/limit_nq_hotpotqa_v0.json",
+      "count": 51,
+      "license": "CC-BY-4.0 (LIMIT); Apache-2.0 (NQ); CC-BY-SA-4.0 (HotpotQA)",
+      "source": [
+        "LIMIT",
+        "BEIR_NQ",
+        "BEIR_HotpotQA"
+      ]
+    },
+    "temporal": {
+      "path": "benchmark/fixtures/temporal/memoryagentbench_v0.json",
+      "count": 52,
+      "license": "MIT",
+      "source": "MemoryAgentBench"
+    },
+    "long_horizon": {
+      "path": "benchmark/fixtures/long_horizon/memoryarena_v0.json",
+      "count": 51,
+      "license": "CC-BY-4.0",
+      "source": "MemoryArena"
+    },
+    "synthetic_temporal": {
+      "count": 60,
+      "license": "Apache-2.0"
+    }
+  },
+  "scoring": "real-cortexbench-v0"
+}

@@ -1,23 +1,24 @@
 #!/usr/bin/env node
-// Phase 7 harness — run a single baseline over N synthetic epochs and emit
-// per-epoch metrics: retrieval accuracy, stale rejection, compression
-// survival, latency, patch sensitivity, overfit resistance.
+// Phase 7 harness — run a single baseline over N epochs, mining candidate
+// patches against the real Phase 4 corpus and scoring with the real
+// CortexBench V0 evaluator (no synthetic SEED-XOR).
 //
-// All scoring is against StubCorpusLoader (always 0.5) plus a deterministic
-// per-baseline noise term — the goal is harness correctness, not real
-// quality. Real scoring requires a corpus loader (Phase 4) with the LoCoMo
-// blocker resolved (issue #4).
+// Per-epoch outputs: real composite + per-component scores, marginalGain,
+// stable family deltas, latency, accept/reject reasons. Per-baseline output
+// summarises trajectory.
 //
 // Usage:
-//   node experiments/harness/runBaseline.mjs <baseline_id> <epochs> [--seed <n>]
+//   node experiments/harness/runBaseline.mjs <baseline_id> <epochs> [--seed <n>] [--out <dir>] [--label <tag>]
 //
 // Output:
-//   experiments/results/synthetic-dryrun/{baseline_id}.json
+//   experiments/results/<label or 'real'>/{baseline_id}.json
 
 import { exit, argv } from 'node:process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { loadRealCorpus, scoreState, computeComposite } from './cortex-bench-eval.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, '../..');
@@ -26,6 +27,12 @@ const BASELINE_ID = (argv[2] ?? '').toUpperCase();
 const EPOCHS = parseInt(argv[3] ?? '5', 10);
 const seedIdx = argv.indexOf('--seed');
 const SEED = seedIdx >= 0 ? parseInt(argv[seedIdx + 1], 10) : 42;
+const outIdx = argv.indexOf('--out');
+const labelIdx = argv.indexOf('--label');
+const LABEL = labelIdx >= 0 ? argv[labelIdx + 1] : 'real';
+const OUTDIR = outIdx >= 0 ? argv[outIdx + 1] : `experiments/results/${LABEL}`;
+const thresholdIdx = argv.indexOf('--threshold');
+const THRESHOLD = thresholdIdx >= 0 ? Number(argv[thresholdIdx + 1]) : 0;
 
 const baselineDir = {
   A: 'baseline_a_empty',
@@ -46,34 +53,58 @@ try {
   console.error('[runBaseline] dist not built; run `npm run build` first');
   exit(2);
 }
-const { merkleizeState, applyPatch, encodePatch, bytesToHex } = mod;
+const { merkleizeState, applyPatch, encodePatch, bytesToHex, keccak256 } = mod;
 
-console.log(`[runBaseline] ${BASELINE_ID} (${baseline.BASELINE_NAME}) × ${EPOCHS} epochs (seed=${SEED})`);
+console.log(`[runBaseline] ${BASELINE_ID} (${baseline.BASELINE_NAME}) × ${EPOCHS} epochs (seed=${SEED}) [real corpus]`);
+
+const corpus = loadRealCorpus({ repoRoot: REPO });
+const corpusSummary = Object.fromEntries(
+  Object.entries(corpus.sources).map(([k, v]) => [k, v.count]),
+);
+console.log(`[runBaseline] corpus events:`, corpusSummary);
 
 let state = baseline.genesisState();
+function scoreOf(s) {
+  return scoreState(s, corpus);
+}
+const genesisRoot = bytesToHex(merkleizeState(state));
+const genesisScore = scoreOf(state);
+console.log(`[runBaseline] genesis composite=${genesisScore.composite.toFixed(6)} root=${genesisRoot.slice(0, 18)}…`);
+
 const epochs = [];
+const familySensitivity = { near_collision: 0, temporal: 0, long_horizon: 0, routing: 0, exact: 0, stale: 0, current: 0 };
+let prevScore = genesisScore;
 
 for (let e = 1; e <= EPOCHS; e++) {
   const t0 = process.hrtime.bigint();
-
   const shardDescriptor = { epoch: e, solveIndex: SEED + e };
-  const patch = baseline.mineCandidatePatch(state, shardDescriptor);
+  const patch = baseline.mineCandidatePatch(state, shardDescriptor, { corpus });
 
-  let accepted = false, scoreDelta = 0, errorCode = null;
+  let accepted = false, marginalDelta = 0, errorCode = null;
+  let beforeComposite = prevScore.composite, afterComposite = beforeComposite;
+  let afterScore = prevScore;
+
   if (!patch) {
-    errorCode = 'no_patch'; // baseline can't mine
+    errorCode = 'no_patch';
   } else {
     patch.parentStateRoot = merkleizeState(state);
     const r = applyPatch(state, patch);
     if (!r.ok) {
       errorCode = r.code;
     } else {
-      // Synthetic scoring: seed-derived deterministic improvement.
-      const deltaScore = (Number(BigInt(SEED + e) ^ BigInt(BASELINE_ID.charCodeAt(0))) % 1000) / 10000;
-      scoreDelta = deltaScore;
-      // Accept iff > 0.5% (matches Phase 4 score threshold direction)
-      accepted = scoreDelta > 0.005;
-      if (accepted) state = r.state;
+      afterScore = scoreOf(r.state);
+      afterComposite = afterScore.composite;
+      marginalDelta = afterComposite - beforeComposite;
+      accepted = marginalDelta > THRESHOLD;
+      if (accepted) {
+        state = r.state;
+        familySensitivity.exact += afterScore.components.exactRetrieval - prevScore.components.exactRetrieval;
+        familySensitivity.stale += afterScore.components.staleMemoryRejection - prevScore.components.staleMemoryRejection;
+        familySensitivity.current += afterScore.components.temporalUpdateCorrectness - prevScore.components.temporalUpdateCorrectness;
+        familySensitivity.long_horizon += afterScore.components.compressionSurvival - prevScore.components.compressionSurvival;
+        familySensitivity.routing += afterScore.components.routingAccuracy - prevScore.components.routingAccuracy;
+        prevScore = afterScore;
+      }
     }
   }
 
@@ -84,12 +115,19 @@ for (let e = 1; e <= EPOCHS; e++) {
     epoch: e,
     accepted,
     errorCode,
-    scoreDelta,
+    beforeComposite,
+    afterComposite,
+    marginalDelta,
     latencyMs,
+    components: accepted ? afterScore.components : prevScore.components,
     parentStateRoot: bytesToHex(merkleizeState(state)),
+    patchHashHex: patch ? bytesToHex(keccak256(encodePatch(patch))) : null,
   });
 }
 
+const finalScore = scoreOf(state);
+const finalRoot = bytesToHex(merkleizeState(state));
+const acceptedCount = epochs.filter((e) => e.accepted).length;
 const result = {
   baselineId: BASELINE_ID,
   baselineName: baseline.BASELINE_NAME,
@@ -97,21 +135,31 @@ const result = {
   epochs,
   summary: {
     totalEpochs: EPOCHS,
-    accepted: epochs.filter((e) => e.accepted).length,
-    rejected: epochs.filter((e) => !e.accepted).length,
-    avgScoreDelta: epochs.reduce((s, e) => s + e.scoreDelta, 0) / EPOCHS,
-    p50LatencyMs: epochs.map(e => e.latencyMs).sort((a,b)=>a-b)[Math.floor(EPOCHS / 2)],
-    finalStateRoot: epochs[epochs.length - 1]?.parentStateRoot ?? null,
+    accepted: acceptedCount,
+    rejected: EPOCHS - acceptedCount,
+    genesisComposite: genesisScore.composite,
+    finalComposite: finalScore.composite,
+    netImprovement: finalScore.composite - genesisScore.composite,
+    avgScoreDelta: epochs.reduce((s, e) => s + e.marginalDelta, 0) / EPOCHS,
+    p50LatencyMs: epochs.map((e) => e.latencyMs).sort((a, b) => a - b)[Math.floor(EPOCHS / 2)],
+    p99LatencyMs: epochs.map((e) => e.latencyMs).sort((a, b) => a - b)[Math.max(0, Math.floor(EPOCHS * 0.99) - 1)],
+    finalStateRoot: finalRoot,
+    genesisStateRoot: genesisRoot,
+    familyContribution: familySensitivity,
+    finalComponents: finalScore.components,
+    finalFamilyScores: finalScore.familyScores,
+    finalHits: finalScore.hits,
+    finalTotals: finalScore.totals,
   },
   generatedAt: new Date().toISOString(),
-  caveat: 'Synthetic scoring (StubCorpusLoader). Real scoring requires Phase 4 corpus + LoCoMo resolution.',
+  corpusSources: corpus.sources,
+  scoring: 'real-cortexbench-v0',
 };
 
-const outDir = resolve(REPO, 'experiments/results/synthetic-dryrun');
+const outDir = resolve(REPO, OUTDIR);
 mkdirSync(outDir, { recursive: true });
 const outPath = resolve(outDir, `${BASELINE_ID}.json`);
 writeFileSync(outPath, JSON.stringify(result, null, 2));
 
-console.log(`[runBaseline] ${BASELINE_ID}: ${result.summary.accepted}/${EPOCHS} accepted`);
-console.log(`[runBaseline] avgScoreDelta=${result.summary.avgScoreDelta.toFixed(4)} p50LatencyMs=${result.summary.p50LatencyMs.toFixed(2)}`);
+console.log(`[runBaseline] ${BASELINE_ID}: ${result.summary.accepted}/${EPOCHS} accepted, netΔ=${result.summary.netImprovement.toFixed(6)} composite ${genesisScore.composite.toFixed(4)}→${finalScore.composite.toFixed(4)}`);
 console.log(`[runBaseline] wrote ${outPath}`);

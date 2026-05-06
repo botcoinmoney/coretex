@@ -14,11 +14,22 @@
 ## Genesis state
 
 ```
-genesisStateRoot:    <TBD — set after Phase 7 baseline iteration freezes the winner>
-coreVersionHash:     <TBD — keccak256 of the pinned Core V0 binary>
+winner:              Baseline A (empty)
+genesisStateRoot:    0x7e704f76d6156405800141206cec1e6d7804daa8bf4e7da1542a1e431958504e
+coreVersionHash:     0xe1a957805f855828338a2a9d1f90c46eb78c378d85f10c8d8c83a1ce6eb388d3
 ```
 
-The `coreVersionHash` is committed in the first `CortexEpochFinalized` event (epoch 0). Auditors must use the corresponding pinned `packages/cortex/dist/` to reproduce roots.
+Frozen by `scripts/freeze-core-version.mjs --baseline A` on 2026-05-06
+from the real CortexBench V0 evaluator. Selection rationale + numbers in
+`experiments/results/phase7-real-30/comparison.md` plus per-seed stability
+runs under `experiments/results/phase7-stability/`. Source of truth is
+`ops/v0-frozen.json`.
+
+The `coreVersionHash` is committed in the first `CortexEpochFinalized`
+event (epoch 0). Auditors must use the corresponding pinned
+`packages/cortex/dist/` to reproduce roots — recompute by running
+`node scripts/freeze-core-version.mjs --baseline A` against the same
+checkout and confirming the same `coreVersionHash` lands.
 
 ## Configuration parameters
 

@@ -204,5 +204,15 @@ if (existsSync('experiments/results/synthetic-dryrun/golden-vectors.json')) {
   }
 }
 
+// T8. Real-corpus end-to-end mine→submit→advance (opt-in: requires anvil).
+// Skipped in CI default. Set CORTEX_E2E_LIVE=1 to run locally with a fresh
+// anvil chain on port 8546. See scripts/e2e-real-improvement.mjs.
+if (process.env.CORTEX_E2E_LIVE === '1') {
+  const r = spawnSync('node', ['scripts/e2e-real-improvement.mjs'], { stdio: 'inherit' });
+  check('e2e-real-improvement', r.status === 0);
+} else {
+  check('e2e-real-improvement', null, 'set CORTEX_E2E_LIVE=1 to spin anvil and verify mine→submit→advance');
+}
+
 console.log(`\n[phase-7] ${pass} pass, ${fail} fail, ${skip} skip`);
 exit(fail === 0 ? 0 : 1);

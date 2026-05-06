@@ -37,7 +37,10 @@ This handoff covers the V0 Cortex on-chain memory lane: state codec, Merkle root
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-3` | 16 PASS, 1 SKIP |
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-5` | 17 PASS, 1 SKIP |
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-6` | 46/46 PASS |
-| `npx -y node@22 scripts/run-e2e.mjs --filter phase-7` | 7/7 synthetic PASS |
+| `npx -y node@22 scripts/run-e2e.mjs --filter phase-7` | 7/7 PASS, 1 SKIP (live e2e) |
+| `CORTEX_E2E_LIVE=1 node test/e2e/phase-7/run.mjs` | 8/8 PASS (incl. mine→submit→advance over Anvil) |
+| `EXTENDED_FUZZ=1 node test/e2e/phase-7/run.mjs` | 7/7 PASS, 1M-patch fuzz green |
+| `node --test test/unit/cortex-bench-eval.test.mjs` | 6/6 PASS (real CortexBench scorer) |
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-8` | 4 PASS, 6 SKIP |
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-9` | 3 PASS, 5 SKIP |
 | `forge test --root contracts --no-match-contract CortexForkTest` | 58/58 PASS |
@@ -59,11 +62,20 @@ Phase 3 perf fixture: `test/e2e/phase-3/fixtures/perf-results.json`
 
 ## Production-readiness position
 
-The previous hard engineering blocker, Phase 3 eval performance, is closed locally. The remaining launch gates are operational and empirical, not architecture blockers:
+Phase 3 eval performance and Phase 7 baseline selection are both closed
+locally. The remaining launch gates are operational and empirical, not
+architecture blockers:
 
-1. Run real Phase 7 baseline iteration and freeze `coreVersionHash` + `genesisStateRoot`.
-2. Run the full Phase 8 testnet campaign: >=100 epochs, >=1k patches, >=10 auditor reproductions, latch/unlatch x2.
-3. Run Phase 9 mainnet rehearsals and publish the first reward epoch audit trail.
+1. ~~Real Phase 7 baseline iteration + freeze `coreVersionHash` /
+   `genesisStateRoot`.~~ DONE 2026-05-06. Winner: Baseline A. Frozen
+   values in `ops/v0-frozen.json` and `docs/contract-addresses.md`.
+   Reports: `experiments/results/phase7-real-30/{comparison.md,patch-sensitivity-report.md,adversarial-report.md}`.
+   Stability runs: `experiments/results/phase7-stability/seed-{1,7,42,99,1234}/winner.json`
+   (all picked A, identical 0.2588 final composite).
+2. Run the full Phase 8 testnet campaign: >=100 epochs, >=1k patches,
+   >=10 auditor reproductions, latch/unlatch x2.
+3. Run Phase 9 mainnet rehearsals and publish the first reward epoch
+   audit trail.
 
 ## Suggested audit focus
 

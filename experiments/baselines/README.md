@@ -9,50 +9,85 @@ selection of Core V0. Each baseline defines:
 
 - `genesisState()` — a deterministic state-seed factory that returns a
   `CortexState` with 1024 uint256 words.
-- `mineCandidatePatch(state, shardDescriptor)` — a tiny heuristic miner that
-  proposes a single candidate patch for the harness to evaluate head-to-head.
+- `mineCandidatePatch(state, shardDescriptor, opts?)` — a corpus-aware miner
+  that proposes a 1–4-word candidate patch. When `opts.corpus` is provided
+  (default for the harness) the miner targets the next uncovered event in
+  its specialty family; without a corpus the legacy heuristic is used.
 
 The harness (`experiments/harness/`) runs all five over the same seeds and
-corpus and emits a comparison report.
+the real Phase 4 fixture corpus, scores via
+`experiments/harness/cortex-bench-eval.mjs`, and emits a comparison report.
 
-**Placeholder winner**: Baseline E (revocation-aware) is designated the
-placeholder winner per §9 Phase 7 until the user runs real iteration. See
-`experiments/PHASE_7_USER_ACTIONS.md` for what to do next.
+**V0 winner**: **Baseline A (empty)** — selected on 2026-05-06 by running
+the real CortexBench V0 evaluator over seeds 1, 7, 42, 99, 1234. Final
+composite 0.2588 (long-horizon compression saturates the 60% family
+weight). See `experiments/results/phase7-real-30/comparison.md` and the
+per-seed stability runs under `experiments/results/phase7-stability/`.
+Frozen `genesisStateRoot` + `coreVersionHash` live in `ops/v0-frozen.json`
+and are mirrored into `docs/contract-addresses.md`.
 
 ## Baselines
 
-| ID | Name | Key feature |
-|----|------|-------------|
-| A  | Empty Cortex | All-zero state (control / floor) |
-| B  | Dense-key Cortex | Header + fully-populated dense retrieval keys |
-| C  | Binary-key Cortex | Header + binary-key retrieval keys (bit-level keys) |
-| D  | Late-interaction Cortex | Multi-slot WARP-inspired multi-vector retrieval |
-| E  | Revocation-aware Cortex | Populated temporal map + revocation bits (placeholder winner) |
+| ID  | Name | Key feature | Final composite (seed 42, 30 epochs) |
+|-----|------|-------------|-------------------------------------:|
+| A ★ | Empty Cortex | All-zero state — miner fills memory_index | **0.2588** |
+| B   | Dense-key Cortex | Header + dense retrieval keys | 0.1941 |
+| C   | Binary-key Cortex | Header + binary retrieval keys | 0.1941 |
+| D   | Late-interaction Cortex | Multi-slot WARP-style multi-vector | 0.0529 |
+| E   | Revocation-aware Cortex | Memory_index slots with REVOKED flag | 0.1178 |
 
 ## Metrics collected by the harness
 
 For each baseline, per epoch:
 
-- **retrieval accuracy** — fraction of exact-retrieval queries answered correctly
-- **stale rejection** — fraction of stale records correctly rejected
-- **compression survival** — score on long-horizon compression family
-- **latency** — patch-eval wall time (p50 / p99)
-- **patch sensitivity** — score delta per canonical patch family
-- **overfit resistance** — synthetic single-family miners score below strong-miner band on composite
+- **per-component scores** — exact retrieval, stale rejection, temporal
+  update correctness, compression survival, routing accuracy
+- **composite trajectory** — genesis → final composite under real corpus
+- **marginal-gain delta** — `composite_after − composite_before` per patch
+- **latency** — wall time per mine + apply + score iteration (p50 / p99)
+- **family contribution** — sum of accepted Δ split by family
+- **patch-sensitivity** — see `experiments/results/<label>/{A..E}.json` for
+  per-epoch component breakdown (a real per-family sensitivity report)
 
-## Caveat
+## Scoring
 
-All baselines use the `StubCorpusLoader` (always returns 0.5) because the
-LoCoMo license blocker (issue #4) is unresolved. Replace with a real corpus
-loader once that is resolved. Scores in the dry-run are therefore **synthetic**
-and reflect harness correctness, not real baseline quality.
+Real CortexBench V0 evaluator (`cortex-bench-eval.mjs`):
+
+- **Exact retrieval (0.30)** — near-collision events whose `keyId =
+  keccak('cortex-key128:'+id)[lo128]` matches an active retrieval-key slot.
+- **Stale rejection (0.15)** — temporal stale-truth events whose
+  `eventId = keccak('cortex-mem128:'+id)[lo128]` matches a memory_index
+  slot with REVOKED set (bit 65, inside VALIDITY_FLAGS at 79:64).
+- **Temporal update correctness (0.15)** — temporal current-truth events
+  whose `eventId` matches a memory_index slot with VALID set and REVOKED
+  clear.
+- **Compression survival (0.30)** — long-horizon events whose `eventId`
+  matches an active memory_index slot.
+- **Routing accuracy (0.05)** — fraction of relation entries whose weight
+  bits 207:192 are non-zero.
+
+Latency penalty subtracts up to 0.025 between p50=10 ms and p99=50 ms.
+
+The corpus is loaded once via `loadRealCorpus()` from
+`benchmark/fixtures/{near_collision,temporal,long_horizon}/*.json` plus
+the deterministic Apache-2.0 `SyntheticTemporalLoader` events. No
+`StubCorpusLoader` in the Phase 7 path.
 
 ## How to run
 
 ```bash
-# Run all baselines over synthetic corpus, emit comparison report
-node experiments/harness/compareBaselines.ts   # (requires ts-node or pre-build)
+# Build the workspace once
+npm run build --workspaces --if-present
 
-# Or, via the E2E gate on synthetic data:
+# Run all baselines on the real corpus, 30 epochs, seed 42
+node experiments/harness/compareBaselines.mjs --epochs 30 --seed 42 --label phase7-real-30
+
+# Phase 7 CI gate (5-epoch dry run + golden vectors + 10k fuzz + live-epoch)
 node test/e2e/phase-7/run.mjs
+
+# Extended 1M-patch fuzz for the V0 release
+EXTENDED_FUZZ=1 node test/e2e/phase-7/run.mjs
+
+# Freeze coreVersionHash + genesisStateRoot for a chosen baseline
+node scripts/freeze-core-version.mjs --baseline A
 ```
