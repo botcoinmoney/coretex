@@ -34,11 +34,13 @@ import { handleState } from './routes/state.js';
 import { handleEpoch } from './routes/epoch.js';
 import { handleEvalReport } from './routes/eval-report.js';
 import { handleMergeBonus } from './routes/merge-bonus.js';
+import { installRealEvaluatorFromEnv } from './real-evaluator.js';
 
 const PORT = Number(process.env['PORT'] ?? 8081);
 
 // ─── Open database and worker pool ──────────────────────────────────────────
 
+await installRealEvaluatorFromEnv();
 const db = openDatabase();
 const pool = getPool();
 
@@ -96,7 +98,7 @@ server.listen(PORT, () => {
   console.log(`[cortex-server] INTERNAL_RPC_URL=${process.env['INTERNAL_RPC_URL'] ?? 'http://127.0.0.1:8080'}`);
   console.log(`[cortex-server] CORTEX_DB_PATH=${process.env['CORTEX_DB_PATH'] ?? 'data/cortex/queue.db'}`);
   console.log(`[cortex-server] CORTEX_WORKER_POOL_SIZE=${process.env['CORTEX_WORKER_POOL_SIZE'] ?? 'auto'}`);
-  console.log('[cortex-server] Phase 5 — eval is STUBBED (Phase 3 pending). _stub=true in reports.');
+  console.log(`[cortex-server] eval mode=${process.env['CORTEX_REAL_EVAL'] === '1' ? 'real-cortexbench-v0' : 'stub/dev-or-external'}`);
 });
 
 // ─── Graceful shutdown ───────────────────────────────────────────────────────

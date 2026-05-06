@@ -10,7 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, '..', '..');
 
 const evalMod = await import(`${REPO}/experiments/harness/cortex-bench-eval.mjs`);
-const { loadRealCorpus, scoreState, computeComposite, eventIdToKey128, eventIdToMem128 } = evalMod;
+const { loadRealCorpus, scoreState, computeComposite, eventIdToKey128, eventIdToMem128, makeRealMarginalEvaluator } = evalMod;
 
 const stateMod = await import(`${REPO}/packages/cortex/dist/state/index.js`);
 const { merkleizeState, applyPatch } = stateMod;
@@ -88,4 +88,14 @@ test('eventIdToKey128 and eventIdToMem128 are deterministic and 128-bit-bounded'
   // re-compute and confirm stability
   assert.equal(eventIdToKey128('mab-temporal-0000'), k);
   assert.equal(eventIdToMem128('mab-temporal-0000'), m);
+});
+
+test('makeRealMarginalEvaluator returns positive gain for a real corpus patch', () => {
+  const state = baselineA.genesisState();
+  const patch = baselineA.mineCandidatePatch(state, { epoch: 1, solveIndex: 1 }, { corpus });
+  assert.ok(patch, 'baseline A miner produced no patch');
+  patch.parentStateRoot = merkleizeState(state);
+  const evaluator = makeRealMarginalEvaluator({ corpus, applyPatch });
+  const gain = evaluator(state, patch);
+  assert.ok(gain > 0n, `expected positive gain, got ${gain}`);
 });

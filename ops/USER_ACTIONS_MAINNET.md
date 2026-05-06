@@ -4,16 +4,15 @@ This is the launch checklist for Botcoin Cortex V0 on Base mainnet. Each numbere
 
 ## Pre-launch readiness
 
-- [ ] **0. Resolve open V0 blockers**
-  - [Issue #4](../../issues/4) — LoCoMo CC-BY-NC-4.0: pick A (Snap commercial license) / B (replace with permissive alt) / C (synthetic Apache-2.0). Phase 4 follow-up PR enables the chosen path.
-  - [Issue #8](../../issues/8) — Phase 3 eval perf incremental Merkle update. Required for production miners to hit p50 < 10 ms / p99 < 50 ms.
+- [x] **0. Resolve open V0 blockers**
+  - Issue #4 closed via LoCoMo Path B.
+  - Issue #8 closed via incremental Merkle update; Phase 3 perf is below the p50 < 10 ms / p99 < 50 ms gate.
 
-- [ ] **1. Run Phase 7 baseline iteration**
-  - *Deliverable*: `experiments/baselines/{a..e}` — five baselines with `genesisState()` and `mineCandidatePatch()`.
-  - *Action*: `node experiments/harness/compareBaselines.ts` against a real corpus. Pick the winner (likely E). Record metrics in `experiments/results/`.
-  - *Output*: chosen baseline → freeze `coreVersionHash` (keccak256 of pinned `packages/cortex/dist/`), freeze `genesisStateRoot` (Merkle root of winner's encoded state).
-  - *Commit*: those two values into `docs/contract-addresses.md` and `packages/cortex/src/eval/index.ts` constants.
-  - *Re-run*: `npm run test:e2e -- --filter phase-7` with real (not placeholder) `genesisStateRoot`. CI gate becomes authoritative.
+- [x] **1. Run Phase 7 baseline iteration**
+  - Completed 2026-05-06. Winner: Baseline A.
+  - Frozen `coreVersionHash` + `genesisStateRoot` live in `ops/v0-frozen.json` and `docs/contract-addresses.md`.
+  - `EXTENDED_FUZZ=1 node test/e2e/phase-7/run.mjs` passed the 1M-patch fuzz gate.
+  - Current Phase 7 gate uses the real CortexBench scorer and frozen Baseline A genesis.
 
 - [ ] **2. Run Phase 8 testnet for ≥100 epochs / ≥1k patches**
   - *Deliverables*: `contracts/script/DeployTestnet.s.sol`, `scripts/testnet/*`, `test/e2e/phase-8/run.mjs` (golden fixture).

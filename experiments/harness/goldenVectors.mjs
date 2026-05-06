@@ -24,15 +24,18 @@ try {
 }
 const { merkleizeState, applyPatch, encodePatch, decodePatch, keccak256, bytesToHex } = mod;
 
-// Use baseline E (placeholder winner) as the base state.
-const baseline = await import(`${REPO}/experiments/baselines/baseline_e_revocation_aware/index.mjs`);
+// Use the frozen V0 winner (Baseline A) as the base state.
+const baseline = await import(`${REPO}/experiments/baselines/baseline_a_empty/index.mjs`);
+const { loadRealCorpus } = await import(`${REPO}/experiments/harness/cortex-bench-eval.mjs`);
+const corpus = loadRealCorpus({ repoRoot: REPO });
 
 const triples = [];
 let state = baseline.genesisState();
 
-// Build 10 deterministic golden triples by mining patches from baseline E.
+// Build 10 deterministic golden triples by mining real corpus-aware patches
+// from the frozen winner.
 for (let i = 0; i < 10; i++) {
-  const patch = baseline.mineCandidatePatch(state, { epoch: i + 1, solveIndex: i });
+  const patch = baseline.mineCandidatePatch(state, { epoch: i + 1, solveIndex: i }, { corpus });
   if (!patch) continue;
   patch.parentStateRoot = merkleizeState(state);
   const wire = encodePatch(patch);
@@ -60,7 +63,8 @@ for (let i = 0; i < 10; i++) {
 
 const bundle = {
   version: 'v0.phase-7',
-  baseline: 'E',
+  baseline: 'A',
+  scoring: 'real-cortexbench-v0',
   triples,
   generatedAt: new Date().toISOString(),
   notes: 'Replay any triple: decode the patch wire, applyPatch to the parent, ' +

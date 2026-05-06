@@ -51,9 +51,9 @@ Testnet addresses move; do not bookmark. Current testnet: see [`../ops/testnet/U
 cast code <ADDRESS> --rpc-url $BASE_RPC_URL | head -c 80
 
 # Check the basic config matches
-cast call $CORTEX_REGISTRY 'challengeWindowSeconds() (uint256)' --rpc-url $BASE_RPC_URL
-cast call $CORTEX_REGISTRY 'snapshotInterval() (uint256)' --rpc-url $BASE_RPC_URL
-cast call $CORTEX_MERGE_BONUS 'mergeMultiplierBps() (uint256)' --rpc-url $BASE_RPC_URL
+cast call $CORTEX_REGISTRY 'CHALLENGE_WINDOW_SECONDS() (uint256)' --rpc-url $BASE_RPC_URL
+cast call $CORTEX_REGISTRY 'SNAPSHOT_EPOCH_INTERVAL() (uint64)' --rpc-url $BASE_RPC_URL
+cast call $CORTEX_MERGE_BONUS 'MERGE_MULTIPLIER_BPS() (uint256)' --rpc-url $BASE_RPC_URL
 ```
 
 The post-deploy smoke script does this automatically:

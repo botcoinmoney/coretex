@@ -8,12 +8,10 @@
  * has been registered via `setEvaluator()` — production miners cannot earn
  * receipts from a stubbed evaluator.
  *
- * Real-evaluator wiring: a follow-up that replaces the inline stub with
- * `import { evalPatch } from '@botcoin/cortex'` is gated on the cortex-server
- * keeping an in-memory copy of the current CortexState (sync'd from chain
- * events) — without that, the worker can't produce real eval reports because
- * `evalPatch` needs the full state, not just `parentStateRoot`. That state-
- * sync agent is the next item.
+ * Real-evaluator wiring: index.ts calls installRealEvaluatorFromEnv() before
+ * constructing the pool. Operators set CORTEX_REAL_EVAL=1 plus a packed state
+ * source for non-genesis roots; otherwise the pool fails closed unless the
+ * explicit local-dev CORTEX_ALLOW_STUB_EVAL=1 flag is set.
  *
  * Hard performance budget (§4): <10 ms p50, <50 ms p99 per eval.
  */
@@ -49,7 +47,7 @@ export interface EvalReport {
   protectedRegressionClean: boolean;
   stateCompliant: boolean;
   latencyMs: number;
-  /** Phase 3 TODO marker — remove when eval is real */
+  /** Present only for the local-dev stub evaluator. */
   _stub?: boolean;
   families?: Record<string, number>;
 }
@@ -230,9 +228,8 @@ export class EvalPool {
   }
 }
 
-// Real evaluator hook (Step 5). cortex-server does NOT yet sync state from
-// chain, so this stays null in V0 unless the operator wires it explicitly.
-// When non-null, EvalPool.eval bypasses the worker stub and calls this fn.
+// Real evaluator hook. When non-null, EvalPool.eval bypasses the worker stub
+// and calls this fn.
 type RealEvaluator = (input: EvalInput) => Promise<EvalResult>;
 let _realEvaluator: RealEvaluator | null = null;
 export function setEvaluator(fn: RealEvaluator | null): void {

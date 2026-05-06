@@ -286,20 +286,24 @@ export function computeComposite(c, opts = {}) {
  * `scoreDelta×1e6` convention used elsewhere in the codebase.
  */
 export function makeRealMarginalEvaluator({ corpus, decode, applyPatch, scale = 1_000_000n } = {}) {
-  if (typeof decode !== 'function' || typeof applyPatch !== 'function') {
-    throw new Error('makeRealMarginalEvaluator: decode + applyPatch required');
+  if (typeof applyPatch !== 'function') {
+    throw new Error('makeRealMarginalEvaluator: applyPatch required');
   }
   if (!corpus) throw new Error('makeRealMarginalEvaluator: corpus required');
 
   return (currentState, patch) => {
-    const baseDecoded = decode(currentState);
-    if (!baseDecoded.ok) return 0n;
-    const baseScore = scoreDecodedState(baseDecoded.decoded, corpus).composite;
+    if (typeof decode === 'function') {
+      const baseDecoded = decode(currentState);
+      if (!baseDecoded.ok) return 0n;
+    }
+    const baseScore = scoreState(currentState, corpus).composite;
     const applied = applyPatch(currentState, patch);
     if (!applied.ok) return 0n;
-    const newDecoded = decode(applied.state);
-    if (!newDecoded.ok) return 0n;
-    const newScore = scoreDecodedState(newDecoded.decoded, corpus).composite;
+    if (typeof decode === 'function') {
+      const newDecoded = decode(applied.state);
+      if (!newDecoded.ok) return 0n;
+    }
+    const newScore = scoreState(applied.state, corpus).composite;
     const delta = newScore - baseScore;
     return BigInt(Math.round(delta * Number(scale)));
   };

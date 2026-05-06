@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Phase 7 E2E gate.
-// Per §9 Phase 7. Runs the synthetic dry-run + replays the golden vectors.
+// Per §9 Phase 7. Runs a short real-corpus baseline comparison + replays the
+// frozen-winner golden vectors.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -13,7 +14,7 @@ function check(name, ok, reason) {
   fail++;          console.error(`  FAIL  ${name}: ${reason ?? ''}`);
 }
 
-// T1. Run all 5 baselines over 5 epochs each (synthetic dry-run).
+// T1. Run all 5 baselines over 5 epochs each with the real CortexBench scorer.
 {
   const r = spawnSync('node', ['experiments/harness/compareBaselines.mjs', '--epochs', '5', '--seed', '42'], { stdio: 'inherit' });
   check('compare-baselines-dry-run', r.status === 0);
@@ -54,14 +55,14 @@ if (existsSync('experiments/results/synthetic-dryrun/golden-vectors.json')) {
   check('replay-golden-vectors', false, 'golden-vectors.json not generated');
 }
 
-// T4. Genesis state encoding round-trip — placeholder winner is E.
+// T4. Genesis state encoding round-trip — frozen winner is Baseline A.
 {
   const mod = await import('../../../packages/cortex/dist/state/index.js').catch(() => null);
   if (!mod) {
     check('genesis-roundtrip', null, 'dist not built');
   } else {
     const { pack, unpack, merkleizeState, bytesToHex } = mod;
-    const baseline = await import('../../../experiments/baselines/baseline_e_revocation_aware/index.mjs');
+    const baseline = await import('../../../experiments/baselines/baseline_a_empty/index.mjs');
     const state = baseline.genesisState();
     const bytes = pack(state);
     const back = unpack(bytes);
@@ -72,7 +73,7 @@ if (existsSync('experiments/results/synthetic-dryrun/golden-vectors.json')) {
     if (mismatch) check('genesis-roundtrip', false, 'pack/unpack mismatch');
     else check('genesis-roundtrip', true);
     if (!mismatch) {
-      console.log(`     placeholder genesisStateRoot = ${bytesToHex(merkleizeState(state)).slice(0, 34)}...`);
+      console.log(`     frozen genesisStateRoot = ${bytesToHex(merkleizeState(state)).slice(0, 34)}...`);
     }
   }
 }

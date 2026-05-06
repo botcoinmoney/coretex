@@ -7,51 +7,175 @@
       "epoch": 1,
       "accepted": true,
       "errorCode": null,
-      "scoreDelta": 0.0104,
-      "latencyMs": 152.32642,
-      "parentStateRoot": "0x759c0393fc901671d79716ade718dfe4cf0c21e3784afbf6e97b84787157b587"
+      "beforeComposite": 0,
+      "afterComposite": 0.023529411764705882,
+      "marginalDelta": 0.023529411764705882,
+      "latencyMs": 211.775734,
+      "components": {
+        "exactRetrieval": 0.0784313725490196,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x81a418113c54af17f3bce5b3c15184f751a9914205b7e6cd45ae2aaed91bcdf9",
+      "patchHashHex": "0xf4e1b84d98706a3903b0675ec63bbf5c4289b85deab44e070a79bd5d14e35128"
     },
     {
       "epoch": 2,
       "accepted": true,
       "errorCode": null,
-      "scoreDelta": 0.0111,
-      "latencyMs": 133.864551,
-      "parentStateRoot": "0x8b096ae1c2d2ce6fb9ed2797dfc89a25bfd910038e57aee2135746369077e30a"
+      "beforeComposite": 0.023529411764705882,
+      "afterComposite": 0.029411764705882353,
+      "marginalDelta": 0.0058823529411764705,
+      "latencyMs": 192.39659,
+      "components": {
+        "exactRetrieval": 0.09803921568627451,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x5dd3a57677ddd49fcc291322612a9b225f0dff9baf2426125a6d1b5deccce128",
+      "patchHashHex": "0xe542ad6dedc02144cfb9042e6031f87382b902ea05273958b64971e8228fc3da"
     },
     {
       "epoch": 3,
       "accepted": true,
       "errorCode": null,
-      "scoreDelta": 0.011,
-      "latencyMs": 129.536457,
-      "parentStateRoot": "0x3d2a59627ab23fd5886e7215abd6bea59a08b856207c01dde37f637820a098a2"
+      "beforeComposite": 0.029411764705882353,
+      "afterComposite": 0.03529411764705882,
+      "marginalDelta": 0.0058823529411764705,
+      "latencyMs": 200.423043,
+      "components": {
+        "exactRetrieval": 0.11764705882352941,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x4ce50da0a47af5f9a9a5d0016b7126577dc2d401c86403450364730d44835440",
+      "patchHashHex": "0x8674e6f3b40dfc7812530d1a8d3df5626245d39a5c13d8487ca48fe21cea4c8e"
     },
     {
       "epoch": 4,
       "accepted": true,
       "errorCode": null,
-      "scoreDelta": 0.0109,
-      "latencyMs": 126.429614,
-      "parentStateRoot": "0xa5ffa80dcda7aa422fee153a2baa057cdcc8d41d8c455a9ce02a5b4e5810334d"
+      "beforeComposite": 0.03529411764705882,
+      "afterComposite": 0.041176470588235294,
+      "marginalDelta": 0.0058823529411764705,
+      "latencyMs": 240.126358,
+      "components": {
+        "exactRetrieval": 0.13725490196078433,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x83d07081575812ac32321330c522de8c7a54bae6217b77565f548916d7f8922e",
+      "patchHashHex": "0xbfcd6334262f2017741b56d9bbb02ebe88d97a4d6868af2580608dd389529574"
     },
     {
       "epoch": 5,
       "accepted": true,
       "errorCode": null,
-      "scoreDelta": 0.0108,
-      "latencyMs": 126.185568,
-      "parentStateRoot": "0x8659d604e33f1f72d7388c9ee55ee73c98bb3d8034ec8b7c8ab5c3ceec863826"
+      "beforeComposite": 0.041176470588235294,
+      "afterComposite": 0.047058823529411764,
+      "marginalDelta": 0.0058823529411764705,
+      "latencyMs": 245.020722,
+      "components": {
+        "exactRetrieval": 0.1568627450980392,
+        "staleMemoryRejection": 0,
+        "temporalUpdateCorrectness": 0,
+        "compressionSurvival": 0,
+        "routingAccuracy": 0,
+        "latencyMs": 0
+      },
+      "parentStateRoot": "0x63de3285d2324e2438fc1d85ea6bfa1b4b0f7a322b3554affe289abc019905b8",
+      "patchHashHex": "0x286584aecf5fd7447a654f5822480025df6c5cdcdd9414aaebf0f782fb1807e8"
     }
   ],
   "summary": {
     "totalEpochs": 5,
     "accepted": 5,
     "rejected": 0,
-    "avgScoreDelta": 0.010839999999999999,
-    "p50LatencyMs": 129.536457,
-    "finalStateRoot": "0x8659d604e33f1f72d7388c9ee55ee73c98bb3d8034ec8b7c8ab5c3ceec863826"
+    "genesisComposite": 0,
+    "finalComposite": 0.047058823529411764,
+    "netImprovement": 0.047058823529411764,
+    "avgScoreDelta": 0.009411764705882352,
+    "p50LatencyMs": 211.775734,
+    "p99LatencyMs": 240.126358,
+    "finalStateRoot": "0x63de3285d2324e2438fc1d85ea6bfa1b4b0f7a322b3554affe289abc019905b8",
+    "genesisStateRoot": "0x8f95fbcdcb26e5f851db700ac001d010e0cad41f7dc599975d85c3b7f4f3d697",
+    "familyContribution": {
+      "near_collision": 0,
+      "temporal": 0,
+      "long_horizon": 0,
+      "routing": 0,
+      "exact": 0.1568627450980392,
+      "stale": 0,
+      "current": 0
+    },
+    "finalComponents": {
+      "exactRetrieval": 0.1568627450980392,
+      "staleMemoryRejection": 0,
+      "temporalUpdateCorrectness": 0,
+      "compressionSurvival": 0,
+      "routingAccuracy": 0,
+      "latencyMs": 0
+    },
+    "finalFamilyScores": {
+      "near_collision": 0.1568627450980392,
+      "temporal": 0,
+      "long_horizon": 0
+    },
+    "finalHits": {
+      "near_collision": 8,
+      "stale": 0,
+      "current": 0,
+      "long_horizon": 0,
+      "relations": 0
+    },
+    "finalTotals": {
+      "near_collision": 51,
+      "stale": 55,
+      "current": 57,
+      "long_horizon": 51,
+      "relations": 128
+    }
   },
-  "generatedAt": "2026-05-06T08:38:12.898Z",
-  "caveat": "Synthetic scoring (StubCorpusLoader). Real scoring requires Phase 4 corpus + LoCoMo resolution."
+  "generatedAt": "2026-05-06T10:30:37.100Z",
+  "corpusSources": {
+    "near_collision": {
+      "path": "benchmark/fixtures/near_collision/limit_nq_hotpotqa_v0.json",
+      "count": 51,
+      "license": "CC-BY-4.0 (LIMIT); Apache-2.0 (NQ); CC-BY-SA-4.0 (HotpotQA)",
+      "source": [
+        "LIMIT",
+        "BEIR_NQ",
+        "BEIR_HotpotQA"
+      ]
+    },
+    "temporal": {
+      "path": "benchmark/fixtures/temporal/memoryagentbench_v0.json",
+      "count": 52,
+      "license": "MIT",
+      "source": "MemoryAgentBench"
+    },
+    "long_horizon": {
+      "path": "benchmark/fixtures/long_horizon/memoryarena_v0.json",
+      "count": 51,
+      "license": "CC-BY-4.0",
+      "source": "MemoryArena"
+    },
+    "synthetic_temporal": {
+      "count": 60,
+      "license": "Apache-2.0"
+    }
+  },
+  "scoring": "real-cortexbench-v0"
 }

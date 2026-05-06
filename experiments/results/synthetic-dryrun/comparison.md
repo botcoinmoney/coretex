@@ -1,23 +1,42 @@
-# Baselines comparison — synthetic dry-run
+# Baselines comparison — CortexBench V0 (synthetic-dryrun)
 
-Seed: 42  Epochs per baseline: 5  Generated: 2026-05-06T08:38:14.969Z
+Seed: 42  Epochs per baseline: 5  Generated: 2026-05-06T10:30:40.249Z
 
-> **Caveat**: scoring is synthetic (StubCorpusLoader). Real scoring requires Phase 4
-> corpus + LoCoMo license resolution (issue #4). Use this report to validate harness
-> correctness, not to pick a real winner.
+> Scorer: real CortexBench V0 (`experiments/harness/cortex-bench-eval.mjs`)
+> driven by Phase 4 fixtures + the Apache-2.0 SyntheticTemporalLoader.
+> See `experiments/PHASE_7_USER_ACTIONS.md` for the freeze procedure.
 
-| Baseline | Name | Accepted/Total | avgΔ | p50 latency (ms) | Final state root |
-|----------|------|---------------:|-----:|-----------------:|------------------|
-| A | empty | 0/5 | 0.0000 | 0.01 | 0x7e704f76d61564... |
-| B | dense-key | 5/5 | 0.0109 | 136.09 | 0x09386e9d979857... |
-| C | binary-key | 5/5 | 0.0108 | 129.54 | 0x8659d604e33f1f... |
-| D | late-interaction | 5/5 | 0.0107 | 132.13 | 0x4817b9fdab596e... |
-| E | revocation-aware | 5/5 | 0.0106 | 131.39 | 0x19a184e8d8e40d... |
+| Baseline | Name | Genesis | Final | Net Δ | Accepted/Total | p50 latency (ms) | Final state root |
+|----------|------|--------:|------:|------:|---------------:|-----------------:|------------------|
+| A ★ | empty | 0.0000 | 0.1176 | 0.1176 | 5/5 | 259.12 | 0x755c8ee973dedf... |
+| B | dense-key | 0.0000 | 0.0471 | 0.0471 | 5/5 | 235.32 | 0xdc5b79b5015d5e... |
+| C | binary-key | 0.0000 | 0.0471 | 0.0471 | 5/5 | 211.78 | 0x63de3285d2324e... |
+| D | late-interaction | 0.0000 | 0.0471 | 0.0471 | 5/5 | 175.85 | 0xcedfc753af842c... |
+| E | revocation-aware | 0.0000 | 0.0535 | 0.0535 | 5/5 | 141.38 | 0x613980c9bb41ad... |
 
+## Winner
 
-## Placeholder winner
+**Baseline A (empty)** — final composite 0.117647.
 
-**Baseline E (revocation-aware)** is the placeholder winner per §9 Phase 7. The user runs real iteration with a Phase 4 corpus and `experiments/PHASE_7_USER_ACTIONS.md` to confirm or override.
+## Component breakdown (final state)
+
+| Baseline | exact | stale | current | compression | routing |
+|----------|------:|------:|--------:|------------:|--------:|
+| A | 0.000 | 0.000 | 0.000 | 0.392 | 0.000 |
+| B | 0.157 | 0.000 | 0.000 | 0.000 | 0.000 |
+| C | 0.157 | 0.000 | 0.000 | 0.000 | 0.000 |
+| D | 0.157 | 0.000 | 0.000 | 0.000 | 0.000 |
+| E | 0.000 | 0.164 | 0.193 | 0.000 | 0.000 |
+
+## Family contribution (sum of accepted Δ per family)
+
+| Baseline | exact | stale | current | compression | routing |
+|----------|------:|------:|--------:|------------:|--------:|
+| A | 0.000 | 0.000 | 0.000 | 0.392 | 0.000 |
+| B | 0.157 | 0.000 | 0.000 | 0.000 | 0.000 |
+| C | 0.157 | 0.000 | 0.000 | 0.000 | 0.000 |
+| D | 0.157 | 0.000 | 0.000 | 0.000 | 0.000 |
+| E | 0.000 | 0.164 | 0.193 | 0.000 | 0.000 |
 
 ## Files
 

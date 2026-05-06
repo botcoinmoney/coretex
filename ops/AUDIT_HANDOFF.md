@@ -24,6 +24,11 @@ This handoff covers the V0 Cortex on-chain memory lane: state codec, Merkle root
   - Live state advances earn normal epoch credits; screener-only candidates do not.
   - Non-overlapping improvements can all advance during the same 24h epoch; stale-parent candidates must rebase on the current `liveStateRoot`.
   - Phase 8 golden fixture no longer prints double-`0x` roots.
+- Final review hardening:
+  - `makeRealMarginalEvaluator()` now scores raw Cortex state correctly.
+  - Phase 7 golden vectors use frozen Baseline A and the real CortexBench corpus.
+  - `cortex-server` installs real CortexBench eval with `CORTEX_REAL_EVAL=1` and a packed state source for non-genesis roots; otherwise it fails closed unless explicitly in local stub mode.
+  - `scripts/post-deploy-smoke.mjs` now reads deployed constants by selector and checks `MERGE_MULTIPLIER_BPS = 10000`.
 
 ## Local validation completed
 
@@ -32,7 +37,7 @@ This handoff covers the V0 Cortex on-chain memory lane: state codec, Merkle root
 | `npm run build --workspaces --if-present` | PASS |
 | `node --test --test-reporter=spec packages/cortex/test/unit/merkle.test.mjs packages/cortex/test/unit/eval.test.mjs` | 30/30 PASS |
 | `node --test --test-reporter=spec packages/cortex/test/unit/patch.test.mjs packages/cortex/test/unit/reducer.test.mjs` | 67/67 PASS |
-| `node --test --test-reporter=spec packages/cortex/test/unit/merkle.test.mjs packages/cortex/test/unit/eval.test.mjs packages/cortex/test/unit/patch.test.mjs packages/cortex/test/unit/reducer.test.mjs` | 97/97 PASS |
+| `node --test --test-reporter=spec test/unit/cortex-bench-eval.test.mjs packages/cortex/test/unit/merkle.test.mjs packages/cortex/test/unit/eval.test.mjs packages/cortex/test/unit/patch.test.mjs packages/cortex/test/unit/reducer.test.mjs` | 104/104 PASS |
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-1` | 6/6 gates PASS |
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-3` | 16 PASS, 1 SKIP |
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-5` | 17 PASS, 1 SKIP |
@@ -40,16 +45,18 @@ This handoff covers the V0 Cortex on-chain memory lane: state codec, Merkle root
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-7` | 7/7 PASS, 1 SKIP (live e2e) |
 | `CORTEX_E2E_LIVE=1 node test/e2e/phase-7/run.mjs` | 8/8 PASS (incl. mine→submit→advance over Anvil) |
 | `EXTENDED_FUZZ=1 node test/e2e/phase-7/run.mjs` | 7/7 PASS, 1M-patch fuzz green |
-| `node --test test/unit/cortex-bench-eval.test.mjs` | 6/6 PASS (real CortexBench scorer) |
+| `node --test test/unit/cortex-bench-eval.test.mjs` | 7/7 PASS (real CortexBench scorer) |
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-8` | 4 PASS, 6 SKIP |
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-9` | 3 PASS, 5 SKIP |
 | `forge test --root contracts --no-match-contract CortexForkTest` | 58/58 PASS |
+| `CORTEX_REAL_EVAL=1 npx -y node@22 packages/cortex-server/dist/index.js` | PASS boot smoke; real evaluator installed |
+| `scripts/post-deploy-smoke.mjs` against fresh Anvil deploy | PASS; bytecode + constants checked |
 
 Phase 3 perf fixture: `test/e2e/phase-3/fixtures/perf-results.json`
 
 - `N = 10000`
-- `p50ms = 0.508801`
-- `p99ms = 0.995279`
+- `p50ms = 0.508`
+- `p99ms = 0.872`
 - Target gate: p50 < 10 ms, p99 < 50 ms
 
 ## Known self-skips / operator gates
