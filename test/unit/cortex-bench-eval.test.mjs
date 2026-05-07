@@ -90,6 +90,17 @@ test('eventIdToKey128 and eventIdToMem128 are deterministic and 128-bit-bounded'
   assert.equal(eventIdToMem128('mab-temporal-0000'), m);
 });
 
+test('near-collision structural score ignores irrelevant near-miss keys', () => {
+  const state = baselineA.genesisState();
+  const miss = corpus.events.near_collision.find((event) => event.relevant === false);
+  assert.ok(miss, 'fixture must include an irrelevant near-miss');
+  const kid = eventIdToKey128(miss.id);
+  const words = [...state.words];
+  words[384] = (kid << 128n) | (0x0002n << 112n) | (256n << 96n) | (0x0001n << 80n);
+  const score = scoreState({ words }, corpus);
+  assert.equal(score.components.exactRetrieval, 0);
+});
+
 test('makeRealMarginalEvaluator returns positive gain for a real corpus patch', () => {
   const state = baselineA.genesisState();
   const patch = baselineA.mineCandidatePatch(state, { epoch: 1, solveIndex: 1 }, { corpus });

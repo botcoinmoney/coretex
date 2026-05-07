@@ -28,6 +28,8 @@ This handoff covers the V0 Cortex on-chain memory lane: state codec, Merkle root
   - `makeRealMarginalEvaluator()` now scores raw Cortex state correctly.
   - Phase 7 golden vectors use frozen Baseline A and the real CortexBench corpus.
   - `cortex-server` installs real CortexBench eval with `CORTEX_REAL_EVAL=1` and a packed state source for non-genesis roots; otherwise it fails closed unless explicitly in local stub mode.
+  - Production state advances also pass the local MiniLM no-regression gate by default (`CORTEX_LOCAL_MODEL_EVAL != 0`): deterministic structural improvement first, then local model retrieval equal-or-better across model-facing components.
+  - Near-collision structural scoring now counts only relevant records; irrelevant near-miss keys do not improve exact retrieval.
   - `scripts/post-deploy-smoke.mjs` now reads deployed constants by selector and checks `MERGE_MULTIPLIER_BPS = 10000`.
 
 ## Local validation completed
@@ -37,7 +39,7 @@ This handoff covers the V0 Cortex on-chain memory lane: state codec, Merkle root
 | `npm run build --workspaces --if-present` | PASS |
 | `node --test --test-reporter=spec packages/cortex/test/unit/merkle.test.mjs packages/cortex/test/unit/eval.test.mjs` | 30/30 PASS |
 | `node --test --test-reporter=spec packages/cortex/test/unit/patch.test.mjs packages/cortex/test/unit/reducer.test.mjs` | 67/67 PASS |
-| `node --test --test-reporter=spec test/unit/cortex-bench-eval.test.mjs packages/cortex/test/unit/merkle.test.mjs packages/cortex/test/unit/eval.test.mjs packages/cortex/test/unit/patch.test.mjs packages/cortex/test/unit/reducer.test.mjs` | 104/104 PASS |
+| `node --test --test-reporter=spec test/unit/cortex-bench-eval.test.mjs test/unit/local-model-eval.test.mjs packages/cortex/test/unit/merkle.test.mjs packages/cortex/test/unit/eval.test.mjs packages/cortex/test/unit/patch.test.mjs packages/cortex/test/unit/reducer.test.mjs` | 108/108 PASS |
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-1` | 6/6 gates PASS |
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-3` | 16 PASS, 1 SKIP |
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-5` | 17 PASS, 1 SKIP |
@@ -45,7 +47,9 @@ This handoff covers the V0 Cortex on-chain memory lane: state codec, Merkle root
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-7` | 7/7 PASS, 1 SKIP (live e2e) |
 | `CORTEX_E2E_LIVE=1 node test/e2e/phase-7/run.mjs` | 8/8 PASS (incl. mine→submit→advance over Anvil) |
 | `EXTENDED_FUZZ=1 node test/e2e/phase-7/run.mjs` | 7/7 PASS, 1M-patch fuzz green |
-| `node --test test/unit/cortex-bench-eval.test.mjs` | 7/7 PASS (real CortexBench scorer) |
+| `node --test test/unit/cortex-bench-eval.test.mjs test/unit/local-model-eval.test.mjs` | 11/11 PASS (real CortexBench scorer + model sidecar logic) |
+| `node scripts/local-model-calibration.mjs` | PASS with `Xenova/multi-qa-MiniLM-L6-cos-v1` across long-horizon, near-collision, and temporal known-good patches |
+| `node scripts/local-model-eval-smoke.mjs` | PASS with `Xenova/multi-qa-MiniLM-L6-cos-v1` |
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-8` | 4 PASS, 6 SKIP |
 | `npx -y node@22 scripts/run-e2e.mjs --filter phase-9` | 3 PASS, 5 SKIP |
 | `forge test --root contracts --no-match-contract CortexForkTest` | 58/58 PASS |
@@ -92,4 +96,6 @@ architecture blockers:
 - Confirm reducer multi-patch epochs accept non-overlapping patches sharing the same epoch parent root.
 - Confirm live `CortexStateAdvanced` events chain by parent root and seal into the final epoch root.
 - Confirm non-overlapping state advances during an epoch all earn credits, while stale-parent and no-marginal-improvement candidates earn none.
+- Confirm local MiniLM no-regression is enforced for production state advances and that `CORTEX_LOCAL_MODEL_EVAL=0` is never used for paying epochs.
+- Confirm near-collision scoring ignores irrelevant near-miss keys in both the structural and model-assisted gates.
 - Confirm `MERGE_MULTIPLIER_BPS = 10000` is consistent across contracts, reducer, docs, and test gates.

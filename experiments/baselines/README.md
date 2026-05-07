@@ -31,9 +31,9 @@ and are mirrored into `docs/contract-addresses.md`.
 | ID  | Name | Key feature | Final composite (seed 42, 30 epochs) |
 |-----|------|-------------|-------------------------------------:|
 | A ★ | Empty Cortex | All-zero state — miner fills memory_index | **0.2588** |
-| B   | Dense-key Cortex | Header + dense retrieval keys | 0.1941 |
-| C   | Binary-key Cortex | Header + binary retrieval keys | 0.1941 |
-| D   | Late-interaction Cortex | Multi-slot WARP-style multi-vector | 0.0529 |
+| B   | Dense-key Cortex | Header + dense retrieval keys | 0.2077 |
+| C   | Binary-key Cortex | Header + binary retrieval keys | 0.2077 |
+| D   | Late-interaction Cortex | Multi-slot WARP-style multi-vector | 0.0692 |
 | E   | Revocation-aware Cortex | Memory_index slots with REVOKED flag | 0.1178 |
 
 ## Metrics collected by the harness
@@ -53,7 +53,7 @@ For each baseline, per epoch:
 
 Real CortexBench V0 evaluator (`cortex-bench-eval.mjs`):
 
-- **Exact retrieval (0.30)** — near-collision events whose `keyId =
+- **Exact retrieval (0.30)** — relevant near-collision events whose `keyId =
   keccak('cortex-key128:'+id)[lo128]` matches an active retrieval-key slot.
 - **Stale rejection (0.15)** — temporal stale-truth events whose
   `eventId = keccak('cortex-mem128:'+id)[lo128]` matches a memory_index

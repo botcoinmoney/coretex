@@ -13,6 +13,7 @@ This is the launch checklist for Botcoin Cortex V0 on Base mainnet. Each numbere
   - Frozen `coreVersionHash` + `genesisStateRoot` live in `ops/v0-frozen.json` and `docs/contract-addresses.md`.
   - `EXTENDED_FUZZ=1 node test/e2e/phase-7/run.mjs` passed the 1M-patch fuzz gate.
   - Current Phase 7 gate uses the real CortexBench scorer and frozen Baseline A genesis.
+  - Local model-assisted merge gate calibrated 2026-05-07: `node scripts/local-model-calibration.mjs` passes with `Xenova/multi-qa-MiniLM-L6-cos-v1` across long-horizon, near-collision, and temporal known-good patches.
 
 - [ ] **2. Run Phase 8 testnet for ≥100 epochs / ≥1k patches**
   - *Deliverables*: `contracts/script/DeployTestnet.s.sol`, `scripts/testnet/*`, `test/e2e/phase-8/run.mjs` (golden fixture).
@@ -82,6 +83,8 @@ This is the launch checklist for Botcoin Cortex V0 on Base mainnet. Each numbere
 
 - [ ] **8. Re-enable cortex-server + first reward epoch**
   - Restart `cortex-server`; restore nginx upstream.
+  - Confirm production env has `CORTEX_REAL_EVAL=1`, `CORTEX_LOCAL_MODEL_EVAL=1`, and `CORTEX_LOCAL_MODEL_PREWARM=1`.
+  - Run `node scripts/local-model-calibration.mjs` on the deployment host before opening the lane.
   - Allow the first paying epoch to finalize. No V0 legacy merge-bonus funding is expected; state-advance credits settle through the normal receipt path.
 
 - [ ] **9. Publish first-reward audit trail**

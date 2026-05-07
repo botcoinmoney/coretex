@@ -26,7 +26,7 @@ import {
   unpack,
 } from '@botcoin/cortex';
 import type { CortexState } from '@botcoin/cortex';
-import { setEvaluator, type EvalInput, type EvalResult } from './workers/eval-pool.js';
+import { setEvaluator, type EvalInput, type EvalReport, type EvalResult } from './workers/eval-pool.js';
 
 const SCALE = 1_000_000;
 
@@ -41,6 +41,11 @@ interface FrozenConfig {
 }
 
 let installed = false;
+let localModelEvalPromise: Promise<{
+  evaluatePatchWithLocalModel: Function;
+  createTransformersEmbedder: Function;
+  embedder: unknown;
+}> | null = null;
 
 export async function installRealEvaluatorFromEnv(): Promise<void> {
   if (installed) return;
@@ -88,8 +93,8 @@ async function evaluateWithRealBench(
   const scoreDelta = Math.round(delta * SCALE);
   const newStateRoot = bytesToHex(merkleizeState(applied.state));
   const latencyMs = performance.now() - t0;
-  const pass = delta > threshold;
-  const report = {
+  let pass = delta > threshold;
+  const report: EvalReport = {
     scoreDelta,
     baselineScore: Math.round(baseScore.composite * SCALE),
     candidateScore: Math.round(candidateScore.composite * SCALE),
@@ -98,8 +103,80 @@ async function evaluateWithRealBench(
     latencyMs,
     families: candidateScore.familyScores ?? {},
   };
+
+  if (pass && process.env['CORTEX_LOCAL_MODEL_EVAL'] !== '0') {
+    const local = await runLocalModelEval(parentState, patch, corpus, repoRoot);
+    report.localModel = local.summary;
+    pass = local.pass;
+    if (!pass) {
+      report.protectedRegressionClean = false;
+      report.errorCode = 'L02_LOCAL_MODEL_NO_SIGNAL';
+    }
+  }
+
   const evalReportHash = reportHash(input, report, patchHash, newStateRoot);
   return { pass, report, evalReportHash, newStateRoot };
+}
+
+async function runLocalModelEval(
+  parentState: CortexState,
+  patch: unknown,
+  corpus: unknown,
+  repoRoot: string,
+): Promise<{ pass: boolean; summary: unknown }> {
+  if (!localModelEvalPromise) {
+    localModelEvalPromise = (async () => {
+      const mod = await import(pathToFileURL(resolve(repoRoot, 'experiments/harness/local-model-eval.mjs')).href) as {
+        evaluatePatchWithLocalModel: Function;
+        createTransformersEmbedder: Function;
+        prewarmLocalModelEmbedder: Function;
+      };
+      const embedder = await mod.createTransformersEmbedder({
+        model: process.env['CORTEX_LOCAL_MODEL'],
+        cacheDir: process.env['CORTEX_LOCAL_MODEL_CACHE'],
+        localOnly: process.env['CORTEX_LOCAL_MODEL_LOCAL_ONLY'] === '1',
+      });
+      if (process.env['CORTEX_LOCAL_MODEL_PREWARM'] !== '0') {
+        const warm = await mod.prewarmLocalModelEmbedder(embedder, corpus);
+        console.log(
+          `[cortex-server] local model eval prewarmed ${warm.textCount} texts in ${warm.latencyMs.toFixed(1)}ms`,
+        );
+      }
+      return { ...mod, embedder };
+    })();
+  }
+
+  const { evaluatePatchWithLocalModel, embedder } = await localModelEvalPromise;
+  const threshold = Number(process.env['CORTEX_LOCAL_MODEL_MIN_DELTA'] ?? 0);
+  const local = await evaluatePatchWithLocalModel(parentState, patch, {
+    applyPatch,
+    corpus,
+    embedder,
+    threshold,
+  }) as {
+    pass: boolean;
+    scoreDelta: number;
+    delta: number;
+    noRegression: boolean;
+    regressions: string[];
+    before: { composite: number; components: unknown; model?: string };
+    after: { composite: number; components: unknown; model?: string };
+  };
+  return {
+    pass: local.pass,
+    summary: {
+      model: local.after.model ?? local.before.model,
+      scoreDelta: local.scoreDelta,
+      beforeComposite: Math.round(local.before.composite * SCALE),
+      afterComposite: Math.round(local.after.composite * SCALE),
+      delta: local.delta,
+      minDelta: threshold,
+      noRegression: local.noRegression,
+      regressions: local.regressions,
+      beforeComponents: local.before.components,
+      afterComponents: local.after.components,
+    },
+  };
 }
 
 async function loadParentState(parentStateRoot: string, frozen: FrozenConfig, repoRoot: string): Promise<CortexState> {

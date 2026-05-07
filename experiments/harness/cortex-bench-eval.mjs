@@ -110,7 +110,12 @@ function normaliseRaw(family, item) {
     truthText: item.truth ?? item.passage ?? '',
   };
   if (family === 'near_collision') {
-    return { ...base, taskType: item.source ?? 'near_collision', isStaleTruth: false };
+    return {
+      ...base,
+      taskType: item.source ?? 'near_collision',
+      isStaleTruth: false,
+      relevant: item.relevant !== false,
+    };
   }
   if (family === 'temporal') {
     return { ...base, taskType: item.task ?? 'temporal', isStaleTruth: item.is_stale === true };
@@ -196,7 +201,7 @@ export function scoreState(state, corpus, opts = {}) {
     if (weight > 0) filledRel++;
   }
 
-  const nc = corpus.events.near_collision;
+  const nc = corpus.events.near_collision.filter((e) => e.relevant !== false);
   const lh = corpus.events.long_horizon;
   const stale = corpus.events.temporal.filter((e) => e.isStaleTruth === true);
   const current = corpus.events.temporal.filter((e) => e.isStaleTruth === false);

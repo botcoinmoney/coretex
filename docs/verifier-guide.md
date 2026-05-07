@@ -64,6 +64,10 @@ You do **not** need:
 
 Every `SNAPSHOT_EPOCH_INTERVAL` epochs (V0 default: 100), `CortexRegistry` emits a `CortexStateSnapshot` event carrying the full 1024 words of state in calldata. To reproduce a recent epoch without scanning every prior `CortexPatchAccepted` since genesis:
 
+This is only a replay optimization. It does not mean Cortex updates every 100
+epochs. Verified improvements can advance the live state many times inside the
+same 24-hour BOTCOIN epoch; snapshots just bound fresh-validator sync cost.
+
 ```bash
 node packages/cortex/dist/cli.js verify-epoch 875 \
   --rpc $BASE_RPC_URL \

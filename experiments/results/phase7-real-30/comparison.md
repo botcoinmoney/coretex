@@ -1,6 +1,6 @@
 # Baselines comparison — CortexBench V0 (phase7-real-30)
 
-Seed: 42  Epochs per baseline: 30  Generated: 2026-05-06T09:31:28.056Z
+Seed: 42  Epochs per baseline: 30  Generated: 2026-05-07T00:23:13.001Z
 
 > Scorer: real CortexBench V0 (`experiments/harness/cortex-bench-eval.mjs`)
 > driven by Phase 4 fixtures + the Apache-2.0 SyntheticTemporalLoader.
@@ -8,11 +8,11 @@ Seed: 42  Epochs per baseline: 30  Generated: 2026-05-06T09:31:28.056Z
 
 | Baseline | Name | Genesis | Final | Net Δ | Accepted/Total | p50 latency (ms) | Final state root |
 |----------|------|--------:|------:|------:|---------------:|-----------------:|------------------|
-| A ★ | empty | 0.0000 | 0.2588 | 0.2588 | 11/30 | 0.04 | 0x689288f235004d... |
-| B | dense-key | 0.0000 | 0.1941 | 0.1941 | 30/30 | 134.35 | 0x2caa54c6b558c1... |
-| C | binary-key | 0.0000 | 0.1941 | 0.1941 | 30/30 | 131.68 | 0x27c16129a298da... |
-| D | late-interaction | 0.0000 | 0.0529 | 0.0529 | 6/30 | 132.81 | 0xa6aa8529f26734... |
-| E | revocation-aware | 0.0000 | 0.1178 | 0.1178 | 11/30 | 0.04 | 0x4254c290d996d4... |
+| A ★ | empty | 0.0000 | 0.2588 | 0.2588 | 11/30 | 0.03 | 0x689288f235004d... |
+| B | dense-key | 0.0000 | 0.2077 | 0.2077 | 17/30 | 139.08 | 0xeec5f46df6b062... |
+| C | binary-key | 0.0000 | 0.2077 | 0.2077 | 17/30 | 137.71 | 0x23760a75ca6614... |
+| D | late-interaction | 0.0000 | 0.0692 | 0.0692 | 5/30 | 137.97 | 0x0f5d201740d762... |
+| E | revocation-aware | 0.0000 | 0.1178 | 0.1178 | 11/30 | 0.03 | 0x4254c290d996d4... |
 
 ## Winner
 
@@ -23,9 +23,9 @@ Seed: 42  Epochs per baseline: 30  Generated: 2026-05-06T09:31:28.056Z
 | Baseline | exact | stale | current | compression | routing |
 |----------|------:|------:|--------:|------------:|--------:|
 | A | 0.000 | 0.000 | 0.000 | 0.863 | 0.000 |
-| B | 0.647 | 0.000 | 0.000 | 0.000 | 0.000 |
-| C | 0.647 | 0.000 | 0.000 | 0.000 | 0.000 |
-| D | 0.176 | 0.000 | 0.000 | 0.000 | 0.000 |
+| B | 0.692 | 0.000 | 0.000 | 0.000 | 0.000 |
+| C | 0.692 | 0.000 | 0.000 | 0.000 | 0.000 |
+| D | 0.231 | 0.000 | 0.000 | 0.000 | 0.000 |
 | E | 0.000 | 0.382 | 0.404 | 0.000 | 0.000 |
 
 ## Family contribution (sum of accepted Δ per family)
@@ -33,9 +33,9 @@ Seed: 42  Epochs per baseline: 30  Generated: 2026-05-06T09:31:28.056Z
 | Baseline | exact | stale | current | compression | routing |
 |----------|------:|------:|--------:|------------:|--------:|
 | A | 0.000 | 0.000 | 0.000 | 0.863 | 0.000 |
-| B | 0.647 | 0.000 | 0.000 | 0.000 | 0.000 |
-| C | 0.647 | 0.000 | 0.000 | 0.000 | 0.000 |
-| D | 0.176 | 0.000 | 0.000 | 0.000 | 0.000 |
+| B | 0.692 | 0.000 | 0.000 | 0.000 | 0.000 |
+| C | 0.692 | 0.000 | 0.000 | 0.000 | 0.000 |
+| D | 0.231 | 0.000 | 0.000 | 0.000 | 0.000 |
 | E | 0.000 | 0.382 | 0.404 | 0.000 | 0.000 |
 
 ## Files

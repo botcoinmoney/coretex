@@ -8,11 +8,11 @@
       "accepted": true,
       "errorCode": null,
       "beforeComposite": 0,
-      "afterComposite": 0.023529411764705882,
-      "marginalDelta": 0.023529411764705882,
-      "latencyMs": 167.623829,
+      "afterComposite": 0.023076923076923078,
+      "marginalDelta": 0.023076923076923078,
+      "latencyMs": 135.931404,
       "components": {
-        "exactRetrieval": 0.0784313725490196,
+        "exactRetrieval": 0.07692307692307693,
         "staleMemoryRejection": 0,
         "temporalUpdateCorrectness": 0,
         "compressionSurvival": 0,
@@ -24,104 +24,104 @@
     },
     {
       "epoch": 2,
-      "accepted": true,
+      "accepted": false,
       "errorCode": null,
-      "beforeComposite": 0.023529411764705882,
-      "afterComposite": 0.029411764705882353,
-      "marginalDelta": 0.0058823529411764705,
-      "latencyMs": 175.85339,
+      "beforeComposite": 0.023076923076923078,
+      "afterComposite": 0.023076923076923078,
+      "marginalDelta": 0,
+      "latencyMs": 133.358585,
       "components": {
-        "exactRetrieval": 0.09803921568627451,
+        "exactRetrieval": 0.07692307692307693,
         "staleMemoryRejection": 0,
         "temporalUpdateCorrectness": 0,
         "compressionSurvival": 0,
         "routingAccuracy": 0,
         "latencyMs": 0
       },
-      "parentStateRoot": "0xf4fe0a124af26396dc37d431db9324bca072de67055f26e0d44afcd921dd7272",
+      "parentStateRoot": "0xcc27eca2100bef0f09c93b04aa6c5de420af79c95efe20cf58f1897d02d80f30",
       "patchHashHex": "0x1031527f54524cbd9cf00a86aa4c6321b0e81d77e71db682288c968faa6fd659"
     },
     {
       "epoch": 3,
       "accepted": true,
       "errorCode": null,
-      "beforeComposite": 0.029411764705882353,
-      "afterComposite": 0.03529411764705882,
-      "marginalDelta": 0.0058823529411764705,
-      "latencyMs": 176.19442,
+      "beforeComposite": 0.023076923076923078,
+      "afterComposite": 0.03461538461538462,
+      "marginalDelta": 0.011538461538461539,
+      "latencyMs": 128.546235,
       "components": {
-        "exactRetrieval": 0.11764705882352941,
+        "exactRetrieval": 0.11538461538461539,
         "staleMemoryRejection": 0,
         "temporalUpdateCorrectness": 0,
         "compressionSurvival": 0,
         "routingAccuracy": 0,
         "latencyMs": 0
       },
-      "parentStateRoot": "0xc1fb0d45ca09ea721bf1ffcc98f6929851761678e78afb9d3f6e8a0ea35622d1",
-      "patchHashHex": "0x0e08e0cf2541017bc873352568bffaa31a0ad21a4166f1ffffbc2797ebcc825f"
+      "parentStateRoot": "0xad33ee1508b60a0a725f6aeeb41f2c2d14de831e6cb7171933dccf9f25bfb37d",
+      "patchHashHex": "0x4c4261313c96bf51a7ba2eca8aaaab0df205ede30e2683831f60d7d2c262c0b0"
     },
     {
       "epoch": 4,
       "accepted": true,
       "errorCode": null,
-      "beforeComposite": 0.03529411764705882,
-      "afterComposite": 0.041176470588235294,
-      "marginalDelta": 0.0058823529411764705,
-      "latencyMs": 159.382189,
+      "beforeComposite": 0.03461538461538462,
+      "afterComposite": 0.046153846153846156,
+      "marginalDelta": 0.011538461538461539,
+      "latencyMs": 127.258792,
       "components": {
-        "exactRetrieval": 0.13725490196078433,
+        "exactRetrieval": 0.15384615384615385,
         "staleMemoryRejection": 0,
         "temporalUpdateCorrectness": 0,
         "compressionSurvival": 0,
         "routingAccuracy": 0,
         "latencyMs": 0
       },
-      "parentStateRoot": "0xacc72ed1c711dde9fc083d4f82b2c1331fed1995334491c2fb2626e19f4d1ed1",
-      "patchHashHex": "0x1c87901a0b7af1e5c44bd570df4de6c23367cca3efc3dfe0d7d2dd569f6593de"
+      "parentStateRoot": "0x46cbf055e67fab08f37b8232a66a4e9e4f5f90d2c794a029ee5baa9b41c893f4",
+      "patchHashHex": "0xa2fedeffdb061f6509d3ffc038cdd005fa1cf388a660f8be6dbe560d25ec5e36"
     },
     {
       "epoch": 5,
-      "accepted": true,
+      "accepted": false,
       "errorCode": null,
-      "beforeComposite": 0.041176470588235294,
-      "afterComposite": 0.047058823529411764,
-      "marginalDelta": 0.0058823529411764705,
-      "latencyMs": 276.617233,
+      "beforeComposite": 0.046153846153846156,
+      "afterComposite": 0.046153846153846156,
+      "marginalDelta": 0,
+      "latencyMs": 134.11062,
       "components": {
-        "exactRetrieval": 0.1568627450980392,
+        "exactRetrieval": 0.15384615384615385,
         "staleMemoryRejection": 0,
         "temporalUpdateCorrectness": 0,
         "compressionSurvival": 0,
         "routingAccuracy": 0,
         "latencyMs": 0
       },
-      "parentStateRoot": "0xcedfc753af842c88afbb08f8a7cff420d7a99d6f3e916ceeeaad2cec7f8d1ca8",
-      "patchHashHex": "0xe09fb67a2804fab8736c74d089ad099dd012955021ca55dbaabf3de46c429f9e"
+      "parentStateRoot": "0x46cbf055e67fab08f37b8232a66a4e9e4f5f90d2c794a029ee5baa9b41c893f4",
+      "patchHashHex": "0x8ad075d82b42415937437a47667d4a950fc81b672fc85dd3abc3a03730d9d6d4"
     }
   ],
   "summary": {
     "totalEpochs": 5,
-    "accepted": 5,
-    "rejected": 0,
+    "accepted": 3,
+    "rejected": 2,
     "genesisComposite": 0,
-    "finalComposite": 0.047058823529411764,
-    "netImprovement": 0.047058823529411764,
-    "avgScoreDelta": 0.009411764705882352,
-    "p50LatencyMs": 175.85339,
-    "p99LatencyMs": 176.19442,
-    "finalStateRoot": "0xcedfc753af842c88afbb08f8a7cff420d7a99d6f3e916ceeeaad2cec7f8d1ca8",
+    "finalComposite": 0.046153846153846156,
+    "netImprovement": 0.046153846153846156,
+    "avgScoreDelta": 0.009230769230769232,
+    "p50LatencyMs": 133.358585,
+    "p99LatencyMs": 134.11062,
+    "finalStateRoot": "0x46cbf055e67fab08f37b8232a66a4e9e4f5f90d2c794a029ee5baa9b41c893f4",
     "genesisStateRoot": "0x3e2a2ba2620a32f6593c46e01bafbd31a4e4c718ceef5603e2bd73f42013040f",
     "familyContribution": {
       "near_collision": 0,
       "temporal": 0,
       "long_horizon": 0,
       "routing": 0,
-      "exact": 0.1568627450980392,
+      "exact": 0.15384615384615385,
       "stale": 0,
       "current": 0
     },
     "finalComponents": {
-      "exactRetrieval": 0.1568627450980392,
+      "exactRetrieval": 0.15384615384615385,
       "staleMemoryRejection": 0,
       "temporalUpdateCorrectness": 0,
       "compressionSurvival": 0,
@@ -129,26 +129,26 @@
       "latencyMs": 0
     },
     "finalFamilyScores": {
-      "near_collision": 0.1568627450980392,
+      "near_collision": 0.15384615384615385,
       "temporal": 0,
       "long_horizon": 0
     },
     "finalHits": {
-      "near_collision": 8,
+      "near_collision": 4,
       "stale": 0,
       "current": 0,
       "long_horizon": 0,
       "relations": 0
     },
     "finalTotals": {
-      "near_collision": 51,
+      "near_collision": 26,
       "stale": 55,
       "current": 57,
       "long_horizon": 51,
       "relations": 128
     }
   },
-  "generatedAt": "2026-05-06T10:30:38.795Z",
+  "generatedAt": "2026-05-07T00:22:29.297Z",
   "corpusSources": {
     "near_collision": {
       "path": "benchmark/fixtures/near_collision/limit_nq_hotpotqa_v0.json",

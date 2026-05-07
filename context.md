@@ -22,7 +22,9 @@
 | Workspace build | **PASS** (`npm run build --workspaces --if-present`) |
 | Phase 3 eval perf gate | **p50 0.508 ms / p99 0.872 ms** on 10k fuzz; target is <10 ms / <50 ms |
 | Phase 3 E2E | **16/16 pass, 1 SKIP** (`BASE_RPC_URL` fork replay self-skip) |
-| Unit tests touched by Merkle/eval/reducer/scorer | **104/104 pass** (Merkle/eval/patch/reducer/live-epoch/legacy bonus/real scorer) |
+| Unit tests touched by Merkle/eval/reducer/scorer/model sidecar | **108/108 pass** (Merkle/eval/patch/reducer/live-epoch/legacy bonus/real scorer + local model sidecar) |
+| Local model-assisted eval unit/smoke path | **PASS** with deterministic hashing embedder; open-weight MiniLM gate is production-default unless `CORTEX_LOCAL_MODEL_EVAL=0` |
+| Local MiniLM calibration | **PASS** across long-horizon, near-collision, and temporal known-good patches (`Xenova/multi-qa-MiniLM-L6-cos-v1`; prewarm 378 texts; warm eval ~3.2-13.7 ms in calibration) |
 | Phase 1 E2E | **6/6 gates green** |
 | Phase 5 E2E | **17 pass, 1 SKIP** (fork receipt test needs `BASE_RPC_URL`) |
 | Phase 6 E2E | **46/46 pass**; no-uplift gate asserts `MERGE_MULTIPLIER_BPS = 10000` |
@@ -59,6 +61,8 @@ Records in `ops/V0_VALIDATION_LOG.md` and `ops/AUDIT_HANDOFF.md`. The anvil-fork
 
 ## Recent decisions (last 10)
 
+- 2026-05-06 — Added local model-assisted elevated-proposal eval. Consensus-safe structural scorer remains the base gate; the local gate loads `Xenova/multi-qa-MiniLM-L6-cos-v1` via `@huggingface/transformers` and checks actual memory-text retrieval.
+- 2026-05-07 — Hardened model gate semantics: production default is MiniLM no-regression (`CORTEX_LOCAL_MODEL_EVAL!=0`) after deterministic structural improvement; equality is accepted by default, positive delta can be required via `CORTEX_LOCAL_MODEL_MIN_DELTA`. Near-collision structural scoring now ignores irrelevant near-miss keys.
 - 2026-05-06 — Final review hardening: `makeRealMarginalEvaluator()` now scores raw state correctly; Phase 7 golden vectors use frozen Baseline A + real corpus; `cortex-server` can install real CortexBench eval via `CORTEX_REAL_EVAL=1` and fails closed otherwise; post-deploy smoke now reads real constant selectors.
 - 2026-05-06 — Phase 7 real baseline iteration completed. Winner: Baseline A. Real-corpus scorer in `experiments/harness/cortex-bench-eval.mjs` replaces synthetic SEED-XOR; baselines mine corpus-aware 4-word patches; freeze script in `scripts/freeze-core-version.mjs`; reports under `experiments/results/phase7-real-30/` (comparison + patch sensitivity + adversarial). End-to-end live-improvement script `scripts/e2e-real-improvement.mjs` exercises mine→submit→advance + stale-parent rebase + no-credit bogus.
 - 2026-05-06 — Protocol policy changed from end-of-epoch merge uplift to live mid-epoch state advances. Verified improvements update `liveStateRoot` immediately, stale-parent suggestions must rebase, and V0 uses no separate merge multiplier (`MERGE_MULTIPLIER_BPS=10000`).

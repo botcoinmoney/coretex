@@ -50,6 +50,8 @@ export interface EvalReport {
   /** Present only for the local-dev stub evaluator. */
   _stub?: boolean;
   families?: Record<string, number>;
+  localModel?: unknown;
+  errorCode?: string;
 }
 
 export interface EvalResult {

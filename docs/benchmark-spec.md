@@ -36,6 +36,59 @@ A patch is accepted iff:
 - `patchSize ≤ 4` words.
 - Evaluation reproducible byte-identically on a clean machine.
 
+## Local model-assisted eval for elevated proposals
+
+The deterministic score above is the consensus-safe structural gate: it checks
+whether CortexState encodes the right memory handles for the committed corpus.
+For elevated production proposals, operators may enable an additional empirical
+gate:
+
+```bash
+CORTEX_LOCAL_MODEL_EVAL=1
+CORTEX_LOCAL_MODEL=Xenova/multi-qa-MiniLM-L6-cos-v1
+```
+
+This runs a small local open-weight embedding model through
+`@huggingface/transformers`. The evaluator converts active CortexState memory
+handles back into candidate corpus texts, embeds each benchmark query and
+candidate memory text, and counts a hit when the correct memory ranks first.
+
+This layer answers the question the structural gate intentionally avoids:
+does the improved memory index make the right memory content more retrievable
+for an actual model? It is not a replacement for deterministic replay; it is a
+fast sidecar gate for proposals that already passed the consensus-safe scorer.
+
+In production the local model gate is on by default. Set
+`CORTEX_LOCAL_MODEL_EVAL=0` only for operator drills where no rewards can be
+issued. A production state advance must:
+
+- pass the deterministic structural CortexBench scorer;
+- pass the MiniLM no-regression gate across model-facing components;
+- satisfy `CORTEX_LOCAL_MODEL_MIN_DELTA` (default `0`, meaning equality is
+  acceptable and any positive improvement is accepted);
+- emit credits through the normal BOTCOIN receipt path only after both gates
+  pass.
+
+## Patch budget rationale
+
+V0 keeps the patch budget at **1-4 words**. This does limit the size of a
+single improvement, but that is intentional for production:
+
+- small patches make attribution clean: one state advance, one miner, one
+  measured delta;
+- small patches keep calldata, replay, and Merkle updates cheap;
+- small patches reduce scorer gaming by forcing miners to expose incremental
+  improvements instead of bundling many unrelated changes;
+- small patches reduce conflict and make stale-parent rebasing simple;
+- miners can still submit multiple improvements across the 24-hour epoch,
+  because live state advances happen mid-epoch.
+
+Larger "macro patches" should be a V1 feature only after testnet data shows
+the model gate remains reliable at larger word counts. The expected design is
+not simply "raise 4 to 16"; it is a separate macro-patch lane with stronger
+model eval, stricter non-regression, higher calldata limits, and separate
+attribution rules.
+
 ## Pass-rate targets
 
 | Miner type     | Target |

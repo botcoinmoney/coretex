@@ -10,7 +10,7 @@
       "beforeComposite": 0,
       "afterComposite": 0.023529411764705882,
       "marginalDelta": 0.023529411764705882,
-      "latencyMs": 142.985841,
+      "latencyMs": 142.761992,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -29,7 +29,7 @@
       "beforeComposite": 0.023529411764705882,
       "afterComposite": 0.047058823529411764,
       "marginalDelta": 0.023529411764705882,
-      "latencyMs": 140.726853,
+      "latencyMs": 141.640709,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -48,7 +48,7 @@
       "beforeComposite": 0.047058823529411764,
       "afterComposite": 0.07058823529411765,
       "marginalDelta": 0.023529411764705882,
-      "latencyMs": 134.228163,
+      "latencyMs": 137.29494,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -67,7 +67,7 @@
       "beforeComposite": 0.07058823529411765,
       "afterComposite": 0.09411764705882353,
       "marginalDelta": 0.023529411764705882,
-      "latencyMs": 133.86985,
+      "latencyMs": 133.671036,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -86,7 +86,7 @@
       "beforeComposite": 0.09411764705882353,
       "afterComposite": 0.11764705882352941,
       "marginalDelta": 0.023529411764705882,
-      "latencyMs": 141.834127,
+      "latencyMs": 139.583079,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -105,7 +105,7 @@
       "beforeComposite": 0.11764705882352941,
       "afterComposite": 0.1411764705882353,
       "marginalDelta": 0.023529411764705882,
-      "latencyMs": 131.68191,
+      "latencyMs": 137.791974,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -124,7 +124,7 @@
       "beforeComposite": 0.1411764705882353,
       "afterComposite": 0.16470588235294117,
       "marginalDelta": 0.023529411764705882,
-      "latencyMs": 144.515405,
+      "latencyMs": 138.830103,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -143,7 +143,7 @@
       "beforeComposite": 0.16470588235294117,
       "afterComposite": 0.18823529411764706,
       "marginalDelta": 0.023529411764705882,
-      "latencyMs": 139.543466,
+      "latencyMs": 137.731952,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -162,7 +162,7 @@
       "beforeComposite": 0.18823529411764706,
       "afterComposite": 0.21176470588235294,
       "marginalDelta": 0.023529411764705882,
-      "latencyMs": 135.753111,
+      "latencyMs": 136.489773,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -181,7 +181,7 @@
       "beforeComposite": 0.21176470588235294,
       "afterComposite": 0.23529411764705882,
       "marginalDelta": 0.023529411764705882,
-      "latencyMs": 132.582438,
+      "latencyMs": 148.688324,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -200,7 +200,7 @@
       "beforeComposite": 0.23529411764705882,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0.02352941176470591,
-      "latencyMs": 131.019568,
+      "latencyMs": 137.865004,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -219,7 +219,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.034568,
+      "latencyMs": 0.027819,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -238,7 +238,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.040225,
+      "latencyMs": 0.034077,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -257,7 +257,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.0373,
+      "latencyMs": 0.027627,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -276,7 +276,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.035019,
+      "latencyMs": 0.026726,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -295,7 +295,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.038433,
+      "latencyMs": 0.026286,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -314,7 +314,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.037851,
+      "latencyMs": 0.031062,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -333,7 +333,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.037702,
+      "latencyMs": 0.027578,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -352,7 +352,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.047145,
+      "latencyMs": 0.035469,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -371,7 +371,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.039544,
+      "latencyMs": 0.029451,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -390,7 +390,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.04339,
+      "latencyMs": 0.025854,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -409,7 +409,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.046934,
+      "latencyMs": 0.025796,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -428,7 +428,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.03645,
+      "latencyMs": 0.02946,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -447,7 +447,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.037742,
+      "latencyMs": 0.031914,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -466,7 +466,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.038251,
+      "latencyMs": 0.031363,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -485,7 +485,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.036149,
+      "latencyMs": 0.026616,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -504,7 +504,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.037793,
+      "latencyMs": 0.033846,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -523,7 +523,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.046535,
+      "latencyMs": 0.034998,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -542,7 +542,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.038883,
+      "latencyMs": 0.033627,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -561,7 +561,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.036521,
+      "latencyMs": 0.026336,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -580,7 +580,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.039595,
+      "latencyMs": 0.030521,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -599,7 +599,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.040637,
+      "latencyMs": 0.034197,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -618,7 +618,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.039345,
+      "latencyMs": 0.030191,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -637,7 +637,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.039515,
+      "latencyMs": 0.027017,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -656,7 +656,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.039995,
+      "latencyMs": 0.031853,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -675,7 +675,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.044551,
+      "latencyMs": 0.035018,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -694,7 +694,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.042018,
+      "latencyMs": 0.035449,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -713,7 +713,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.038823,
+      "latencyMs": 0.033846,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -732,7 +732,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.040275,
+      "latencyMs": 0.034387,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -751,7 +751,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.038984,
+      "latencyMs": 0.031904,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -770,7 +770,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.023142,
+      "latencyMs": 0.028878,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -789,7 +789,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.023902,
+      "latencyMs": 0.039804,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -808,7 +808,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.029661,
+      "latencyMs": 0.030521,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -827,7 +827,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.023212,
+      "latencyMs": 0.028619,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -846,7 +846,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.024443,
+      "latencyMs": 0.027398,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -865,7 +865,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.023773,
+      "latencyMs": 0.034278,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -884,7 +884,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.024293,
+      "latencyMs": 0.02891,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -903,7 +903,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.02142,
+      "latencyMs": 0.035179,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -922,7 +922,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.024333,
+      "latencyMs": 0.028158,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -941,7 +941,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.0217,
+      "latencyMs": 0.02934,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -960,7 +960,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.025946,
+      "latencyMs": 0.02865,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -979,7 +979,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.022911,
+      "latencyMs": 0.027297,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -998,7 +998,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.027738,
+      "latencyMs": 0.035008,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -1017,7 +1017,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.025505,
+      "latencyMs": 0.030582,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -1036,7 +1036,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.024033,
+      "latencyMs": 0.026567,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -1055,7 +1055,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.028469,
+      "latencyMs": 0.027678,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -1074,7 +1074,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.024714,
+      "latencyMs": 0.031022,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -1093,7 +1093,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.022512,
+      "latencyMs": 0.038624,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -1112,7 +1112,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.024334,
+      "latencyMs": 0.028148,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -1131,7 +1131,7 @@
       "beforeComposite": 0.25882352941176473,
       "afterComposite": 0.25882352941176473,
       "marginalDelta": 0,
-      "latencyMs": 0.023693,
+      "latencyMs": 0.043811,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -1152,8 +1152,8 @@
     "finalComposite": 0.25882352941176473,
     "netImprovement": 0.25882352941176473,
     "avgScoreDelta": 0.004313725490196079,
-    "p50LatencyMs": 0.038251,
-    "p99LatencyMs": 142.985841,
+    "p50LatencyMs": 0.031853,
+    "p99LatencyMs": 142.761992,
     "finalStateRoot": "0x1ac363fb41d78484d9a0648f0e30aa4cb86bba815a74bc7f212a0495c167898a",
     "genesisStateRoot": "0x7e704f76d6156405800141206cec1e6d7804daa8bf4e7da1542a1e431958504e",
     "familyContribution": {
@@ -1186,14 +1186,14 @@
       "relations": 0
     },
     "finalTotals": {
-      "near_collision": 51,
+      "near_collision": 26,
       "stale": 55,
       "current": 57,
       "long_horizon": 51,
       "relations": 128
     }
   },
-  "generatedAt": "2026-05-06T09:32:13.778Z",
+  "generatedAt": "2026-05-07T00:24:32.609Z",
   "corpusSources": {
     "near_collision": {
       "path": "benchmark/fixtures/near_collision/limit_nq_hotpotqa_v0.json",
