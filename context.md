@@ -52,6 +52,7 @@ Records in `ops/V0_VALIDATION_LOG.md` and `ops/AUDIT_HANDOFF.md`. The anvil-fork
 
 | # | What | Severity |
 |---|------|----------|
+| Production corpus hardening | Replace/augment synthetic Season 1 with source-grounded DACR/domain-library corpus and scorer-region tests; see `ops/CORETEX_CORPUS_PRODUCTION_HANDOFF.md` | **Hard blocker before paying CoreTex mainnet epochs** |
 | [#11](../../issues/11) | V1: collapse 5 vendored keccak copies to one canonical | Soft hardening |
 | BASE_RPC_URL CI secret | Wire to GitHub Actions secrets so fork tests run on every PR | Operator action |
 | Real Phase 8 testnet run | ≥100 epochs / ≥1k patches / ≥10 auditor reproductions / latch-unlatch ×2 | User operator task |
@@ -67,6 +68,7 @@ Records in `ops/V0_VALIDATION_LOG.md` and `ops/AUDIT_HANDOFF.md`. The anvil-fork
 
 - 2026-05-07 — CoreTex screener calibration hardened. Pass threshold now adapts to current baseline headroom and observed noise floor; default `workPolicyHash=0xd5bc0e0ce151f289f9cc46a3852b2154816d741c4a0adc1cd33f5e974dbbb774`.
 - 2026-05-07 — Season 1 corpus added for real dry-run testing: 10k records across DACR-shaped memory families, pinned by `experienceCorpusRoot=0x43ebf3457a51476adc5c563bbaace98af00106d7d28f92b5d7d29ec859fd8f7f`; large-corpus eval uses deterministic hidden shards.
+- 2026-05-07 — Production corpus hardening handoff added. Current Season 1 is correct scale/plumbing but still synthetic; paying CoreTex mainnet epochs require source-grounded corpus + scorer-region tests.
 - 2026-05-07 — Mining V4 lane added. `BotcoinMiningV4` keeps V3 stake/fund/claim mechanics and adds bounded lane/outcome work receipts. CoreTex verifier exports the matching work policy: screener pass 1x, state advance 3x/4x/6x/9x/12x by qualified screener passes since last state advance, pinned by `workPolicyHash`.
 - 2026-05-06 — Added local model-assisted elevated-proposal eval. Consensus-safe structural scorer remains the base gate; the local gate loads `Xenova/multi-qa-MiniLM-L6-cos-v1` via `@huggingface/transformers` and checks actual memory-text retrieval.
 - 2026-05-07 — Hardened model gate semantics: production default is MiniLM no-regression (`CORTEX_LOCAL_MODEL_EVAL!=0`) after deterministic structural improvement; equality is accepted by default, positive delta can be required via `CORTEX_LOCAL_MODEL_MIN_DELTA`. Near-collision structural scoring now ignores irrelevant near-miss keys.
