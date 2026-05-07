@@ -21,9 +21,9 @@ This handoff covers the V0 Cortex on-chain memory lane: state codec, Merkle root
   - Phase 3 E2E compares incremental roots directly against the old full-recompute reference.
 - Policy/doc alignment:
   - CoreTex rewards settle through `BotcoinMiningV4.submitWorkReceipt(...)`.
-  - Qualified screener passes earn exactly 1x current tier credits.
+  - Qualified screener passes earn exactly 1x current tier credits after clearing the adaptive current-root threshold.
   - Live state advances earn policy-weighted credits; the default starts at 3x and scales by qualified screener passes since the last state advance.
-  - The active work policy is pinned by `workPolicyHash`.
+  - The active work policy is pinned by `workPolicyHash`; default is `0xd5bc0e0ce151f289f9cc46a3852b2154816d741c4a0adc1cd33f5e974dbbb774`.
   - Non-overlapping improvements can all advance during the same 24h epoch; stale-parent candidates must rebase on the current `liveStateRoot`.
   - Phase 8 golden fixture no longer prints double-`0x` roots.
 - Final review hardening:
@@ -100,7 +100,8 @@ architecture blockers:
 - Confirm reducer multi-patch epochs accept non-overlapping patches sharing the same epoch parent root.
 - Confirm live `CortexStateAdvanced` events chain by parent root and seal into the final epoch root.
 - Confirm non-overlapping state advances during an epoch all earn credits, while stale-parent and no-marginal-improvement candidates earn none.
-- Confirm V4 screener-pass receipts earn exactly 1x tier credits and state-advance receipts earn the policy-derived work units.
+- Confirm V4 screener-pass receipts earn exactly 1x tier credits only after `scoreDelta >= requiredDeterministicDeltaPpm`, and state-advance receipts earn the policy-derived work units.
+- Confirm `requiredDeterministicDeltaPpm` is reproduced from baseline score, remaining score headroom, and `CORTEX_SCREENER_NOISE_FLOOR_PPM`.
 - Confirm `workPolicyHashByRulesVersion(0xC0)` equals `coreTexWorkPolicyHash(DEFAULT_CORETEX_WORK_POLICY)` unless an operator-published calibration has rotated it.
 - Confirm any policy rotation updates both on-chain bounds and the published CoreTex policy JSON before receipts are signed under the new hash.
 - Confirm local MiniLM no-regression is enforced for production state advances and that `CORTEX_LOCAL_MODEL_EVAL=0` is never used for paying epochs.

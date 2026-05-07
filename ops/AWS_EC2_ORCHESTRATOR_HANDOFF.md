@@ -34,6 +34,7 @@ Cortex is responsible for:
 - evaluating 1-4 word memory-index patches;
 - running deterministic CortexBench eval;
 - running the local MiniLM no-regression gate;
+- reproducing the adaptive screener threshold from baseline score, remaining score headroom, and the configured noise floor;
 - emitting / preparing state-advance data;
 - requesting a CoreTex V4 work receipt after a qualified screener pass or state advance.
 
