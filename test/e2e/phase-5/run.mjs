@@ -180,6 +180,19 @@ function startFakeSwcp(overrides = {}) {
         return;
       }
 
+      if (req.method === 'POST' && path === '/internal/sign-coretex-work-receipt') {
+        readBody().then((raw) => {
+          const body = JSON.parse(raw);
+          if (body.rulesVersion !== 0xC0 || body.lane !== 2 || ![1, 2].includes(body.outcome)) {
+            json(400, { error: 'bad-work-receipt', body });
+            return;
+          }
+          const sig = '0x' + createHash('sha256').update(JSON.stringify(body)).digest('hex') + '00'.repeat(32) + '1b';
+          json(200, { signature: sig, receipt: body });
+        });
+        return;
+      }
+
       json(404, { error: 'not-found', path });
     });
 
@@ -332,7 +345,7 @@ await (async () => {
 
     const required = ['lane','epoch','parentStateRoot','experienceCorpusRoot',
       'coreVersionHash','patchObjective','patchBudget','shardId','shardDescriptor',
-      'submissionFormat','creditsPerSolve'];
+      'submissionFormat','creditsPerSolve','workPolicyHash','screenerWorkUnitsBps'];
     for (const k of required) {
       assert(k in ch.body, `challenge missing field: ${k}`);
     }
@@ -360,7 +373,10 @@ await (async () => {
       assert(k in sub.body, `receipt missing §6 field: ${k}`);
     }
     assert(sub.body.rulesVersion === '0xC0', `rulesVersion must be 0xC0 got ${sub.body.rulesVersion}`);
-    assert(sub.body.docHash === psr, 'docHash must equal parentStateRoot');
+    assert(sub.body.receiptMode === 'v4', 'receiptMode must default to v4');
+    assert(sub.body.workOutcome === 1, 'screener submit must use outcome=1');
+    assert(sub.body.workUnitsBps === '10000', 'screener submit must earn 1x work units');
+    assert(sub.body.receipt.parentStateRoot === psr, 'work receipt parentStateRoot must equal challenge parentStateRoot');
   }, serverSkipReason);
 
   // ── Test 3: Cross-lane outstanding-challenge guard ───────────────────────────
@@ -454,8 +470,8 @@ await (async () => {
 
     // §6 mapping verification
     assert(sub.body.rulesVersion === '0xC0', `rulesVersion must be 0xC0`);
-    assert(sub.body.docHash === ch.body.parentStateRoot, 'docHash must equal parentStateRoot');
-    assert(sub.body.questionsHash === ch.body.experienceCorpusRoot, 'questionsHash must equal experienceCorpusRoot');
+    assert(sub.body.receipt.parentStateRoot === ch.body.parentStateRoot, 'parentStateRoot must equal challenge parentStateRoot');
+    assert(sub.body.receipt.workPolicyHash === ch.body.workPolicyHash, 'workPolicyHash must match challenge');
     // 0xC0 = 192 in decimal
     assert(parseInt(sub.body.rulesVersion, 16) === 192, '0xC0 must equal 192');
   }, serverSkipReason);
@@ -506,6 +522,24 @@ await (async () => {
     const signed = await post(port, '/internal/sign-cortex-receipt', signBody);
     assert(signed.status === 200 && typeof signed.body.signature === 'string', 'sign-cortex-receipt failed');
     assert(!signed.body.signature.includes('signing-key-not-here'), 'signing key must not appear in response');
+
+    const workBody = {
+      miner,
+      epochId: 812,
+      solveIndex: 0,
+      prevReceiptHash: '0x' + '00'.repeat(32),
+      lane: 2,
+      outcome: 1,
+      challengeId: '0x' + '11'.repeat(32),
+      parentStateRoot: '0x' + '33'.repeat(32),
+      artifactHash: '0x' + '66'.repeat(32),
+      worldSeed: '0x' + '77'.repeat(16),
+      rulesVersion: 0xC0,
+      workPolicyHash: '0x' + '88'.repeat(32),
+      workUnitsBps: '10000',
+    };
+    const workSigned = await post(port, '/internal/sign-coretex-work-receipt', workBody);
+    assert(workSigned.status === 200 && typeof workSigned.body.signature === 'string', 'sign-coretex-work-receipt failed');
   });
 
   // ── Test 8: sign-cortex-receipt rejects non-Cortex rulesVersion ──────────────

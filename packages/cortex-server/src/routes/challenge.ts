@@ -13,7 +13,9 @@
  *   shardId: "0x...",
  *   shardDescriptor: {...},
  *   submissionFormat: "cortex-patch-v0",
- *   creditsPerSolve: N
+ *   creditsPerSolve: N,
+ *   workPolicyHash: "0x...",
+ *   screenerWorkUnitsBps: "10000"
  * }
  *
  * Enforces single outstanding challenge across lanes (§6/§8):
@@ -35,10 +37,18 @@ import {
   getOutstandingChallenge,
   setOutstandingChallenge,
 } from '../internal-rpc-client.js';
-import { deriveShardIdHex, hexToBytes } from '@botcoin/cortex';
+import {
+  DEFAULT_CORETEX_WORK_POLICY,
+  OUTCOME_CORETEX_SCREENER_PASS,
+  computeCoreTexWorkUnitsBps,
+  coreTexWorkPolicyHash,
+  deriveShardIdHex,
+  hexToBytes,
+} from '@botcoin/cortex';
 
 /** Default challenge TTL: 10 minutes */
 const CHALLENGE_TTL_SECONDS = Number(process.env['CHALLENGE_TTL_SECONDS'] ?? 600);
+const DEFAULT_WORK_POLICY_HASH = coreTexWorkPolicyHash(DEFAULT_CORETEX_WORK_POLICY);
 
 /**
  * Canonical challenge-time shard derivation (Step 6 fix).
@@ -200,6 +210,8 @@ export function handleChallenge(db: CortexDb) {
         shardDescriptor,
         submissionFormat: 'cortex-patch-v0',
         creditsPerSolve: tierInfo.creditsPerSolve,
+        workPolicyHash: DEFAULT_WORK_POLICY_HASH,
+        screenerWorkUnitsBps: computeCoreTexWorkUnitsBps({ outcome: OUTCOME_CORETEX_SCREENER_PASS }).toString(),
         solveIndex,
         prevReceiptHash: receiptChain.prevReceiptHash.toLowerCase(),
         _expiresAt: expiresAt,

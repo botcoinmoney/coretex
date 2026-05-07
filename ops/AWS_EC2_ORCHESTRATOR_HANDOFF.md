@@ -4,7 +4,9 @@ Date: 2026-05-07
 
 This is the handoff for the AWS EC2 agent that will clone Cortex and latch it
 onto the existing Botcoin coordinator. Cortex is a sidecar mining lane: it does
-not replace the existing SWCP coordinator or `MiningContractV3`.
+not replace the existing SWCP coordinator. The mining contract should be the V4
+extension so CoreTex can issue lane-aware work receipts while preserving V3
+staking, funding, claims, and Trace receipts.
 
 ## Goal
 
@@ -24,7 +26,7 @@ The existing coordinator remains responsible for:
 - receipt-chain state;
 - rate limits;
 - EIP-712 receipt signing;
-- normal `MiningContractV3` settlement.
+- normal epoch settlement through the V3-compatible claim path.
 
 Cortex is responsible for:
 
@@ -33,7 +35,7 @@ Cortex is responsible for:
 - running deterministic CortexBench eval;
 - running the local MiniLM no-regression gate;
 - emitting / preparing state-advance data;
-- requesting a normal Cortex-discriminated receipt only after both eval gates pass.
+- requesting a CoreTex V4 work receipt after a qualified screener pass or state advance.
 
 ## Instance Sizing
 
@@ -112,7 +114,8 @@ Cortex expects internal support for:
 - miner receipt chain and `prevReceiptHash`;
 - shared outstanding challenge lock;
 - shared rate-limit budget;
-- `sign-cortex-receipt`;
+- `sign-coretex-work-receipt`;
+- optional `sign-cortex-receipt` only for explicitly configured V3 fallback drills;
 - clearing an outstanding challenge after successful submit.
 
 The internal shared secret must be private and never exposed through public
@@ -125,12 +128,12 @@ Create `/etc/botcoin-cortex.env`:
 ```bash
 BASE_RPC_URL=https://...
 
-BOTCOIN_MINING_V3_ADDRESS=0x...
+BOTCOIN_MINING_V4_ADDRESS=0x...
 CORTEX_REGISTRY_ADDRESS=0x...
-CORTEX_MERGE_BONUS_ADDRESS=0x...
 
 INTERNAL_RPC_URL=http://127.0.0.1:8080
 INTERNAL_RPC_SHARED_SECRET=...
+CORTEX_RECEIPT_MODE=v4
 
 CORTEX_DB_PATH=/var/lib/cortex/queue.db
 CORTEX_WORKER_POOL_SIZE=2
@@ -242,7 +245,7 @@ Do not expose `/internal/*`.
 
 1. Upgrade EC2 instance.
 2. Clone/build Cortex.
-3. Deploy `CortexRegistry` + legacy `CortexMergeBonus`.
+3. Deploy `BotcoinMiningV4` if the existing mainnet lane has not already migrated, then deploy `CortexRegistry`.
 4. Fill `/etc/botcoin-cortex.env`.
 5. Write `/var/lib/cortex/current-state.bin`.
 6. Run `node scripts/local-model-calibration.mjs`.
@@ -265,7 +268,7 @@ Do not expose `/internal/*`.
 
 - Enable signed receipts for 1-3 known miners only.
 - Low per-miner submit cap.
-- Confirm normal `MiningContractV3` receipt chain remains valid.
+- Confirm normal Trace receipts and CoreTex V4 work receipts share the same `nextIndex` / `lastReceiptHash` chain.
 - Confirm `CortexStateAdvanced` events chain by parent root.
 
 ### Stage 2 — Existing High-Stake Miners
@@ -292,9 +295,10 @@ validators do not need to replay from genesis forever.
 
 ```text
 During epoch N:
-  patch A passes -> liveStateRoot advances immediately
-  patch B passes -> liveStateRoot advances immediately
-  patch C fails  -> no state advance, no credits
+  patch A screener-passes -> 1x V4 work receipt
+  patch A advances state  -> liveStateRoot advances immediately, state-advance V4 receipt
+  patch B screener-passes -> 1x V4 work receipt
+  patch C fails           -> no receipt
 
 Every 100 epochs:
   emit full-state snapshot for faster validator sync

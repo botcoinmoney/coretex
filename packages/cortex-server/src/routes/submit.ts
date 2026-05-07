@@ -20,14 +20,12 @@
  * 2. Check rate-limit budget via /internal/rate-limit-budget.
  * 3. Decode patch via @botcoin/cortex decodePatch (validates wire format, parent root, budget).
  * 4. Run Core eval in worker pool (Phase 3 stub: always passes, _stub=true in report).
- * 5. On screener pass: request signed receipt from SWCP via /internal/sign-cortex-receipt.
- *    Receipt fields follow the §6 mapping:
- *      docHash = parentStateRoot
- *      questionsHash = experienceCorpusRoot
- *      constraintsHash = shardCommitment
- *      answersHash = patchHash (keccak256 of patch wire bytes)
- *      worldSeed = keccak(hiddenSeedCommit ‖ miner ‖ solveIndex ‖ parentStateRoot) [u128]
- *      rulesVersion = 0xC0 (192)
+ * 5. On qualified screener pass: request a signed V4 work receipt from SWCP
+ *    via /internal/sign-coretex-work-receipt. Production default:
+ *      lane = 2 (CoreTex)
+ *      outcome = 1 (screener pass)
+ *      workUnitsBps = 10000 (1x current tier credits)
+ *      workPolicyHash = coreTexWorkPolicyHash(DEFAULT_CORETEX_WORK_POLICY)
  * 6. Clear outstanding challenge.
  * 7. Return receipt to miner.
  *
@@ -43,15 +41,23 @@ import {
   bytesToHex,
   hexToBytes,
   deriveWorldSeedU128,
+  DEFAULT_CORETEX_WORK_POLICY,
+  LANE_CORETEX,
+  OUTCOME_CORETEX_SCREENER_PASS,
+  computeCoreTexWorkUnitsBps,
+  coreTexWorkPolicyHash,
+  evaluateCoreTexWorkQualification,
 } from '@botcoin/cortex';
 import type { CortexDb } from '../queue/sqlite.js';
 import {
   getRateLimitBudget,
   signCortexReceipt,
+  signCoreTexWorkReceipt,
   getEpochState,
   getMinerReceiptChain,
   clearOutstandingChallenge,
   type SignCortexReceiptRequest,
+  type SignCoreTexWorkReceiptRequest,
 } from '../internal-rpc-client.js';
 import { getPool } from '../workers/eval-pool.js';
 import fs from 'node:fs';
@@ -59,6 +65,8 @@ import path from 'node:path';
 
 /** rulesVersion for Cortex receipts (§6) */
 const CORTEX_RULES_VERSION = 0xC0; // 192
+const CORTEX_RECEIPT_MODE = process.env['CORTEX_RECEIPT_MODE'] ?? 'v4';
+const DEFAULT_WORK_POLICY_HASH = coreTexWorkPolicyHash(DEFAULT_CORETEX_WORK_POLICY);
 
 function extractMiner(req: IncomingMessage): string | null {
   const h = req.headers['x-miner'];
@@ -214,6 +222,15 @@ function writeDatasetArtifact(
     // Non-fatal: log and continue. Don't fail the receipt over storage.
     console.warn('[submit] dataset write failed:', err);
   }
+}
+
+function localModelDeltaPpm(report: { localModel?: unknown }): number {
+  const local = report.localModel;
+  if (typeof local === 'object' && local !== null && 'scoreDelta' in local) {
+    const value = Number((local as { scoreDelta?: unknown }).scoreDelta);
+    if (Number.isSafeInteger(value)) return value;
+  }
+  return 0;
 }
 
 export function handleSubmit(db: CortexDb) {
@@ -469,7 +486,28 @@ export function handleSubmit(db: CortexDb) {
         shardId.replace(/^0x/, '') + parentStateRoot.replace(/^0x/, ''),
       );
 
-      const receiptRequest: SignCortexReceiptRequest = {
+      const workQualification = evaluateCoreTexWorkQualification({
+        outcome: OUTCOME_CORETEX_SCREENER_PASS,
+        deterministicDeltaPpm: evalResult.report.scoreDelta,
+        localModelDeltaPpm: localModelDeltaPpm(evalResult.report),
+        parentMatchesLiveRoot: true,
+      });
+      if (!workQualification.qualified) {
+        db.updateStatus(submissionId, 'screener_fail', { rejectCode: workQualification.reason });
+        res.writeHead(422, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'work-qualification-fail',
+          reason: workQualification.reason,
+          evalReport: evalResult.report,
+          evalReportHash: evalResult.evalReportHash,
+        }));
+        return;
+      }
+      const screenerWorkUnitsBps = computeCoreTexWorkUnitsBps({
+        outcome: OUTCOME_CORETEX_SCREENER_PASS,
+      });
+
+      const legacyReceiptRequest: SignCortexReceiptRequest = {
         miner,
         epochId: epoch,
         solveIndex,
@@ -484,13 +522,31 @@ export function handleSubmit(db: CortexDb) {
         rulesVersion: CORTEX_RULES_VERSION,    // §6: 0xC0
       };
 
+      const workReceiptRequest: SignCoreTexWorkReceiptRequest = {
+        miner,
+        epochId: epoch,
+        solveIndex,
+        prevReceiptHash,
+        lane: LANE_CORETEX,
+        outcome: OUTCOME_CORETEX_SCREENER_PASS,
+        challengeId: shardId,
+        parentStateRoot,
+        artifactHash: evalResult.evalReportHash,
+        worldSeed,
+        rulesVersion: CORTEX_RULES_VERSION,
+        workPolicyHash: DEFAULT_WORK_POLICY_HASH,
+        workUnitsBps: screenerWorkUnitsBps.toString(),
+      };
+
       // 6. Request signature from SWCP (signing key NEVER held by cortex-server)
       let signedReceipt;
       try {
-        signedReceipt = await signCortexReceipt(receiptRequest);
+        signedReceipt = CORTEX_RECEIPT_MODE === 'v3'
+          ? await signCortexReceipt(legacyReceiptRequest)
+          : await signCoreTexWorkReceipt(workReceiptRequest);
       } catch (err) {
         db.updateStatus(submissionId, 'screener_pass', { rejectCode: 'E_SIGN_FAIL' });
-        console.error('[submit] sign-cortex-receipt failed:', err);
+        console.error('[submit] sign CoreTex receipt failed:', err);
         res.writeHead(503, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: 'signing-unavailable', detail: String(err) }));
         return;
@@ -521,7 +577,12 @@ export function handleSubmit(db: CortexDb) {
         constraintsHash: shardCommitment,
         answersHash: patchHash,
         rulesVersion: '0xC0',
+        receiptMode: CORTEX_RECEIPT_MODE,
+        workPolicyHash: DEFAULT_WORK_POLICY_HASH,
+        workUnitsBps: screenerWorkUnitsBps.toString(),
+        workOutcome: OUTCOME_CORETEX_SCREENER_PASS,
         signature: signedReceipt.signature,
+        receipt: signedReceipt.receipt,
         evalReport: evalResult.report,
         evalReportHash: evalResult.evalReportHash,
         submissionId,

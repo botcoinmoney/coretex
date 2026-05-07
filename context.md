@@ -11,7 +11,7 @@
   - **LoCoMo Path B applied** — LoCoMo removed; `SyntheticTemporalLoader` (Apache-2.0) + `MemoryAgentBenchLoader` (MIT) cover the temporal family. Issue #4 CLOSED.
   - **Multisig deferred to V1** — `CortexRegistry.ownerRevertEpoch(uint64)` is the V0 audit-window override (single owner). `voteRevertEpoch` 2-of-N wiring retained for V1 reactivation.
   - **Live mid-epoch state advances** — verified improvements emit `CortexStateAdvanced` and update the current epoch root immediately; the 24h epoch seals the ordered advance chain.
-  - **No separate merge uplift** — `MERGE_MULTIPLIER_BPS = 10000` (1.0×). Legacy `CortexMergeBonus` remains for compatibility only and should not be funded in V0 production.
+  - **Mining V4 work-credit lane** — CoreTex uses `BotcoinMiningV4.submitWorkReceipt(...)`: screener pass = 1x current tier credits; state advance = policy-weighted 3x+; active policy hash pins the exact verifier math.
   - **License: Apache-2.0** confirmed (patent grant matters for crypto/ML; ethos preserves redistribution rights).
   - **Repo: private** (per §13.1; reconsider at V0 launch).
 
@@ -33,6 +33,8 @@
 | Phase 8 E2E | **4 pass, 6 SKIP** (testnet/operator gates self-skip without RPC/live run) |
 | Phase 9 E2E | **3 pass, 5 SKIP** (mainnet-only gates self-skip) |
 | `forge test` (no-fork): `CortexPhase2` + `GasBudget` | **58/58 pass** (54 + 4) |
+| `/root/botcoin` V4 contract suite | **170/170 pass** (`forge test`), including **12/12** `BotcoinMiningV4Test` |
+| CoreTex work-unit policy tests | **9/9 pass**; default `workPolicyHash=0x4acfb75b9ee06a80762f5c8bb2561cc347fe461f1b7cff0ffa0ab9e60ff45877` |
 | `cortex-server` real eval boot smoke | **PASS** with `CORTEX_REAL_EVAL=1` on Node 22 |
 | `forge test --fork-url $BASE_RPC_URL` (real Base mainnet fork) | **6/7 pass, 1 SKIP** (Phase-3-dep log-replay) |
 | Anvil-fork-of-mainnet deploy via `forge create` | Both contracts deployed; bytecode verified |
@@ -61,6 +63,7 @@ Records in `ops/V0_VALIDATION_LOG.md` and `ops/AUDIT_HANDOFF.md`. The anvil-fork
 
 ## Recent decisions (last 10)
 
+- 2026-05-07 — Mining V4 lane added. `BotcoinMiningV4` keeps V3 stake/fund/claim mechanics and adds bounded lane/outcome work receipts. CoreTex verifier exports the matching work policy: screener pass 1x, state advance 3x/4x/6x/9x/12x by qualified screener passes since last state advance, pinned by `workPolicyHash`.
 - 2026-05-06 — Added local model-assisted elevated-proposal eval. Consensus-safe structural scorer remains the base gate; the local gate loads `Xenova/multi-qa-MiniLM-L6-cos-v1` via `@huggingface/transformers` and checks actual memory-text retrieval.
 - 2026-05-07 — Hardened model gate semantics: production default is MiniLM no-regression (`CORTEX_LOCAL_MODEL_EVAL!=0`) after deterministic structural improvement; equality is accepted by default, positive delta can be required via `CORTEX_LOCAL_MODEL_MIN_DELTA`. Near-collision structural scoring now ignores irrelevant near-miss keys.
 - 2026-05-06 — Final review hardening: `makeRealMarginalEvaluator()` now scores raw state correctly; Phase 7 golden vectors use frozen Baseline A + real corpus; `cortex-server` can install real CortexBench eval via `CORTEX_REAL_EVAL=1` and fails closed otherwise; post-deploy smoke now reads real constant selectors.

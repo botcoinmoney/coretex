@@ -4,11 +4,11 @@ This guide is for miners participating in the Botcoin Cortex lane. It is the pub
 
 ## What Cortex mining is
 
-Cortex mining proves: **I improved the shared memory substrate that future Botcoin agents read through Core — and I get paid through the same receipt path I already use when that improvement advances the live state.**
+Cortex mining proves: **I improved the shared memory substrate that future Botcoin agents read through Core — and I get paid through the same epoch reward pool miners already use.**
 
-The shared memory substrate is a **compact 1024-word on-chain-rooted memory codec** (≈32 KB active state). You propose a small patch to it (1–4 word changes per patch). Botcoin Core deterministically verifies that your patch improves the codec against an anchored benchmark and the current live state root, then the production elevated gate verifies that the patch does not regress local open-weight model retrieval. If both gates pass, the coordinator emits a `CortexStateAdvanced` checkpoint during the still-open 24-hour epoch and issues normal Botcoin credits for that state advance. There is **no separate merge multiplier** in V0 production.
+The shared memory substrate is a **compact 1024-word on-chain-rooted memory codec** (≈32 KB active state). You propose a small patch to it (1–4 word changes per patch). Botcoin Core deterministically verifies the patch against an anchored benchmark, the current live state root, and the miner's hidden shard. A qualified screener pass earns 1x work credit. If the same proposal also advances live state and passes the local open-weight model no-regression gate, it earns state-advance work credit according to the active CoreTex V4 policy.
 
-`BotcoinMiningV3` is **unchanged**. The SWCP challenge system is **unchanged**. Cortex is a parallel lane — same auth, same tier system, same RPC origin (`/v1/cortex/*`), same signing key.
+`BotcoinMiningV4` is a surgical extension of V3. V3 staking, epoch funding, finalization, claims, tiers, and Trace receipts are unchanged. V4 adds `submitWorkReceipt(...)` for lane-aware CoreTex work credits.
 
 ## How to mine
 
@@ -35,11 +35,13 @@ Response shape:
   "shardId": "0x...",
   "shardDescriptor": { "...": "..." },
   "submissionFormat": "patch_v0",
-  "creditsPerSolve": "<from getTier()>"
+  "creditsPerSolve": "<from getTier()>",
+  "workPolicyHash": "0x4acfb75b9ee06a80762f5c8bb2561cc347fe461f1b7cff0ffa0ab9e60ff45877",
+  "screenerWorkUnitsBps": "10000"
 }
 ```
 
-`creditsPerSolve` is your **current on-chain tier credits** — same value the SWCP lane returns. No separate Cortex tier table.
+`creditsPerSolve` is your **current on-chain tier credits**. `workUnitsBps` scales that tier amount: 10000 is 1x, 30000 is 3x, and so on.
 
 ```bash
 # 2. Compute a patch (using any LLM externally, or a heuristic, or a hand-crafted patch).
@@ -55,36 +57,38 @@ curl -s "$COORDINATOR/v1/cortex/submit" \
      -d "$(cat patch.json)"
 ```
 
-Response: a signed receipt that you submit on-chain via `BotcoinMiningV3.submitReceipt(...)` only after the patch advances the live Cortex state. Credits accrue through the same `claim()` math you already use.
+Response: a signed V4 work receipt for `BotcoinMiningV4.submitWorkReceipt(...)`. Credits accrue through the same epoch `claim()` math you already use.
 
-## Receipt field mapping (V0)
+## Work receipt (V4)
 
-Cortex receipts ride the **existing `BotcoinMining` EIP-712 domain** with `rulesVersion = 0xC0` as the Cortex discriminator. The contract validates the signature only — field labels are by convention. The on-chain mapping:
+CoreTex receipts use the existing `BotcoinMining` EIP-712 domain and a new V4 typed struct:
 
-| `BotcoinMining` field   | Cortex meaning                                                                |
-|-------------------------|-------------------------------------------------------------------------------|
-| `worldSeed` (uint128)   | u128 of `keccak(H_e ‖ miner ‖ solveIndex ‖ parentStateRoot)`                   |
-| `docHash`               | `parentStateRoot`                                                              |
-| `questionsHash`         | `experienceCorpusRoot`                                                         |
-| `constraintsHash`       | `shardCommitment`                                                              |
-| `answersHash`           | `patchHash`                                                                    |
-| `rulesVersion`          | `0xC0` (reserved Cortex value)                                                 |
+| Field | Meaning |
+|-------|---------|
+| `lane` | `2` for CoreTex |
+| `outcome` | `1` = screener pass, `2` = state advance |
+| `parentStateRoot` | Live root the patch was evaluated against |
+| `artifactHash` | Eval report hash for the accepted work |
+| `worldSeed` | u128 of `keccak(H_e ‖ miner ‖ solveIndex ‖ parentStateRoot)` |
+| `rulesVersion` | `0xC0` |
+| `workPolicyHash` | Hash of the exact published CoreTex work policy |
+| `workUnitsBps` | Tier-credit multiplier in basis points |
 
-Block explorers will see `doc/questions/constraints/answers` labels — that is the V0 soft-coupling. **V1 path**: `BotcoinMining.submitCortexReceipt(...)` sister function with explicit Cortex field names. Tracked in the [V1 roadmap](./v1-roadmap.md).
+The default work policy hash is `0x4acfb75b9ee06a80762f5c8bb2561cc347fe461f1b7cff0ffa0ab9e60ff45877`, reproduced by `coreTexWorkPolicyHash(DEFAULT_CORETEX_WORK_POLICY)` in `@botcoin/cortex`.
 
 ## Credits
 
-**State-advance credits**: a patch earns credits only when it is verified as a real marginal improvement on the current live state and is emitted as `CortexStateAdvanced`. A cheap screener pass by itself is not enough; if the patch does not improve the live state, it receives a stable rejection code and no receipt.
+**Screener pass credits**: a qualified screener pass earns exactly 1x current tier credits. It must beat the deterministic current-root threshold and, when model eval is enabled, show no local-model regression. It is not a free participation award: stale-parent, no-signal, near-collision, and stub-eval candidates fail closed.
 
-**Model no-regression gate**: production Cortex runs a local open-weight MiniLM retrieval check for elevated state advances. The deterministic scorer must improve, and the model-facing retrieval components must be equal or better than the parent state. If the model gate regresses, the patch does not advance state and no credits are issued.
+**State-advance credits**: a patch that advances live state earns at least 3x current tier credits. The default policy scales upward by qualified screener passes since the last state advance: `0 => 3x`, `25 => 4x`, `100 => 6x`, `250 => 9x`, `500 => 12x`. Operators can recalibrate these tiers by publishing a new policy hash and updating the V4 on-chain bounds.
 
-**No separate merge multiplier**: `MERGE_MULTIPLIER_BPS` is set to `10000` (1.0×, zero separate uplift). The old `CortexMergeBonus` rail is retained only as legacy/deployment compatibility and should not be funded for V0 production epochs.
+**Model no-regression gate**: production Cortex runs a local open-weight MiniLM retrieval check for elevated state advances. The deterministic scorer must improve, and the model-facing retrieval components must be equal or better than the parent state. If the model gate regresses, the patch does not advance state.
 
-**Worked example**: A miner with 200 SWCP solves + 20 Cortex state advances in epoch `e` earns:
+**Worked example**: a miner with 200 Trace solves, 40 CoreTex screener passes, and 3 CoreTex state advances at 3x in epoch `e` earns:
 
-- Their normal `(200 + 20) × tierCredits` from `BotcoinMiningV3.claim()`.
+- `(200 + 40 + 9) × tierCredits` from `BotcoinMiningV4.claim()`.
 
-The incentive is now direct: advance useful state early, earn normal credits. There is no extra end-of-epoch jackpot to withhold for.
+The incentive is deliberately not winner-takes-all. Screener work gets paid, but true live state advances are materially heavier and become more valuable as qualified attempts pile up without an advance.
 
 ## Cross-lane rules
 
@@ -116,7 +120,7 @@ Each epoch's finalization is **provisional for `CHALLENGE_WINDOW_SECONDS` (V0 de
 
 **This is not an on-chain fraud proof.** The EVM cannot re-run Botcoin Core. The audit window is a public delay during which divergence can be demonstrated and the multisig can act. **V1 path**: bond-based or ZK fraud proofs replace the multisig override. See [V1 roadmap](./v1-roadmap.md).
 
-State-advance receipts are settled through the existing `BotcoinMining.submitReceipt` path. The audit window protects the epoch state root; if the epoch is reverted, the coordinator replays from the last valid state and re-finalizes.
+CoreTex work receipts are settled through `BotcoinMiningV4.submitWorkReceipt(...)`. The audit window protects the epoch state root; if the epoch is reverted, the coordinator replays from the last valid state and re-finalizes.
 
 ## Filler / abuse rejection
 

@@ -13,6 +13,7 @@
  *   GET  /internal/miner-tier?miner=0x...
  *   GET  /internal/miner-receipt-chain?miner=0x...
  *   POST /internal/sign-cortex-receipt
+ *   POST /internal/sign-coretex-work-receipt
  *   GET  /internal/epoch
  *   GET  /internal/rate-limit-budget?miner=0x...&lane=cortex
  *   GET  /internal/outstanding-challenge?miner=0x...
@@ -49,6 +50,21 @@ export interface ReceiptSignerLike {
     answersHash: string;
     worldSeed: bigint;
     rulesVersion: number;
+  }): Promise<{ signature: string; receipt: unknown }>;
+  signWorkReceipt?(receiptData: {
+    miner: string;
+    epochId: bigint;
+    solveIndex: bigint;
+    prevReceiptHash: string;
+    lane: number;
+    outcome: number;
+    challengeId: string;
+    parentStateRoot: string;
+    artifactHash: string;
+    worldSeed: bigint;
+    rulesVersion: number;
+    workPolicyHash: string;
+    workUnitsBps: bigint;
   }): Promise<{ signature: string; receipt: unknown }>;
 }
 
@@ -304,6 +320,110 @@ export function mountCortexHandler(app: MinimalApp, deps: CortexHandlerDeps): vo
         sendJson(res, 200, signed);
       } catch (err) {
         console.error('[cortex-handler] sign-cortex-receipt failed:', err);
+        sendJson(res, 500, { error: 'signing-failed', detail: String(err) });
+      }
+    })();
+  });
+
+  // ── POST /internal/sign-coretex-work-receipt ────────────────────────────────
+  app.post('/internal/sign-coretex-work-receipt', (req, res) => {
+    void (async () => {
+      if (!checkAuth(req, res)) return;
+
+      if (!receiptSigner.signWorkReceipt) {
+        sendJson(res, 501, {
+          error: 'work-receipt-signer-unavailable',
+          message: 'BotcoinMiningV4 requires receiptSigner.signWorkReceipt in the SWCP coordinator.',
+        });
+        return;
+      }
+
+      let body: unknown;
+      try {
+        const raw = await readBody(req);
+        body = JSON.parse(raw);
+      } catch {
+        sendJson(res, 400, { error: 'invalid-json' });
+        return;
+      }
+
+      if (typeof body !== 'object' || body === null) {
+        sendJson(res, 400, { error: 'body-must-be-object' });
+        return;
+      }
+
+      const b = body as Record<string, unknown>;
+      const rulesVersion = Number(b['rulesVersion'] ?? 0);
+      if (rulesVersion !== 0xC0) {
+        sendJson(res, 400, {
+          error: 'invalid-rules-version',
+          expected: '0xC0',
+          got: `0x${rulesVersion.toString(16)}`,
+          message: 'sign-coretex-work-receipt only accepts rulesVersion=0xC0',
+        });
+        return;
+      }
+
+      try {
+        const miner = String(b['miner'] ?? '').toLowerCase();
+        if (!/^0x[0-9a-fA-F]{40}$/.test(miner)) {
+          sendJson(res, 400, { error: 'invalid miner address' });
+          return;
+        }
+        const solveIndex = BigInt(String(b['solveIndex'] ?? '0'));
+        const prevReceiptHash = String(b['prevReceiptHash'] ?? '0x' + '00'.repeat(32)).toLowerCase();
+        if (!/^0x[0-9a-fA-F]{64}$/.test(prevReceiptHash)) {
+          sendJson(res, 400, { error: 'invalid prevReceiptHash' });
+          return;
+        }
+
+        const chain = await receiptChain.getReceiptChain(miner);
+        if (solveIndex !== BigInt(chain.solveIndex) || prevReceiptHash !== chain.prevReceiptHash.toLowerCase()) {
+          sendJson(res, 409, {
+            error: 'stale-receipt-chain',
+            expected: { solveIndex: chain.solveIndex, prevReceiptHash: chain.prevReceiptHash.toLowerCase() },
+            got: { solveIndex: solveIndex.toString(), prevReceiptHash },
+          });
+          return;
+        }
+
+        const lane = Number(b['lane'] ?? 0);
+        const outcome = Number(b['outcome'] ?? 0);
+        if (lane !== 2 || (outcome !== 1 && outcome !== 2)) {
+          sendJson(res, 400, { error: 'invalid-coretex-lane-outcome', expected: { lane: 2, outcomes: [1, 2] } });
+          return;
+        }
+
+        const parentStateRoot = String(b['parentStateRoot'] ?? '').toLowerCase();
+        const artifactHash = String(b['artifactHash'] ?? '').toLowerCase();
+        const challengeId = String(b['challengeId'] ?? '').toLowerCase();
+        const workPolicyHash = String(b['workPolicyHash'] ?? '').toLowerCase();
+        for (const [field, value] of Object.entries({ parentStateRoot, artifactHash, challengeId, workPolicyHash })) {
+          if (!/^0x[0-9a-fA-F]{64}$/.test(value)) {
+            sendJson(res, 400, { error: `invalid ${field}` });
+            return;
+          }
+        }
+
+        const signed = await receiptSigner.signWorkReceipt({
+          miner,
+          epochId: BigInt(String(b['epochId'] ?? '0')),
+          solveIndex,
+          prevReceiptHash,
+          lane,
+          outcome,
+          challengeId,
+          parentStateRoot,
+          artifactHash,
+          worldSeed: BigInt(String(b['worldSeed'] ?? '0')),
+          rulesVersion,
+          workPolicyHash,
+          workUnitsBps: BigInt(String(b['workUnitsBps'] ?? '0')),
+        });
+
+        sendJson(res, 200, signed);
+      } catch (err) {
+        console.error('[cortex-handler] sign-coretex-work-receipt failed:', err);
         sendJson(res, 500, { error: 'signing-failed', detail: String(err) });
       }
     })();

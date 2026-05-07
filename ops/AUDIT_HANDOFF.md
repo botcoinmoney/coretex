@@ -20,8 +20,10 @@ This handoff covers the V0 Cortex on-chain memory lane: state codec, Merkle root
   - Cached eval still performs full reserved-bit validation on the result state.
   - Phase 3 E2E compares incremental roots directly against the old full-recompute reference.
 - Policy/doc alignment:
-  - V0 production disables the separate merge uplift: `MERGE_MULTIPLIER_BPS = 10000` (1.0x).
-  - Live state advances earn normal epoch credits; screener-only candidates do not.
+  - CoreTex rewards settle through `BotcoinMiningV4.submitWorkReceipt(...)`.
+  - Qualified screener passes earn exactly 1x current tier credits.
+  - Live state advances earn policy-weighted credits; the default starts at 3x and scales by qualified screener passes since the last state advance.
+  - The active work policy is pinned by `workPolicyHash`.
   - Non-overlapping improvements can all advance during the same 24h epoch; stale-parent candidates must rebase on the current `liveStateRoot`.
   - Phase 8 golden fixture no longer prints double-`0x` roots.
 - Final review hardening:
@@ -30,7 +32,7 @@ This handoff covers the V0 Cortex on-chain memory lane: state codec, Merkle root
   - `cortex-server` installs real CortexBench eval with `CORTEX_REAL_EVAL=1` and a packed state source for non-genesis roots; otherwise it fails closed unless explicitly in local stub mode.
   - Production state advances also pass the local MiniLM no-regression gate by default (`CORTEX_LOCAL_MODEL_EVAL != 0`): deterministic structural improvement first, then local model retrieval equal-or-better across model-facing components.
   - Near-collision structural scoring now counts only relevant records; irrelevant near-miss keys do not improve exact retrieval.
-  - `scripts/post-deploy-smoke.mjs` now reads deployed constants by selector and checks `MERGE_MULTIPLIER_BPS = 10000`.
+  - `scripts/post-deploy-smoke.mjs` now reads deployed constants by selector.
 
 ## Local validation completed
 
@@ -55,6 +57,8 @@ This handoff covers the V0 Cortex on-chain memory lane: state codec, Merkle root
 | `forge test --root contracts --no-match-contract CortexForkTest` | 58/58 PASS |
 | `CORTEX_REAL_EVAL=1 npx -y node@22 packages/cortex-server/dist/index.js` | PASS boot smoke; real evaluator installed |
 | `scripts/post-deploy-smoke.mjs` against fresh Anvil deploy | PASS; bytecode + constants checked |
+| `/root/botcoin: forge test` | 170/170 PASS, including 12/12 BotcoinMiningV4 work-credit tests |
+| `packages/cortex: node --test --test-reporter=spec ./test/unit/work-units.test.mjs` | 9/9 PASS |
 
 Phase 3 perf fixture: `test/e2e/phase-3/fixtures/perf-results.json`
 
@@ -96,6 +100,8 @@ architecture blockers:
 - Confirm reducer multi-patch epochs accept non-overlapping patches sharing the same epoch parent root.
 - Confirm live `CortexStateAdvanced` events chain by parent root and seal into the final epoch root.
 - Confirm non-overlapping state advances during an epoch all earn credits, while stale-parent and no-marginal-improvement candidates earn none.
+- Confirm V4 screener-pass receipts earn exactly 1x tier credits and state-advance receipts earn the policy-derived work units.
+- Confirm `workPolicyHashByRulesVersion(0xC0)` equals `coreTexWorkPolicyHash(DEFAULT_CORETEX_WORK_POLICY)` unless an operator-published calibration has rotated it.
+- Confirm any policy rotation updates both on-chain bounds and the published CoreTex policy JSON before receipts are signed under the new hash.
 - Confirm local MiniLM no-regression is enforced for production state advances and that `CORTEX_LOCAL_MODEL_EVAL=0` is never used for paying epochs.
 - Confirm near-collision scoring ignores irrelevant near-miss keys in both the structural and model-assisted gates.
-- Confirm `MERGE_MULTIPLIER_BPS = 10000` is consistent across contracts, reducer, docs, and test gates.

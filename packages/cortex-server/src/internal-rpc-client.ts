@@ -8,7 +8,8 @@
  * Endpoints (all on the SWCP side):
  *   GET  /internal/miner-tier?miner=0x...
  *   GET  /internal/miner-receipt-chain?miner=0x...
- *   POST /internal/sign-cortex-receipt
+ *   POST /internal/sign-coretex-work-receipt
+ *   POST /internal/sign-cortex-receipt (V3 fallback drills only)
  *   GET  /internal/epoch
  *   GET  /internal/rate-limit-budget?miner=0x...&lane=cortex
  *   GET  /internal/outstanding-challenge?miner=0x...
@@ -134,6 +135,27 @@ export interface SignCortexReceiptResponse {
   receipt: SignCortexReceiptRequest;
 }
 
+export interface SignCoreTexWorkReceiptRequest {
+  miner: string;
+  epochId: number;
+  solveIndex: number;
+  prevReceiptHash: string;
+  lane: number;
+  outcome: number;
+  challengeId: string;
+  parentStateRoot: string;
+  artifactHash: string;
+  worldSeed: string;
+  rulesVersion: number;
+  workPolicyHash: string;
+  workUnitsBps: string;
+}
+
+export interface SignCoreTexWorkReceiptResponse {
+  signature: string;
+  receipt: SignCoreTexWorkReceiptRequest;
+}
+
 // ─── Client API ───────────────────────────────────────────────────────────────
 
 export async function getMinerTier(miner: string): Promise<MinerTierResponse> {
@@ -166,4 +188,8 @@ export async function clearOutstandingChallenge(miner: string): Promise<{ ok: tr
 
 export async function signCortexReceipt(req: SignCortexReceiptRequest): Promise<SignCortexReceiptResponse> {
   return rpcPost<SignCortexReceiptResponse>('/internal/sign-cortex-receipt', req);
+}
+
+export async function signCoreTexWorkReceipt(req: SignCoreTexWorkReceiptRequest): Promise<SignCoreTexWorkReceiptResponse> {
+  return rpcPost<SignCoreTexWorkReceiptResponse>('/internal/sign-coretex-work-receipt', req);
 }
