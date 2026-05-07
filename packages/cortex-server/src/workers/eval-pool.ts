@@ -84,9 +84,9 @@ parentPort.on('message', (msg) => {
 
   // STUB report — _stub flag forces submit.ts production gate to reject.
   const report = {
-    scoreDelta: 1,
+    scoreDelta: 1000,
     baselineScore: 0,
-    candidateScore: 1,
+    candidateScore: 1000,
     protectedRegressionClean: true,
     stateCompliant: true,
     latencyMs,

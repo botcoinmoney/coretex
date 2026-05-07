@@ -31,7 +31,7 @@ Hard vetoes (override S): state-size violation; protected-regression drop.
 
 A patch is accepted iff:
 
-- `candidateScore > baselineScore + 0.005` (threshold).
+- `scoreDelta >= adaptiveThreshold`, where `adaptiveThreshold` is derived from current baseline score, remaining headroom, and the recent noise floor.
 - `protectedRegressionCount === 0`.
 - `patchSize ≤ 4` words.
 - Evaluation reproducible byte-identically on a clean machine.
@@ -114,9 +114,9 @@ with `rulesVersion = 0xC0`. `H_e` is revealed at epoch end. Auditors then re-der
 ~50 anchored items per family, frozen at corpus snapshot.
 
 - **At screener**: evaluated on a small RANDOM subset (cost optimization). The random subset is drawn deterministically from the epoch seed.
-- **At merge**: evaluated on the FULL set (hard veto). A patch that drops any single protected anchor is rejected regardless of weighted score.
+- **At live state advance**: evaluated on the FULL set (hard veto). A patch that drops any single protected anchor is rejected regardless of weighted score.
 
-The screener-vs-merge subset trick is the mechanism that prevents protected-regression exploitation: the screener subset is not known to the miner before evaluation.
+The screener-vs-state-advance subset trick is the mechanism that prevents protected-regression exploitation: the screener subset is not known to the miner before evaluation.
 
 ## Saturation alarm
 

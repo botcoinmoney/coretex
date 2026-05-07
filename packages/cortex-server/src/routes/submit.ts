@@ -233,6 +233,18 @@ function localModelDeltaPpm(report: { localModel?: unknown }): number {
   return 0;
 }
 
+function nonNegativeSafeIntFromEnv(name: string): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return 0;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`${name} must be a non-negative safe integer`);
+  }
+  return value;
+}
+
+const RECENT_SCREENER_NOISE_FLOOR_PPM = nonNegativeSafeIntFromEnv('CORTEX_SCREENER_NOISE_FLOOR_PPM');
+
 export function handleSubmit(db: CortexDb) {
   return (req: IncomingMessage, res: ServerResponse): void => {
     void (async () => {
@@ -489,6 +501,8 @@ export function handleSubmit(db: CortexDb) {
       const workQualification = evaluateCoreTexWorkQualification({
         outcome: OUTCOME_CORETEX_SCREENER_PASS,
         deterministicDeltaPpm: evalResult.report.scoreDelta,
+        baselineScorePpm: evalResult.report.baselineScore,
+        recentNoiseFloorPpm: RECENT_SCREENER_NOISE_FLOOR_PPM,
         localModelDeltaPpm: localModelDeltaPpm(evalResult.report),
         parentMatchesLiveRoot: true,
       });
@@ -498,6 +512,7 @@ export function handleSubmit(db: CortexDb) {
         res.end(JSON.stringify({
           error: 'work-qualification-fail',
           reason: workQualification.reason,
+          requiredDeterministicDeltaPpm: workQualification.requiredDeterministicDeltaPpm.toString(),
           evalReport: evalResult.report,
           evalReportHash: evalResult.evalReportHash,
         }));
@@ -580,6 +595,7 @@ export function handleSubmit(db: CortexDb) {
         receiptMode: CORTEX_RECEIPT_MODE,
         workPolicyHash: DEFAULT_WORK_POLICY_HASH,
         workUnitsBps: screenerWorkUnitsBps.toString(),
+        requiredDeterministicDeltaPpm: workQualification.requiredDeterministicDeltaPpm.toString(),
         workOutcome: OUTCOME_CORETEX_SCREENER_PASS,
         signature: signedReceipt.signature,
         receipt: signedReceipt.receipt,

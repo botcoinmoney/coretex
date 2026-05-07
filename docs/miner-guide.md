@@ -36,7 +36,7 @@ Response shape:
   "shardDescriptor": { "...": "..." },
   "submissionFormat": "patch_v0",
   "creditsPerSolve": "<from getTier()>",
-  "workPolicyHash": "0x4acfb75b9ee06a80762f5c8bb2561cc347fe461f1b7cff0ffa0ab9e60ff45877",
+  "workPolicyHash": "0xd5bc0e0ce151f289f9cc46a3852b2154816d741c4a0adc1cd33f5e974dbbb774",
   "screenerWorkUnitsBps": "10000"
 }
 ```
@@ -74,11 +74,11 @@ CoreTex receipts use the existing `BotcoinMining` EIP-712 domain and a new V4 ty
 | `workPolicyHash` | Hash of the exact published CoreTex work policy |
 | `workUnitsBps` | Tier-credit multiplier in basis points |
 
-The default work policy hash is `0x4acfb75b9ee06a80762f5c8bb2561cc347fe461f1b7cff0ffa0ab9e60ff45877`, reproduced by `coreTexWorkPolicyHash(DEFAULT_CORETEX_WORK_POLICY)` in `@botcoin/cortex`.
+The default work policy hash is `0xd5bc0e0ce151f289f9cc46a3852b2154816d741c4a0adc1cd33f5e974dbbb774`, reproduced by `coreTexWorkPolicyHash(DEFAULT_CORETEX_WORK_POLICY)` in `@botcoin/cortex`.
 
 ## Credits
 
-**Screener pass credits**: a qualified screener pass earns exactly 1x current tier credits. It must beat the deterministic current-root threshold and, when model eval is enabled, show no local-model regression. It is not a free participation award: stale-parent, no-signal, near-collision, and stub-eval candidates fail closed.
+**Screener pass credits**: a qualified screener pass earns exactly 1x current tier credits. It must beat the adaptive deterministic current-root threshold and, when model eval is enabled, show no local-model regression. The threshold is computed from current baseline score, remaining score headroom, and measured recent noise floor, then pinned by `workPolicyHash`. It is not a free participation award: stale-parent, below-threshold, near-collision, and stub-eval candidates fail closed.
 
 **State-advance credits**: a patch that advances live state earns at least 3x current tier credits. The default policy scales upward by qualified screener passes since the last state advance: `0 => 3x`, `25 => 4x`, `100 => 6x`, `250 => 9x`, `500 => 12x`. Operators can recalibrate these tiers by publishing a new policy hash and updating the V4 on-chain bounds.
 

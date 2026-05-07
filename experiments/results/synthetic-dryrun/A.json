@@ -10,7 +10,7 @@
       "beforeComposite": 0,
       "afterComposite": 0.023529411764705882,
       "marginalDelta": 0.023529411764705882,
-      "latencyMs": 133.379836,
+      "latencyMs": 224.505311,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -29,7 +29,7 @@
       "beforeComposite": 0.023529411764705882,
       "afterComposite": 0.047058823529411764,
       "marginalDelta": 0.023529411764705882,
-      "latencyMs": 133.025487,
+      "latencyMs": 213.187851,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -48,7 +48,7 @@
       "beforeComposite": 0.047058823529411764,
       "afterComposite": 0.07058823529411765,
       "marginalDelta": 0.023529411764705882,
-      "latencyMs": 130.186491,
+      "latencyMs": 210.607028,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -67,7 +67,7 @@
       "beforeComposite": 0.07058823529411765,
       "afterComposite": 0.09411764705882353,
       "marginalDelta": 0.023529411764705882,
-      "latencyMs": 129.07325,
+      "latencyMs": 205.446078,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -86,7 +86,7 @@
       "beforeComposite": 0.09411764705882353,
       "afterComposite": 0.11764705882352941,
       "marginalDelta": 0.023529411764705882,
-      "latencyMs": 134.688195,
+      "latencyMs": 209.824703,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0,
@@ -107,8 +107,8 @@
     "finalComposite": 0.11764705882352941,
     "netImprovement": 0.11764705882352941,
     "avgScoreDelta": 0.023529411764705882,
-    "p50LatencyMs": 133.025487,
-    "p99LatencyMs": 133.379836,
+    "p50LatencyMs": 210.607028,
+    "p99LatencyMs": 213.187851,
     "finalStateRoot": "0x755c8ee973dedf33d49e5ae6c43ac010bf6e4c64ff03ac0c9eb6531f10990050",
     "genesisStateRoot": "0x7e704f76d6156405800141206cec1e6d7804daa8bf4e7da1542a1e431958504e",
     "familyContribution": {
@@ -148,7 +148,7 @@
       "relations": 128
     }
   },
-  "generatedAt": "2026-05-07T00:22:25.639Z",
+  "generatedAt": "2026-05-07T07:24:16.113Z",
   "corpusSources": {
     "near_collision": {
       "path": "benchmark/fixtures/near_collision/limit_nq_hotpotqa_v0.json",
