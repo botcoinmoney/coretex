@@ -31,6 +31,7 @@ The existing coordinator remains responsible for:
 Cortex is responsible for:
 
 - loading the current packed 32 KB Cortex state;
+- loading the pinned Season 1 corpus fixture when `CORTEX_CORPUS_SEASON=season1`;
 - evaluating 1-4 word memory-index patches;
 - running deterministic CortexBench eval;
 - running the local MiniLM no-regression gate;

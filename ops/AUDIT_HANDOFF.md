@@ -29,6 +29,9 @@ This handoff covers the V0 Cortex on-chain memory lane: state codec, Merkle root
 - Final review hardening:
   - `makeRealMarginalEvaluator()` now scores raw Cortex state correctly.
   - Phase 7 golden vectors use frozen Baseline A and the real CortexBench corpus.
+  - Season 1 production dry-run corpus is committed at `benchmark/fixtures/season1/coretex_season1_10000.json`:
+    10,000 records, `experienceCorpusRoot=0x43ebf3457a51476adc5c563bbaace98af00106d7d28f92b5d7d29ec859fd8f7f`.
+  - Large-corpus eval uses deterministic hidden shards (`CORTEX_EVAL_ITEMS_PER_FAMILY=256` recommended) so V0 1-4 word patches remain measurable.
   - `cortex-server` installs real CortexBench eval with `CORTEX_REAL_EVAL=1` and a packed state source for non-genesis roots; otherwise it fails closed unless explicitly in local stub mode.
   - Production state advances also pass the local MiniLM no-regression gate by default (`CORTEX_LOCAL_MODEL_EVAL != 0`): deterministic structural improvement first, then local model retrieval equal-or-better across model-facing components.
   - Near-collision structural scoring now counts only relevant records; irrelevant near-miss keys do not improve exact retrieval.
@@ -106,3 +109,4 @@ architecture blockers:
 - Confirm any policy rotation updates both on-chain bounds and the published CoreTex policy JSON before receipts are signed under the new hash.
 - Confirm local MiniLM no-regression is enforced for production state advances and that `CORTEX_LOCAL_MODEL_EVAL=0` is never used for paying epochs.
 - Confirm near-collision scoring ignores irrelevant near-miss keys in both the structural and model-assisted gates.
+- Confirm all CoreTex operators have the exact Season 1 fixture and reproduce the same `experienceCorpusRoot` before any paying mainnet epoch uses `CORTEX_CORPUS_SEASON=season1`.

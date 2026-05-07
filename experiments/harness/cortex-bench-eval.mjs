@@ -66,12 +66,14 @@ const FIXTURE_PATHS = {
   long_horizon:   'benchmark/fixtures/long_horizon/memoryarena_v0.json',
 };
 
+const SEASON1_PATH = 'benchmark/fixtures/season1/coretex_season1_10000.json';
+
 /**
  * Load Phase 4 fixture events and convert to a uniform shape.
  * Falls back to empty arrays for any missing fixture so the harness still
  * runs against partial corpora.
  */
-export function loadRealCorpus({ repoRoot = REPO_ROOT } = {}) {
+export function loadRealCorpus({ repoRoot = REPO_ROOT, corpusSeason = process.env.CORTEX_CORPUS_SEASON ?? 'season0' } = {}) {
   const events = { near_collision: [], temporal: [], long_horizon: [] };
   const sources = {};
   for (const [family, relPath] of Object.entries(FIXTURE_PATHS)) {
@@ -95,6 +97,31 @@ export function loadRealCorpus({ repoRoot = REPO_ROOT } = {}) {
   // generator default), 20 protected.
   events.temporal = events.temporal.concat(synthesizeTemporalEvents(0, 60));
   sources.synthetic_temporal = { count: 60, license: 'Apache-2.0' };
+
+  if (corpusSeason === 'season1') {
+    const relPath = SEASON1_PATH;
+    const fp = resolve(repoRoot, relPath);
+    if (!existsSync(fp)) {
+      throw new Error(`CORTEX_CORPUS_SEASON=season1 but fixture is missing: ${relPath}`);
+    }
+    const raw = JSON.parse(readFileSync(fp, 'utf8'));
+    const seasonItems = raw.items ?? [];
+    for (const item of seasonItems) {
+      const family = item.family;
+      if (family !== 'near_collision' && family !== 'temporal' && family !== 'long_horizon') {
+        throw new Error(`season1 malformed item ${item.id}: unknown family ${family}`);
+      }
+      events[family].push(normaliseRaw(family, item));
+    }
+    sources.season1 = {
+      path: relPath,
+      count: seasonItems.length,
+      license: raw.license_spdx ?? 'Apache-2.0',
+      source: raw.source ?? 'Botcoin DACR-shaped synthetic memory corpus',
+      corpus_hash: raw.corpus_hash,
+      experienceCorpusRoot: raw.experience_corpus_root,
+    };
+  }
 
   return { events, sources };
 }
@@ -166,6 +193,7 @@ const RELATIONS_END = 799;
 export function scoreState(state, corpus, opts = {}) {
   const latencyMs = opts.latencyMs ?? 0;
   const words = state.words;
+  const scoredEvents = selectScoredEvents(corpus.events, opts);
 
   const activeMemIds = new Set();
   const revokedMemIds = new Set();
@@ -201,10 +229,10 @@ export function scoreState(state, corpus, opts = {}) {
     if (weight > 0) filledRel++;
   }
 
-  const nc = corpus.events.near_collision.filter((e) => e.relevant !== false);
-  const lh = corpus.events.long_horizon;
-  const stale = corpus.events.temporal.filter((e) => e.isStaleTruth === true);
-  const current = corpus.events.temporal.filter((e) => e.isStaleTruth === false);
+  const nc = scoredEvents.near_collision.filter((e) => e.relevant !== false);
+  const lh = scoredEvents.long_horizon;
+  const stale = scoredEvents.temporal.filter((e) => e.isStaleTruth === true);
+  const current = scoredEvents.temporal.filter((e) => e.isStaleTruth === false);
 
   let ncHits = 0;
   for (const e of nc) if (activeKeyIds.has(eventIdToKey128(e.id))) ncHits++;
@@ -249,6 +277,30 @@ export function scoreState(state, corpus, opts = {}) {
     hits: { near_collision: ncHits, stale: staleRej, current: curMatched, long_horizon: lhCov, relations: filledRel },
     totals: { near_collision: nc.length, stale: stale.length, current: current.length, long_horizon: lh.length, relations: totalRel },
   };
+}
+
+export function selectScoredEvents(events, opts) {
+  const limit = Number(opts.evalItemsPerFamily ?? 0);
+  const shardId = String(opts.shardId ?? '');
+  if (!Number.isSafeInteger(limit) || limit < 0) throw new RangeError('evalItemsPerFamily must be a non-negative safe integer');
+  if (limit === 0 || shardId.length === 0) return events;
+  return {
+    near_collision: selectByShard(events.near_collision, shardId, limit),
+    temporal: selectByShard(events.temporal, shardId, limit),
+    long_horizon: selectByShard(events.long_horizon, shardId, limit),
+  };
+}
+
+function selectByShard(items, shardId, limit) {
+  if (items.length <= limit) return items;
+  return items
+    .map((item) => ({
+      item,
+      key: createHash('sha256').update(`${shardId}:${item.id}`).digest('hex'),
+    }))
+    .sort((a, b) => a.key.localeCompare(b.key) || a.item.id.localeCompare(b.item.id))
+    .slice(0, limit)
+    .map((x) => x.item);
 }
 
 // Compatibility alias.

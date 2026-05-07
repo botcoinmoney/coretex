@@ -32,7 +32,11 @@ const SCALE = 1_000_000;
 
 interface BenchModule {
   loadRealCorpus(opts: { repoRoot: string }): unknown;
-  scoreState(state: CortexState, corpus: unknown): { composite: number; familyScores?: Record<string, number> };
+  scoreState(
+    state: CortexState,
+    corpus: unknown,
+    opts?: { shardId?: string; evalItemsPerFamily?: number },
+  ): { composite: number; familyScores?: Record<string, number> };
 }
 
 interface FrozenConfig {
@@ -57,8 +61,9 @@ export async function installRealEvaluatorFromEnv(): Promise<void> {
   const corpus = bench.loadRealCorpus({ repoRoot });
   const frozen = readFrozen(repoRoot);
   const threshold = Number(process.env['CORTEX_SCORE_THRESHOLD'] ?? 0);
+  const evalItemsPerFamily = nonNegativeSafeIntFromEnv('CORTEX_EVAL_ITEMS_PER_FAMILY');
 
-  setEvaluator(async (input) => evaluateWithRealBench(input, bench, corpus, frozen, repoRoot, threshold));
+  setEvaluator(async (input) => evaluateWithRealBench(input, bench, corpus, frozen, repoRoot, threshold, evalItemsPerFamily));
   installed = true;
   console.log('[cortex-server] real CortexBench evaluator installed');
 }
@@ -70,6 +75,7 @@ async function evaluateWithRealBench(
   frozen: FrozenConfig,
   repoRoot: string,
   threshold: number,
+  evalItemsPerFamily: number,
 ): Promise<EvalResult> {
   const t0 = performance.now();
   const patchBytes = hexToBytes(input.patchHex.startsWith('0x') ? input.patchHex : `0x${input.patchHex}`);
@@ -82,13 +88,17 @@ async function evaluateWithRealBench(
     return rejectedReport(input, patchHash, parentRoot, 'E01_PARENT_STATE_SOURCE_MISMATCH', performance.now() - t0);
   }
 
-  const baseScore = bench.scoreState(parentState, corpus);
+  const scoreOpts = {
+    shardId: input.shardId,
+    ...(evalItemsPerFamily > 0 ? { evalItemsPerFamily } : {}),
+  };
+  const baseScore = bench.scoreState(parentState, corpus, scoreOpts);
   const applied = applyPatch(parentState, patch);
   if (!applied.ok) {
     return rejectedReport(input, patchHash, parentRoot, applied.code, performance.now() - t0, baseScore.composite);
   }
 
-  const candidateScore = bench.scoreState(applied.state, corpus);
+  const candidateScore = bench.scoreState(applied.state, corpus, scoreOpts);
   const delta = candidateScore.composite - baseScore.composite;
   const scoreDelta = Math.round(delta * SCALE);
   const newStateRoot = bytesToHex(merkleizeState(applied.state));
@@ -116,6 +126,16 @@ async function evaluateWithRealBench(
 
   const evalReportHash = reportHash(input, report, patchHash, newStateRoot);
   return { pass, report, evalReportHash, newStateRoot };
+}
+
+function nonNegativeSafeIntFromEnv(name: string): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return 0;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`${name} must be a non-negative safe integer`);
+  }
+  return value;
 }
 
 async function runLocalModelEval(

@@ -74,6 +74,6 @@
       "expectedReportHash": "0x7ca4dbbc8678b91778b6ef8814b81e603c37ebcb4aa3c6ea1f4c38a738e57205"
     }
   ],
-  "generatedAt": "2026-05-07T07:24:25.781Z",
+  "generatedAt": "2026-05-07T09:45:57.870Z",
   "notes": "Replay any triple: decode the patch wire, applyPatch to the parent, merkleize, compare to expectedNewStateRoot. Recompute the canonical JSON above and keccak256 it; compare to expectedReportHash."
 }

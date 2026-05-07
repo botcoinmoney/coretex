@@ -12,6 +12,7 @@
   - **Multisig deferred to V1** — `CortexRegistry.ownerRevertEpoch(uint64)` is the V0 audit-window override (single owner). `voteRevertEpoch` 2-of-N wiring retained for V1 reactivation.
   - **Live mid-epoch state advances** — verified improvements emit `CortexStateAdvanced` and update the current epoch root immediately; the 24h epoch seals the ordered advance chain.
   - **Mining V4 work-credit lane** — CoreTex uses `BotcoinMiningV4.submitWorkReceipt(...)`: screener pass = 1x current tier credits; state advance = policy-weighted 3x+; active policy hash pins the exact verifier math.
+  - **Season 1 corpus added** — production dry-runs use a committed 10,000-record DACR-shaped corpus with deterministic hidden-shard eval. `experienceCorpusRoot=0x43ebf3457a51476adc5c563bbaace98af00106d7d28f92b5d7d29ec859fd8f7f`.
   - **License: Apache-2.0** confirmed (patent grant matters for crypto/ML; ethos preserves redistribution rights).
   - **Repo: private** (per §13.1; reconsider at V0 launch).
 
@@ -29,6 +30,7 @@
 | Phase 5 E2E | **17 pass, 1 SKIP** (fork receipt test needs `BASE_RPC_URL`) |
 | Phase 6 E2E | **46/46 pass**; no-uplift gate asserts `MERGE_MULTIPLIER_BPS = 10000` |
 | Phase 7 E2E (real corpus) | **8/8 pass** with `CORTEX_E2E_LIVE=1`; 7/7 + 1 SKIP without anvil. Includes baseline validity, 1M-patch adversarial fuzz under `EXTENDED_FUZZ=1`, and live mine→submit→advance over Anvil |
+| Season 1 corpus scale smoke | **PASS**; 10,000 records, hidden shard 256/family, 4-word long-horizon patch Δ=4688 ppm vs 500 ppm gate |
 | Real Phase 7 winner pick | **Baseline A** across seeds 1, 7, 42, 99, 1234. `coreVersionHash` + `genesisStateRoot` frozen in `ops/v0-frozen.json` |
 | Phase 8 E2E | **4 pass, 6 SKIP** (testnet/operator gates self-skip without RPC/live run) |
 | Phase 9 E2E | **3 pass, 5 SKIP** (mainnet-only gates self-skip) |
@@ -64,6 +66,7 @@ Records in `ops/V0_VALIDATION_LOG.md` and `ops/AUDIT_HANDOFF.md`. The anvil-fork
 ## Recent decisions (last 10)
 
 - 2026-05-07 — CoreTex screener calibration hardened. Pass threshold now adapts to current baseline headroom and observed noise floor; default `workPolicyHash=0xd5bc0e0ce151f289f9cc46a3852b2154816d741c4a0adc1cd33f5e974dbbb774`.
+- 2026-05-07 — Season 1 corpus added for real dry-run testing: 10k records across DACR-shaped memory families, pinned by `experienceCorpusRoot=0x43ebf3457a51476adc5c563bbaace98af00106d7d28f92b5d7d29ec859fd8f7f`; large-corpus eval uses deterministic hidden shards.
 - 2026-05-07 — Mining V4 lane added. `BotcoinMiningV4` keeps V3 stake/fund/claim mechanics and adds bounded lane/outcome work receipts. CoreTex verifier exports the matching work policy: screener pass 1x, state advance 3x/4x/6x/9x/12x by qualified screener passes since last state advance, pinned by `workPolicyHash`.
 - 2026-05-06 — Added local model-assisted elevated-proposal eval. Consensus-safe structural scorer remains the base gate; the local gate loads `Xenova/multi-qa-MiniLM-L6-cos-v1` via `@huggingface/transformers` and checks actual memory-text retrieval.
 - 2026-05-07 — Hardened model gate semantics: production default is MiniLM no-regression (`CORTEX_LOCAL_MODEL_EVAL!=0`) after deterministic structural improvement; equality is accepted by default, positive delta can be required via `CORTEX_LOCAL_MODEL_MIN_DELTA`. Near-collision structural scoring now ignores irrelevant near-miss keys.

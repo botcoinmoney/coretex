@@ -10,7 +10,7 @@
       "beforeComposite": 0,
       "afterComposite": 0.010717703349282296,
       "marginalDelta": 0.010717703349282296,
-      "latencyMs": 210.558832,
+      "latencyMs": 136.608491,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0.03636363636363636,
@@ -29,7 +29,7 @@
       "beforeComposite": 0.010717703349282296,
       "afterComposite": 0.021435406698564592,
       "marginalDelta": 0.010717703349282296,
-      "latencyMs": 208.710409,
+      "latencyMs": 136.682382,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0.07272727272727272,
@@ -48,7 +48,7 @@
       "beforeComposite": 0.021435406698564592,
       "afterComposite": 0.03205741626794258,
       "marginalDelta": 0.010622009569377991,
-      "latencyMs": 200.043403,
+      "latencyMs": 130.888754,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0.09090909090909091,
@@ -67,7 +67,7 @@
       "beforeComposite": 0.03205741626794258,
       "afterComposite": 0.042775119617224876,
       "marginalDelta": 0.010717703349282293,
-      "latencyMs": 202.695252,
+      "latencyMs": 132.248554,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0.12727272727272726,
@@ -86,7 +86,7 @@
       "beforeComposite": 0.042775119617224876,
       "afterComposite": 0.053492822966507175,
       "marginalDelta": 0.0107177033492823,
-      "latencyMs": 205.849432,
+      "latencyMs": 134.124154,
       "components": {
         "exactRetrieval": 0,
         "staleMemoryRejection": 0.16363636363636364,
@@ -107,8 +107,8 @@
     "finalComposite": 0.053492822966507175,
     "netImprovement": 0.053492822966507175,
     "avgScoreDelta": 0.010698564593301435,
-    "p50LatencyMs": 205.849432,
-    "p99LatencyMs": 208.710409,
+    "p50LatencyMs": 134.124154,
+    "p99LatencyMs": 136.608491,
     "finalStateRoot": "0x613980c9bb41ad6fb9a1d9186db5127f2d98b161a510fb0183aeb1abd7abf060",
     "genesisStateRoot": "0xb335e2298e3a8c1e0338408464734a42291faf3f738de395917ac50466cc40d4",
     "familyContribution": {
@@ -148,7 +148,7 @@
       "relations": 128
     }
   },
-  "generatedAt": "2026-05-07T07:24:23.474Z",
+  "generatedAt": "2026-05-07T09:45:55.860Z",
   "corpusSources": {
     "near_collision": {
       "path": "benchmark/fixtures/near_collision/limit_nq_hotpotqa_v0.json",

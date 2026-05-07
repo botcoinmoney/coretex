@@ -1,6 +1,6 @@
 # Baselines comparison — CortexBench V0 (synthetic-dryrun)
 
-Seed: 42  Epochs per baseline: 5  Generated: 2026-05-07T07:24:23.482Z
+Seed: 42  Epochs per baseline: 5  Generated: 2026-05-07T09:45:55.867Z
 
 > Scorer: real CortexBench V0 (`experiments/harness/cortex-bench-eval.mjs`)
 > driven by Phase 4 fixtures + the Apache-2.0 SyntheticTemporalLoader.
@@ -8,11 +8,11 @@ Seed: 42  Epochs per baseline: 5  Generated: 2026-05-07T07:24:23.482Z
 
 | Baseline | Name | Genesis | Final | Net Δ | Accepted/Total | p50 latency (ms) | Final state root |
 |----------|------|--------:|------:|------:|---------------:|-----------------:|------------------|
-| A ★ | empty | 0.0000 | 0.1176 | 0.1176 | 5/5 | 210.61 | 0x755c8ee973dedf... |
-| B | dense-key | 0.0000 | 0.0462 | 0.0462 | 3/5 | 214.66 | 0xda712cc9ea32b0... |
-| C | binary-key | 0.0000 | 0.0462 | 0.0462 | 3/5 | 208.01 | 0x30ba3ec84214b7... |
-| D | late-interaction | 0.0000 | 0.0462 | 0.0462 | 3/5 | 209.18 | 0x46cbf055e67fab... |
-| E | revocation-aware | 0.0000 | 0.0535 | 0.0535 | 5/5 | 205.85 | 0x613980c9bb41ad... |
+| A ★ | empty | 0.0000 | 0.1176 | 0.1176 | 5/5 | 132.33 | 0x755c8ee973dedf... |
+| B | dense-key | 0.0000 | 0.0462 | 0.0462 | 3/5 | 134.72 | 0xda712cc9ea32b0... |
+| C | binary-key | 0.0000 | 0.0462 | 0.0462 | 3/5 | 135.22 | 0x30ba3ec84214b7... |
+| D | late-interaction | 0.0000 | 0.0462 | 0.0462 | 3/5 | 133.11 | 0x46cbf055e67fab... |
+| E | revocation-aware | 0.0000 | 0.0535 | 0.0535 | 5/5 | 134.12 | 0x613980c9bb41ad... |
 
 ## Winner
 

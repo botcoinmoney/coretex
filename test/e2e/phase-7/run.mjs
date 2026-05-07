@@ -215,5 +215,20 @@ if (process.env.CORTEX_E2E_LIVE === '1') {
   check('e2e-real-improvement', null, 'set CORTEX_E2E_LIVE=1 to spin anvil and verify mine→submit→advance');
 }
 
+// T9. Season 1 corpus scale smoke. The committed 10k-record corpus should be
+// mineable at the V0 1-4 word patch scale when evaluated through a deterministic
+// hidden shard instead of diluting each patch over the entire corpus.
+{
+  const r = spawnSync('node', ['scripts/season1-shard-smoke.mjs'], {
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      CORTEX_CORPUS_SEASON: 'season1',
+      CORTEX_EVAL_ITEMS_PER_FAMILY: process.env.CORTEX_EVAL_ITEMS_PER_FAMILY ?? '256',
+    },
+  });
+  check('season1-10k-shard-smoke', r.status === 0);
+}
+
 console.log(`\n[phase-7] ${pass} pass, ${fail} fail, ${skip} skip`);
 exit(fail === 0 ? 0 : 1);

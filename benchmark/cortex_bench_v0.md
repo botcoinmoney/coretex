@@ -214,6 +214,26 @@ Loaders must produce the same root from the same fixture regardless of machine.
 
 Implementation: `benchmark/generators/corpus_root.ts`.
 
+### Corpus Seasons
+
+V0 keeps the small Phase 4 fixture corpus as `season0` for calibration and
+regression tests. Production dry-runs use `season1`, a committed 10,000-record
+corpus at `benchmark/fixtures/season1/coretex_season1_10000.json`.
+
+Season 1 includes DACR-shaped memory records across near-collision retrieval,
+current/stale temporal facts, long-horizon project memory, multi-hop project
+facts, user preference drift, tool/API facts, and domain-library facts. The
+fixture pins:
+
+- `record_count = 10000`
+- `corpus_hash = 0b33e6ab681f3c6f0fb3b3322e70256ab65380c6d4865ea6a6adb1a4fcb01494`
+- `experience_corpus_root = 0x43ebf3457a51476adc5c563bbaace98af00106d7d28f92b5d7d29ec859fd8f7f`
+
+Large corpora are evaluated through deterministic hidden shards
+(`CORTEX_EVAL_ITEMS_PER_FAMILY`, default operator recommendation: 256). This
+keeps 1-4 word patches measurable while preserving the full corpus root for
+validator consistency.
+
 ---
 
 ## 9. File Map
@@ -233,6 +253,7 @@ Implementation: `benchmark/generators/corpus_root.ts`.
 | `benchmark/fixtures/temporal/memoryagentbench_v0.json` | Frozen temporal corpus (≥50 protected) |
 | `benchmark/fixtures/near_collision/limit_nq_hotpotqa_v0.json` | Frozen near-collision corpus (≥50 protected) |
 | `benchmark/fixtures/long_horizon/memoryarena_v0.json` | Frozen long-horizon corpus (≥50 protected) |
+| `benchmark/fixtures/season1/coretex_season1_10000.json` | Season 1 production dry-run corpus (10k records) |
 | `test/e2e/phase-4/run.mjs` | Full Phase 4 E2E gate |
 
 ---
