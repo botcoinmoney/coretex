@@ -1,35 +1,75 @@
-# Botcoin Cortex
+# Botcoin CoreTex
 
-On-chain memory codec mining lane for Botcoin. Miners propose tiny patches to a compact, on-chain-rooted 1024-word memory codec; Botcoin Core verifies improvements deterministically against an anchored benchmark; screener-pass patches earn credits at the miner's current on-chain tier through the same `BotcoinMining.submitReceipt` path; merged patches earn a multiplier-uplift bonus through a peer `CortexMergeBonus` contract that mirrors the existing `BonusEpoch` pattern.
+This repository is the canonical implementation/spec home for the CoreTex 1024-word binary substrate and the off-chain Botcoin CoreTex client bundle.
 
-`BotcoinMiningV3` is **unchanged**. The SWCP challenge system is **unchanged**. Cortex is a parallel lane behind the same coordinator origin (`/v1/cortex/*`) and pays through the existing receipt path.
+Current private remote:
 
-## Status
+```text
+https://github.com/botcoinmoney/cortex.git
+```
 
-Pre-V0. See [`context.md`](./context.md) for current state and [`ORGANISM_CORTEX_STATE_PLAN.md`](./ORGANISM_CORTEX_STATE_PLAN.md) for the canonical phase-by-phase plan.
+The repo should be renamed to `CoreTex` or `coretex` before public release. Until then, use **CoreTex** in product/docs language and keep lowercase `cortex` only for real paths, package names, commands, endpoints, and compatibility identifiers.
 
-| Phase | Status | Tag |
-|-------|--------|-----|
-| 0 — Research lock + benchmark anchoring | landed | `v0.phase-0` |
-| 1 — Cortex state spec + TS reference impl | landed | `v0.phase-1` |
-| 2 — CortexRegistry + CortexMergeBonus contracts | landed | `v0.phase-2` |
-| 3 — Botcoin Core decoder package | landed (perf follow-up [#8](../../issues/8)) | `v0.phase-3` |
-| 4 — CortexBench V0 | landed | `v0.phase-4` |
-| 5 — Mining API + cortex-server + cortex-handler | landed | `v0.phase-5` |
-| 6 — Reducer + credit mechanics | landed | `v0.phase-6` |
-| 1 — Python second reference impl + cross-impl parity | landed | `v0.phase-1b` |
-| 7 — Pre-release local iteration (baselines A–E) | scaffolded | `v0.phase-7` |
-| 8 — Testnet Cortex organism | scaffolded | `v0.phase-8` |
-| 9 — Mainnet sidecar launch | scaffolded | `v0.phase-9` |
+Production v4 planning authority lives in:
 
-> Phases 7/8/9 ship the harnesses and release artifacts; **running** the baselines, deploying to testnet, and launching mainnet are user actions documented in [`experiments/PHASE_7_USER_ACTIONS.md`](./experiments/PHASE_7_USER_ACTIONS.md), [`ops/testnet/USER_ACTIONS.md`](./ops/testnet/USER_ACTIONS.md), and [`ops/USER_ACTIONS_MAINNET.md`](./ops/USER_ACTIONS_MAINNET.md).
+```text
+/root/botcoin/CORETEX_V4_PRODUCTION_PLAN.md
+```
 
-Tracked open blockers: see [issues](../../issues). Notably **issue #4** — LoCoMo CC-BY-NC-4.0 license decision needed before Phase 4 temporal-family loader ships.
+Use this repo for:
 
-## Wiring
+- `/root/cortex/docs/state-spec.md`
+- `/root/cortex/specs/cortex_state_v0.md`
+- `/root/cortex/specs/cortex_schema_v0.json`
+- `/root/cortex/specs/packing_spec_v0.md`
+- `/root/cortex/specs/merkleization_spec_v0.md`
+- `/root/cortex/specs/patch_format_v0.md`
+- `/root/cortex/packages/cortex/src/state/`
+- `/root/cortex/packages/cortex-py/cortex_py/`
+- benchmark fixtures and harnesses referenced by the v4 production plan
 
-To stand up Cortex against an existing Botcoin coordinator, follow [`instructions.md`](./instructions.md). The plug-and-play guarantee: `packages/cortex-handler` exports a single mountable router the existing coordinator imports in **one line** plus signing-key wiring. No edits to existing SWCP routes. No edits to `BotcoinMiningV3`.
+Do not use old CoreTex planning/runbook docs as production authority where they conflict with the v4 production plan. In particular, stale audit-window, multisig-override, merge-bonus, and separate handoff language has been superseded.
 
-## License
+The production architecture is intentionally small:
 
-Apache-2.0. See [`LICENSE`](./LICENSE).
+1. on-chain temporal-map substrate root and transition log
+2. off-chain Botcoin CoreTex client bundle with substrate decoder, corpus data, evaluator, manifests, and 0.6B reranker
+3. on-chain staking/credit/reward contract lane
+
+No separate data-availability artifact system is part of the canonical v4 extension plan.
+
+## Local Production Development
+
+This workspace is not the production coordinator server. For implementation and testing:
+
+```text
+/root/botcoin                    contracts and v4 production plan
+/root/cortex                     substrate, client bundle, evaluator, corpus, replay
+/root/botcoin-coordinator-live   cloned live coordinator for additive wiring patches
+```
+
+Run the 0.6B reranker locally for now. Production will run the same pinned model through the coordinator host or an internal evaluator process.
+
+## Coordinator Wiring
+
+The production coordinator integration must be additive:
+
+- preserve existing V3 challenge/submit routes
+- add CoreTex screen/evaluate/substrate/client-bundle routes
+- keep signing authority in the coordinator
+- keep the evaluator without signing keys
+- make coordinator cache a convenience, not a replay dependency
+
+See [`instructions.md`](./instructions.md) for the concrete local wiring checklist.
+
+## Git and Secret Discipline
+
+Commit and push frequently to the private CoreTex remote after coherent green slices. Do not leave important work only in a local dirty tree.
+
+Treat this repo as future-public:
+
+- never commit `.env`, private keys, wallet material, API tokens, authenticated RPC URLs, cookies, production logs, database dumps, private user data, or coordinator signing secrets
+- commit model/corpus files only when redistribution, license, and size policy are acceptable
+- otherwise commit manifests, hashes, and deterministic fetch/install instructions
+- inspect `git diff --cached` before every commit and run a secret scan when available
+- if a secret is staged or committed, stop and rotate it before pushing
