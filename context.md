@@ -57,3 +57,10 @@ npm run test:unit --workspace @botcoin/cortex
 Both passed after the replay/bundle slice; unit suite was 181 passing tests at that checkpoint.
 They also passed after the production corpus loader slice; unit suite was 184 passing tests at that checkpoint.
 They also passed after the coordinator endpoint contract slice; unit suite was 188 passing tests at that checkpoint.
+
+2026-05-08 final hardening notes:
+
+- Reconciled the production corpus scorer with the launch bundle profile: 20% near-collision retrieval, 20% temporal current/stale, 20% long-horizon compression, 20% relation/multi-hop routing, 10% codebook compression, 10% local model agreement proxy.
+- Added a unit guard proving a complete structural state scores 1.0 under that 20/20/20/20/10/10 profile.
+- Fixed `test/e2e/phase-4/run.mjs` for pure ESM execution by removing a stale inline `require`.
+- Full e2e was run with Node 22.22.2 via `npx -y node@22 scripts/run-e2e.mjs`; phases 1 through 9 passed, with environment-gated network/mainnet tests skipped where required env vars were absent.

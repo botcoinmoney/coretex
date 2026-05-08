@@ -14,8 +14,11 @@ changes, and file contents under `/root/cortex`.
 
 Captured 2026-05-08, before any orchestrator-driven changes land.
 
-- HEAD: `81aac77` docs: hand off production corpus hardening
-- Working tree: clean as of capture; will diff each wake.
+- HEAD: `c59d5fe` coretex: add coordinator endpoint contract
+  (was `81aac77` at audit start; commits since: `3882830`,
+  `e551544`, `012d7e2`, `c59d5fe`)
+- Working tree: only `ongoing_audit.md` itself is dirty (auditor
+  artifact).
 
 ### Layout snapshot
 
@@ -371,6 +374,438 @@ modules import each other consistently (no obvious cycle), the
 `dist/index.js` import path used by tests matches `package.json`
 `main` (`dist/index.js`).
 
+### Wake 3 (2026-05-08 23:29)
+
+HEAD advanced to `012d7e2`. Three commits since baseline `81aac77`:
+
+```
+3882830 coretex: refresh production repo guidance
+e551544 coretex: add v4 client bundle replay tooling
+012d7e2 coretex: add deterministic corpus evaluator
+```
+
+Working tree adds (uncommitted):
+
+```
+?? packages/cortex/src/coordinator/endpoints.ts
+?? packages/cortex/test/unit/coordinator-endpoints.test.mjs
+M  packages/cortex/src/index.ts                 (+1: re-export coordinator/endpoints)
+```
+
+#### Commit `3882830` — production repo guidance
+
+Matches plan §15 cleanup: deletes `ORGANISM_CORTEX_STATE_PLAN.md`
+(751 lines) and `ops/CORETEX_CORPUS_PRODUCTION_HANDOFF.md` (225
+lines), refreshes `README.md`, `instructions.md`, `.gitignore`.
+Also commits `ongoing_audit.md` itself (376 lines as of wake 2) —
+intentional, this file is now part of the repo handoff. Note:
+`context.md` rewrite landed in the *next* commit, not this one;
+not a finding, just an order observation.
+
+#### Commit `e551544` — v4 client bundle replay tooling
+
+This commit incorporated three of my prior findings:
+
+- ✅ **Wake 1 #1 RESOLVED**: `replay/v4.ts:55` adds
+  `'NO_MATCHING_PATCH_EVENT_FOR_ADVANCE'` to the error-code union;
+  `replay/v4.ts:101-108` returns it explicitly when no patch event
+  matches the advance event's patchHash, replacing the old fallback
+  that quietly used the wrong event.
+- ✅ **Wake 1 #3 RESOLVED**: `bundle/index.ts:58` adds
+  `snapshots: readonly BundleFile[]` to the manifest type;
+  `bundle/index.ts:72` adds `snapshotFiles?: readonly string[]` to
+  `BuildBundleManifestOptions`; `bundle/index.ts:165` builds them;
+  `bundle/index.ts:186` includes them in `verifyBundleManifest`.
+  Bundle now declares packed-state snapshots needed for replay
+  bootstrap (plan §11).
+- ✅ **Wake 2 #1 RESOLVED**: `replay-cli.ts:86-108` replaces the
+  single-shot watch with a polling loop. New flags
+  `--poll-interval-ms` (default 12 s), `--once`, `--cortex-state`.
+  Tracks block cursor, advances forward, reuses
+  `replayV4TransitionsFromLogs` (new batch helper at
+  `replay/v4.ts:157-186`) so that consecutive transitions in one
+  poll window apply in order with intermediate state advance.
+  This is the plan §11 auto-detect behavior.
+
+Other notes on this commit:
+
+- New batch helper `replayV4TransitionsFromLogs` (`replay/v4.ts:157-186`)
+  walks ordered advance events, reapplies each with its matching
+  patch event, and returns the final packed state. Required for
+  the polling watch loop to be correct across multi-advance windows.
+- `bundle/index.ts:96-101` `DEFAULT_EVALUATOR_FILES` now includes
+  `eval/index.ts`, `eval/corpus.ts`, `replay/v4.ts`, `replay-cli.ts`
+  — bundle hash now binds the evaluator/replay surface area, so
+  any drift in those files invalidates the bundle hash deterministically.
+
+Carry-forward open findings:
+
+- 🟡 **Wake 1 #2 STILL OPEN**: `replay/v4.ts:194-220` ABI decoder
+  still assumes `CoretexPatchBytes(... bytes32 receiptHash, bytes
+  compactPatchBytes)` and `CortexStateAdvanced(... bytes32 parent,
+  bytes32 newRoot, bytes32 patchHash, bytes32 artifactHash, uint16
+  wordCount)`. The replay-v4 unit test at lines 60-83 confirms this
+  is internally consistent with the encoder, but the V4 Solidity
+  contract is not in this repo — must be cross-checked when the
+  contract emit slice lands. The auditor cannot verify this from
+  /root/cortex alone.
+- 🟡 **Wake 2 #2 STILL OPEN**: `replay-cli.ts:56-108` — no
+  `--bundle-hash` / `--core-version-hash` provenance flag. Parent
+  state and bundle metadata are still trusted by content. Suggest
+  adding `--bundle-manifest <path> --expected-bundle-hash <0x...>`
+  that asserts manifest's `bundleHash` matches the on-chain
+  `coreVersionHash` for the parent root.
+
+#### Commit `012d7e2` — deterministic corpus evaluator
+
+`packages/cortex/src/eval/corpus.ts` (321 lines) implements plan §8
+`scoreProductionState` with three families and reads three
+substrate regions:
+
+- `corpus.ts:124-133` reads MemoryIndex shards at words
+  `32 + s*8` for `s in [0, 44)` — correct per substrate region map.
+- `corpus.ts:135-143` reads RetrievalKeys shards at words
+  `384 + s*8` for `s in [0, 36)` — correct per region map.
+- `corpus.ts:146-148` reads Relations region at words `[672..799]`
+  — matches plan §9 substrate-region mention.
+- `corpus.ts:281-285` deterministic shard selection via
+  `sha256(${shardId}:${event.id})` — replay determinism (plan §8
+  "same query pack" / "same evaluator code hash").
+- `corpus.ts:75-114` `loadProductionCorpus` rejects mismatched
+  `corpus_hash` (line 86-87) and mismatched `experience_corpus_root`
+  (line 100-102). Matches plan §11 "tampered corpus/model/substrate
+  data fails hash checks."
+- `corpus.ts:48-73` `ProductionCorpusLoader` integrates as a
+  `CorpusLoader` (existing shape), so the legacy eval pipeline can
+  consume the new scorer.
+
+🔴 **NEW FINDING — composite-weight inconsistency**:
+
+`corpus.ts:166-172` composite formula:
+
+```
+0.30 * exactRetrieval         // near_collision family
++ 0.15 * staleMemoryRejection // temporal stale
++ 0.15 * temporalUpdateCorrectness // temporal current
++ 0.30 * compressionSurvival  // long_horizon family
++ 0.05 * routingAccuracy      // relations region
+```
+
+Sum = **0.95**, not 1.0. `clamp01` (corpus.ts:166, 311-313)
+silently caps to 1.0 from above and 0 from below, but the composite
+will never exceed 0.95 even on a perfect score. That alone is a
+bug — a "perfect" production state is mathematically capped at 95%.
+
+Compare against:
+
+- **plan §9** intended weights: 20% near-collision retrieval,
+  20% temporal current/stale, 20% long-horizon compression survival,
+  20% relation/multi-hop routing, 10% codebook compression, 10%
+  local model agreement. **Sum = 100%** across **6 categories**.
+- **bundle/index.ts:110-117** `DEFAULT_PROFILE.familyWeights`
+  matches the plan exactly: 20/20/20/20/10/10 across the same six
+  categories.
+- **corpus.ts:166-172** scorer implements **5 categories** (no
+  codebook, no local-model-agreement) with 30/15/15/30/5
+  weighting. Routing collapses from 20% → 5%; near-collision and
+  long-horizon both get inflated to 30%; temporal split into
+  stale+current at 15+15=30% (vs plan's 20% combined).
+
+This is a substantive deviation. Two paths to reconcile:
+
+1. **Implement to the plan**: extend `ProductionCorpusEvent` with
+   codebook and local-model-agreement signals, reweight to
+   20/20/20/20/10/10, and ensure the family list in
+   `bundle/index.ts:110-117` is consumed by the scorer instead of
+   being a decorative profile.
+2. **Update the plan and the bundle**: if the launch surface is
+   intentionally the 5-category 30/15/15/30/5 shape (because the
+   substrate doesn't yet have a codebook region or local-model
+   harness), update plan §9, drop codebook/local-model-agreement
+   from `DEFAULT_PROFILE`, and renormalize to sum to 1.0.
+
+Either way, the **bundle's declared profile must match the actual
+scorer** so that bundle-hash drift catches changes to reward law.
+Right now the bundle's family weights are decorative — the scorer
+hardcodes its own. Flag to orchestrator: pick a path before the
+next state-advance receipt is signed under this scorer.
+
+Additional minor: `corpus.ts:165` defines a separate
+`longHorizon = (compressionSurvival * 0.30 + routingAccuracy * 0.05) / 0.35`
+just for the per-family score (not the composite). It's correct as
+a normalized family score, but combined with the composite-weight
+mismatch above it makes the relationship between family scores and
+composite hard to reason about. Doc-level comment in source would
+help future readers.
+
+#### Working-tree slice — coordinator endpoints
+
+`packages/cortex/src/coordinator/endpoints.ts` (148 lines) declares
+the production CoreTex HTTP surface from plan §12. Strong:
+
+- endpoints.ts:19-30 `CORETEX_ENDPOINTS` lists all ten plan §12
+  endpoints with exact method+path. Test at
+  `test/unit/coordinator-endpoints.test.mjs:11-22` asserts the list
+  matches the plan order/wording exactly.
+- endpoints.ts:57-124 `handleCoreTexCoordinatorRoute` returns
+  `{handled: false}` for non-coretex paths
+  (endpoints.ts:122-123) — additive integration with existing V3
+  router (plan §12 "Existing V3 endpoints stay unchanged").
+- endpoints.ts:130-132 `notConfigured` returns 503 for missing
+  handlers — fail-closed for unwired routes.
+- endpoints.ts:44-55 `CoreTexCoordinatorDataSource` is a fully
+  injected interface — no signing keys live here. Honors plan §12
+  "Coordinator remains the only receipt signer. The CoreTex
+  evaluator must not hold signing keys."
+- Tests cover happy path (substrate-current, substrate-by-root,
+  patch-by-hash, screen/evaluate POST), the additive miss
+  (`/v1/challenge` returns `{handled:false}`), and the fail-closed
+  503 for an unconfigured handler.
+
+Concerns (minor):
+
+- endpoints.ts has no auth/rate-limit hook. Plan §12 says "Rate
+  limiting and RPC guards modeled on current coordinator patterns" —
+  appropriate that the host coordinator owns those, but a hook
+  point on `CoreTexCoordinatorDataSource` (e.g.,
+  `authorize?(req): boolean`) would make integration cleaner. Not
+  a blocker; the host can wrap `handleCoreTexCoordinatorRoute`.
+- endpoints.ts:64-66 `health` returns
+  `{ ok: true, service: 'coretex' }` if no handler. That's a
+  liveness check, not a readiness check — a real `health` should
+  also verify that bundle/corpus paths are reachable. Suggest
+  the host always supplies a `health` handler.
+- The screen/evaluate routes accept any body shape. The receipt
+  schema split between screener (plan §4 — base credits, no
+  state mutation) and state-advance (plan §5 — full eval, full
+  receipt) is enforced downstream by the coordinator's receipt
+  signer, not here. That's correct given plan §12's "additive
+  integration only" framing, but worth flagging that the cortex
+  package could expose typed request/response schemas later.
+
+#### Forge build
+
+Skipped: still no `.sol` files under /root/cortex.
+
+#### Commit hygiene
+
+Three coherent checkpoints in 4 minutes — vastly improved cadence
+over wakes 0–2. The doc cleanup, replay tooling, and corpus
+evaluator are clean atomic slices. Coordinator slice should
+checkpoint as `coretex: add coordinator endpoint contract` once it
+stabilizes.
+
+### Wake 4 (2026-05-08 23:41)
+
+HEAD advanced to `c59d5fe`. One commit since wake 3:
+
+```
+c59d5fe coretex: add coordinator endpoint contract
+```
+
+Commit content (`git show --stat c59d5fe`): exactly the working-tree
+slice audited in wake 3 — `packages/cortex/src/coordinator/endpoints.ts`
+(+147), `packages/cortex/src/index.ts` (+1 re-export),
+`packages/cortex/test/unit/coordinator-endpoints.test.mjs` (+86),
+`context.md` (+3). Commit-message naming convention exactly matches
+the suggestion logged in wake 3. No additional changes; wake 3's
+coordinator-endpoint audit stands.
+
+Carry-forward open findings (none resolved this wake):
+
+- 🟡 Wake 1 #2: V4 ABI decoder cross-check still pending external
+  contract slice (not in /root/cortex).
+- 🟡 Wake 2 #2: replay-cli.ts still has no `--bundle-hash` /
+  `--core-version-hash` provenance flag.
+- 🔴 Wake 3 (TOP PRIORITY): `eval/corpus.ts:166-172` composite
+  weighting still 0.95-cap and 5-category 30/15/15/30/5, while
+  `bundle/index.ts:110-117` `DEFAULT_PROFILE.familyWeights` is
+  6-category 20/20/20/20/10/10 per plan §9. Bundle profile remains
+  decorative until reconciled. **No state-advance receipt should be
+  signed under this scorer** without reconciling first.
+
+Working tree only has `ongoing_audit.md` (auditor artifact, not
+committed by orchestrator). No new files to audit.
+
+#### Forge build
+
+Skipped: still no `.sol` files under /root/cortex.
+
+### Wake 5 (2026-05-08 23:43)
+
+HEAD unchanged: still `c59d5fe`. No new commits.
+
+Working tree changed since wake 4 — orchestrator re-ran the
+synthetic-dryrun experiment + phase-3/phase-4 e2e suites on a
+different host:
+
+```
+M  experiments/results/synthetic-dryrun/{A,B,C,D,E}.json
+M  experiments/results/synthetic-dryrun/comparison.csv
+M  experiments/results/synthetic-dryrun/comparison.md
+M  experiments/results/synthetic-dryrun/golden-vectors.json
+M  test/e2e/phase-3/fixtures/expected-hashes.json
+M  test/e2e/phase-3/fixtures/perf-results.json
+M  test/e2e/phase-4/run.mjs
+```
+
+#### Substrate determinism: PRESERVED
+
+`comparison.md` shows identical final state roots for all five
+baselines (A `0x755c8ee9...`, B `0xda712cc9...`, C `0x30ba3ec8...`,
+D `0x46cbf055...`, E `0x613980c9...`). Net deltas, accept counts,
+and Net Δ values are unchanged. `golden-vectors.json` content
+(state roots, patch hashes, expected report hashes) unchanged
+modulo `generatedAt`. ✅ Plan §0/§8 determinism preserved across
+hosts.
+
+Latencies updated (e.g. A p50 132.33 → 140.83 ms). Pure host noise,
+not a finding.
+
+#### `test/e2e/phase-4/run.mjs:270` deletion: SAFE
+
+The removed line was `const { createHash } = require('node:crypto');`
+inside a block scope. Module already does
+`import { createHash, randomBytes } from 'node:crypto'` at line 25.
+The deleted `require` was either dead-code shadow (best case) or
+broken in the `.mjs` ES-module context (worst case). Removing it
+is a legitimate cleanup. ✅
+
+#### 🟡 Finding: Node version regressed in determinism fixtures
+
+`test/e2e/phase-3/fixtures/expected-hashes.json:5` and
+`test/e2e/phase-3/fixtures/perf-results.json:6` both now report
+`"nodeVersion": "v20.18.2"` where they previously claimed
+`"v22.22.2"`. The substrate determinism doesn't depend on Node
+version (binary substrate is platform-independent), so the recorded
+hashes still pass — but the fixtures are now retroactively
+**describing a different baseline platform** than what they
+documented before. Two concerns:
+
+1. CI / future dev machines pinning to v22 will write back v22 next
+   time these fixtures are regenerated, causing perpetual fixture
+   churn. Suggest pinning a single CI-baseline Node version (the
+   plan implicitly favors stability) or accepting `nodeVersion`
+   as informational and not committing it (e.g. moving it to a
+   `.gitignore`d local-info file or omitting from the schema).
+
+2. perf-results.json:3-4 also moved p50 0.507 → 0.543 ms and p99
+   0.872 → 0.920 ms. These are perf-baseline values; if a future
+   regression check compares against committed baseline, this
+   silently raises the bar.
+
+Not a substrate/correctness issue — flag for orchestrator visibility.
+
+#### Carry-forward open findings (none resolved this wake)
+
+- 🟡 Wake 1 #2 OPEN: V4 ABI decoder cross-check pending external
+  contract slice (not in /root/cortex).
+- 🟡 Wake 2 #2 OPEN: replay-cli.ts has no `--bundle-hash` /
+  `--core-version-hash` provenance flag.
+- 🔴 Wake 3 OPEN (TOP PRIORITY): `eval/corpus.ts:166-172` composite
+  weighting still 0.95-cap and 5-category 30/15/15/30/5; bundle
+  declares 6-category 20/20/20/20/10/10. Bundle profile remains
+  decorative until reconciled. **No state-advance receipt should be
+  signed under this scorer** without reconciling first.
+
+#### Forge build
+
+Skipped: still no `.sol` files under /root/cortex.
+
+#### Commit hygiene
+
+Fixture-regeneration noise is dirty in working tree alongside
+ongoing_audit.md. None of these changes should be committed
+without reviewing whether the Node-version downgrade is intended.
+
+### Wake 6 (2026-05-08 23:53)
+
+HEAD unchanged: still `c59d5fe`. No new commits.
+
+#### Wake 5 finding partially resolved
+
+- 🟢 `test/e2e/phase-3/fixtures/expected-hashes.json` reverted —
+  no longer in `git status`. Determinism fixture's
+  `nodeVersion: v22.22.2` claim restored.
+- 🟢 `test/e2e/phase-3/fixtures/perf-results.json:6` Node version
+  also reverted to `v22.22.2`; only `p50ms` and `p99ms` keep
+  drifting per host run (0.507→0.519ms, 0.872→0.982ms).
+
+The Node-version regression has been rolled back. The remaining
+perf-number drift in `perf-results.json` and the synthetic-dryrun
+result JSONs is per-run host noise — still appearing in the dirty
+working tree each wake but not impacting substrate determinism.
+
+#### Substrate determinism still preserved
+
+`comparison.md` final state roots unchanged across the latest
+re-run (A `0x755c8ee9...`, B `0xda712cc9...`, etc.). Net deltas,
+accept counts, winner unchanged. `golden-vectors.json` content
+unchanged modulo `generatedAt`.
+
+#### Observation: noisy per-run fixtures
+
+`experiments/results/synthetic-dryrun/*.json`,
+`experiments/results/synthetic-dryrun/comparison.{md,csv}`, and
+`test/e2e/phase-3/fixtures/perf-results.json` regenerate on every
+e2e run with new timestamps and per-host latencies. They have been
+dirty in the working tree across multiple wakes without being
+committed. **Suggest** to orchestrator:
+
+1. Add latency/timestamp-only files to `.gitignore` so they don't
+   stay perma-dirty, OR
+2. Strip non-deterministic fields (timestamps, p50/p99) from
+   committed files and only retain deterministic content (state
+   roots, hashes, accept counts), OR
+3. Commit a single representative baseline once and stop
+   regenerating those files in the audit/test loop.
+
+Not a blocker — just clutter that masks real diffs.
+
+#### Carry-forward open findings (none resolved this wake)
+
+- 🟡 Wake 1 #2 OPEN: V4 ABI decoder cross-check pending external
+  contract.
+- 🟡 Wake 2 #2 OPEN: replay-cli.ts has no `--bundle-hash` /
+  `--core-version-hash` provenance flag.
+- 🔴 Wake 3 OPEN (TOP PRIORITY): `eval/corpus.ts:166-172`
+  composite weighting still 0.95-cap and 5-category 30/15/15/30/5;
+  `bundle/index.ts:110-117` still declares 6-category
+  20/20/20/20/10/10. **No state-advance receipt should be signed
+  under this scorer** without reconciling first.
+
+#### Forge build
+
+Skipped: still no `.sol` files under /root/cortex.
+
 ---
 
 (Subsequent wake entries will be appended below.)
+
+### Orchestrator resolution (2026-05-08 23:50)
+
+Reviewed Wake 3/Wake 6 TOP PRIORITY scorer-weight finding before the
+next checkpoint. Resolved in the working tree before commit:
+
+- `packages/cortex/src/eval/corpus.ts` now scores the production
+  corpus against the launch profile declared in
+  `packages/cortex/src/bundle/index.ts`: 20% near-collision
+  retrieval, 20% temporal current/stale, 20% long-horizon
+  compression, 20% relation/multi-hop routing, 10% codebook
+  compression, and 10% local-model-agreement proxy.
+- `packages/cortex/test/unit/eval.test.mjs` now includes a unit
+  guard proving a complete structural state reaches composite `1`
+  under the 20/20/20/20/10/10 profile.
+- `test/e2e/phase-4/run.mjs` ESM cleanup was verified by the full
+  Node 22 e2e pass.
+
+Post-resolution verification:
+
+```text
+npm run build --workspace @botcoin/cortex
+npm run test:unit --workspace @botcoin/cortex
+npx -y node@22 scripts/run-e2e.mjs
+```
+
+All passed. Environment-gated Base/mainnet/testnet checks remained
+skipped where the required env vars were absent.

@@ -270,7 +270,6 @@ console.log('\n[1] Anchored-source loader parity');
   // Inline the SyntheticTemporalLoader for the e2e test (mirrors
   // benchmark/generators/temporal/SyntheticTemporalLoader.ts).
   function deterministic32(epoch, idx) {
-    const { createHash } = require('node:crypto');
     return createHash('sha256').update(`syn-temporal:${epoch}:${idx}`).digest();
   }
   function gen(epoch, n = 60) {
