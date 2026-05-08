@@ -63,4 +63,5 @@ They also passed after the coordinator endpoint contract slice; unit suite was 1
 - Reconciled the production corpus scorer with the launch bundle profile: 20% near-collision retrieval, 20% temporal current/stale, 20% long-horizon compression, 20% relation/multi-hop routing, 10% codebook compression, 10% local model agreement proxy.
 - Added a unit guard proving a complete structural state scores 1.0 under that 20/20/20/20/10/10 profile.
 - Fixed `test/e2e/phase-4/run.mjs` for pure ESM execution by removing a stale inline `require`.
+- Added optional `coretex-replay --bundle-manifest ... --expected-bundle-hash ...` verification so replay can assert the installed bundle hash against on-chain `coreVersionHash`/policy metadata before processing events.
 - Full e2e was run with Node 22.22.2 via `npx -y node@22 scripts/run-e2e.mjs`; phases 1 through 9 passed, with environment-gated network/mainnet tests skipped where required env vars were absent.

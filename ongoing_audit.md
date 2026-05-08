@@ -809,3 +809,10 @@ npx -y node@22 scripts/run-e2e.mjs
 
 All passed. Environment-gated Base/mainnet/testnet checks remained
 skipped where the required env vars were absent.
+
+Follow-up: Wake 2 #2 replay provenance finding was also resolved
+after the scoring-profile checkpoint. `coretex-replay` now accepts
+`--bundle-manifest <path>` with optional
+`--expected-bundle-hash <0x...>` / `--core-version-hash <0x...>` and
+fails before replay if the manifest files or bundle hash do not
+verify.
