@@ -44,6 +44,8 @@ Current execution posture:
 - Added `ProductionCorpusLoader` in `packages/cortex/src/eval/corpus.ts` for deterministic raw-state scoring against the pinned Season 1 corpus shape.
 - `botcoin-cortex eval` can now use `--corpus-file` and `--eval-items-per-family`; the legacy stub loader remains available for compatibility.
 - Season 1 corpus loading verifies the embedded SHA-256 and `experience_corpus_root`, then scores shard-selected near-collision, temporal, long-horizon, and routing signals.
+- Added `packages/cortex/src/coordinator/endpoints.ts`, a small raw-HTTP-friendly contract for additive `/coretex/*` coordinator routes.
+- The coordinator endpoint contract covers screen/evaluate, substrate, patch, eval-report, challenge-book, corpus-delta, client-bundle, and health routes while explicitly ignoring `/v1/challenge`.
 
 Latest local checks for this slice:
 
@@ -54,3 +56,4 @@ npm run test:unit --workspace @botcoin/cortex
 
 Both passed after the replay/bundle slice; unit suite was 181 passing tests at that checkpoint.
 They also passed after the production corpus loader slice; unit suite was 184 passing tests at that checkpoint.
+They also passed after the coordinator endpoint contract slice; unit suite was 188 passing tests at that checkpoint.
