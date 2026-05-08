@@ -41,6 +41,9 @@ Current execution posture:
 - Replay now checks compact patch bytes against `patchHash`, parent state root, applied new root, 32 KB packed-state snapshots, and ordered multi-transition batches.
 - Added unit coverage for bundle manifests, replay tamper failures, and multi-transition replay.
 - Fixed the package unit-test script glob so `npm run test:unit --workspace @botcoin/cortex` executes the full unit suite.
+- Added `ProductionCorpusLoader` in `packages/cortex/src/eval/corpus.ts` for deterministic raw-state scoring against the pinned Season 1 corpus shape.
+- `botcoin-cortex eval` can now use `--corpus-file` and `--eval-items-per-family`; the legacy stub loader remains available for compatibility.
+- Season 1 corpus loading verifies the embedded SHA-256 and `experience_corpus_root`, then scores shard-selected near-collision, temporal, long-horizon, and routing signals.
 
 Latest local checks for this slice:
 
@@ -50,3 +53,4 @@ npm run test:unit --workspace @botcoin/cortex
 ```
 
 Both passed after the replay/bundle slice; unit suite was 181 passing tests at that checkpoint.
+They also passed after the production corpus loader slice; unit suite was 184 passing tests at that checkpoint.
