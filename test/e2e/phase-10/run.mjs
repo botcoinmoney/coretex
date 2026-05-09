@@ -179,7 +179,7 @@ async function main() {
   if (buildResult.status !== 0) fail(`forge build failed: ${buildResult.status}`);
 
   log('spawning anvil');
-  const anvil = spawn('anvil', ['--port', String(RPC_PORT), '--block-time', '1', '--silent'], {
+  const anvil = spawn('anvil', ['--port', String(RPC_PORT), '--silent'], {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let anvilStopped = false;

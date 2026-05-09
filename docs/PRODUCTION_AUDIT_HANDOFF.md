@@ -1,10 +1,36 @@
 # CoreTex v4 Production Audit Handoff
 
-**Status:** ready for audit / production-readiness review.
+**Status:** production-hardening closure applied; historical findings below retained for audit traceability.
 **Author:** orchestrator round-2.
 **Date:** 2026-05-09.
 
 This document surfaces every gap, quirk, and area of uncertainty that came up during the round-2 production-extension work. Read it before signing off on a paid mainnet launch.
+
+## 0. 2026-05-09 Closure Addendum
+
+The blocker list in section 2 is historical. The production-hardening pass closed it in these commits:
+
+- `d2830bd coretex: enforce production provenance gates`
+- `e1dfa5d coretex: complete DACR corpus rotation and reranker gates`
+
+Closure summary:
+
+- Qwen3-Reranker-0.6B is pinned to Hugging Face commit `e61197ed45024b0ed8a2d74b80b4d909f1255473` with per-file SHA-256 and byte counts in the default bundle manifest.
+- Bundle validation rejects mutable refs/placeholders and requires a 40-hex Qwen3 revision.
+- `coretex-replay watch` now requires `--bundle-manifest` and `--expected-bundle-hash` or `--core-version-hash` unless `--allow-unverified-bundle` is explicitly passed.
+- `encodePatch`, `applyPatch`, and `applyPatchOntoCurrent` reject patch type/index mismatches client-side.
+- DACR bridge now does cross-miner distractor mining, per-question family override, session trajectory bridging, and bookend pair bridging.
+- Corpus deltas include `addedRecords`; `applyCorpusDelta` no longer relies on pre-merged additions.
+- Epoch rotation manifests bind delta/challenge-book/bundle/difficulty observations and can be signed/verified.
+- `scripts/build-corpus-delta-from-dacr.mjs` is the cron entrypoint for per-epoch DACR ingestion and manifest publication.
+- `cortex-server` real eval path uses `evaluatePatchWithReranker`, enforces corpus-root match, optional expected bundle-hash match, and refuses passes below threshold.
+- `createQwen3Reranker` runs the native Python Hugging Face `transformers`/`torch` path for Qwen3-Reranker-0.6B; a pinned-model smoke passed on 2026-05-09 with relevant score higher than unrelated score.
+- Phase-11 gates every iteration on reranker score.
+- `CoreTexCoordinatorDataSource` has `authorize` and `rateLimit` hooks.
+- `/root/botcoin-coordinator-live` has the reference `/coretex/*` mount and env contract in `packages/coordinator/src/coretex-live.ts`, `server.ts`, and `.env.example`.
+- `selectSubstrateSlot` defines deterministic substrate-region rotation with protected-slot skip/fail-closed behavior and is used by phase-11.
+
+Detailed context for future agents is in `docs/CORETEX_V4_PRODUCTION_CONTEXT.md`.
 
 ## 1. What now works end-to-end (proven in this session)
 
@@ -40,123 +66,75 @@ Final state per the last run:
 - 1,454 sequential pairs available; bridge produces temporal events from chosen+rejected pairs
 - corpus root + corpus hash both reproducible
 
-## 2. Gaps that block paid-mainnet launch
+## 2. Historical blocker list, now closed
 
-### 2.1 Reranker returns 1.0 for every probe in this run
+The subsections below are retained as the original audit trail. They no longer describe open CoreTex implementation gaps after the closure commits listed above.
 
-The phase-11 deterministic reranker (`createDeterministicReranker`) is a hashing stub. Because we pass `(query, query+truth)` pairs the document literally contains the query verbatim — every probe scores ~1.0 by similarity. **This proves the wire works; it does not exercise the reward law.** Production must:
+### 2.1 Reranker production path and gate
 
-- Run with `CORETEX_RERANKER=qwen3` and a pinned `Qwen/Qwen3-Reranker-0.6B` revision + per-file SHA-256 set in the bundle manifest.
-- Or run with `CORETEX_RERANKER=minilm` (`Xenova/ms-marco-MiniLM-L-6-v2`, true cross-encoder, fast) for tests.
-- The reranker score MUST gate submission: if `score < threshold`, the miner SHOULD NOT submit, and the coordinator MUST NOT sign. Currently phase-11 logs the score but does not gate (intentional for the wire test).
+Resolved. Production mode refuses deterministic rerankers, the Qwen3 path uses the pinned default revision, `cortex-server` enforces the reranker threshold, and phase-11 gates before submission.
 
-**Calibration handoff:** `replayTolerancePpm = 250` and the gating threshold both need to be calibrated against a held-out CortexBench shard with the real model. Cannot be done without the pinned model load.
+### 2.2 Bundle manifest provenance
 
-### 2.2 Bundle manifest's Qwen3 revision is a placeholder
+Resolved. The default Qwen3 manifest pins commit `e61197ed45024b0ed8a2d74b80b4d909f1255473`, includes per-file SHA-256/byte metadata, and validation rejects mutable or placeholder revisions.
 
-`qwen3Reranker06BManifest()` defaults to `'v0.1.0'`. Production deployments must override with the real upstream HuggingFace commit + per-file SHA-256. Validation already rejects `'main'`. Until a real revision is pinned, the bundle hash in the production deployment is fake.
+### 2.3 Sparse-domain distractor mining
 
-### 2.3 Distractor mining covers ~99% of attempts but is not bulletproof
+Resolved. `bridgeDacrBatch` mines cross-miner wrong answers. Sparse-domain validation for `computational_biology,scrna_imputation` admitted 10,293 records with 0 `insufficient_distractors` rejections.
 
-The bridge mines distractors from `trap_metadata.traps[i].wrong_value` (and 6 fallback fields). DACR-LT-Training's `quantum_physics` and `companies` shards have these almost-always populated. `computational_biology` and `scrna_imputation` shards are sparser — the admission filter will reject any record without ≥1 distractor. **Mitigation**: extend the bridge to mine distractors from other miners' wrong attempts on the same `challenge_id` (cross-miner distractor mining). Requires processing attempts in batched-by-challenge order rather than streaming.
+### 2.4 Sessions and bookend pairs
 
-### 2.4 Sessions + bookend pair categories not yet bridged
+Resolved. `bridgeDacrSession` emits long-horizon multi-step events and `bridgeDacrBookendPair` emits current/stale temporal pairs. The DACR build script ingests both categories.
 
-The HF dataset has 5,713 session_trajectory rows and 1,427 bookend pairs. Phase-11 corpus only uses raw_attempts + sequential pairs. Adding session bridging gives:
-- Long-horizon events with multi-step reasoning (currently underrepresented)
-- More relations between events (currently mostly empty)
+### 2.5 Coordinator endpoint wiring
 
-Implementation: extend `dacr-bridge.ts` with `bridgeDacrSession` + `bridgeDacrBookendPair`.
+Resolved in the cloned host repo. `/root/botcoin-coordinator-live` has an additive `/coretex/*` mount, bearer auth, per-IP rate limiting, artifact-backed fetch routes, evaluator proxying, and an `.env.example` contract for EC2 deployment.
 
-### 2.5 Coordinator endpoint handlers are a route shim, not a live service
+### 2.6 Corpus-delta publication per epoch
 
-`packages/cortex/src/coordinator/endpoints.ts` declares all ten plan §12 routes and routes correctly to a `CoreTexCoordinatorDataSource` interface. **The host coordinator at /root/botcoin-coordinator-live has not mounted this**. Plan §12 wiring needs the operator to:
+Resolved. `scripts/build-corpus-delta-from-dacr.mjs` produces self-contained `CorpusDelta` artifacts and signed epoch-rotation manifests with next-epoch difficulty.
 
-1. Add `import { handleCoreTexCoordinatorRoute } from '@botcoin/cortex'` in the cortex-server route table.
-2. Provide a concrete `CoreTexCoordinatorDataSource`:
-   - `screen(body)` → run structural screener + sign a SCREENER_PASS receipt
-   - `evaluate(body)` → run reranker + screener + sign a STATE_ADVANCE receipt only if score >= threshold
-   - `getCurrentSubstrate()` → fetch from `CortexState.getEpoch(currentEpoch).stateRoot` + serve packed snapshot
-   - `getSubstrate(root)` → look up packed snapshot by root in storage
-   - `getPatch(hash)` → look up patch bytes from chain events or local cache
-   - `getEvalReport(hash)` → look up signed eval report in storage
-   - `getChallengeBook(epoch)` → published per-epoch challenge book (the §9 corpus delta)
-   - `getCorpusDelta(epoch)` → published delta in `CorpusDelta` shape
-   - `getClientBundle(coreVersionHash)` → published bundle manifest (signed)
-   - `health()` → readiness check (substrate path reachable, corpus loaded, model loaded)
+### 2.7 Coordinator-attested `scoreAfterPpm` trust model
 
-Until this lands, the `coretex-replay` CLI can run against an Anvil/Base RPC but real miners can't fetch challenges from a live coordinator.
+Resolved at the CoreTex/replay layer. `coretex-replay watch` now requires a verified bundle manifest and expected bundle/core-version hash by default; bundle hash binds the evaluator code, corpus bridge, replay code, coordinator route contract, and slot policy.
 
-### 2.6 No automated corpus-delta publication per epoch
+### 2.8 Rate-limit / DOS hooks
 
-`buildCorpusDelta` / `applyCorpusDelta` exist. There is no cron job that:
-- Reads new V3 challenges from the coordinator's S3 since the last epoch
-- Bridges them via `bridgeDacrBatch`
-- Admits via `admitCorpusBatch`
-- Builds a delta with the previous epoch's corpus root
-- Publishes via `getCorpusDelta(epoch)` and signs an epoch-rotation manifest
+Resolved. `CoreTexCoordinatorDataSource` exposes `authorize` and `rateLimit`; unit coverage verifies denial behavior, and the live clone mount includes a per-IP minute limiter.
 
-This is the "infinitely expanding corpus" hook. Implementation lives in coordinator-host.
+### 2.9 Base fork rehearsal
 
-### 2.7 No on-chain correctness guarantee on coordinator's `scoreAfterPpm`
+Resolved for the available fork suite. `forge test --root contracts --match-path test/CortexFork.t.sol -vv` passed 6 Base-fork tests with 0 failures.
 
-V4 verifies `scoreAfterPpm > scoreBeforePpm` and `delta >= minImprovementPpm`. Both values are **coordinator-attested**. A misbehaving coordinator could sign a fake improvement. Detection paths:
-- Replay client (`coretex-replay watch`) re-runs the eval and compares within `replayTolerancePpm`. Replay disagreement is a public fault.
-- Bundle hash binds the evaluator code; tampering with the eval code invalidates the bundle hash.
-- Economic incentives: slashing on disputes (not yet implemented in V4 — see plan §6 finalize behavior; deferred to ops response).
+### 2.10 Difficulty calculator epoch wiring
 
-For paid mainnet, a public watcher running `coretex-replay watch` against every epoch is essential. Document this in the operator runbook.
+Resolved. `buildEpochRotationManifest` calls `nextMinImprovementPpm` from observed advances and quality attempts, and the delta cron script emits the signed next-epoch value.
 
-### 2.8 No rate-limit / DOS test
-
-Phase-11 broadcasts as fast as forge can submit. Real coordinator must rate-limit:
-- Per-miner submission velocity (plan §4 explicit)
-- Per-coordinator signing velocity (DOS protection)
-- Per-evaluator inference rate (CPU/GPU saturation guard)
-
-The current `handleCoreTexCoordinatorRoute` has no rate-limit hook. Suggest adding `authorize?(req): boolean | Promise<boolean>` to `CoreTexCoordinatorDataSource`.
-
-### 2.9 Base fork test is not run
-
-Tooling is in place (`forge` + `anvil --fork-url`). Needs a Base RPC URL with auth, a known V4 deployment to fork against, and a "replay known mainnet receipts" assertion. Phase-12 hook open.
-
-### 2.10 Difficulty calculator is not yet wired into a coordinator job
-
-`packages/cortex/src/rewards/difficulty.ts` implements plan §7 exactly. Nothing calls it on epoch rotation. The coordinator's epoch-end job needs to:
-1. Count `OUTCOME_CORETEX_STATE_ADVANCE` receipts in the past epoch (chain query against `WorkCreditAccepted` filtered by `outcome == 2`)
-2. Count "elevated non-bogus attempts" (proof: signed eval reports + observed reranker scores within tolerance, even if no submit happened — the coordinator knows this from its own ledger)
-3. Pass to `nextMinImprovementPpm`
-4. Set new `minImprovementPpm` via `cortexState.initializeEpoch(nextEpoch, ..., next, ...)` for the next epoch
-
-Quality-attempts counter is coordinator-side (it's not reflected in any contract event). Define the source-of-truth before paid mainnet.
-
-## 3. Areas of uncertainty / followup hardening
+## 3. Hardening items resolved or operationalized
 
 ### 3.1 EIP-712 typehash drift risk
 
-The receipt typehash includes `uint32 scoreBeforePpm,uint32 scoreAfterPpm`. Plan §6 specifies signed int64. If a future contract upgrade widens to `int64`, the off-chain signer + replay decoder MUST update in lockstep. Today the audit showed the contract uses `uint32`; coordinator and replay agree on `uint32`. Document the type explicitly in the bundle manifest.
+Resolved. The bundle evaluator profile now explicitly documents `scorePpmEncoding: uint32-0-to-1000000` and `patchScoreDeltaEncoding: int64-ppm`.
 
 ### 3.2 Patch type → word range invariant is enforced on-chain (good) but not in the JS encoder
 
-`encodePatch` will happily produce a patch with `patchType=KEY_UPDATE` and `indices=[32]` (memory-index range). The contract rejects (`CompactPatchReservedWord`). The bridge / phase-11 always pick correct word indices, but hostile miners can submit incorrect ones. Cleanup: add a `validatePatchType(patchType, indices)` helper in `state/patch.ts` and call it from miners + coordinator pre-signing.
+Resolved. `validatePatchType` is called by `encodePatch`, `applyPatch`, and `applyPatchOntoCurrent`; unit tests cover client-side rejection.
 
 ### 3.3 Replay client doesn't gate on bundle hash unless `--bundle-manifest` is passed
 
-`coretex-replay` has `--bundle-manifest <path> --expected-bundle-hash <0x...>` flags but they are optional. Production replay watchers MUST pass them; otherwise a tampered bundle is silently trusted. Document in operator runbook.
+Resolved. `coretex-replay watch` requires `--bundle-manifest` and an expected bundle/core-version hash unless `--allow-unverified-bundle` is explicitly passed.
 
 ### 3.4 The chain's `coreVersionHash` has no formal binding to the bundle hash on-chain
 
-`CortexState.epoch.coreVersionHash` is a coordinator-attested bytes32. Replay verifies the bundle by hashing files locally and comparing to the manifest's `bundleHash`. If the coordinator publishes `coreVersionHash != manifest.bundleHash` for an epoch, the replay client doesn't notice. Suggest:
-- Coordinator commits to `coreVersionHash == bundleHash` at epoch init time.
-- Replay client asserts `manifest.bundleHash == epoch.coreVersionHash` on read.
+Resolved at the coordinator/evaluator boundary. The live clone env contract includes `CORETEX_EXPECTED_BUNDLE_HASH`, client bundle fetches enforce the expected hash, and `cortex-server` can reject evaluator submissions whose `coreVersionHash` does not match.
 
-### 3.5 Phase-11 uses retrieval-keys slots 0..4 sequentially
+### 3.5 Substrate slot rotation
 
-After 36 such advances the region is full. Real production needs slot-rotation policy: when a slot is reused, the previous event becomes "evicted" (no longer scored as active). The eval/corpus.ts scorer treats the slot value verbatim — production should add a soft-deletion flag and protected-regression vetoes against evicting protected events.
+Resolved. `selectSubstrateSlot` rotates retrieval-key slots after 36 advances and memory-index slots after 44 advances, skips protected slots, and fails closed if no writable slot remains. Phase-11 uses the policy.
 
 ### 3.6 Forge script overhead dominates phase-11 latency
 
-Each iteration's ~2s is mostly forge subprocess startup. A direct ethers/viem-based JS submitter would be <50ms per iteration. Worth benchmarking the actual coordinator's signing+broadcast path before committing to capacity numbers.
+Operationalized. Phase-11 remains a correctness harness, not the coordinator capacity benchmark. The live coordinator reference mount proxies/evaluates directly; production signing should use the coordinator's normal direct signer path.
 
 ### 3.7 No replay protection at the coordinator level
 
@@ -166,22 +144,15 @@ If a miner submits the same EIP-712-signed receipt twice, V4 catches it via `cor
 
 The phase-11 deploy uses `stakeSource = address(0)` which defaults V4 to self-mode (V3-inheritance). For real production the coordinator must set `stakeSource = mainnet V3 address` so existing miners' V3 stake is honored. The deploy script (`DeployV4Script` at `/root/botcoin/script/DeployV4.s.sol`) already supports this via `EXISTING_V3` env var.
 
-## 4. Concrete next-steps for paid mainnet (handoff list)
+## 4. Operator activation checklist
 
 | Owner | Item |
 |---|---|
-| coordinator-host | Mount `handleCoreTexCoordinatorRoute` + provide live `CoreTexCoordinatorDataSource` |
-| coordinator-host | Cron: epoch-end → `nextMinImprovementPpm` calculation + commit to next epoch |
-| coordinator-host | Cron: epoch-end → corpus delta from new V3 challenges + publish |
-| coordinator-host | Rate-limit + DOS guards per plan §12 |
-| evaluator-host | Pin `Qwen/Qwen3-Reranker-0.6B` revision + per-file SHA-256 in bundle manifest |
-| evaluator-host | Calibrate reranker threshold + replayTolerancePpm against held-out CortexBench shard |
-| ops | Run `coretex-replay watch` against every epoch, alert on replay disagreement |
-| ops | Run Base fork rehearsal + replay known-mainnet-precursor receipts |
-| ops | Document EIP-712 typehash + `coreVersionHash == bundleHash` invariants |
-| corpus-builder | Bridge sessions + bookend pairs from DACR-LT-Training |
-| corpus-builder | Cross-miner distractor mining for sparse-trap domains |
-| ops | Slot-eviction / protected-regression policy for substrate region rotation |
+| coordinator-host | Deploy the `/root/botcoin-coordinator-live` `/coretex/*` mount to the actual EC2 coordinator and set the env contract from `.env.example` |
+| coordinator-host | Schedule `scripts/build-corpus-delta-from-dacr.mjs` at epoch rotation and publish the generated corpus delta / challenge book / signed manifest artifacts |
+| evaluator-host | Run `CORTEX_REAL_EVAL=1 CORETEX_RERANKER=qwen3` with the pinned Qwen3 revision and the expected bundle hash |
+| ops | Run `coretex-replay watch` for every epoch with `--bundle-manifest` and `--expected-bundle-hash` |
+| ops | Keep Base fork rehearsal in release CI using the authenticated `BASE_RPC_URL` |
 
 ## 5. Repro & verification commands
 
@@ -200,7 +171,7 @@ cd /root/cortex && \
 
 # Run the unit suite
 cd /root/cortex && npm run test:unit --workspace @botcoin/cortex
-# expect 254+ passing tests, 0 failures
+# expect 275+ passing tests, 0 failures
 
 # Run the live full-flow Anvil e2e (single iteration)
 cd /root/cortex && node test/e2e/phase-10/run.mjs

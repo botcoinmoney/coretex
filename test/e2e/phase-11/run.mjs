@@ -51,6 +51,7 @@ import {
   eventIdToMem128,
 } from '../../../packages/cortex/dist/eval/corpus.js';
 import { rerankerFromEnv, withRerankerCache } from '../../../packages/cortex/dist/eval/reranker.js';
+import { selectSubstrateSlot } from '../../../packages/cortex/dist/substrate/slot-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORTEX_ROOT = join(__dirname, '..', '..', '..');
@@ -89,27 +90,20 @@ async function rpcReady(url, timeoutMs = 30_000) {
 
 function buildCleanState() { return { words: new Array(1024).fill(0n) }; }
 
-// Substrate-region word indices per the eval/corpus.ts scoreProductionState.
-function memIndexSlot(slotIdx) { return 32 + slotIdx * 8; }      // 0..43
-function retrievalKeySlot(slotIdx) { return 384 + slotIdx * 8; } // 0..35
-
 // Build a patch that inserts a corpus event's eventId into the appropriate
 // substrate region.  Near-collision events go into RetrievalKeys, others into
 // MemoryIndex.  Returns { patchType, indices, newWords }.
-function patchForEvent(event, slotIdx) {
+function patchForEvent(event, advanceIndex) {
+  const selected = selectSubstrateSlot({ family: event.family, advanceIndex });
   if (event.family === 'near_collision') {
-    const wordIdx = retrievalKeySlot(slotIdx);
-    if (wordIdx > 671) throw new Error(`retrieval-keys slot ${slotIdx} out of range`);
     const keyId = eventIdToKey128(event.id);
     const word = (keyId << 128n) | (1n << 80n); // active flag in low bits of upper-half
-    return { patchType: PATCH_TYPE.KEY_UPDATE, indices: [wordIdx], newWords: [word] };
+    return { patchType: PATCH_TYPE.KEY_UPDATE, indices: [selected.wordIndex], newWords: [word], slot: selected };
   }
-  const wordIdx = memIndexSlot(slotIdx);
-  if (wordIdx > 383) throw new Error(`mem-index slot ${slotIdx} out of range`);
   const memId = eventIdToMem128(event.id);
   const flags = 1n; // valid
   const word = (memId << 128n) | (flags << 64n);
-  return { patchType: PATCH_TYPE.SLOT_REPLACE, indices: [wordIdx], newWords: [word] };
+  return { patchType: PATCH_TYPE.SLOT_REPLACE, indices: [selected.wordIndex], newWords: [word], slot: selected };
 }
 
 // Deterministic structural screener — mirrors V4 contract _validateCompactPatch checks
@@ -191,7 +185,7 @@ async function main() {
   if (buildResult.status !== 0) fail(`forge build failed: ${buildResult.stderr?.toString().slice(-500)}`);
 
   log('spawning anvil');
-  const anvil = spawn('anvil', ['--port', String(RPC_PORT), '--block-time', '1', '--silent'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const anvil = spawn('anvil', ['--port', String(RPC_PORT), '--silent'], { stdio: ['ignore', 'pipe', 'pipe'] });
   let anvilStopped = false;
   const stopAnvil = () => { if (!anvilStopped) { anvilStopped = true; try { anvil.kill('SIGTERM'); } catch (_e) {} } };
   process.on('exit', stopAnvil);
@@ -278,8 +272,7 @@ async function main() {
     for (let iter = 2; iter <= ITERATIONS; iter++) {
       const t0 = performance.now();
       const event = eventsForIter[iter - 1];
-      const slotIdx = iter - 1; // distinct slot per iteration
-      const patchPlan = patchForEvent(event, slotIdx);
+      const patchPlan = patchForEvent(event, iter - 1);
       const scoreDelta = 4_000 + iter * 100; // monotonic, all >= MIN_IMPROVEMENT_PPM = 2_500
 
       const patchObj = {
