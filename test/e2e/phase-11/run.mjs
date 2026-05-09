@@ -50,7 +50,7 @@ import {
   eventIdToKey128,
   eventIdToMem128,
 } from '../../../packages/cortex/dist/eval/corpus.js';
-import { createDeterministicReranker, withRerankerCache } from '../../../packages/cortex/dist/eval/reranker.js';
+import { rerankerFromEnv, withRerankerCache } from '../../../packages/cortex/dist/eval/reranker.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORTEX_ROOT = join(__dirname, '..', '..', '..');
@@ -58,6 +58,7 @@ const BOTCOIN_ROOT = '/root/botcoin';
 const RPC_PORT = Number(process.env.E2E_ANVIL_PORT ?? 8547);
 const RPC_URL = `http://127.0.0.1:${RPC_PORT}`;
 const ITERATIONS = Number(process.env.E2E_ITERATIONS ?? 5);
+const RERANKER_MIN_SCORE = Number(process.env.CORETEX_RERANKER_MIN_SCORE ?? 0.5);
 const CORPUS_PATH = process.env.CORETEX_CORPUS ?? (
   existsSync(join(CORTEX_ROOT, 'benchmark/fixtures/dacr-v0/coretex_dacr.json'))
     ? join(CORTEX_ROOT, 'benchmark/fixtures/dacr-v0/coretex_dacr.json')
@@ -129,6 +130,17 @@ function structuralScreener(patchBytes, expectedHash, parentRoot, scoreDeltaPpm)
   return { ok: true };
 }
 
+async function scoreEventWithReranker(reranker, event, iter) {
+  const probeQuery = event.queryText;
+  const probeDoc = `${event.queryText}\n${event.truthText}`;
+  const score = (await reranker.score([{ query: probeQuery, document: probeDoc }]))[0];
+  if (typeof score !== 'number' || !Number.isFinite(score)) fail(`iter ${iter} reranker returned ${score}`);
+  if (score < RERANKER_MIN_SCORE) {
+    fail(`iter ${iter} reranker score ${score.toFixed(6)} below threshold ${RERANKER_MIN_SCORE}`);
+  }
+  return score;
+}
+
 async function readCortexEpoch(rpcUrl, cortexState, epochId) {
   const data = await ethCall(rpcUrl, cortexState, sel('getEpoch(uint64)') + pad32(epochId));
   const slots = data.replace(/^0x/, '');
@@ -168,9 +180,10 @@ async function main() {
   const eventsForIter = candidates.slice(0, ITERATIONS);
   if (eventsForIter.length < ITERATIONS) fail(`corpus has only ${eventsForIter.length} events; need ${ITERATIONS}`);
 
-  // Pre-warm the deterministic reranker (real Qwen3 path is gated by env).
-  const reranker = withRerankerCache(await createDeterministicReranker());
-  log(`reranker=${reranker.model} (deterministic stub for CI)`);
+  // Pre-warm the reranker. Default is deterministic for CI; set
+  // CORETEX_RERANKER=qwen3 to exercise the pinned Qwen3-Reranker-0.6B path.
+  const reranker = withRerankerCache(await rerankerFromEnv());
+  log(`reranker=${reranker.model} minScore=${RERANKER_MIN_SCORE}`);
 
   // Run forge build first.
   log('forge build');
@@ -206,12 +219,13 @@ async function main() {
     };
     const iter1Bytes = encodePatch(iter1PatchObj);
     const iter1Hash = keccak256(iter1Bytes);
+    const iter1RerankerScore = await scoreEventWithReranker(reranker, iter1Event, 1);
 
     // Apply locally to compute newStateRoot for the deploy script.
     localState.words[iter1Patch.indices[0]] = iter1Patch.newWords[0];
     const iter1NewRoot = merkleizeState(localState);
 
-    log('forge script CoreTexE2EFlow (deploy + screener + iter 1 advance)');
+    log(`forge script CoreTexE2EFlow (deploy + screener + iter 1 advance) rerankerScore=${iter1RerankerScore.toFixed(4)}`);
     const env1 = {
       ...process.env,
       DEPLOYER_PK,
@@ -283,12 +297,9 @@ async function main() {
       const screen = structuralScreener(patchBytes, patchHash, currentRoot, scoreDelta);
       if (!screen.ok) fail(`iter ${iter} screener rejected: ${screen.code}`);
 
-      // Step 5: 0.6B benchmark eval — score the would-be state's contribution
-      // to the corpus. Deterministic stub here; real Qwen3 path gated by env.
-      const probeQuery = event.queryText;
-      const probeDoc = `${event.queryText}\n${event.truthText}`;
-      const score = (await reranker.score([{ query: probeQuery, document: probeDoc }]))[0];
-      if (typeof score !== 'number' || !Number.isFinite(score)) fail(`iter ${iter} reranker returned ${score}`);
+      // Step 5: benchmark eval gate. Default CI reranker is deterministic;
+      // CORETEX_RERANKER=qwen3 exercises the pinned Qwen3-Reranker-0.6B path.
+      const score = await scoreEventWithReranker(reranker, event, iter);
 
       // Apply locally + compute new state root
       const nextState = { words: [...localState.words] };

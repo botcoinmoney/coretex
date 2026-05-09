@@ -20,12 +20,15 @@ import {
   applyPatch,
   bytesToHex,
   decodePatch,
+  evaluatePatchWithReranker,
   hexToBytes,
   keccak256,
+  loadProductionCorpus,
   merkleizeState,
   unpack,
+  rerankerFromEnv,
 } from '@botcoin/cortex';
-import type { CortexState } from '@botcoin/cortex';
+import type { CortexState, CrossEncoderReranker, ProductionCorpus } from '@botcoin/cortex';
 import { setEvaluator, type EvalInput, type EvalReport, type EvalResult } from './workers/eval-pool.js';
 
 const SCALE = 1_000_000;
@@ -57,15 +60,92 @@ export async function installRealEvaluatorFromEnv(): Promise<void> {
   if (!enabled) return;
 
   const repoRoot = resolve(process.env['CORTEX_REPO_ROOT'] ?? process.cwd());
+  const frozen = readFrozen(repoRoot);
+  const evalItemsPerFamily = nonNegativeSafeIntFromEnv('CORTEX_EVAL_ITEMS_PER_FAMILY');
+  if (process.env['CORTEX_RERANKER_EVAL'] !== '0') {
+    const corpusPath = resolve(
+      repoRoot,
+      process.env['CORETEX_CORPUS']
+        ?? process.env['CORTEX_CORPUS_PATH']
+        ?? 'benchmark/fixtures/dacr-v0/coretex_dacr.json',
+    );
+    const corpus = loadProductionCorpus(corpusPath);
+    const reranker = await rerankerFromEnv();
+    const threshold = rerankerThresholdFromEnv();
+    setEvaluator(async (input) => evaluateWithRealReranker(input, corpus, reranker, frozen, repoRoot, threshold));
+    installed = true;
+    console.log(`[cortex-server] real CoreTex reranker evaluator installed model=${reranker.model} threshold=${threshold}`);
+    return;
+  }
+
   const bench = await import(pathToFileURL(resolve(repoRoot, 'experiments/harness/cortex-bench-eval.mjs')).href) as BenchModule;
   const corpus = bench.loadRealCorpus({ repoRoot });
-  const frozen = readFrozen(repoRoot);
   const threshold = Number(process.env['CORTEX_SCORE_THRESHOLD'] ?? 0);
-  const evalItemsPerFamily = nonNegativeSafeIntFromEnv('CORTEX_EVAL_ITEMS_PER_FAMILY');
 
   setEvaluator(async (input) => evaluateWithRealBench(input, bench, corpus, frozen, repoRoot, threshold, evalItemsPerFamily));
   installed = true;
   console.log('[cortex-server] real CortexBench evaluator installed');
+}
+
+async function evaluateWithRealReranker(
+  input: EvalInput,
+  corpus: ProductionCorpus,
+  reranker: CrossEncoderReranker,
+  frozen: FrozenConfig,
+  repoRoot: string,
+  threshold: number,
+): Promise<EvalResult> {
+  const t0 = performance.now();
+  const patchBytes = hexToBytes(input.patchHex.startsWith('0x') ? input.patchHex : `0x${input.patchHex}`);
+  const patch = decodePatch(patchBytes);
+  const patchHash = bytesToHex(keccak256(patchBytes));
+
+  if (input.experienceCorpusRoot.toLowerCase() !== corpus.corpusRoot.toLowerCase()) {
+    return rejectedReport(input, patchHash, input.parentStateRoot, 'E_CORPUS_ROOT_MISMATCH', performance.now() - t0);
+  }
+  const expectedBundleHash = process.env['CORETEX_EXPECTED_BUNDLE_HASH'];
+  if (expectedBundleHash && input.coreVersionHash.toLowerCase() !== expectedBundleHash.toLowerCase()) {
+    return rejectedReport(input, patchHash, input.parentStateRoot, 'E_CORE_VERSION_BUNDLE_MISMATCH', performance.now() - t0);
+  }
+
+  const parentState = await loadParentState(input.parentStateRoot, frozen, repoRoot);
+  const parentRoot = bytesToHex(merkleizeState(parentState));
+  if (parentRoot.toLowerCase() !== input.parentStateRoot.toLowerCase()) {
+    return rejectedReport(input, patchHash, parentRoot, 'E01_PARENT_STATE_SOURCE_MISMATCH', performance.now() - t0);
+  }
+
+  const evaluated = await evaluatePatchWithReranker(parentState, patch, {
+    corpus,
+    reranker,
+    threshold,
+  });
+  const applied = applyPatch(parentState, patch);
+  const newStateRoot = applied.ok ? bytesToHex(merkleizeState(applied.state)) : undefined;
+  const latencyMs = performance.now() - t0;
+  const report: EvalReport = {
+    scoreDelta: evaluated.scoreDelta,
+    baselineScore: Math.round(evaluated.before.composite * SCALE),
+    candidateScore: Math.round(evaluated.after.composite * SCALE),
+    protectedRegressionClean: evaluated.noRegression,
+    stateCompliant: applied.ok,
+    latencyMs,
+    families: evaluated.after.familyHitRates,
+    localModel: {
+      model: evaluated.after.model ?? reranker.model,
+      threshold,
+      noRegression: evaluated.noRegression,
+      regressions: evaluated.regressions,
+      beforeComponents: evaluated.before.components,
+      afterComponents: evaluated.after.components,
+    },
+    ...(!evaluated.pass ? { errorCode: evaluated.errorCode ?? 'RERANKER_THRESHOLD' } : {}),
+  };
+  return {
+    pass: evaluated.pass,
+    report,
+    evalReportHash: reportHash(input, report, patchHash, newStateRoot ?? null),
+    ...(newStateRoot ? { newStateRoot } : {}),
+  };
 }
 
 async function evaluateWithRealBench(
@@ -136,6 +216,12 @@ function nonNegativeSafeIntFromEnv(name: string): number {
     throw new RangeError(`${name} must be a non-negative safe integer`);
   }
   return value;
+}
+
+function rerankerThresholdFromEnv(): number {
+  const ppm = process.env['CORTEX_RERANKER_MIN_DELTA_PPM'] ?? process.env['CORETEX_RERANKER_MIN_DELTA_PPM'];
+  if (ppm !== undefined && ppm !== '') return Number(ppm) / SCALE;
+  return Number(process.env['CORTEX_RERANKER_MIN_DELTA'] ?? process.env['CORTEX_SCORE_THRESHOLD'] ?? 0.0025);
 }
 
 async function runLocalModelEval(

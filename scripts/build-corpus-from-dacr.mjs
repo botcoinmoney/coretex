@@ -20,8 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 
 import {
-  bridgeDacrAttempt,
-  bridgeDacrSequentialPair,
+  bridgeDacrBatch,
   admitCorpusBatch,
   DEFAULT_ADMISSION_POLICY,
   computeProductionCorpusRoot,
@@ -31,12 +30,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
 function parseArgs(argv) {
-  const out = { domain: 'quantum_physics', maxAttempts: 1500, maxPairs: 200, epoch: 1 };
+  const out = { domain: 'quantum_physics', maxAttempts: 1500, maxPairs: 200, maxSessions: 200, maxBookends: 200, epoch: 1 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--domain') out.domain = argv[++i];
     else if (a === '--max-attempts') out.maxAttempts = Number(argv[++i]);
     else if (a === '--max-pairs') out.maxPairs = Number(argv[++i]);
+    else if (a === '--max-sessions') out.maxSessions = Number(argv[++i]);
+    else if (a === '--max-bookends') out.maxBookends = Number(argv[++i]);
     else if (a === '--epoch') out.epoch = Number(argv[++i]);
     else if (a === '--out') out.out = argv[++i];
     else if (a === '--policy-min-distractors') out.minDistractors = Number(argv[++i]);
@@ -67,33 +68,44 @@ async function main() {
   const token = process.env.HF_ACCESS_TOKEN;
   if (!token) { console.error('HF_ACCESS_TOKEN not set'); process.exit(1); }
   const domains = opts.domain.split(',').map((s) => s.trim()).filter(Boolean);
-  console.log(`[build-corpus-from-dacr] domains=${domains.join(',')} maxAttempts=${opts.maxAttempts} maxPairs=${opts.maxPairs}`);
+  console.log(`[build-corpus-from-dacr] domains=${domains.join(',')} maxAttempts=${opts.maxAttempts} maxPairs=${opts.maxPairs} maxSessions=${opts.maxSessions} maxBookends=${opts.maxBookends}`);
 
   const allEvents = [];
   for (const domain of domains) {
     console.log(`[build-corpus-from-dacr] fetching raw_attempts/${domain}/part-00000.jsonl`);
     const attempts = await fetchJsonl(`raw_attempts/${domain}/part-00000.jsonl`, token, opts.maxAttempts);
     console.log(`  loaded ${attempts.length} attempt rows`);
-    let attemptEvents = 0;
-    for (const att of attempts) {
-      const events = bridgeDacrAttempt(att, { epochCommitted: opts.epoch, maxDistractors: 4 });
-      allEvents.push(...events);
-      attemptEvents += events.length;
-    }
-    console.log(`  emitted ${attemptEvents} retrieval-eval events from attempts`);
 
+    let pairs = [];
     try {
       console.log(`[build-corpus-from-dacr] fetching pairs_sequential/${domain}/part-00000.jsonl`);
-      const pairs = await fetchJsonl(`pairs_sequential/${domain}/part-00000.jsonl`, token, opts.maxPairs);
+      pairs = await fetchJsonl(`pairs_sequential/${domain}/part-00000.jsonl`, token, opts.maxPairs);
       console.log(`  loaded ${pairs.length} pair rows`);
-      let pairEvents = 0;
-      for (const pair of pairs) {
-        const events = bridgeDacrSequentialPair(pair, { epochCommitted: opts.epoch, maxDistractors: 4 });
-        allEvents.push(...events);
-        pairEvents += events.length;
-      }
-      console.log(`  emitted ${pairEvents} temporal events from pairs`);
     } catch (e) { console.warn(`  pairs unavailable for ${domain}: ${e.message}`); }
+
+    let sessions = [];
+    try {
+      console.log(`[build-corpus-from-dacr] fetching sessions/${domain}/part-00000.jsonl`);
+      sessions = await fetchJsonl(`sessions/${domain}/part-00000.jsonl`, token, opts.maxSessions);
+      console.log(`  loaded ${sessions.length} session rows`);
+    } catch (e) { console.warn(`  sessions unavailable for ${domain}: ${e.message}`); }
+
+    let bookends = [];
+    try {
+      console.log(`[build-corpus-from-dacr] fetching pairs_bookend/${domain}/part-00000.jsonl`);
+      bookends = await fetchJsonl(`pairs_bookend/${domain}/part-00000.jsonl`, token, opts.maxBookends);
+      console.log(`  loaded ${bookends.length} bookend rows`);
+    } catch (e) { console.warn(`  bookends unavailable for ${domain}: ${e.message}`); }
+
+    const domainEvents = bridgeDacrBatch(
+      attempts,
+      pairs,
+      { epochCommitted: opts.epoch, maxDistractors: 4 },
+      sessions,
+      bookends,
+    );
+    allEvents.push(...domainEvents);
+    console.log(`  emitted ${domainEvents.length} CoreTex events after cross-miner distractor mining`);
   }
 
   console.log(`[build-corpus-from-dacr] total events before admission: ${allEvents.length}`);
@@ -101,7 +113,7 @@ async function main() {
     ...DEFAULT_ADMISSION_POLICY,
     perDomainCap: 5000,
     totalCap: 20000,
-    minDistractorsPerRecord: opts.minDistractors ?? 1,
+    minDistractorsPerRecord: opts.minDistractors ?? DEFAULT_ADMISSION_POLICY.minDistractorsPerRecord,
   });
   console.log(`[build-corpus-from-dacr] admitted=${decision.admitted.length} rejected=${decision.rejected.length}`);
   const rejectionsByReason = new Map();
