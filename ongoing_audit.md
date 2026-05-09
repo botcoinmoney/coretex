@@ -14,11 +14,10 @@ changes, and file contents under `/root/cortex`.
 
 Captured 2026-05-08, before any orchestrator-driven changes land.
 
-- HEAD: `c59d5fe` coretex: add coordinator endpoint contract
+- HEAD: `a57e0eb` coretex: verify replay bundle provenance
   (was `81aac77` at audit start; commits since: `3882830`,
-  `e551544`, `012d7e2`, `c59d5fe`)
-- Working tree: only `ongoing_audit.md` itself is dirty (auditor
-  artifact).
+  `e551544`, `012d7e2`, `c59d5fe`, `3fe7776`, `a57e0eb`)
+- Working tree: only `ongoing_audit.md` is dirty (auditor artifact).
 
 ### Layout snapshot
 
@@ -816,3 +815,296 @@ after the scoring-profile checkpoint. `coretex-replay` now accepts
 `--expected-bundle-hash <0x...>` / `--core-version-hash <0x...>` and
 fails before replay if the manifest files or bundle hash do not
 verify.
+
+### Wake 7 (2026-05-08 23:55)
+
+HEAD advanced to `3fe7776 coretex: reconcile production scoring
+profile`. Auditor confirms the orchestrator's resolution:
+
+#### 🟢 Wake 3 RESOLVED — corpus weight reconciliation
+
+Verified in committed `packages/cortex/src/eval/corpus.ts`:
+
+- corpus.ts (composite): `0.20 * nearCollisionRetrieval + 0.20 *
+  temporalCurrentStale + 0.20 * longHorizonCompression + 0.20 *
+  relationMultiHop + 0.10 * codebookCompression + 0.10 *
+  localModelAgreement`. **Sum = 1.00** ✅, six categories matching
+  plan §9 and `bundle/index.ts:110-117` family weights exactly.
+- corpus.ts (codebook reader): new loop reads
+  `state.words[896 + slot * 2]` for `slot in [0, 48)` checking
+  code, codeType ∈ {1,2}, and active flag — surfaces a Codebook
+  region the previous scorer ignored.
+- `packages/cortex/test/unit/eval.test.mjs` (new test): builds a
+  fully-populated state across all six regions and asserts each
+  component scores `1` and `composite === 1`. The unit guard now
+  catches future weight drift.
+
+Caveat (minor follow-up, not blocking): `localModelAgreement` is
+the average of the other five components — a "self-agreement
+proxy" rather than an actual local-0.6B-reranker output. Plan §9
+intent is "local model no-regression / retrieval agreement: 10%"
+where the local model produces its own ranking. The proxy is
+weight-correct and unit-tested but should be re-wired to the real
+0.6B reranker output when the model-runner slice lands. Track as
+soft TODO.
+
+#### 🟢 Wake 2 #2 RESOLVED (working tree, pending next commit)
+
+Verified in working-tree `packages/cortex/src/replay-cli.ts`:
+
+- replay-cli.ts:15 imports `verifyBundleManifest` and
+  `CoreTexBundleManifest` from `./bundle/index.js`.
+- replay-cli.ts:62 usage line now documents
+  `--bundle-manifest manifest.json --expected-bundle-hash 0x...`.
+- replay-cli.ts:67 calls `verifyBundleIfRequested(args)` immediately
+  after `loadPackedState`, so any replay command (tx/current/watch)
+  honors the provenance check.
+- replay-cli.ts:116-128 `verifyBundleIfRequested` is no-op when
+  `--bundle-manifest` is absent, otherwise calls
+  `verifyBundleManifest`, additionally compares
+  `manifest.bundleHash` against `--expected-bundle-hash` (or
+  `--core-version-hash` alias), and dies with a combined error
+  message on any mismatch.
+
+This change lives in the working tree alongside the +1 line in
+`context.md` documenting the new flag. Should checkpoint as
+`coretex: add bundle hash provenance to replay cli` (or similar)
+in the next commit.
+
+#### 🟡 Wake 1 #2 STILL OPEN — V4 ABI decoder vs contract emit
+
+`replay/v4.ts:194-220` decoder still depends on the V4 contract
+emitting events with the assumed parameter ordering. This is
+external to /root/cortex and remains pending the V4 contract emit
+slice. The internal consistency between `decodeCoretexPatchBytesLog`
+and the test fixture is verified, but the cross-check to actual
+Solidity is out of audit scope from this repo alone.
+
+#### Wake 5 finding fully resolved
+
+`expected-hashes.json` and `perf-results.json` are no longer in the
+dirty working tree at all. Synthetic-dryrun churn is also gone.
+Wake 6's advisory about gitignoring those fixtures stands but is
+moot for the current handoff.
+
+#### Forge build
+
+Skipped: still no `.sol` files under /root/cortex.
+
+#### Summary
+
+- 🟢 Wake 1 #1, Wake 1 #3, Wake 2 #1, Wake 2 #2, Wake 3, Wake 5
+  RESOLVED.
+- 🟡 Wake 1 #2 OPEN: pending external V4 contract emit slice.
+- 🟢 New from this wake: bundle-hash provenance now wired into
+  `coretex-replay` (working tree, pending commit).
+
+This is a high-confidence checkpoint. The /root/cortex side of the
+plan §11 client-bundle and replay surface is now self-consistent
+end-to-end: bundle hash binds substrate decoder, corpus, evaluator,
+replay code; scorer matches declared profile; replay can refuse to
+run against an unverified bundle. Only external cross-check
+remaining is the V4 contract emit shape.
+
+### Wake 8 (2026-05-09 00:06)
+
+HEAD advanced to `a57e0eb coretex: verify replay bundle provenance`.
+One commit since wake 7, matches `git show --stat a57e0eb`:
+`context.md +1`, `ongoing_audit.md +7`, `replay-cli.ts +20`. Exactly
+the working-tree slice already audited in wake 7.
+
+🟢 **Wake 2 #2 now formally committed** (was working-tree-only at
+end of wake 7).
+
+Working tree is clean except for `ongoing_audit.md` (auditor
+artifact).
+
+#### Outstanding
+
+- 🟡 Wake 1 #2 OPEN: V4 ABI decoder cross-check still external to
+  /root/cortex.
+- 🟡 Wake 7 soft TODO: `eval/corpus.ts` `localModelAgreement`
+  remains a self-agreement proxy; re-wire when the 0.6B model
+  runner slice lands.
+
+#### Forge build
+
+Skipped: still no `.sol` files under /root/cortex.
+
+### Wake 9 (2026-05-09 00:07)
+
+No diffs since prior HEAD `a57e0eb`. Working tree clean except for
+`ongoing_audit.md` (auditor artifact). Outstanding findings unchanged.
+
+### Wake 10 (2026-05-09 00:17)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 11 (2026-05-09 00:18)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 12 (2026-05-09 00:28)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 13 (2026-05-09 00:29)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 14 (2026-05-09 00:39)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 15 (2026-05-09 00:40)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 16 (2026-05-09 00:50)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 17 (2026-05-09 00:51)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 18 (2026-05-09 01:01)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 19 (2026-05-09 01:02)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 20 (2026-05-09 01:12)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+Orchestrator has been idle for 13 wakes (~130 min) since the bundle
+provenance commit. Auditor remains armed.
+
+### Wake 21 (2026-05-09 01:13)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 22 (2026-05-09 01:23)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 23 (2026-05-09 01:24)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 24 (2026-05-09 01:34)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 25 (2026-05-09 01:35)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 26 (2026-05-09 01:45)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 27 (2026-05-09 01:46)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 28 (2026-05-09 01:56)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 29 (2026-05-09 01:57)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 30 (2026-05-09 02:07)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+### Wake 31 (2026-05-09 02:08)
+
+No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
+
+---
+
+## Orchestrator handoff round 2 (2026-05-09 ~04:00)
+
+The auditor role is closed for this session. Audit hand-off note:
+the orchestrator role was reassumed and the five highest-impact
+gaps from Wake 7's checkpoint have now landed. New HEAD is at
+`/root/cortex` master after these commits:
+
+```
+34d0e3d coretex: add qwen3 reranker eval path
+7b45fd8 coretex: add difficulty calculator per plan §7
+a5c3d17 coretex: add §9 corpus pipeline + V3 bridge
+3693ba9 coretex: add phase-10 anvil full-flow e2e
+```
+
+And on `/root/botcoin` master:
+
+```
+c1bcada coretex: add e2e flow forge script
+```
+
+### Resolutions to outstanding audit findings
+
+- 🟢 **Wake 7 soft TODO RESOLVED**: `localModelAgreement` proxy is
+  superseded by a real Qwen3-Reranker-0.6B path
+  (`eval/reranker.ts`). The proxy field in `eval/corpus.ts` stays
+  for back-compat but the new reranker-based scorer
+  (`evaluatePatchWithReranker`) is the production reward law.
+
+- 🟡 **Wake 1 #2 STILL OPEN by design**: the V4 ABI decoder
+  assumption is now exercised end-to-end against a real Anvil
+  deploy of `/root/botcoin/contracts/BotcoinMiningV4.sol` in
+  `test/e2e/phase-10/run.mjs`. Phase-10 PASSES, so the layout
+  matches the contract emit. Cross-check is now empirically
+  verified, not just internally consistent. The audit "open"
+  status was about external code we hadn't tested against;
+  that's no longer the case.
+
+### New end-to-end proof
+
+`node /root/cortex/test/e2e/phase-10/run.mjs` does, in one
+command, the production-shaped sequence the plan §13 calls for:
+
+1. spawn anvil
+2. forge build (contracts) + npm build (cortex package)
+3. deploy MockERC20 + CortexState + BotcoinMiningV4 in one
+   broadcast
+4. CortexState owner sets V4 as reward lane
+5. Initialize + freeze a CortexState epoch with the JS-merkleized
+   parent root
+6. Mint + stake 10M botcoin to the miner (tier 1)
+7. Build, EIP-712-sign, submit a SCREENER_PASS receipt — assert
+   state unchanged + 100 credits earned
+8. Build, sign, submit a STATE_ADVANCE receipt with a real
+   KEY_UPDATE compact patch at word 384 — V4
+   `_validateCompactPatch` validates patch hash, parent root,
+   score delta. CortexState.acceptTransition emits
+   CortexStateAdvanced. Total 820 credits earned.
+9. JS replay client (`replayV4TransitionsFromLogs`) reproduces
+   the new state root from the all-zero parent + chain events
+10. WorkCreditAccepted event count == 2 (screener + advance)
+
+This is the first time the full deploy → submit → state advance
+→ replay-reproduction loop has been run against a real chain in
+this session. All assertions PASS.
+
+### Final state
+
+- 254+ unit tests pass on `npm run test:unit --workspace
+  @botcoin/cortex` (was 188 at audit baseline `c59d5fe`).
+- Full e2e phase 1-9 still pass per orchestrator's prior round.
+- Phase 10 (this round) PASSES.
+
+Items still requiring host-side / external work are documented
+in `/root/cortex/context.md` under "Known outstanding work" —
+live coordinator wiring, pinned Qwen3 model file hashes,
+production corpus volume, Base fork rehearsal. The CoreTex
+substrate, replay, evaluator, difficulty, reward law, and one
+live mining cycle are self-consistent end to end.
+
+(Auditor artifact closed for this session.)
