@@ -3,6 +3,11 @@
 Purpose: minimal wiring instructions for the coordinator AI agent that will
 mount CoreTex into the Botcoin coordinator host.
 
+For the full launch-blocking orchestration, including calibration, real
+reranker tests, Base fork rehearsal, mainnet canary, and independent replay,
+use `docs/CORETEX_FINAL_PRODUCTION_E2E_ORCHESTRATOR_RUNBOOK.md` as the
+controlling runbook. This file is the coordinator sub-agent slice.
+
 The coordinator should stay thin. CoreTex verification lives in the published
 bundle, corpus, replay client, and on-chain events. The host only serves files,
 signs evaluated receipts, rotates epochs, and exposes a small HTTP shim.
@@ -40,9 +45,17 @@ CORETEX_BUNDLE_HASH
 CORETEX_CORE_VERSION_HASH
 CORETEX_CORPUS
 CORETEX_BASE_RPC_URL
-CORETEX_V4_ADDRESS
-CORETEX_STATE_ADDRESS
+CORETEX_V4_ADDRESS=0x12ff0B47389AE6d6293d44991B0D6A27394494A4
+CORETEX_STATE_ADDRESS=0x5d3B9D9b246cf8457F320Bb27f008186B69D555d
 CORETEX_COORDINATOR_SIGNER
+```
+
+Current Base mainnet support contracts:
+
+```
+BotcoinMiningV3=0xB2fbe0DB5A99B4E2Dd294dE64cEd82740b53A2Ea
+BOTCOIN=0xA601877977340862Ca67f816eb079958E5bd0BA3
+chainId=8453
 ```
 
 ## Startup Gate

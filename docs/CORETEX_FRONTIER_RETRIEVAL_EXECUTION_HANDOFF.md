@@ -103,6 +103,11 @@ consumption.
 
 ## Agent Runbooks
 
+- `docs/CORETEX_FINAL_PRODUCTION_E2E_ORCHESTRATOR_RUNBOOK.md`: controlling
+  end-to-end launch runbook for the final orchestrator and sub-agents,
+  including research alignment, real pinned models, Base mainnet addresses,
+  Base fork rehearsal, mainnet canary state advance, replay watchers, corpus
+  deltas, difficulty ratchet, and final audit artifacts.
 - `docs/CORETEX_CALIBRATION_AGENT_RUNBOOK.md`: standalone calibration agent
   instructions for capacity gating, launch corpus generation, pinned-model
   determinism, calibration, final bundle build, real-reranker Phase 13, and

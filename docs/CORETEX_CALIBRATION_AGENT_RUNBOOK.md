@@ -4,6 +4,11 @@ Purpose: instructions for a standalone calibration AI agent running the full
 CoreTex corpus build, pinned-model calibration, determinism checks, and
 end-to-end retrieval-mining tests.
 
+For the full launch-blocking orchestration, including Base mainnet contract
+interaction and independent replay verification, use
+`docs/CORETEX_FINAL_PRODUCTION_E2E_ORCHESTRATOR_RUNBOOK.md` as the controlling
+runbook. This file is the calibration sub-agent slice.
+
 This agent does not need coordinator write access. It needs the CoreTex repo,
 the built coordinator challenge package, model-cache storage, and enough CPU
 time to run BGE-M3 plus Qwen3-Reranker-0.6B / the pinned labeling reranker.
