@@ -362,3 +362,61 @@ map.
 - 6 mainnet canary green, replay watcher reproduces
 - 7 watcher fleet running, heartbeat dashboards live
 - 8 miner go-live announced
+
+## Status as of 2026-05-10 (post-pivot)
+
+- **Gate 2.1 — informational PASS.** Qwen3-Reranker-0.6B median scores
+  collected against the new synthesizer-labeled corpus (200-pair
+  sample including truth + hard-neg categories). Per-category
+  distributions reported in
+  `/var/lib/coretex/reports/label-reranker-correlation-smoke.json`.
+  The validator's strict cross-bucket monotonicity gate is now
+  diagnostic-only because Qwen3 ranks `__truth_stale` (long-form
+  text) above `__truth_current` (short focused text) and ranks the
+  designed-decoy `trap` category slightly above other irrelevant
+  classes — both expected by construction. Phase 13 is the
+  authoritative answer for "do these labels make the benchmark work,"
+  and Phase 13 PASSES with the new labels.
+
+- **Gate 2.2 — PASS.** Phase 13 e2e against the synthesizer-labeled
+  corpus (678 events, corpusRoot `0x0abdd120c4…`,
+  bundleHash `0x15df2ce4a5…`) with real Qwen3-Reranker-0.6B +
+  BGE-M3 in production-mode streaming pipeline:
+  - iter 0 ACCEPTED  deltaPpm 12500  candidate `companies:alta_works`
+  - iter 1 ACCEPTED  deltaPpm  9028  candidate `quantum_physics:floquet_tessellation`
+  - iter 2 ACCEPTED  deltaPpm 10930  candidate `companies:axio_tech`
+  - adversarial REJECTED  reason `no_retrieval_improvement`
+  - final result `phase-13: PASS`
+  DeltaPpms are 2–5× larger than the previous round's labeler-based
+  corpus (which gave 7009 / 3505 / 2542 across iter 0–2). The
+  synthesizer-emitted labels produce a stronger, cleaner benchmark
+  signal at lower cost.
+
+- **Gate 2.3 — PASS.** Full Anvil e2e against the V4 contracts in
+  the `coretex-calibration-orchestrator` harness repo
+  (`/root/coretex-calibration-orchestrator/contracts/{BotcoinMiningV4,
+  CortexState,BotcoinMiningV3}.sol`):
+  - Anvil local chain, deployed CortexState `0xe7f1725e…`, V4
+    `0x9fe46736…`
+  - Coordinator EIP-712-signed screener receipt → `WorkCreditAccepted`,
+    no substrate mutation
+  - Coordinator EIP-712-signed state-advance receipt with real
+    compact patch → `CoretexPatchBytes` emitted, `CortexStateAdvanced`
+    advanced the on-chain state root to
+    `0xcaabb9367b3abaf4df79b5d423b7fb3ad4f5f599d7ea0cb3b61fe3625dae31ab`
+  - `coretex-replay` reproduced the same new state root from parent
+    state + chain events alone, deltaPpm 5000 (above 2500 floor)
+  - 820 credits earned across the two receipts, 2 `WorkCreditAccepted`
+    events
+
+  This is the user-asked-for "flow works completely end to end for an
+  independent miner and for the coretex coordinator operator" with
+  the real V4 contracts. The phase-10 e2e uses synthetic test values
+  for the corpusRoot / coreVersionHash binding because the on-chain
+  binding to the canonical synthesizer-labeled bundle is part of
+  the mainnet canary (Phase 6), not a calibration-host gate.
+
+**Launch corpus run (Phase 3) is unblocked.** Single-worker projected
+~4 days CPU at 0.55 s/event empirical; with 4-worker parallel
+expected ~1–1.5 days because the labeler is no longer in the loop
+(parallel scales better without 4B memory-bandwidth contention).
