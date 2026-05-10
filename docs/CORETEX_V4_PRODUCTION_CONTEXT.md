@@ -2,6 +2,19 @@
 
 Last updated: 2026-05-09.
 
+## 2026-05-10 Frontier-Retrieval Correction
+
+The current V4 infrastructure is strong, but the default `coretex-v4-launch`
+reward profile is not the final frontier memory-retrieval benchmark. It is
+still dominated by structural substrate commitment signals. The required final
+shape is documented separately in
+`docs/CORETEX_V4_FRONTIER_RETRIEVAL_HARDENING_PLAN.md`.
+
+Do not call CoreTex production-ready as a memory-retrieval benchmark until the
+retrieval-native plan is implemented: hidden query packs, substrate top-k
+retrieval, Qwen3-graded relevance, `nDCG@10` as primary metric, and replayable
+metric reproduction.
+
 ## Current Head
 
 - `e1dfa5d coretex: complete DACR corpus rotation and reranker gates`
