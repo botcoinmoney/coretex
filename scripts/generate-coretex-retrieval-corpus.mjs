@@ -97,10 +97,14 @@ const productionCorpusMode =
   env.CORETEX_CORPUS_PRODUCTION === '1' ||
   env.CORTEX_REAL_EVAL === '1' ||
   env.CORETEX_RERANKER_PRODUCTION === '1';
-if (productionCorpusMode && env.CORETEX_LABELER !== 'pinned') {
-  console.error('generate-coretex-retrieval-corpus: production corpus generation requires CORETEX_LABELER=pinned');
-  exit(2);
-}
+// Production corpus generation refuses a non-pinned bi-encoder and any
+// source other than the challenge library. The labeler is no longer on
+// the production hot path — qrels for hard negatives are derived from
+// the synthesizer's construction-time category through the bundle's
+// negCategoryRelevanceMap (see resolveNegRelevancesFromCategories below).
+// CORETEX_LABELER=pinned is still honored as an A/B opt-in to compare
+// the synthesizer's labels against the 4B reranker's labels on the
+// same corpus, but it is not required.
 if (productionCorpusMode && env.CORETEX_BIENCODER !== 'pinned') {
   console.error('generate-coretex-retrieval-corpus: production corpus generation requires CORETEX_BIENCODER=pinned');
   exit(2);
@@ -194,18 +198,36 @@ function buildDocument(facts) {
 }
 
 function buildHardNegatives(fact, otherFacts, r) {
+  // Returns an array of { text, category } records. Categories are known
+  // by construction at each branch; the corpus generator threads them
+  // through to buildEvent which resolves them to qrel relevances via the
+  // bundle's negCategoryRelevanceMap (no per-event 4B reranker call).
   const out = [];
   const noise = otherFacts.slice(0, 4);
   for (const n of noise) {
     if (n === fact) continue;
     if (r() < 0.5) {
-      out.push(`${fact.entity}'s ${fact.attribute} is ${n.value}.`);   // wrong value, right entity+attr
+      // Wrong value, right entity + attribute → near_collision_attribute
+      // (the substrate knows the right entity but picks the wrong value).
+      out.push({
+        text: `${fact.entity}'s ${fact.attribute} is ${n.value}.`,
+        category: 'near_collision_attribute',
+      });
     } else {
-      out.push(`${n.entity}'s ${fact.attribute} is ${fact.value}.`);   // right value, wrong entity
+      // Right value, wrong entity → near_collision_entity
+      // (different entity that surface-matches the query's attribute+value).
+      out.push({
+        text: `${n.entity}'s ${fact.attribute} is ${fact.value}.`,
+        category: 'near_collision_entity',
+      });
     }
   }
   while (out.length < 3) {
-    out.push(`${fact.entity}'s ${fact.attribute} is redacted-${Math.floor(r() * 10000)} in the distractor archive.`);
+    // Synthetic padding filler — no signal, true negative.
+    out.push({
+      text: `${fact.entity}'s ${fact.attribute} is redacted-${Math.floor(r() * 10000)} in the distractor archive.`,
+      category: 'unrelated',
+    });
   }
   return out.slice(0, 4);
 }
@@ -247,6 +269,42 @@ async function labelHardNegative(query, document) {
   if (score >= 0.55) return 0.4;
   if (score >= 0.25) return 0.2;
   return 0.0;
+}
+
+// ─── Synthesizer-category relevance resolver ─────────────────────────────────
+//
+// Replaces the per-event 4B-reranker labeling call. The corpus generator
+// knows the structural category of every hard negative at construction
+// time; the bundle's negCategoryRelevanceMap turns that into a qrel
+// relevance bucket deterministically. This is what makes corpus
+// expansion CPU-cheap forever and matches the design intent of an
+// indefinitely growing on-chain temporal map substrate.
+const negCategoryRelevanceMap = manifest.evaluator?.profile?.negCategoryRelevanceMap;
+if (productionCorpusMode && !negCategoryRelevanceMap) {
+  console.error(
+    'generate-coretex-retrieval-corpus: production corpus generation requires ' +
+      'manifest.evaluator.profile.negCategoryRelevanceMap (rebuild template-bundle.json ' +
+      'against the current @botcoin/cortex)',
+  );
+  exit(2);
+}
+
+function resolveNegRelevancesFromCategories(hardNegs) {
+  return hardNegs.map((n) => {
+    if (!n.category) {
+      throw new Error(
+        `hard negative ${n.id} has no category — corpus generator must tag every ` +
+          `neg with a structural category at construction time`,
+      );
+    }
+    const r = negCategoryRelevanceMap[n.category];
+    if (typeof r !== 'number') {
+      throw new Error(
+        `negCategoryRelevanceMap missing category ${n.category} for neg ${n.id}`,
+      );
+    }
+    return r;
+  });
 }
 
 function relevanceFromScore(score) {
@@ -353,7 +411,9 @@ for (const domain of domains) {
         recordCounter++;
 
         const truthDocs = [{ id: `${id}::truth`, text: truthDocText, isCurrent: true }];
-        const hardNegs = negs.map((t, i) => ({ id: `${id}::neg${i}`, text: t }));
+        // negs are { text, category } records emitted by buildHardNegatives;
+        // attach an event-scoped id so they can be referenced in qrels.
+        const hardNegs = negs.map((n, i) => ({ id: `${id}::neg${i}`, text: n.text, category: n.category }));
 
         // Temporal family: add a "stale" truth document.
         let temporal;
@@ -378,9 +438,10 @@ for (const domain of domains) {
         // subprocess only pays one round-trip + one padded forward pass.
         const { queryHex, perTruthHex, perNegHex } = await encodeEventTexts(question, truthDocs, hardNegs);
 
-        // Qrels: truth at 1.0 (current) or 0.4 (stale temporal); hard negatives
-        // scored in one batched labeler call to amortize subprocess + forward.
-        const negRelevances = await labelHardNegativesBatched(question, hardNegs);
+        // Qrels: truth at 1.0 (current) or 0.4 (stale temporal); hard
+        // negatives resolved via the bundle's negCategoryRelevanceMap from
+        // the construction-time category — no per-event reranker call.
+        const negRelevances = resolveNegRelevancesFromCategories(hardNegs);
         const qrels = [];
         for (const td of truthDocs) qrels.push({ documentId: td.id, relevance: td.isCurrent ? 1.0 : 0.4 });
         for (let ni = 0; ni < hardNegs.length; ni++) qrels.push({ documentId: hardNegs[ni].id, relevance: negRelevances[ni] });
@@ -516,7 +577,10 @@ async function recordsFromChallenge({
       domain,
       queryText: `Which ${domainLabel(domain)} record is the exact profile for ${entity.name}?`,
       truthDocuments: [{ id: `${id}::truth`, text: entityDocs.get(String(entity.name)), isCurrent: true }],
-      hardNegativeTexts: nearestEntityDocs(entities, entity.name, entityDocs, 4),
+      // Other-entity documents in the same domain — surface-similar but
+      // different entity. Synthesizer category: near_collision_entity.
+      hardNegativeRecords: nearestEntityDocs(entities, entity.name, entityDocs, 4)
+        .map((text) => ({ text, category: 'near_collision_entity' })),
       protectedRecord: false,
       provenance: provenanceFor(challenge, challengeKey, sourceSeed, {
         questionId: `entity:${entity.name}`,
@@ -543,9 +607,13 @@ async function recordsFromChallenge({
         { id: `${id}::truth_current`, text: currentText, isCurrent: true },
         { id: `${id}::truth_stale`, text: staleText, isCurrent: false },
       ],
-      hardNegativeTexts: [
-        staleText,
-        ...nearestEntityDocs(entities, modifier.entityName, entityDocs, 3),
+      // Modifier (temporal) record's negs: first is the explicitly-stale
+      // version of the truth (temporal_stale), rest are other-entity docs
+      // in the same temporal context (near_collision_entity).
+      hardNegativeRecords: [
+        { text: staleText, category: 'temporal_stale' },
+        ...nearestEntityDocs(entities, modifier.entityName, entityDocs, 3)
+          .map((text) => ({ text, category: 'near_collision_entity' })),
       ],
       protectedRecord: true,
       temporal: {
@@ -579,9 +647,14 @@ async function recordsFromChallenge({
         { id: `${id}::truth_current`, text: currentText, isCurrent: true },
         { id: `${id}::truth_stale`, text: staleText, isCurrent: false },
       ],
-      hardNegativeTexts: [
-        staleText,
-        ...nearestEntityDocs(entities, trap.entityName, entityDocs, 3),
+      // Trap-temporal record's negs: first is the stale designed-decoy
+      // (temporal_stale — the substrate must learn to reject the
+      // explicitly-superseded "planning note" wrongValue), rest are
+      // other-entity docs in the same trap context (near_collision_entity).
+      hardNegativeRecords: [
+        { text: staleText, category: 'temporal_stale' },
+        ...nearestEntityDocs(entities, trap.entityName, entityDocs, 3)
+          .map((text) => ({ text, category: 'near_collision_entity' })),
       ],
       protectedRecord: true,
       temporal: {
@@ -614,9 +687,13 @@ async function recordsFromChallenge({
         edgeType: family === 'multi_hop_relation' ? 'derived_from' : 'supports',
       });
     }
-    const hardNegativeTexts = nearestEntityDocsByAnswer(entities, answerName, entityDocs, 4);
+    // Question record's negs: other answer-entity docs (near_collision_entity)
+    // plus any trap texts produced for this question (trap — designed
+    // adversarial decoys that the substrate must learn to reject).
+    const hardNegativeRecords = nearestEntityDocsByAnswer(entities, answerName, entityDocs, 4)
+      .map((text) => ({ text, category: 'near_collision_entity' }));
     for (const trapText of trapTextsForQuestion(challenge, q, entityDocs)) {
-      hardNegativeTexts.push(trapText);
+      hardNegativeRecords.push({ text: trapText, category: 'trap' });
     }
     records.push(await buildEvent({
       id,
@@ -624,7 +701,7 @@ async function recordsFromChallenge({
       domain,
       queryText: q.text,
       truthDocuments: [{ id: `${id}::truth`, text: truthText, isCurrent: true }],
-      hardNegativeTexts,
+      hardNegativeRecords,
       protectedRecord: family === 'temporal',
       temporal: family === 'temporal'
         ? { validFromEpoch: corpusEpoch, validUntilEpoch: 1 << 30, currentStaleFlag: true }
@@ -646,25 +723,47 @@ async function buildEvent({
   domain,
   queryText,
   truthDocuments,
-  hardNegativeTexts,
+  hardNegativeRecords,
   protectedRecord,
   temporal,
   relations,
   provenance,
 }) {
-  const hardNegatives = uniqueTexts(hardNegativeTexts)
-    .filter((text) => truthDocuments.every((truth) => truth.text !== text))
-    .slice(0, 6)
-    .map((text, i) => ({ id: `${id}::neg${i}`, text }));
+  // De-dup on text, drop any neg that matches a truth doc verbatim,
+  // cap at 6. Each surviving neg carries its synthesizer category.
+  const truthTexts = new Set(truthDocuments.map((td) => td.text));
+  const seen = new Set();
+  const deduped = [];
+  for (const rec of hardNegativeRecords ?? []) {
+    if (!rec?.text || seen.has(rec.text) || truthTexts.has(rec.text)) continue;
+    seen.add(rec.text);
+    deduped.push(rec);
+    if (deduped.length >= 6) break;
+  }
+  const hardNegatives = deduped.map((rec, i) => ({
+    id: `${id}::neg${i}`,
+    text: rec.text,
+    category: rec.category,
+  }));
   while (hardNegatives.length < 3) {
+    // Padding filler — true negative, no signal. The substrate is not
+    // expected to learn anything from these; the qrel is 0.0.
     hardNegatives.push({
       id: `${id}::neg${hardNegatives.length}`,
       text: `Non-answer distractor for ${id}: this record mentions ${domain} but does not contain the requested answer.`,
+      category: 'unrelated',
     });
   }
 
   const { queryHex, perTruthHex, perNegHex } = await encodeEventTexts(queryText, truthDocuments, hardNegatives);
-  const negRelevances = await labelHardNegativesBatched(queryText, hardNegatives);
+  // Synthesizer-category relevance (default). The labeler path is still
+  // honored if CORETEX_LABELER=pinned is set explicitly, so an operator
+  // can A/B compare the synthesizer's labels against MemReranker-4B's
+  // labels on the same corpus by toggling the env var.
+  const useLabeler = labeler && env.CORETEX_LABELER === 'pinned';
+  const negRelevances = useLabeler
+    ? await labelHardNegativesBatched(queryText, hardNegatives)
+    : resolveNegRelevancesFromCategories(hardNegatives);
 
   const qrels = [];
   for (const td of truthDocuments) qrels.push({ documentId: td.id, relevance: td.isCurrent ? 1.0 : 0.4 });
