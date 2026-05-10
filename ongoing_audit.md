@@ -1144,3 +1144,75 @@ retrieval-state advances and rejecting `no_retrieval_improvement` on the
 adversarial patch. See
 `docs/CORETEX_FRONTIER_RETRIEVAL_EXECUTION_HANDOFF.md` for commands and
 file-of-record details.
+
+## Orchestrator handoff round 4 (2026-05-10, CPU finalization)
+
+CPU-finalization orchestrator pass after the addition of
+`docs/CORETEX_FINAL_PRODUCTION_E2E_ORCHESTRATOR_RUNBOOK.md`. Purpose:
+ensure the canonical CoreTex repo is shippable as the production
+artifact for all coordinator hosts, replay watchers, miners, and
+auditors. No npm/node available on this CPU finalizer; build/test gates
+still run on the calibration host per the runbook.
+
+Source-level audit findings (no blockers):
+
+- Production gating verified end to end: `rerankerFromEnv`,
+  `biEncoderFromEnv`, `createDeterministicBiEncoder`,
+  `createDeterministicReranker` all refuse production mode unless the
+  pinned model selector is set. Bundle manifest validation rejects
+  mutable/placeholder model revisions.
+- Coordinator boundary verified: `handleCoreTexCoordinatorRoute`,
+  `createRetrievalDataSource`, `loadProductionCorpus`,
+  `assertBundleBindingAtStartup`, `verifyBundleManifest`, and
+  `CORETEX_ENDPOINTS` are exported and the request-shape contract is
+  unit-tested.
+- Corpus delta layer verified: `applyCorpusDelta` enforces schema
+  version, `previousRoot -> nextRoot` continuity, bi-encoder pinning,
+  per-record split assignment, and computed-vs-claimed root match.
+- Mainnet scripts verified safe-by-default: `dry-run-epoch.mjs` is
+  read-only; `emergency-disable-rehearsal.mjs` and
+  `multisig-revert-rehearsal.mjs` require an explicit
+  `MAINNET_CONFIRM=I-UNDERSTAND-THIS-IS-MAINNET-DRILL` env var and
+  print calldata only.
+- No tracked secrets: `.env`, model weights, RPC creds, seed preimages
+  are all gitignored and absent from the index.
+
+Tightening landed this round:
+
+- Cross-linked `docs/CORETEX_PRODUCTION_RUNBOOK.md` and
+  `docs/CORETEX_V4_FRONTIER_RETRIEVAL_HARDENING_PLAN.md` to the
+  controlling final orchestrator runbook so operators always land on
+  the canonical sequence.
+- Corrected the coordinator integration runbook's startup-binding
+  example to match the real
+  `assertBundleBindingAtStartup({ manifest, onChainCoreVersionHash,
+  installedRuntimeVersions })` API and added an explicit
+  `verifyBundleManifest(repoRoot)` step before the runtime gate.
+- Added unit-test coverage for `createRetrievalDataSource` (new
+  `packages/cortex/test/unit/retrieval-data-source.test.mjs`):
+  bundle-hash mismatch refuses construction; hidden, canary, and
+  calibration splits are masked by default; calibration is unlocked
+  only when `allowCalibrationReads=true`; embeddings serialize to hex;
+  `getBundle` is hash-gated; coverage hints summarize train_visible
+  records or defer to the host override; optional substrate/patch/
+  eval-report hooks are forwarded.
+- Tightened the production-mode refusal in
+  `scripts/generate-coretex-retrieval-corpus.mjs`: it already refused a
+  non-pinned labeler in production mode; it now also refuses a
+  non-pinned bi-encoder and any source other than `challenge-library`.
+
+Pushed to `origin/main`: f418441 (boundary tightening + runbook
+cross-links) and 1e75a11 (corpus generator production gates).
+
+Calibration-host gates that this CPU finalizer cannot run locally:
+
+- `npm ci`, `npm run build`, `npm run typecheck`, `npm run test:unit`.
+- The full Phase 13 e2e with `CORETEX_RERANKER=qwen3 CORTEX_REAL_EVAL=1
+  CORETEX_RERANKER_PRODUCTION=1` against the pinned BGE-M3 + Qwen3 +
+  MemReranker weights.
+- Determinism check + aggregate across ≥3 calibrated hosts.
+- Base fork rehearsal and Base mainnet canary.
+
+Each of those is the calibration agent's job per
+`docs/CORETEX_CALIBRATION_AGENT_RUNBOOK.md` and the controlling final
+orchestrator runbook.
