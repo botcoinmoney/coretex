@@ -88,8 +88,9 @@ of any data loading. The temporal family ships with two operative sources:
    templated grammar (LoCoMo Path B fill)
 
 Combined coverage ≈ 90% of the original §5 design intent. The remaining
-~10% (long multi-session conversational cadence) is documented as a V1
-follow-up in `docs/v1-roadmap.md`.
+~10% (long multi-session conversational cadence) was documented as a V1
+follow-up in the archived CortexBench V0 roadmap. Current CoreTex launch
+authority is `docs/README.md`.
 
 **Implication for the §11 thesis**: family weights (60/20/20) unchanged.
 Pass-rate targets unchanged. The temporal family's structural property

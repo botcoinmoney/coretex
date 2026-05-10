@@ -198,7 +198,7 @@ At each epoch boundary:
 2. Generate the next corpus delta from the challenge library:
 
 ```bash
-CORETEX_CORPUS_PRODUCTION=1 CORETEX_BIENCODER=pinned CORETEX_LABELER=pinned \
+CORETEX_CORPUS_PRODUCTION=1 CORETEX_BIENCODER=pinned \
 node scripts/generate-coretex-retrieval-corpus.mjs \
   --source challenge-library \
   --challenge-lib-root /opt/botcoin-coordinator-live/packages/challenges \

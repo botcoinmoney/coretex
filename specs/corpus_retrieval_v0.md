@@ -150,21 +150,18 @@ Default split percentages (calibration outputs; pinned in bundle profile):
 
 ## Graded qrel labeling
 
-Graded labels are produced at corpus-build time by a separately pinned
-**labeling reranker** (stronger than the production reranker).
-The labeling reranker is pinned in the bundle's `labelingModel` field
-(revision + per-file SHA-256 + runtime + quantization).
-
-Labeling is deterministic and replayable. Per `(query, candidate)` pair:
+Production hard-negative labels are emitted by the challenge synthesizer as
+structural negative categories and resolved through the bundle's
+`negCategoryRelevanceMap`.
 
 ```
-score   = labelingReranker.score(query, candidate)
-binEdges= [0.0, 0.05, 0.20, 0.50, 0.80, 1.0]   // calibrated
-relevance = lookup(score, binEdges) -> {0.0, 0.2, 0.4, 0.6, 0.8, 1.0}
+category  = challengeSynthesizer.hardNegative.category
+relevance = bundle.evaluator.profile.negCategoryRelevanceMap[category]
 ```
 
-The labeling model is **not** the production reranker. Using the same
-model for both is circular and is rejected at bundle build.
+This keeps corpus expansion CPU-cheap and replayable. A separately pinned
+stronger reranker may be used as an offline audit/reference model, but it is
+not in the production corpus-generation hot path and live eval never uses it.
 
 ## CorpusDelta carrying embeddings
 
@@ -194,9 +191,10 @@ the entire delta). `applyCorpusDelta` enforces:
 
 ## Reproducibility
 
-A fresh corpus build, on two clean machines using the pinned models,
-produces a byte-identical `corpusRoot`. The bundle manifest binds the
-labeling model revision + per-file SHA-256, so the qrels are reproducible.
+A fresh corpus build, on two clean machines using the pinned challenge
+synthesizer, bundle `negCategoryRelevanceMap`, and pinned bi-encoder,
+produces a byte-identical `corpusRoot`. The bundle manifest binds the qrel map
+and model file hashes, so labels and embeddings are reproducible.
 
 ## Coordinator API surface
 

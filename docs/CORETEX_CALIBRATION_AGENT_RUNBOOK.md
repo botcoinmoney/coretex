@@ -11,7 +11,10 @@ runbook. This file is the calibration sub-agent slice.
 
 This agent does not need coordinator write access. It needs the CoreTex repo,
 the built coordinator challenge package, model-cache storage, and enough CPU
-time to run BGE-M3 plus Qwen3-Reranker-0.6B / the pinned labeling reranker.
+time to run BGE-M3 plus Qwen3-Reranker-0.6B. Hard-negative qrels for the
+production corpus come from synthesizer categories through the bundle's
+`negCategoryRelevanceMap`; MemReranker-4B is an offline audit/reference model,
+not a required per-record production labeler.
 
 ## Launch Corpus Size Gate
 
@@ -106,7 +109,6 @@ node scripts/estimate-coretex-corpus-capacity.mjs \
 ```bash
 CORETEX_CORPUS_PRODUCTION=1 \
 CORETEX_BIENCODER=pinned \
-CORETEX_LABELER=pinned \
 CORTEX_REAL_EVAL=1 \
 CORETEX_RERANKER=qwen3 \
 CORETEX_RERANKER_PRODUCTION=1 \
@@ -193,7 +195,6 @@ node test/e2e/phase-13/run.mjs \
 ```bash
 CORETEX_CORPUS_PRODUCTION=1 \
 CORETEX_BIENCODER=pinned \
-CORETEX_LABELER=pinned \
 node scripts/generate-coretex-retrieval-corpus.mjs \
   --source challenge-library \
   --challenge-lib-root /root/botcoin-coordinator-live/packages/challenges \

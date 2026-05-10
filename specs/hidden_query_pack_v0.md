@@ -136,6 +136,6 @@ function deriveQueryPack(epochId, evalSeed, corpusEpoch, corpus, profile):
     return pack
 ```
 
-`stratum_of(record)` is deterministic from the record's family and a
-hardness bucket derived from the labeling model's score on the record's
-hardest negative pair (also a calibration output).
+`stratum_of(record)` is deterministic from the record's family and a hardness
+bucket derived from the record's synthesizer-category qrels and calibrated
+visible-split retrieval difficulty.

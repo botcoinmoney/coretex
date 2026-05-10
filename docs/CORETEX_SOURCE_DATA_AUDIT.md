@@ -70,8 +70,9 @@ Notes:
 - A retrieval corpus has to be generated from the challenge-library source code,
   not from materialized dataset_v2 traces. The library produces deterministic
   seeded worlds, domain-specific entity attributes, computed question answers,
-  traps, constraints, and modifier-derived temporal updates. Qrels are labeled
-  at corpus-build time by the separately pinned labeling reranker.
+  traps, constraints, modifier-derived temporal updates, and hard-negative
+  categories. Qrels are resolved from those categories through the bundle's
+  `negCategoryRelevanceMap`.
 
 ## Recommended outcome
 
@@ -82,11 +83,11 @@ Rationale:
 Coordinator dataset_v2 captures challenge-attempt traces. It does not
 contain (query, answer-bearing-document, hard-negatives, graded-qrels)
 tuples in any single record category. Bridging would require synthesizing
-qrels from a labeling reranker, lifting traps to hard negatives, and
-inferring temporal current/stale annotations. The plan specifies that
-under `reject_current_data`, the orchestrator generates a CoreTex
-retrieval corpus from the challenge libraries and the labeling-model
-pipeline (`scripts/generate-coretex-retrieval-corpus.mjs`).
+qrels, lifting traps to hard negatives, and inferring temporal current/stale
+annotations. The current plan specifies that under `reject_current_data`, the
+orchestrator generates a CoreTex retrieval corpus from the challenge libraries
+and synthesizer-category labels via
+`scripts/generate-coretex-retrieval-corpus.mjs`.
 
 ## CoreTex corpus source decision
 

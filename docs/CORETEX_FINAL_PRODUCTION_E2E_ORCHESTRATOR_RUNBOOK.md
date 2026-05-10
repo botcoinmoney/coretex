@@ -163,7 +163,6 @@ BASE_RPC_URL=<authenticated Base RPC>
 OWNER_PK=<owner/coordinator key from secure secret store>
 CORETEX_CHALLENGE_LIB_ROOT=/root/botcoin-coordinator-live/packages/challenges
 CORETEX_BIENCODER=pinned
-CORETEX_LABELER=pinned
 CORETEX_RERANKER=qwen3
 CORETEX_RERANKER_PRODUCTION=1
 CORTEX_REAL_EVAL=1
@@ -222,13 +221,12 @@ node scripts/estimate-coretex-corpus-capacity.mjs \
   --out /var/lib/coretex/reports/corpus-capacity.json
 ```
 
-Corpus build (single worker; persistent BGE-M3 + MemReranker-4B
-subprocess pipeline):
+Corpus build (single worker; persistent BGE-M3 subprocess pipeline,
+synthesizer-category qrels):
 
 ```bash
 CORETEX_CORPUS_PRODUCTION=1 \
 CORETEX_BIENCODER=pinned \
-CORETEX_LABELER=pinned \
 CORTEX_REAL_EVAL=1 \
 CORETEX_BIENCODER_PYTHON=/root/cortex/.venv/bin/python \
 CORETEX_RERANKER_PYTHON=/root/cortex/.venv/bin/python \
@@ -237,7 +235,6 @@ HF_HUB_CACHE=/var/lib/coretex/model-cache \
 HF_HUB_OFFLINE=1 \
 BIENCODER_NUM_THREADS=16 BIENCODER_INNER_BATCH=64 \
 RERANKER_NUM_THREADS=16 RERANKER_INNER_BATCH=16 \
-CORETEX_LABELER_NUM_THREADS=16 CORETEX_LABELER_BATCH_SIZE=16 \
 node scripts/generate-coretex-retrieval-corpus.mjs \
   --source challenge-library \
   --challenge-lib-root $CORETEX_CHALLENGE_LIB_ROOT \
@@ -251,12 +248,14 @@ node scripts/generate-coretex-retrieval-corpus.mjs \
   --out /var/lib/coretex/corpus-epoch-0.json
 ```
 
-Production-mode generation refuses anything but `CORETEX_BIENCODER=pinned`,
-`CORETEX_LABELER=pinned`, and `--source challenge-library`. The script
-spawns one persistent Python child per pinned model (loaded exactly
-once) and services NDJSON requests over stdin/stdout — the legacy
-per-call spawn variant pays the multi-gigabyte model-load cost on every
-encode/score and is unusable past a few hundred events on a CPU host.
+Production-mode generation refuses a non-pinned bi-encoder and refuses any
+source other than `--source challenge-library`. Hard-negative qrels are
+resolved from the synthesizer's structural negative category through the
+bundle's `negCategoryRelevanceMap`; the launch corpus does not require a
+4B labeler call per event. The script spawns a persistent Python BGE-M3 child
+(loaded exactly once) and services NDJSON requests over stdin/stdout — the
+legacy per-call spawn variant pays the model-load cost on every encode and is
+unusable past a few hundred events on a CPU host.
 
 For multi-shard parallel generation, the parallel driver dispatches
 disjoint seed-offset shards and merges them deterministically:
@@ -278,18 +277,11 @@ node scripts/generate-coretex-retrieval-corpus-parallel.mjs \
   --out /var/lib/coretex/corpus-epoch-0.json
 ```
 
-CPU runtime: MemReranker-4B labeling is the dominant cost. Single-worker
-empirical throughput on a 32-core x86_64 host with 128 GB RAM and the
-models pre-cached is approximately 1.7 pair/s (~0.5 pair/s in practice
-on real-length prompts ≈200 tokens), driven by memory bandwidth — so
-the launch corpus (`seeds-per-domain=512`, ≈679k events × ~4 hard
-negatives = ~2.7M label calls) is multi-week wall on this hardware.
-Parallel workers help marginally on a single machine because the labeler
-saturates memory bandwidth even at one worker; two workers run at
-~92% of single-worker per-worker rate. Run the launch corpus on a host
-with multiple memory controllers or use accelerator-equipped hardware
-that hosts the labeler at higher pair/s; the same scripts run unchanged
-and the bundle binds the pipeline + pinned models, not the host.
+CPU runtime is dominated by BGE-M3 embedding, not online 4B labeling. The
+launch corpus (`seeds-per-domain=512`, about 679k events before deltas) should
+be generated with the parallel shard driver when the host has spare cores and
+memory bandwidth. MemReranker-4B remains pinned for offline audit/reference
+checks, but it is not in the corpus-generation hot path.
 
 Validation:
 
@@ -659,7 +651,6 @@ Corpus delta:
 ```bash
 CORETEX_CORPUS_PRODUCTION=1 \
 CORETEX_BIENCODER=pinned \
-CORETEX_LABELER=pinned \
 node scripts/generate-coretex-retrieval-corpus.mjs \
   --source challenge-library \
   --challenge-lib-root $CORETEX_CHALLENGE_LIB_ROOT \

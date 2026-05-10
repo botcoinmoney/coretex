@@ -7,14 +7,15 @@ Each box must be green before the next is started.
 
 ## 0. Pre-conditions
 
-- [ ] `docs/CORETEX_V4_FRONTIER_RETRIEVAL_HARDENING_PLAN.md` is the
-      canonical design plan.
+- [ ] `docs/CORETEX_LAUNCH_PLAN_v2.md` is the launch-controlling plan,
+      with `docs/CORETEX_V4_FRONTIER_RETRIEVAL_HARDENING_PLAN.md` retained
+      only as design background where non-conflicting.
 - [ ] `docs/CORETEX_FINAL_PRODUCTION_E2E_ORCHESTRATOR_RUNBOOK.md` has been
       executed end to end by the launch orchestrator and sub-agents.
 - [ ] Phase A through G acceptance gates are green (see plan).
 - [ ] `docs/CORETEX_SOURCE_DATA_AUDIT.md` outcome is recorded.
 - [ ] `docs/CORETEX_MODEL_SELECTION_AUDIT.md` exists and pins the
-      production reranker + labeling reranker.
+      production reranker + offline audit/reference reranker.
 
 ## 1. Calibration outputs
 

@@ -49,7 +49,7 @@ temporal current/stale labels, or cross-document relation labels.
 
 Launch corpus generation therefore follows the `reject_current_data` branch:
 generate retrieval-shaped records from challenge primitives, label qrels with
-the separately pinned labeling reranker, and publish signed embedding-bearing
+the bundle's synthesizer-category qrel map, and publish signed embedding-bearing
 corpus deltas for every epoch.
 
 See `docs/CORETEX_SOURCE_DATA_AUDIT.md`.
@@ -250,7 +250,6 @@ The repo is ready to port to the calibration host without code edits:
 ```bash
 CORETEX_CORPUS_PRODUCTION=1 \
 CORETEX_BIENCODER=pinned \
-CORETEX_LABELER=pinned \
 CORTEX_REAL_EVAL=1 \
 CORETEX_RERANKER=qwen3 \
 CORETEX_RERANKER_PRODUCTION=1 \

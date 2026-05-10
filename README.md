@@ -10,25 +10,35 @@ https://github.com/botcoinmoney/cortex.git
 
 The repo should be renamed to `CoreTex` or `coretex` before public release. Until then, use **CoreTex** in product/docs language and keep lowercase `cortex` only for real paths, package names, commands, endpoints, and compatibility identifiers.
 
-Production v4 planning authority lives in:
+Current launch authority lives in this repo:
 
-```text
-/root/botcoin/CORETEX_V4_PRODUCTION_PLAN.md
-```
+- [docs/README.md](./docs/README.md) — canonical documentation map.
+- [docs/CORETEX_LAUNCH_PLAN_v2.md](./docs/CORETEX_LAUNCH_PLAN_v2.md) — current
+  production launch plan after the synthesizer-labeled corpus pivot.
+- [docs/CORETEX_FINAL_PRODUCTION_E2E_ORCHESTRATOR_RUNBOOK.md](./docs/CORETEX_FINAL_PRODUCTION_E2E_ORCHESTRATOR_RUNBOOK.md) — launch-blocking end-to-end
+  orchestration.
+- [docs/CORETEX_CALIBRATION_AGENT_RUNBOOK.md](./docs/CORETEX_CALIBRATION_AGENT_RUNBOOK.md) — standalone CPU calibration host runbook.
 
 Use this repo for:
 
-- `/root/cortex/docs/state-spec.md`
 - `/root/cortex/specs/cortex_state_v0.md`
 - `/root/cortex/specs/cortex_schema_v0.json`
 - `/root/cortex/specs/packing_spec_v0.md`
 - `/root/cortex/specs/merkleization_spec_v0.md`
 - `/root/cortex/specs/patch_format_v0.md`
+- `/root/cortex/specs/substrate_retrieval_semantics_v0.md`
+- `/root/cortex/specs/retrieval_benchmark_v0.md`
+- `/root/cortex/specs/corpus_retrieval_v0.md`
+- `/root/cortex/specs/hidden_query_pack_v0.md`
+- `/root/cortex/specs/determinism_v0.md`
 - `/root/cortex/packages/cortex/src/state/`
 - `/root/cortex/packages/cortex-py/cortex_py/`
-- benchmark fixtures and harnesses referenced by the v4 production plan
+- the bundle, corpus, evaluator, replay, and coordinator route-shim packages
+  referenced by the current launch plan
 
-Do not use old CoreTex planning/runbook docs as production authority where they conflict with the v4 production plan. In particular, stale audit-window, multisig-override, merge-bonus, and separate handoff language has been superseded.
+Do not use archived CortexBench V0 planning/runbook docs as production
+authority. They live under `docs/archive/legacy-cortex-v0/` and
+`ops/archive/legacy-cortex-v0/` only for historical audit traceability.
 
 The production architecture is intentionally small:
 
@@ -60,7 +70,10 @@ The production coordinator integration must be additive:
 - keep the evaluator without signing keys
 - make coordinator cache a convenience, not a replay dependency
 
-See [`instructions.md`](./instructions.md) for the concrete local wiring checklist.
+See [docs/CORETEX_COORDINATOR_QUICKSTART.md](./docs/CORETEX_COORDINATOR_QUICKSTART.md)
+for copy-paste coordinator wiring and
+[docs/CORETEX_COORDINATOR_INTEGRATION_RUNBOOK.md](./docs/CORETEX_COORDINATOR_INTEGRATION_RUNBOOK.md)
+for the full integration contract.
 
 ## Git and Secret Discipline
 

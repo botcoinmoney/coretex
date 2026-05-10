@@ -2,7 +2,20 @@
 
 Last updated: 2026-05-10.
 
-This is the canonical design plan for CoreTex's production launch. It is not an upgrade plan. There is no live CoreTex production system to migrate from. The substrate primitives (1024-word state body, compact 1–4 word patches, EIP-712 receipts, replay client, bundle manifest, corpus/delta utilities, coordinator route shim) exist as reusable libraries from prior local hardening work — they are correct and stay. Any code or doc artifact describing a "structural commitment" or "slot-fill" reward law is stale and is removed before launch, not preserved as a historical profile.
+Status: design background. The current launch-controlling plan is
+`docs/CORETEX_LAUNCH_PLAN_v2.md`, which incorporates the
+synthesizer-labeled corpus pivot. This file remains useful for the original
+frontier-retrieval architecture and acceptance gates, but it is subordinate to
+`CORETEX_LAUNCH_PLAN_v2.md` anywhere the two differ.
+
+This file records the retrieval-native design plan for CoreTex's production
+launch. It is not an upgrade plan. There is no live CoreTex production system
+to migrate from. The substrate primitives (1024-word state body, compact 1–4
+word patches, EIP-712 receipts, replay client, bundle manifest, corpus/delta
+utilities, coordinator route shim) exist as reusable libraries from prior local
+hardening work — they are correct and stay. Any code or doc artifact describing
+a "structural commitment" or "slot-fill" reward law is stale and is removed
+before launch, not preserved as a historical profile.
 
 Operational counterparts:
 
@@ -71,7 +84,13 @@ The bi-encoder and cross-encoder are model-level commitments. Both bind into the
 - MemReranker-0.6B if a public artifact exists and can be pinned with per-file hashes
 - MemReranker-4B or another stronger memory reranker for labeling/calibration if a public artifact exists and can be pinned
 
-The selected production reranker and labeling reranker are recorded in the bundle manifest with model id, revision, file hashes, runtime, quantization, and calibration outputs. When a candidate model fails pinning or deterministic CPU execution, the orchestrator selects the next strongest candidate and records the failed candidate in `docs/CORETEX_MODEL_SELECTION_AUDIT.md`; the work continues until a pinned deterministic launch pair exists.
+The selected production reranker and offline audit/reference reranker are
+recorded in the bundle manifest with model id, revision, file hashes, runtime,
+quantization, and calibration outputs. When a candidate model fails pinning or
+deterministic CPU execution, the orchestrator selects the next strongest
+candidate and records the failed candidate in
+`docs/CORETEX_MODEL_SELECTION_AUDIT.md`; the work continues until pinned
+deterministic launch artifacts exist.
 
 The bundle manifest pins both models. A bundle whose `bundleHash` does not match the on-chain `coreVersionHash` for the current epoch refuses replay and refuses startup at the coordinator.
 
@@ -145,9 +164,15 @@ Each admitted corpus record carries:
 
 ### Graded qrel labeling
 
-Graded labels are produced by the corpus-build pipeline at delta time, not by the live coordinator at scoring time. The labeling source is a separate **labeling pinned model** (commit reveal: a stronger reranker than the production reranker, run once per delta over `(query, candidate_document)` pairs, output binned to the 5-level scale). The labeling model is bound into the bundle manifest's `labelingModel` field (revision + per-file SHA-256 + runtime + quantization). Labels are deterministic, replayable, and audit-checkable.
+Graded hard-negative labels are emitted by the challenge synthesizer as
+structural categories at delta time, not by the live coordinator at scoring
+time. The bundle's `negCategoryRelevanceMap` maps those categories onto the
+5-level qrel scale. A stronger pinned reranker remains available as an offline
+audit/reference model; it is not the production reranker and is not required for
+ordinary corpus expansion.
 
-The labeling model is NOT the production reranker. Using the same model for labeling and scoring is circular. The labeling model is the strongest separately pinned reranker selected by the model-selection audit. This is the methodology MemReranker uses; CoreTex follows it.
+The offline audit/reference model is NOT the production reranker. Using the
+same model to generate labels and score live retrieval would be circular.
 
 ### Splits
 
@@ -383,7 +408,7 @@ Acceptance gate: the test suite passes after the deletion (smaller suite is fine
 ### Phase B — Models + Determinism
 
 - Pin BGE-M3 in `bundle/index.ts` as `bgeM3DenseManifest({revision, outputDim, quantization, runtime})`. Reject `'main'`. Fail closed without per-file SHA-256.
-- Pin Qwen3-Reranker-0.6B (already structurally present); add MemReranker-0.6B/MemReranker-4B factories that all share a `CrossEncoderReranker` interface. The labeling model is a separate slot in the bundle (not the production reranker).
+- Pin Qwen3-Reranker-0.6B (already structurally present); add MemReranker-0.6B/MemReranker-4B factories that all share a `CrossEncoderReranker` interface. The audit/reference model is a separate slot in the bundle (not the production reranker).
 - Implement a bi-encoder runtime under `eval/bi-encoder.ts` (CPU-only, named runtime, named quantization). Output bytes are the substrate-slot wire format.
 - Implement determinism harness `scripts/determinism-check.mjs` that runs both models on a 1k-pair sample across configured runtimes, emits a CSV of `|score_a - score_b|` per pair, and exits non-zero if the P99 exceeds `MAX_TOLERANCE_PPM = 5000` before final calibration pins the tighter bundle value.
 - Acceptance gate: `npm run determinism-check` passes on ≥3 hardware configurations using the pinned model revisions and runtime version. Output P99 disagreement is recorded.
@@ -476,7 +501,8 @@ Acceptance gate: `docs/CORETEX_SOURCE_DATA_AUDIT.md` exists, the audit script ru
   - ingest context `challenge.json` and `trap_metadata.json`
   - ingest attempts/sessions/session-pairs only if their schemas support retrieval qrels
   - generate or preserve answer-bearing documents, hard negatives, stale/current labels, multi-hop labels, and graded qrels
-  - generate graded qrels via the labeling model (pinned in bundle)
+  - generate graded qrels via synthesizer categories and the bundle's
+    `negCategoryRelevanceMap`
   - compute bi-encoder embeddings for query + truthDocuments + hardNegatives
   - split records deterministically
   - write a `CorpusDelta` (or initial corpus snapshot at genesis) with embeddings inlined
@@ -535,8 +561,11 @@ CoreTex is production-ready as a frontier memory retrieval benchmark only when *
 - The reward law is `nDCG@10` over hidden query packs, with retrieval ≥70% of composite weight and the structural validity ≤10% sanity-only.
 - The bi-encoder is `BAAI/bge-m3` at a pinned revision with deterministic CPU-only inference.
 - The cross-encoder is the strongest deterministic 0.6B-class memory/retrieval reranker selected by the model-selection audit, at a pinned revision with per-file hashes.
-- The labeling model is a separate, stronger pinned reranker — never the production reranker.
-- The corpus carries graded qrels, hidden splits, embedding payloads in deltas, and is reproducible byte-identically across machines from the pinned models.
+- The offline audit/reference model is a separate, stronger pinned reranker —
+  never the production reranker.
+- The corpus carries graded qrels, hidden splits, embedding payloads in deltas,
+  and is reproducible byte-identically across machines from the pinned
+  synthesizer, qrel map, and models.
 - Hidden query packs are deterministic from the seed; sampling is auditable; seed escrow with a multisig and a `revealGracePeriod`.
 - Phase G real-reranker mining cycle passes end-to-end including the "correct ids + bad vectors fails" adversarial sub-test.
 - Replay watchers reproduce signed `scoreAfterPpm` within `replayTolerancePpm` across at least 3 different CPU hardware configurations.

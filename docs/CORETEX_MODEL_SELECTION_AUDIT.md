@@ -3,7 +3,7 @@
 Last updated: 2026-05-10.
 
 This audit pins the production cross-encoder reranker and the separate
-labeling reranker for the CoreTex v4 launch. The audit is reproducible by
+offline audit/reference reranker for the CoreTex v4 launch. The audit is reproducible by
 re-running `scripts/determinism-check.mjs` against each candidate
 manifest and rerunning the calibration suite.
 
@@ -20,7 +20,7 @@ of these hold:
    configurations.
 5. Inference latency on the canonical CPU envelope is within the
    coordinator throughput budget at the calibrated `K`.
-6. Distinct from the labeling reranker (different `modelId` or
+6. Distinct from the offline audit/reference reranker (different `modelId` or
    `revision`).
 
 ## Candidate models
@@ -32,18 +32,20 @@ of these hold:
 | `Qwen/Qwen3-Reranker-0.6B` | **Selected (launch)** | `e61197ed45024b0ed8a2d74b80b4d909f1255473` | Already integrated (`eval/reranker.ts:createQwen3Reranker`). 12-file manifest hashed in `bundle/index.ts`. Passes determinism harness on torch-transformers CPU build. |
 | `memreranker/0.6B` | Pending public artifact | — | If MemReranker-0.6B publishes a public 0.6B-class checkpoint with attestable per-file SHA-256, the orchestrator runs the determinism harness against it and considers swapping. |
 
-### Labeling reranker (stronger; corpus-build only)
+### Offline audit/reference reranker (stronger)
 
 | Candidate | Status | Pin | Notes |
 |---|---|---|---|
-| `IAAR-Shanghai/MemReranker-4B` | **Selected (corpus labeling)** | `7fe33c1385f652f52d370b8822d6b620b32b6ec4` | Separate stronger model for qrel labeling. 11-file manifest hashed in `bundle/index.ts`; excludes training-only pickle artifacts from the runtime bundle. |
+| `IAAR-Shanghai/MemReranker-4B` | **Selected (offline qrel audit/reference)** | `7fe33c1385f652f52d370b8822d6b620b32b6ec4` | Separate stronger model for auditing synthesizer-category qrels. 11-file manifest hashed in `bundle/index.ts`; excludes training-only pickle artifacts from the runtime bundle. |
 | `Qwen/Qwen3-Reranker-4B` | Alternate | — | Acceptable backup if MemReranker-4B is unavailable, provided the modelId differs from the production reranker. |
 | `BAAI/bge-reranker-v2-m3` | Alternate | — | Cross-encoder trained on retrieval; usable if the above two are unavailable. |
 
-The labeling reranker is run **only** at corpus-build time via the
-`scripts/generate-coretex-retrieval-corpus.mjs` pipeline (under
-`CORETEX_LABELER=pinned`). Production corpus generation refuses to run with
-the deterministic labeler. Live eval never uses the labeling model.
+The audit/reference reranker is not in the production corpus-generation hot
+path. Production hard-negative qrels are emitted by the challenge synthesizer
+as structural categories and resolved through the bundle's
+`negCategoryRelevanceMap`. Operators may run `CORETEX_LABELER=pinned` as an
+explicit offline A/B audit against MemReranker-4B; live eval never uses the
+audit/reference model.
 
 ## Refusal log
 

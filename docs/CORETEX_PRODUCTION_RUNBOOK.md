@@ -3,7 +3,8 @@
 Last updated: 2026-05-10.
 
 This runbook is the operational counterpart to
-`docs/CORETEX_V4_FRONTIER_RETRIEVAL_HARDENING_PLAN.md`. It documents the
+`docs/CORETEX_LAUNCH_PLAN_v2.md` and
+`docs/CORETEX_FINAL_PRODUCTION_E2E_ORCHESTRATOR_RUNBOOK.md`. It documents the
 deploy procedure, replay-watcher topology, escrow operations, retention
 policy, rate-limit envelope, kill switches, and bundle rotation procedure
 for the mainnet launch.
@@ -41,8 +42,9 @@ There is no migration. Mainnet launch is a fresh deploy to fresh addresses.
 - Phase 13 e2e (`node test/e2e/phase-13/run.mjs`) passes including the
   adversarial sub-test.
 - Bundle manifest verifies (`verifyBundleManifest` returns []).
-- Bi-encoder + reranker + labeling reranker model weights cached locally on
-  every coordinator + watcher host with the pinned commit SHA-256s.
+- Bi-encoder + production reranker model weights cached locally on every
+  coordinator + watcher host with the pinned commit SHA-256s. MemReranker-4B
+  is cached only on hosts running offline qrel audits.
 
 ### 1.2 Deploy contracts
 
@@ -146,7 +148,7 @@ The first miner uses only on-chain reads + REST: `cast call` against
 $COORDINATOR/coretex/substrate/current` and `curl
 $COORDINATOR/coretex/corpus/<id>/embedding` to construct a candidate
 patch, then `POST /coretex/screen` and `POST /coretex/evaluate`. The
-miner-side workflow is documented in `docs/miner-guide.md`.
+miner-side workflow is documented in `docs/CORETEX_MINER_QUICKSTART.md`.
 
 ## 2. Replay watcher topology
 
@@ -265,7 +267,7 @@ Every epoch may append a signed `CorpusDelta` carrying new graded-qrel
 records plus embedding payloads. The coordinator builds the next corpus with:
 
 ```
-CORETEX_CORPUS_PRODUCTION=1 CORETEX_BIENCODER=pinned CORETEX_LABELER=pinned \
+CORETEX_CORPUS_PRODUCTION=1 CORETEX_BIENCODER=pinned \
 node scripts/generate-coretex-retrieval-corpus.mjs \
   --source challenge-library \
   --challenge-lib-root /opt/botcoin-coordinator-live/packages/challenges \
