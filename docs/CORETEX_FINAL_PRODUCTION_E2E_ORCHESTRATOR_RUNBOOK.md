@@ -222,13 +222,22 @@ node scripts/estimate-coretex-corpus-capacity.mjs \
   --out /var/lib/coretex/reports/corpus-capacity.json
 ```
 
-Corpus build:
+Corpus build (single worker; persistent BGE-M3 + MemReranker-4B
+subprocess pipeline):
 
 ```bash
 CORETEX_CORPUS_PRODUCTION=1 \
 CORETEX_BIENCODER=pinned \
 CORETEX_LABELER=pinned \
 CORTEX_REAL_EVAL=1 \
+CORETEX_BIENCODER_PYTHON=/root/cortex/.venv/bin/python \
+CORETEX_RERANKER_PYTHON=/root/cortex/.venv/bin/python \
+CORTEX_LOCAL_MODEL_CACHE=/var/lib/coretex/model-cache \
+HF_HUB_CACHE=/var/lib/coretex/model-cache \
+HF_HUB_OFFLINE=1 \
+BIENCODER_NUM_THREADS=16 BIENCODER_INNER_BATCH=64 \
+RERANKER_NUM_THREADS=16 RERANKER_INNER_BATCH=16 \
+CORETEX_LABELER_NUM_THREADS=16 CORETEX_LABELER_BATCH_SIZE=16 \
 node scripts/generate-coretex-retrieval-corpus.mjs \
   --source challenge-library \
   --challenge-lib-root $CORETEX_CHALLENGE_LIB_ROOT \
@@ -241,6 +250,46 @@ node scripts/generate-coretex-retrieval-corpus.mjs \
   --corpus-epoch 0 \
   --out /var/lib/coretex/corpus-epoch-0.json
 ```
+
+Production-mode generation refuses anything but `CORETEX_BIENCODER=pinned`,
+`CORETEX_LABELER=pinned`, and `--source challenge-library`. The script
+spawns one persistent Python child per pinned model (loaded exactly
+once) and services NDJSON requests over stdin/stdout — the legacy
+per-call spawn variant pays the multi-gigabyte model-load cost on every
+encode/score and is unusable past a few hundred events on a CPU host.
+
+For multi-shard parallel generation, the parallel driver dispatches
+disjoint seed-offset shards and merges them deterministically:
+
+```bash
+node scripts/generate-coretex-retrieval-corpus-parallel.mjs \
+  --bundle-manifest /etc/coretex/template-bundle.json \
+  --challenge-lib-root $CORETEX_CHALLENGE_LIB_ROOT \
+  --domains companies,quantum_physics,computational_biology,scrna_imputation \
+  --seeds-per-domain 512 --workers 4 \
+  --modifier-counts 0,1,2,3 \
+  --constraint-difficulties easy,medium,hard \
+  --trap-count 2 \
+  --corpus-epoch 0 \
+  --num-threads-per-worker 8 \
+  --inner-batch-biencoder 64 \
+  --inner-batch-reranker 16 \
+  --shard-dir /var/lib/coretex/corpus-shards \
+  --out /var/lib/coretex/corpus-epoch-0.json
+```
+
+CPU runtime: MemReranker-4B labeling is the dominant cost. Single-worker
+empirical throughput on a 32-core x86_64 host with 128 GB RAM and the
+models pre-cached is approximately 1.7 pair/s (~0.5 pair/s in practice
+on real-length prompts ≈200 tokens), driven by memory bandwidth — so
+the launch corpus (`seeds-per-domain=512`, ≈679k events × ~4 hard
+negatives = ~2.7M label calls) is multi-week wall on this hardware.
+Parallel workers help marginally on a single machine because the labeler
+saturates memory bandwidth even at one worker; two workers run at
+~92% of single-worker per-worker rate. Run the launch corpus on a host
+with multiple memory controllers or use accelerator-equipped hardware
+that hosts the labeler at higher pair/s; the same scripts run unchanged
+and the bundle binds the pipeline + pinned models, not the host.
 
 Validation:
 
