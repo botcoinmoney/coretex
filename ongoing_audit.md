@@ -1216,3 +1216,114 @@ Calibration-host gates that this CPU finalizer cannot run locally:
 Each of those is the calibration agent's job per
 `docs/CORETEX_CALIBRATION_AGENT_RUNBOOK.md` and the controlling final
 orchestrator runbook.
+
+## Orchestrator handoff round 5 (2026-05-10, CPU finalization second pass)
+
+Second CPU-finalization pass on a freshly provisioned CPU instance with no
+toolchain installed. Goal: rerun every gate that does not require GPU model
+weights or a Base RPC, and verify the canonical CoreTex tree is shippable
+unchanged.
+
+Toolchain installed this round:
+
+- Node.js 22.22.2 (from NodeSource apt repo) — required for `npm ci`,
+  `npm run build`, typecheck, and unit suites.
+- Foundry 1.7.1 (forge / cast / anvil / chisel) — required for the
+  contracts gate.
+
+Gates re-run on this host:
+
+- `npm ci` — 57 packages, 0 vulnerabilities.
+- `npm run build --workspaces --if-present` — `@botcoin/cortex`,
+  `@botcoin/cortex-handler`, `@botcoin/cortex-server` all compile clean.
+- `npm run typecheck --workspaces --if-present` — clean across all
+  workspaces.
+- `npm run test:unit --workspace @botcoin/cortex` — **233/233 passed**,
+  0 fail / 0 cancelled / 0 skipped (was 224 at round 4; the
+  retrieval-data-source unit suite added in commit f418441 is now in the
+  baseline count).
+- `forge build --root contracts` — clean (Solidity 0.8.26, optimizer 200
+  runs, lint warnings are advisory only).
+- `forge test --root contracts` — **58 passed / 0 failed / 7 skipped**
+  across 3 suites in 15.16ms.
+
+End-to-end coordinator route smoke (this round, not part of the unit
+suite) walked every endpoint declared in `CORETEX_ENDPOINTS`:
+
+- All 14 endpoints (`POST /coretex/screen`, `POST /coretex/evaluate`, +
+  12 GET routes) handle and return `{handled: true, status: 200}` with
+  authoritative bearer auth.
+- Missing-auth POST returns 401 via the `authorize` hook.
+- Blocked-IP POST returns 429 via the `rateLimit` hook and never reaches
+  the host handler.
+- Unknown `/coretex/wat` returns 404 (handled, scoped 404).
+- Non-`/coretex/` paths decline with `handled: false` so the V3 route
+  table is unaffected.
+
+Runtime export check against `packages/cortex/dist/index.js` confirmed
+all six coordinator wire-up symbols are importable: `VERSION` is
+`'0.7.0'`, `CORETEX_ENDPOINTS.length === 14`, and
+`handleCoreTexCoordinatorRoute`, `createRetrievalDataSource`,
+`loadProductionCorpus`, `assertBundleBindingAtStartup`,
+`verifyBundleManifest` are all live functions.
+
+Source-level audit findings this round (no new blockers):
+
+- All four remaining `TODO` markers in `packages/cortex/src` are in
+  `reducer/reducer.ts` and refer to the V0 marginal-evaluator stub
+  (`stubMarginalEvaluator`). The V4 production reward path uses
+  `evaluateRetrievalBenchmarkPatch` (real reranker scorer) and never
+  enters the V0 reducer — confirmed by tracing all call sites of
+  `evalPatch` (CLI + workers/worker.ts only) and all call sites of
+  `marginalEvaluator` (reducer.ts, live-epoch.ts only). The TODOs are
+  V0-fallback breadcrumbs and do not leak into the production
+  `/coretex/evaluate` flow.
+- `coordinator/retrieval-data-source.ts:91-108` `getCoverageHints`
+  returns `measured: null` for each `train_visible` record by default;
+  the runbook integration example sets `getCoverageHintsForCurrent` to
+  the host's measured-nDCG override. Default is documented as a
+  placeholder for that override path; not a production correctness
+  blocker.
+- `eval/reranker.ts` retains a single explicit production-mode escape
+  hatch via `CORETEX_ALLOW_DETERMINISTIC_RERANKER=1`; otherwise the
+  deterministic stub is refused under both `CORTEX_REAL_EVAL=1` and
+  `CORETEX_RERANKER_PRODUCTION=1`. The bi-encoder
+  (`createDeterministicBiEncoder`) has no escape hatch and refuses
+  unconditionally in production mode.
+- `assertBundleBindingAtStartup` refuses startup on any of:
+  bundle-hash mismatch with on-chain `coreVersionHash`,
+  `acceleratorPolicy != 'cpu_only'`, `CORETEX_USE_GPU` /
+  `PYTORCH_USE_MPS` / `CUDA_VISIBLE_DEVICES` env present,
+  `ONNXRUNTIME_PROVIDERS` containing CUDA/MPS, or any pinned runtime
+  version that does not match the installed runtime.
+- `git ls-files` contains zero secrets, model weights, RPC creds, seed
+  preimages, or local model caches; `.gitignore` covers `.env*`,
+  `*.pem`, `*.key`, `*.seed`, `*.token`, `*.secret`, `*private-key*`,
+  `*wallet*.json`, `models/`, `model-cache/`, `*.safetensors`,
+  `*.gguf`, `*.onnx`, `*.bin`, and `*.log`.
+- No build artifacts (`dist/`, `out/`, `cache/`, `.tsbuildinfo`)
+  tracked in git.
+
+Tightening landed this round:
+
+- Added `contracts/foundry.lock` and `foundry.lock` to `.gitignore`.
+  Submodule revs are already pinned in `.gitmodules`; the per-host
+  forge-generated lock file would otherwise enter the canonical tree on
+  the first `forge build` of any contributor. This keeps the canonical
+  CoreTex tree free of build-host artifacts.
+
+Calibration-host gates this CPU finalizer still cannot run locally
+(unchanged from round 4):
+
+- The full Phase 13 e2e with `CORETEX_RERANKER=qwen3 CORTEX_REAL_EVAL=1
+  CORETEX_RERANKER_PRODUCTION=1` against the pinned BGE-M3 + Qwen3 +
+  MemReranker weights (requires the model weights and a Base RPC).
+- `scripts/determinism-check.mjs` + `aggregate-determinism.mjs` across
+  ≥3 calibrated hosts.
+- `forge test --match-path test/CoreTexBaseFork.t.sol` against a real
+  Base RPC fork.
+- The Base mainnet canary in
+  `docs/CORETEX_FINAL_PRODUCTION_E2E_ORCHESTRATOR_RUNBOOK.md` Phase 6.
+
+Each remains the calibration / chain agent's job per the controlling
+final orchestrator runbook.
