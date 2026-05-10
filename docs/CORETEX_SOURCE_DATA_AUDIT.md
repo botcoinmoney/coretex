@@ -67,7 +67,11 @@ Notes:
 - Coordinator records carry no explicit hard-negative document set; trap paragraphs (in trap_metadata.json) are plausible-but-wrong but unlabeled.
 - No temporal current/stale labels exist; sequential and bookend pairs encode chosen/rejected attempts, not (current, stale) document pairs.
 - No multi-hop relation graph is materialized; questions reference multi-hop within a single document but no cross-document edge labels exist.
-- A retrieval corpus would have to be generated from challenge libraries (synthetic) and the document/trap pool, with qrels labeled by a separately pinned reranker at corpus-build time.
+- A retrieval corpus has to be generated from the challenge-library source code,
+  not from materialized dataset_v2 traces. The library produces deterministic
+  seeded worlds, domain-specific entity attributes, computed question answers,
+  traps, constraints, and modifier-derived temporal updates. Qrels are labeled
+  at corpus-build time by the separately pinned labeling reranker.
 
 ## Recommended outcome
 
@@ -83,3 +87,23 @@ inferring temporal current/stale annotations. The plan specifies that
 under `reject_current_data`, the orchestrator generates a CoreTex
 retrieval corpus from the challenge libraries and the labeling-model
 pipeline (`scripts/generate-coretex-retrieval-corpus.mjs`).
+
+## CoreTex corpus source decision
+
+The launch corpus source is:
+
+```
+scripts/generate-coretex-retrieval-corpus.mjs --source challenge-library
+```
+
+This imports the built coordinator challenge package at
+`/root/botcoin-coordinator-live/packages/challenges/dist/index.js` by default
+and calls `generateInterchangeableChallenge` over
+`(domain, seed, modifierCount, constraintDifficulty)`.
+
+The old CoreTex template synthesizer remains only behind
+`--source synthetic` for local fallback. It is not a production corpus source:
+it emits thin lexical templates and does not provide durable difficulty
+growth. Challenge-library expansion scales by appending new seeds, increasing
+modifier counts, increasing constraint difficulty, and enabling new
+domain-library JSON bundles without CoreTex source changes.

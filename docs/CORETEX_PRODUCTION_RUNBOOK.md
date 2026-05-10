@@ -24,8 +24,9 @@ There is no migration. Mainnet launch is a fresh deploy to fresh addresses.
   outcome (`reject_current_data` for launch) is reflected in the corpus
   build script choice.
 - Generated corpus reproduces byte-identical `corpusRoot` on two clean
-  hosts (run `node scripts/generate-coretex-retrieval-corpus.mjs` on both
-  and compare).
+  hosts (run `node scripts/generate-coretex-retrieval-corpus.mjs --source
+  challenge-library` on both with the same built challenge package and model
+  cache, then compare).
 - Corpus validation passes with zero errors:
   `node scripts/validate-retrieval-corpus.mjs --corpus <path> --min-events <N> --min-per-family <N>`.
 - Phase 13 e2e (`node test/e2e/phase-13/run.mjs`) passes including the
@@ -257,6 +258,8 @@ records plus embedding payloads. The coordinator builds the next corpus with:
 ```
 CORETEX_CORPUS_PRODUCTION=1 CORETEX_BIENCODER=pinned CORETEX_LABELER=pinned \
 node scripts/generate-coretex-retrieval-corpus.mjs \
+  --source challenge-library \
+  --challenge-lib-root /opt/botcoin-coordinator-live/packages/challenges \
   --bundle-manifest /etc/coretex/bundle-manifest.json \
   --previous-corpus /var/lib/coretex/corpus-epoch-N.json \
   --seed-offset $NEXT_SEED_OFFSET \

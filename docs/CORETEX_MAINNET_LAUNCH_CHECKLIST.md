@@ -54,8 +54,9 @@ Each box must be green before the next is started.
 
 ## 4. Corpus generation
 
-- [ ] `node scripts/generate-coretex-retrieval-corpus.mjs` produced a
-      corpus reproducing byte-identically across two clean hosts.
+- [ ] `node scripts/generate-coretex-retrieval-corpus.mjs --source
+      challenge-library` produced a corpus reproducing byte-identically
+      across two clean hosts from the same built challenge package.
 - [ ] Per-family / per-bucket coverage statistics printed to stdout.
 - [ ] Corpus carries embedding payloads matching the bundle's pinned
       bi-encoder.

@@ -24,8 +24,12 @@
  * Usage:
  *   node scripts/generate-coretex-retrieval-corpus.mjs \
  *     --bundle-manifest <path>                # provides bi-encoder + labeling model pins
+ *     --source challenge-library              # default; imports coordinator challenge package
+ *     --challenge-lib-root <path>             # default /root/botcoin-coordinator-live/packages/challenges
  *     --domains companies,quantum_physics,...
  *     --seeds-per-domain 32
+ *     --modifier-counts 0,1,2,3
+ *     --constraint-difficulties easy,medium,hard
  *     --corpus-epoch 0
  *     --out corpus/coretex_retrieval_v0.json
  *
@@ -34,8 +38,9 @@
  *   CORETEX_LABELER=deterministic|pinned      # default deterministic for offline gen
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { argv, exit, env } from 'node:process';
 import { createHash } from 'node:crypto';
 
@@ -68,6 +73,20 @@ const epoch = Number(flag('epoch', String(corpusEpoch)));
 const outPath = resolve(flag('out', 'corpus/coretex_retrieval_v0.json'));
 const previousCorpusPath = flag('previous-corpus');
 const deltaOutPath = flag('delta-out');
+const source = flag('source', 'challenge-library');
+const challengeLibRoot = resolve(flag(
+  'challenge-lib-root',
+  env.CORETEX_CHALLENGE_LIB_ROOT ?? '/root/botcoin-coordinator-live/packages/challenges',
+));
+const modifierCounts = flag('modifier-counts', '0,1,2,3')
+  .split(',')
+  .map((s) => Number(s.trim()))
+  .filter((n) => Number.isInteger(n) && n >= 0);
+const constraintDifficulties = flag('constraint-difficulties', 'easy,medium,hard')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const trapCount = Math.max(0, Math.min(2, Number(flag('trap-count', '2'))));
 
 env.CORETEX_BIENCODER ??= 'deterministic';
 env.CORETEX_BIENCODER_REVISION ??= manifest.model.biEncoder.revision;
@@ -197,6 +216,15 @@ async function labelHardNegative(query, document) {
   return 0.0;
 }
 
+if (source === 'challenge-library') {
+  await generateChallengeLibraryCorpus();
+  exit(0);
+}
+if (source !== 'synthetic') {
+  console.error(`generate-coretex-retrieval-corpus: unsupported --source ${source}`);
+  exit(2);
+}
+
 // ─── Build records ───────────────────────────────────────────────────────────
 
 const events = [];
@@ -314,6 +342,468 @@ for (const domain of domains) {
         });
       }
     }
+  }
+}
+
+async function generateChallengeLibraryCorpus() {
+  const challengeIndex = resolve(challengeLibRoot, 'dist/index.js');
+  if (!existsSync(challengeIndex)) {
+    console.error(
+      'generate-coretex-retrieval-corpus: challenge-library source requires a built coordinator challenge package at ' +
+      `${challengeIndex}. Run the coordinator challenge package build first or pass --source synthetic explicitly.`,
+    );
+    exit(2);
+  }
+
+  const challengeLib = await import(pathToFileURL(challengeIndex).href);
+  if (typeof challengeLib.generateInterchangeableChallenge !== 'function') {
+    console.error(`generate-coretex-retrieval-corpus: ${challengeIndex} does not export generateInterchangeableChallenge`);
+    exit(2);
+  }
+
+  const generated = [];
+  for (const domain of domains) {
+    const questionMeta = loadDomainQuestionMetadata(domain);
+    for (let s = seedOffset; s < seedOffset + seedsPerDomain; s++) {
+      for (const modifierCount of modifierCounts) {
+        for (const constraintDifficulty of constraintDifficulties) {
+          const worldSeed = deriveWorldSeed(domain, s, modifierCount, constraintDifficulty);
+          const challenge = challengeLib.generateInterchangeableChallenge(
+            worldSeed,
+            {
+              trapCount,
+              modifierCount,
+              constraintDifficulty,
+            },
+            domain,
+          );
+          const challengeKey = `${domain}/seed-${s}/m${modifierCount}/${constraintDifficulty}`;
+          generated.push(...await recordsFromChallenge({
+            challenge,
+            domain,
+            sourceSeed: s,
+            modifierCount,
+            constraintDifficulty,
+            challengeKey,
+            questionMeta,
+          }));
+        }
+      }
+    }
+  }
+
+  await writeCorpusOutput(generated, 'challenge-library');
+}
+
+function deriveWorldSeed(domain, seed, modifierCount, constraintDifficulty) {
+  const h = createHash('sha256')
+    .update(`coretex-corpus-v1|${corpusEpoch}|${domain}|${seed}|${modifierCount}|${constraintDifficulty}`)
+    .digest('hex');
+  return BigInt(`0x${h.slice(0, 32)}`);
+}
+
+function loadDomainQuestionMetadata(domain) {
+  const out = new Map();
+  const path = resolve(challengeLibRoot, 'domains', domain, 'domain_library.json');
+  if (!existsSync(path)) return out;
+  const library = JSON.parse(readFileSync(path, 'utf8'));
+  for (const q of library.questions ?? []) {
+    out.set(q.id, {
+      isChain: Array.isArray(q.answer_logic?.chain) && q.answer_logic.chain.length > 1,
+      hasFilter: Boolean(q.answer_logic?.filter),
+      aggregation: q.answer_logic?.aggregation,
+      attribute: q.answer_logic?.attribute,
+    });
+  }
+  return out;
+}
+
+async function recordsFromChallenge({
+  challenge,
+  domain,
+  sourceSeed,
+  modifierCount,
+  constraintDifficulty,
+  challengeKey,
+  questionMeta,
+}) {
+  const entities = extractEntities(challenge);
+  const entityDocs = new Map(entities.map((entity) => [String(entity.name), entityDocument(domain, entity)]));
+  const directIdsByName = new Map();
+  const records = [];
+
+  for (let i = 0; i < entities.length; i++) {
+    const entity = entities[i];
+    const id = `${recordPrefix(domain, sourceSeed, modifierCount, constraintDifficulty)}:entity:${stableSegment(entity.name)}`;
+    directIdsByName.set(String(entity.name), id);
+    records.push(await buildEvent({
+      id,
+      family: 'near_collision',
+      domain,
+      queryText: `Which ${domainLabel(domain)} record is the exact profile for ${entity.name}?`,
+      truthDocuments: [{ id: `${id}::truth`, text: entityDocs.get(String(entity.name)), isCurrent: true }],
+      hardNegativeTexts: nearestEntityDocs(entities, entity.name, entityDocs, 4),
+      protectedRecord: false,
+      provenance: provenanceFor(challenge, challengeKey, sourceSeed, {
+        questionId: `entity:${entity.name}`,
+        sourcePayload: entity,
+      }),
+    }));
+  }
+
+  for (const modifier of challenge.modifiers ?? []) {
+    const entityDoc = entityDocs.get(String(modifier.entityName)) ?? `${modifier.entityName} is present in ${challengeKey}.`;
+    const id = `${recordPrefix(domain, sourceSeed, modifierCount, constraintDifficulty)}:temporal:${stableSegment(modifier.entityName)}:${stableSegment(modifier.attribute)}`;
+    const currentText =
+      `Current validated ${domainLabel(domain)} state after ${modifier.eventType ?? 'event'}: ` +
+      `${modifier.entityName}'s ${modifier.attribute} is ${formatValue(modifier.derivedValue)}. ${entityDoc}`;
+    const staleText =
+      `Superseded stale ${domainLabel(domain)} state before ${modifier.eventType ?? 'event'}: ` +
+      `${modifier.entityName}'s ${modifier.attribute} was ${formatValue(modifier.baseValue)}.`;
+    records.push(await buildEvent({
+      id,
+      family: 'temporal',
+      domain,
+      queryText: `After the latest ${modifier.eventType ?? 'event'}, what is ${modifier.entityName}'s current ${modifier.attribute}?`,
+      truthDocuments: [
+        { id: `${id}::truth_current`, text: currentText, isCurrent: true },
+        { id: `${id}::truth_stale`, text: staleText, isCurrent: false },
+      ],
+      hardNegativeTexts: [
+        staleText,
+        ...nearestEntityDocs(entities, modifier.entityName, entityDocs, 3),
+      ],
+      protectedRecord: true,
+      temporal: {
+        validFromEpoch: corpusEpoch,
+        validUntilEpoch: 1 << 30,
+        currentStaleFlag: true,
+      },
+      relations: directIdsByName.has(String(modifier.entityName))
+        ? [{ other_id: directIdsByName.get(String(modifier.entityName)), edgeType: 'supersedes' }]
+        : undefined,
+      provenance: provenanceFor(challenge, challengeKey, sourceSeed, {
+        questionId: `modifier:${modifier.entityName}:${modifier.attribute}`,
+        sourcePayload: modifier,
+      }),
+    }));
+  }
+
+  for (const trap of challenge.silentTraps ?? []) {
+    const id = `${recordPrefix(domain, sourceSeed, modifierCount, constraintDifficulty)}:trap-temporal:${stableSegment(trap.entityName)}:${stableSegment(trap.attribute)}`;
+    const entityDoc = entityDocs.get(String(trap.entityName)) ?? `${trap.entityName} is present in ${challengeKey}.`;
+    const currentText =
+      `Validated current value: ${trap.entityName}'s ${trap.attribute} is ${formatValue(trap.correctValue)}. ${entityDoc}`;
+    const staleText =
+      `Superseded distractor value: ${trap.entityName}'s ${trap.attribute} was listed as ${formatValue(trap.wrongValue)} in an obsolete planning note.`;
+    records.push(await buildEvent({
+      id,
+      family: 'temporal',
+      domain,
+      queryText: `What is the validated current ${trap.attribute} for ${trap.entityName}, rejecting superseded planning values?`,
+      truthDocuments: [
+        { id: `${id}::truth_current`, text: currentText, isCurrent: true },
+        { id: `${id}::truth_stale`, text: staleText, isCurrent: false },
+      ],
+      hardNegativeTexts: [
+        staleText,
+        ...nearestEntityDocs(entities, trap.entityName, entityDocs, 3),
+      ],
+      protectedRecord: true,
+      temporal: {
+        validFromEpoch: corpusEpoch,
+        validUntilEpoch: 1 << 30,
+        currentStaleFlag: true,
+      },
+      relations: directIdsByName.has(String(trap.entityName))
+        ? [{ other_id: directIdsByName.get(String(trap.entityName)), edgeType: 'supersedes' }]
+        : undefined,
+      provenance: provenanceFor(challenge, challengeKey, sourceSeed, {
+        questionId: `trap:${trap.entityName}:${trap.attribute}`,
+        sourcePayload: trap,
+      }),
+    }));
+  }
+
+  for (const q of challenge.questions ?? []) {
+    const answerName = String(q.answer);
+    const truthText = entityDocs.get(answerName)
+      ?? `The canonical answer for ${challengeKey} question ${q.id} is ${answerName}.`;
+    const id = `${recordPrefix(domain, sourceSeed, modifierCount, constraintDifficulty)}:question:${stableSegment(q.id)}`;
+    let family = classifyChallengeQuestion(q, questionMeta.get(q.id), modifierCount);
+    const relations = [];
+    const targetId = directIdsByName.get(answerName);
+    if (family === 'multi_hop_relation' && !targetId) family = 'long_horizon';
+    if (targetId) {
+      relations.push({
+        other_id: targetId,
+        edgeType: family === 'multi_hop_relation' ? 'derived_from' : 'supports',
+      });
+    }
+    const hardNegativeTexts = nearestEntityDocsByAnswer(entities, answerName, entityDocs, 4);
+    for (const trapText of trapTextsForQuestion(challenge, q, entityDocs)) {
+      hardNegativeTexts.push(trapText);
+    }
+    records.push(await buildEvent({
+      id,
+      family,
+      domain,
+      queryText: q.text,
+      truthDocuments: [{ id: `${id}::truth`, text: truthText, isCurrent: true }],
+      hardNegativeTexts,
+      protectedRecord: family === 'temporal',
+      temporal: family === 'temporal'
+        ? { validFromEpoch: corpusEpoch, validUntilEpoch: 1 << 30, currentStaleFlag: true }
+        : undefined,
+      relations: relations.length > 0 ? relations : undefined,
+      provenance: provenanceFor(challenge, challengeKey, sourceSeed, {
+        questionId: q.id,
+        sourcePayload: q,
+      }),
+    }));
+  }
+
+  return records;
+}
+
+async function buildEvent({
+  id,
+  family,
+  domain,
+  queryText,
+  truthDocuments,
+  hardNegativeTexts,
+  protectedRecord,
+  temporal,
+  relations,
+  provenance,
+}) {
+  const hardNegatives = uniqueTexts(hardNegativeTexts)
+    .filter((text) => truthDocuments.every((truth) => truth.text !== text))
+    .slice(0, 6)
+    .map((text, i) => ({ id: `${id}::neg${i}`, text }));
+  while (hardNegatives.length < 3) {
+    hardNegatives.push({
+      id: `${id}::neg${hardNegatives.length}`,
+      text: `Non-answer distractor for ${id}: this record mentions ${domain} but does not contain the requested answer.`,
+    });
+  }
+
+  const queryHex = bytesToHex(await encodeOne(queryText));
+  const perTruthHex = {};
+  for (const td of truthDocuments) perTruthHex[td.id] = bytesToHex(await encodeOne(td.text));
+  const perNegHex = {};
+  for (const n of hardNegatives) perNegHex[n.id] = bytesToHex(await encodeOne(n.text));
+
+  const qrels = [];
+  for (const td of truthDocuments) qrels.push({ documentId: td.id, relevance: td.isCurrent ? 1.0 : 0.4 });
+  for (const n of hardNegatives) qrels.push({ documentId: n.id, relevance: await labelHardNegative(queryText, n.text) });
+
+  return {
+    id,
+    family,
+    domain,
+    split: splitForRecord(id, corpusEpoch),
+    queryText,
+    truthDocuments,
+    hardNegatives,
+    qrels,
+    protected: protectedRecord,
+    temporal,
+    relations,
+    provenance,
+    embeddings: {
+      modelId: manifest.model.biEncoder.modelId,
+      revision: manifest.model.biEncoder.revision,
+      layout,
+      query: queryHex,
+      perTruth: perTruthHex,
+      perNegative: perNegHex,
+    },
+  };
+}
+
+function extractEntities(challenge) {
+  const raw = challenge.world?.companies ?? challenge.world?.entities;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error(`challenge_world_has_no_entities:${challenge.challengeDomain}:${String(challenge.worldSeed)}`);
+  }
+  return raw.map((entity) => ({ ...entity, name: String(entity.name) }));
+}
+
+function entityDocument(domain, entity) {
+  const fields = Object.entries(entity)
+    .filter(([key]) => key !== 'name')
+    .map(([key, value]) => `${humanize(key)} is ${formatValue(value)}`)
+    .join('; ');
+  return `${domainLabel(domain)} ${entity.name}: ${fields}.`;
+}
+
+function nearestEntityDocs(entities, entityName, entityDocs, limit) {
+  return entities
+    .filter((entity) => String(entity.name) !== String(entityName))
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+    .slice(0, limit)
+    .map((entity) => entityDocs.get(String(entity.name)));
+}
+
+function nearestEntityDocsByAnswer(entities, answerName, entityDocs, limit) {
+  const answer = String(answerName);
+  const lexical = entities
+    .filter((entity) => String(entity.name) !== answer)
+    .map((entity) => ({
+      entity,
+      score: sharedPrefixLength(answer.toLowerCase(), String(entity.name).toLowerCase()),
+    }))
+    .sort((a, b) => b.score - a.score || String(a.entity.name).localeCompare(String(b.entity.name)));
+  return lexical.slice(0, limit).map(({ entity }) => entityDocs.get(String(entity.name)));
+}
+
+function trapTextsForQuestion(challenge, question, entityDocs) {
+  const out = [];
+  for (const trap of challenge.silentTraps ?? []) {
+    if (question.answer === trap.entityName) {
+      out.push(`Superseded trap document: ${trap.entityName}'s ${trap.attribute} was incorrectly listed as ${formatValue(trap.wrongValue)}.`);
+    }
+  }
+  if (out.length === 0 && challenge.silentTraps?.length) {
+    const trap = challenge.silentTraps[0];
+    const doc = entityDocs.get(String(trap.entityName));
+    out.push(`Plausible trap record for ${trap.entityName}: ${trap.attribute} was incorrectly listed as ${formatValue(trap.wrongValue)}. ${doc ?? ''}`);
+  }
+  return out;
+}
+
+function classifyChallengeQuestion(question, meta) {
+  if (question.id?.startsWith?.('conditional_') || meta?.isChain) return 'multi_hop_relation';
+  if (meta?.hasFilter || /among|across|which|highest|lowest|largest|smallest|most|fewest|broadest/i.test(question.text)) {
+    return 'long_horizon';
+  }
+  return 'near_collision';
+}
+
+function provenanceFor(challenge, challengeKey, sourceSeed, extra) {
+  const sourcePayload = {
+    challengeDomain: challenge.challengeDomain,
+    worldSeed: String(challenge.worldSeed),
+    rulesVersion: challenge.rulesVersion,
+    challengeKey,
+    sourceSeed,
+    ...extra,
+  };
+  return {
+    source: 'synthetic_challenge',
+    challengeSeed: `0x${BigInt(challenge.worldSeed).toString(16).padStart(32, '0').slice(-32)}`,
+    challengeId: challengeKey,
+    questionId: extra.questionId,
+    sourceHash: `0x${createHash('sha256').update(JSON.stringify(sourcePayload)).digest('hex')}`,
+  };
+}
+
+function recordPrefix(domain, seed, modifierCount, constraintDifficulty) {
+  return `coretex_v1:${domain}:s${seed}:m${modifierCount}:c${constraintDifficulty}`;
+}
+
+function stableSegment(value) {
+  return String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64) || createHash('sha256').update(String(value)).digest('hex').slice(0, 16);
+}
+
+function humanize(value) {
+  return String(value).replace(/[_.-]+/g, ' ');
+}
+
+function domainLabel(domain) {
+  return humanize(domain).replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function formatValue(value) {
+  if (Array.isArray(value)) return value.map(formatValue).join(', ');
+  if (value === null) return 'not applicable';
+  if (typeof value === 'number') return Number.isInteger(value) ? value.toLocaleString('en-US') : String(value);
+  return String(value);
+}
+
+function uniqueTexts(texts) {
+  const seen = new Set();
+  const out = [];
+  for (const text of texts) {
+    const normalized = String(text ?? '').trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function sharedPrefixLength(a, b) {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+}
+
+async function writeCorpusOutput(events, sourceName) {
+  const previousRaw = previousCorpusPath
+    ? JSON.parse(readFileSync(resolve(previousCorpusPath), 'utf8'))
+    : null;
+  const outputEvents = previousRaw ? [...previousRaw.events, ...events] : events;
+  const corpusRoot = computeCorpusRoot(eventsToMemory(outputEvents));
+
+  const corpus = {
+    schemaVersion: 'coretex.production-corpus.v1',
+    corpusEpoch,
+    source: sourceName,
+    challengeLibrary: {
+      root: challengeLibRoot,
+      modifierCounts,
+      constraintDifficulties,
+      trapCount,
+    },
+    biEncoder: {
+      modelId: manifest.model.biEncoder.modelId,
+      revision: manifest.model.biEncoder.revision,
+      layout,
+    },
+    labelingModel: {
+      modelId: manifest.model.labelingReranker.modelId,
+      revision: manifest.model.labelingReranker.revision,
+    },
+    events: outputEvents,
+    corpusRoot,
+  };
+
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, JSON.stringify(corpus, null, 2));
+  console.log(`generate-coretex-retrieval-corpus: wrote ${events.length} ${sourceName} events to ${outPath}`);
+  if (previousRaw) console.log(`  totalEvents=${outputEvents.length} previousEvents=${previousRaw.events.length}`);
+  console.log(`  corpusRoot=${corpusRoot}`);
+  console.log(`  splits=${tally(outputEvents.map((e) => e.split))}`);
+  console.log(`  families=${tally(outputEvents.map((e) => e.family))}`);
+
+  if (deltaOutPath) {
+    if (!previousCorpusPath) {
+      console.error('generate-coretex-retrieval-corpus: --delta-out requires --previous-corpus');
+      exit(2);
+    }
+    const previousCorpus = loadProductionCorpus(resolve(previousCorpusPath));
+    const delta = buildCorpusDelta({
+      previousCorpus,
+      additions: eventsToMemory(events),
+      removals: [],
+      epoch,
+      labelingProvenance: {
+        modelId: manifest.model.labelingReranker.modelId,
+        revision: manifest.model.labelingReranker.revision,
+        runtime: 'torch-transformers/cpu',
+        batchHash: createHash('sha256').update(JSON.stringify(events)).digest('hex'),
+      },
+    });
+    mkdirSync(dirname(resolve(deltaOutPath)), { recursive: true });
+    writeFileSync(resolve(deltaOutPath), JSON.stringify(serializeCorpusDelta(delta), null, 2));
+    console.log(`  delta=${resolve(deltaOutPath)} added=${delta.addedIds.length} nextRoot=${delta.nextRoot}`);
   }
 }
 

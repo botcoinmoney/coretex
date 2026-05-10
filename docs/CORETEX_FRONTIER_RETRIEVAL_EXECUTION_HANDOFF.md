@@ -54,6 +54,28 @@ corpus deltas for every epoch.
 
 See `docs/CORETEX_SOURCE_DATA_AUDIT.md`.
 
+## Challenge-Library Corpus Source
+
+`scripts/generate-coretex-retrieval-corpus.mjs` now defaults to
+`--source challenge-library`. This imports the built coordinator challenge
+package and generates records from
+`generateInterchangeableChallenge(domain, seed, modifierCount,
+constraintDifficulty)`.
+
+This is the production corpus source. It is materially different from the old
+CoreTex template fallback:
+
+- each world is a deterministic challenge-library world with 20 structured
+  entities and domain JSON attributes;
+- qrels are built around computed challenge answers, direct entity profiles,
+  silent-trap hard negatives, and modifier/trap temporal current-stale pairs;
+- multi-hop records point at answer entity profile records through relation
+  annotations;
+- expansion is append-only through new `(seed, modifierCount,
+  constraintDifficulty, domain)` tuples and signed `CorpusDelta` files;
+- the old template generator remains only behind `--source synthetic` for
+  offline fallback and is not the launch corpus path.
+
 ## Local Verification Run
 
 Commands run on 2026-05-10:
@@ -74,6 +96,8 @@ Corpus and bundle smoke:
 ```bash
 CORETEX_BIENCODER=deterministic CORETEX_LABELER=deterministic \
   node scripts/generate-coretex-retrieval-corpus.mjs \
+    --source challenge-library \
+    --challenge-lib-root /root/botcoin-coordinator-live/packages/challenges \
     --bundle-manifest /tmp/coretex-template-bundle.json \
     --domains companies,quantum_physics,computational_biology,scrna_imputation \
     --seeds-per-domain 4 \
@@ -87,6 +111,8 @@ node scripts/validate-retrieval-corpus.mjs \
 
 CORETEX_BIENCODER=deterministic CORETEX_LABELER=deterministic \
   node scripts/generate-coretex-retrieval-corpus.mjs \
+    --source challenge-library \
+    --challenge-lib-root /root/botcoin-coordinator-live/packages/challenges \
     --bundle-manifest /tmp/coretex-template-bundle.json \
     --previous-corpus artifacts/coretex/corpus-smoke-epoch0.json \
     --seed-offset 4 \
@@ -114,6 +140,50 @@ ITERATIONS=2 \
   node test/e2e/phase-13/run.mjs
 ```
 
+Challenge-library corpus hardening smoke run:
+
+```bash
+CORETEX_BIENCODER=deterministic CORETEX_LABELER=deterministic \
+  node scripts/generate-coretex-retrieval-corpus.mjs \
+    --source challenge-library \
+    --challenge-lib-root /root/botcoin-coordinator-live/packages/challenges \
+    --bundle-manifest artifacts/coretex/coretex-bundle-smoke-template.json \
+    --domains companies,quantum_physics,computational_biology,scrna_imputation \
+    --seeds-per-domain 1 \
+    --modifier-counts 0,1 \
+    --constraint-difficulties easy,hard \
+    --corpus-epoch 0 \
+    --out artifacts/coretex/challenge-library-corpus-smoke-epoch0.json
+
+node scripts/validate-retrieval-corpus.mjs \
+  --corpus artifacts/coretex/challenge-library-corpus-smoke-epoch0.json \
+  --min-events 400 \
+  --min-per-family 15 \
+  --min-hard-negatives 3
+
+CORETEX_BIENCODER=deterministic CORETEX_LABELER=deterministic \
+  node scripts/generate-coretex-retrieval-corpus.mjs \
+    --source challenge-library \
+    --challenge-lib-root /root/botcoin-coordinator-live/packages/challenges \
+    --bundle-manifest artifacts/coretex/coretex-bundle-smoke-template.json \
+    --previous-corpus artifacts/coretex/challenge-library-corpus-smoke-epoch0.json \
+    --domains companies,quantum_physics,computational_biology,scrna_imputation \
+    --seed-offset 1 \
+    --seeds-per-domain 1 \
+    --modifier-counts 0,1 \
+    --constraint-difficulties easy,hard \
+    --corpus-epoch 0 \
+    --epoch 1 \
+    --out artifacts/coretex/challenge-library-corpus-smoke-epoch1.json \
+    --delta-out artifacts/coretex/challenge-library-delta-smoke-epoch1.json
+```
+
+Observed output: epoch 0 generated 438 events; epoch 1 appended 438 events for
+876 total with family coverage `near_collision=496`, `temporal=60`,
+`long_horizon=288`, `multi_hop_relation=32`; validation returned zero errors.
+After recalibrating the bundle profile from that corpus, Phase 13 passed with
+the deterministic scorer and adversarial `no_retrieval_improvement` rejection.
+
 Phase 13 accepted `2/2` retrieval-state advances and the adversarial sub-test
 returned `accepted=false reason=no_retrieval_improvement`.
 
@@ -121,7 +191,10 @@ Production refusal checks:
 
 ```bash
 CORETEX_CORPUS_PRODUCTION=1 CORETEX_LABELER=deterministic \
-  node scripts/generate-coretex-retrieval-corpus.mjs ...
+  node scripts/generate-coretex-retrieval-corpus.mjs \
+    --source challenge-library \
+    --challenge-lib-root /root/botcoin-coordinator-live/packages/challenges \
+    --bundle-manifest /etc/coretex/template-bundle.json
 # exits 2
 
 CORETEX_RERANKER_PRODUCTION=1 CORETEX_RERANKER=deterministic \
@@ -141,6 +214,8 @@ CORTEX_REAL_EVAL=1 \
 CORETEX_RERANKER=qwen3 \
 CORETEX_RERANKER_PRODUCTION=1 \
   node scripts/generate-coretex-retrieval-corpus.mjs \
+    --source challenge-library \
+    --challenge-lib-root /root/botcoin-coordinator-live/packages/challenges \
     --bundle-manifest /etc/coretex/template-bundle.json \
     --domains companies,quantum_physics,computational_biology,scrna_imputation \
     --seeds-per-domain $SEEDS_PER_DOMAIN \
