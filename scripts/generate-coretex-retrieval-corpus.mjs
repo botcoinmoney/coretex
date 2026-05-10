@@ -48,7 +48,9 @@ import {
   splitForRecord,
   computeCorpusRoot,
   biEncoderFromEnv,
+  createStreamingBiEncoder,
   createQwen3Reranker,
+  createStreamingQwen3Reranker,
   loadProductionCorpus,
   buildCorpusDelta,
   serializeCorpusDelta,
@@ -109,19 +111,42 @@ if (productionCorpusMode && source !== 'challenge-library') {
 }
 
 const layout = manifest.model.biEncoder.retrievalKeyLayout;
-const biEncoder = biEncoderFromEnv(layout, {
-  modelId: manifest.model.biEncoder.modelId,
-  revision: manifest.model.biEncoder.revision,
-});
 
-const labeler = env.CORETEX_LABELER === 'pinned'
-  ? await createQwen3Reranker({
-      model: manifest.model.labelingReranker.modelId,
-      revision: manifest.model.labelingReranker.revision,
-      cacheDir: env.CORTEX_LOCAL_MODEL_CACHE,
-      localOnly: env.CORTEX_LOCAL_MODEL_LOCAL_ONLY === '1',
-      batchSize: Number(env.CORETEX_LABELER_BATCH_SIZE ?? '2'),
+// Production corpus generation always uses the persistent-subprocess encoder
+// (model loaded once, NDJSON stdin/stdout) — the per-call spawn variant pays
+// the full BGE-M3 model-load cost on every text and is unusable past a few
+// hundred events on a CPU host. Non-production paths keep the legacy factory.
+const biEncoder = productionCorpusMode
+  ? createStreamingBiEncoder({
+      modelId: manifest.model.biEncoder.modelId,
+      revision: manifest.model.biEncoder.revision,
+      layout,
     })
+  : biEncoderFromEnv(layout, {
+      modelId: manifest.model.biEncoder.modelId,
+      revision: manifest.model.biEncoder.revision,
+    });
+
+// Same persistent-subprocess treatment for the labeling reranker. The pinned
+// labeler is typically MemReranker-4B, which takes 30-60s to load on CPU; the
+// per-batch spawn variant cannot finish a launch-scale corpus.
+const labeler = env.CORETEX_LABELER === 'pinned'
+  ? (productionCorpusMode
+      ? createStreamingQwen3Reranker({
+          model: manifest.model.labelingReranker.modelId,
+          revision: manifest.model.labelingReranker.revision,
+          cacheDir: env.CORTEX_LOCAL_MODEL_CACHE,
+          localOnly: env.CORTEX_LOCAL_MODEL_LOCAL_ONLY === '1',
+          batchSize: Number(env.CORETEX_LABELER_BATCH_SIZE ?? '8'),
+          numThreads: Number(env.CORETEX_LABELER_NUM_THREADS ?? '0') || undefined,
+        })
+      : await createQwen3Reranker({
+          model: manifest.model.labelingReranker.modelId,
+          revision: manifest.model.labelingReranker.revision,
+          cacheDir: env.CORTEX_LOCAL_MODEL_CACHE,
+          localOnly: env.CORTEX_LOCAL_MODEL_LOCAL_ONLY === '1',
+          batchSize: Number(env.CORETEX_LABELER_BATCH_SIZE ?? '2'),
+        }))
   : null;
 
 // ─── Synthesis ───────────────────────────────────────────────────────────────
@@ -224,8 +249,50 @@ async function labelHardNegative(query, document) {
   return 0.0;
 }
 
+function relevanceFromScore(score) {
+  if (score >= 0.55) return 0.4;
+  if (score >= 0.25) return 0.2;
+  return 0.0;
+}
+
+async function labelHardNegativesBatched(query, hardNegs) {
+  if (hardNegs.length === 0) return [];
+  if (!labeler) {
+    return hardNegs.map((n) => Math.min(0.4, labelStub(query, n.text)));
+  }
+  const scores = await labeler.score(hardNegs.map((n) => ({ query, document: n.text })));
+  return scores.map(relevanceFromScore);
+}
+
+async function encodeEventTexts(query, truthDocs, hardNegs) {
+  const inputs = [
+    { text: query, id: '__query' },
+    ...truthDocs.map((td) => ({ text: td.text, id: td.id })),
+    ...hardNegs.map((n) => ({ text: n.text, id: n.id })),
+  ];
+  const out = await biEncoder.encode(inputs);
+  let i = 0;
+  const queryHex = bytesToHex(out[i++]);
+  const perTruthHex = {};
+  for (const td of truthDocs) perTruthHex[td.id] = bytesToHex(out[i++]);
+  const perNegHex = {};
+  for (const n of hardNegs) perNegHex[n.id] = bytesToHex(out[i++]);
+  return { queryHex, perTruthHex, perNegHex };
+}
+
+async function closeStreamingChildren() {
+  const closeIfStreaming = async (obj, label) => {
+    if (obj && typeof obj.close === 'function') {
+      try { await obj.close(); } catch (e) { console.warn(`${label}.close failed: ${(e && e.message) || e}`); }
+    }
+  };
+  await closeIfStreaming(biEncoder, 'biEncoder');
+  await closeIfStreaming(labeler, 'labeler');
+}
+
 if (source === 'challenge-library') {
-  await generateChallengeLibraryCorpus();
+  try { await generateChallengeLibraryCorpus(); }
+  finally { await closeStreamingChildren(); }
   exit(0);
 }
 if (source !== 'synthetic') {
@@ -306,18 +373,17 @@ for (const domain of domains) {
             relations = [{ other_id: relationTargetId, edgeType: 'coreference_of' }];
           }
 
-        // Embeddings via bi-encoder (deterministic stub by default).
-        // Real production runs this with CORETEX_BIENCODER=pinned.
-        const queryHex = bytesToHex(await encodeOne(question));
-        const perTruthHex = {};
-        for (const td of truthDocs) perTruthHex[td.id] = bytesToHex(await encodeOne(td.text));
-        const perNegHex = {};
-        for (const n of hardNegs) perNegHex[n.id] = bytesToHex(await encodeOne(n.text));
+        // Embeddings via bi-encoder; one batched encode per event
+        // (1 query + truth docs + hard negatives) so the persistent
+        // subprocess only pays one round-trip + one padded forward pass.
+        const { queryHex, perTruthHex, perNegHex } = await encodeEventTexts(question, truthDocs, hardNegs);
 
-        // Qrels: bin labelStub scores
+        // Qrels: truth at 1.0 (current) or 0.4 (stale temporal); hard negatives
+        // scored in one batched labeler call to amortize subprocess + forward.
+        const negRelevances = await labelHardNegativesBatched(question, hardNegs);
         const qrels = [];
         for (const td of truthDocs) qrels.push({ documentId: td.id, relevance: td.isCurrent ? 1.0 : 0.4 });
-        for (const n of hardNegs) qrels.push({ documentId: n.id, relevance: await labelHardNegative(question, n.text) });
+        for (let ni = 0; ni < hardNegs.length; ni++) qrels.push({ documentId: hardNegs[ni].id, relevance: negRelevances[ni] });
 
         const split = splitForRecord(id, corpusEpoch);
 
@@ -597,15 +663,12 @@ async function buildEvent({
     });
   }
 
-  const queryHex = bytesToHex(await encodeOne(queryText));
-  const perTruthHex = {};
-  for (const td of truthDocuments) perTruthHex[td.id] = bytesToHex(await encodeOne(td.text));
-  const perNegHex = {};
-  for (const n of hardNegatives) perNegHex[n.id] = bytesToHex(await encodeOne(n.text));
+  const { queryHex, perTruthHex, perNegHex } = await encodeEventTexts(queryText, truthDocuments, hardNegatives);
+  const negRelevances = await labelHardNegativesBatched(queryText, hardNegatives);
 
   const qrels = [];
   for (const td of truthDocuments) qrels.push({ documentId: td.id, relevance: td.isCurrent ? 1.0 : 0.4 });
-  for (const n of hardNegatives) qrels.push({ documentId: n.id, relevance: await labelHardNegative(queryText, n.text) });
+  for (let ni = 0; ni < hardNegatives.length; ni++) qrels.push({ documentId: hardNegatives[ni].id, relevance: negRelevances[ni] });
 
   return {
     id,
@@ -884,6 +947,8 @@ if (deltaOutPath) {
   writeFileSync(resolve(deltaOutPath), JSON.stringify(serializeCorpusDelta(delta), null, 2));
   console.log(`  delta=${resolve(deltaOutPath)} added=${delta.addedIds.length} nextRoot=${delta.nextRoot}`);
 }
+
+await closeStreamingChildren();
 
 function tally(arr) {
   const m = {};
