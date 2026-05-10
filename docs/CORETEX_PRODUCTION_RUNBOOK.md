@@ -8,6 +8,13 @@ deploy procedure, replay-watcher topology, escrow operations, retention
 policy, rate-limit envelope, kill switches, and bundle rotation procedure
 for the mainnet launch.
 
+The controlling end-to-end orchestration runbook is
+`docs/CORETEX_FINAL_PRODUCTION_E2E_ORCHESTRATOR_RUNBOOK.md`. The launch
+orchestrator must execute that runbook end-to-end. This document is the
+operations reference for §1.5 (coordinator env), §3 (replay-watcher
+topology), §4 (escrow), §5 (retention), §6 (rate-limit envelope),
+§7 (kill switches), and §8 (bundle rotation).
+
 ## 1. Mainnet deploy
 
 There is no migration. Mainnet launch is a fresh deploy to fresh addresses.

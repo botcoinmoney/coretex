@@ -4,6 +4,16 @@ Last updated: 2026-05-10.
 
 This is the canonical design plan for CoreTex's production launch. It is not an upgrade plan. There is no live CoreTex production system to migrate from. The substrate primitives (1024-word state body, compact 1–4 word patches, EIP-712 receipts, replay client, bundle manifest, corpus/delta utilities, coordinator route shim) exist as reusable libraries from prior local hardening work — they are correct and stay. Any code or doc artifact describing a "structural commitment" or "slot-fill" reward law is stale and is removed before launch, not preserved as a historical profile.
 
+Operational counterparts:
+
+- `docs/CORETEX_FINAL_PRODUCTION_E2E_ORCHESTRATOR_RUNBOOK.md` — controlling
+  end-to-end launch orchestration (calibration host through Base mainnet
+  canary and independent replay).
+- `docs/CORETEX_PRODUCTION_RUNBOOK.md` — operational reference for deploy,
+  replay-watcher topology, escrow, retention, rate-limit envelope, kill
+  switches, and bundle rotation.
+- `docs/CORETEX_MAINNET_LAUNCH_CHECKLIST.md` — per-step launch gate.
+
 ## Non-Negotiable Goal
 
 CoreTex's reward law measures real improvements to a compact on-chain memory retrieval substrate, scored by accepted IR metrics over hidden benchmark queries:

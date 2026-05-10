@@ -103,16 +103,32 @@ import {
   createRetrievalDataSource,
   loadProductionCorpus,
   assertBundleBindingAtStartup,
+  verifyBundleManifest,
 } from '@botcoin/cortex';
 
 const corpus = loadProductionCorpus(process.env.CORETEX_CORPUS!);
 const bundleManifest = JSON.parse(fs.readFileSync('/etc/coretex/bundle-manifest.json', 'utf8'));
 
+// 1. Static manifest verification (file SHA-256s, model pin shape, etc.).
+const manifestErrors = verifyBundleManifest(bundleManifest, '/opt/cortex');
+if (manifestErrors.length > 0) {
+  throw new Error(`bundle manifest invalid: ${manifestErrors.join(', ')}`);
+}
+
+// 2. Bundle hash must equal the on-chain coreVersionHash for this epoch.
+if (bundleManifest.bundleHash.toLowerCase() !== process.env.CORETEX_BUNDLE_HASH!.toLowerCase()) {
+  throw new Error(
+    `bundle manifest hash ${bundleManifest.bundleHash} does not match CORETEX_BUNDLE_HASH ${process.env.CORETEX_BUNDLE_HASH}`,
+  );
+}
+
+// 3. Runtime/accelerator binding gate. Reads onChainCoreVersionHash from the
+//    epoch's published value (CORETEX_CORE_VERSION_HASH); refuses on
+//    GPU/MPS/CUDA env vars and on runtimePin mismatch.
 assertBundleBindingAtStartup({
   manifest: bundleManifest,
-  expectedBundleHash: process.env.CORETEX_BUNDLE_HASH!,
-  expectedCoreVersionHash: process.env.CORETEX_CORE_VERSION_HASH!,
-  repoRoot: '/opt/cortex',
+  onChainCoreVersionHash: process.env.CORETEX_CORE_VERSION_HASH!,
+  installedRuntimeVersions: readInstalledRuntimeVersions(),
 });
 
 const coretexDataSource = createRetrievalDataSource({
