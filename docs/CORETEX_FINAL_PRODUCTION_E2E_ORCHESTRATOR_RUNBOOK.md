@@ -435,12 +435,29 @@ node scripts/validate-retrieval-corpus.mjs \
 Then fetch representative hidden/canary records through the coordinator and
 confirm they return hidden/restricted responses before reveal.
 
-## Phase 5 - Epoch Rotation To The Final Bundle
+## Phase 5 - Daily V3 24-Hour Epoch Ritual
 
-After calibration, rotate the next CoreTex epoch to the final
-`bundleHash/coreVersionHash` and final corpus root.
+CoreTex rides the existing V3 24-hour epoch cycle. Reward distribution
+and credit accumulation are unchanged: V4's `coretexCredits` accrue as
+miners call `submitWorkReceipt` during the epoch, and at epoch end the
+V4 reward lane distributes the CoreTex reward share pro-rata over those
+credits — same shape as V3.
 
-Compute seed commitment:
+The CortexState contract just records four constants per V3 epoch:
+`bundleHash` (= `coreVersionHash`), `corpusRoot`, `minImprovementPpm`,
+and a fresh `evalSeedCommit`. The first three stay **identical across
+most epochs** — they only change when ops publishes a new corpus delta
+or a new bundle. The `evalSeedCommit` is fresh every epoch so the
+hidden pack derives deterministically from a per-epoch seed that is
+revealed at epoch close.
+
+The launch transition is just the first 24h cycle in which
+`bundleHash` is set to the production CoreTex bundle and `rewardLane`
+is set to V4 (already done). After that, the same three on-chain calls
+fire every 24h indefinitely, and the values are constant unless ops
+deliberately bumps them.
+
+Compute seed commitment (per-epoch):
 
 ```bash
 openssl rand -hex 32 > /var/lib/coretex/eval-seed-epoch-$NEXT_CHAIN_EPOCH.secret
@@ -481,6 +498,19 @@ cast call --rpc-url "$BASE_RPC_URL" $CORTEX_STATE_ADDRESS \
   'getEpoch(uint64)(bool,bool,uint32,bytes32,bytes32,bytes32,bytes32,uint16,uint64,bytes32,uint32,bytes32,bytes32)' \
   $NEXT_CHAIN_EPOCH
 ```
+
+At cycle close (24h later), reveal the seed before the V3 reward
+finalization runs:
+
+```bash
+cast send --rpc-url "$BASE_RPC_URL" --private-key "$OWNER_PK" $CORTEX_STATE_ADDRESS \
+  'revealEvalSeed(uint64,bytes32)' $CURRENT_CHAIN_EPOCH $EVAL_SEED
+```
+
+These three calls (`initializeEpoch` + `freezeEpoch` at start,
+`revealEvalSeed` at end) are added to the coordinator's existing
+24h V3 finalize cron — see `docs/CORETEX_COORDINATOR_QUICKSTART.md`
+§4 for the wiring.
 
 Pass criteria:
 
