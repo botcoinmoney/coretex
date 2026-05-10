@@ -607,14 +607,15 @@ async function recordsFromChallenge({
         { id: `${id}::truth_current`, text: currentText, isCurrent: true },
         { id: `${id}::truth_stale`, text: staleText, isCurrent: false },
       ],
-      // Modifier (temporal) record's negs: first is the explicitly-stale
-      // version of the truth (temporal_stale), rest are other-entity docs
-      // in the same temporal context (near_collision_entity).
-      hardNegativeRecords: [
-        { text: staleText, category: 'temporal_stale' },
-        ...nearestEntityDocs(entities, modifier.entityName, entityDocs, 3)
-          .map((text) => ({ text, category: 'near_collision_entity' })),
-      ],
+      // Modifier (temporal) record's hard negs are other-entity docs in
+      // the same temporal context (near_collision_entity). The
+      // temporal-partial-relevance signal is encoded via the
+      // truth_stale entry above (isCurrent=false → qrel relevance 0.4
+      // by the buildEvent truth-rule), not as a hard neg — adding a
+      // duplicate staleText to hardNegativeRecords would be deduped
+      // by buildEvent anyway and ends up dead code.
+      hardNegativeRecords: nearestEntityDocs(entities, modifier.entityName, entityDocs, 4)
+        .map((text) => ({ text, category: 'near_collision_entity' })),
       protectedRecord: true,
       temporal: {
         validFromEpoch: corpusEpoch,
@@ -647,15 +648,13 @@ async function recordsFromChallenge({
         { id: `${id}::truth_current`, text: currentText, isCurrent: true },
         { id: `${id}::truth_stale`, text: staleText, isCurrent: false },
       ],
-      // Trap-temporal record's negs: first is the stale designed-decoy
-      // (temporal_stale — the substrate must learn to reject the
-      // explicitly-superseded "planning note" wrongValue), rest are
-      // other-entity docs in the same trap context (near_collision_entity).
-      hardNegativeRecords: [
-        { text: staleText, category: 'temporal_stale' },
-        ...nearestEntityDocs(entities, trap.entityName, entityDocs, 3)
-          .map((text) => ({ text, category: 'near_collision_entity' })),
-      ],
+      // Trap-temporal record's hard negs: other-entity docs in the
+      // same trap context (near_collision_entity). The stale
+      // designed-decoy is encoded via truth_stale above
+      // (isCurrent=false → qrel 0.4 partial relevance) — duplicating
+      // it as a hard neg would be deduped by buildEvent.
+      hardNegativeRecords: nearestEntityDocs(entities, trap.entityName, entityDocs, 4)
+        .map((text) => ({ text, category: 'near_collision_entity' })),
       protectedRecord: true,
       temporal: {
         validFromEpoch: corpusEpoch,

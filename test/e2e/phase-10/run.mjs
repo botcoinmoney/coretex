@@ -35,7 +35,11 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORTEX_ROOT = join(__dirname, '..', '..', '..');
-const BOTCOIN_ROOT = '/root/botcoin';
+// Repo that holds the V4 contracts + `script/CoreTexE2EFlow.s.sol`.
+// Default is the historical /root/botcoin path; override with the
+// CORETEX_CONTRACTS_ROOT env var to point at the orchestrator harness
+// repo (/root/coretex-calibration-orchestrator) or any other clone.
+const BOTCOIN_ROOT = process.env.CORETEX_CONTRACTS_ROOT ?? '/root/botcoin';
 const RPC_PORT = Number(process.env.E2E_ANVIL_PORT ?? 8546);
 const RPC_URL = `http://127.0.0.1:${RPC_PORT}`;
 
