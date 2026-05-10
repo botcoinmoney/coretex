@@ -43,7 +43,27 @@ The final CoreTex V4 reward law must be shaped like accepted retrieval benchmark
 - Evaluation loop: hidden query pack -> substrate top-k candidate retrieval -> Qwen3 reranking / graded relevance -> metric aggregation -> parent/candidate delta.
 - Weighting: at least 80% retrieval quality, at most 20% structural/compression sanity.
 
-The final benchmark should resemble BEIR/MTEB retrieval and reranking methodology, extended for long-term memory concerns surfaced by LongMemEval, LoCoMo-style memory reranking, and memory-structure benchmarks.
+The final benchmark should resemble BEIR/MTEB retrieval and reranking methodology, extended for long-term memory concerns surfaced by LongMemEval, LoCoMo-style memory reranking, memory-structure benchmarks, and MemReranker.
+
+MemReranker is especially important because it states the exact failure mode CoreTex must avoid: generic rerankers and semantic similarity can return memories that look relevant but do not contain the key information needed to answer the query. Its design target is reasoning-aware, instruction-aware, calibrated agent-memory reranking over temporal, causal, multi-hop, and dialogue-context cases. CoreTex V4.1 must therefore evaluate answer-bearing retrieval quality, not mere semantic proximity or slot commitment.
+
+MemReranker-specific implications for CoreTex:
+
+- Prefer a memory-specialized reranker when available:
+  - Primary target: MemReranker-0.6B once the 0.6B artifact is published/pinned.
+  - Fallback target: pinned Qwen3-Reranker-0.6B until MemReranker-0.6B is available.
+  - Optional high-accuracy target: MemReranker-4B for release calibration / audit sweeps.
+- Scores must be calibrated enough for thresholding. The paper's five-level relevance scale maps naturally to qrels:
+  - 0.0-0.2 irrelevant
+  - 0.2-0.4 low relevance / missing key information
+  - 0.4-0.6 partially relevant
+  - 0.6-0.8 highly relevant
+  - 0.8-1.0 direct answer
+- Corpus qrels should be graded, not binary, so `nDCG@10` and MAP can reward direct-answer memories above partial/supporting memories.
+- Candidate generation should be evaluated separately from reranking. MemReranker evaluates with fixed recall candidate sets such as BGE-M3 Top-100 for LOCOMO and Top-50 for LongMemEval; CoreTex should similarly report:
+  - substrate candidate recall before reranking
+  - reranked `nDCG@10` / MAP / MRR / Recall after Qwen3/MemReranker
+- Hard-case coverage must include high lexical overlap with low semantic relevance, low lexical overlap with high semantic relevance, temporal interference, coreference, causal reversal, entity confusion, numerical reasoning, granularity mismatch, and multi-hop reasoning.
 
 ## V4.1 Architecture
 
@@ -136,8 +156,11 @@ Required flow:
 3. For each hidden query, compute/query-load the pinned query embedding.
 4. Compute similarity against active substrate vectors.
 5. Select top-k candidate memories from the substrate.
-6. Run Qwen3-Reranker-0.6B over `(query, candidate_document)` pairs for top-k.
-7. Convert reranker outputs + corpus qrels into graded relevance.
+6. Run the production memory reranker over `(query, candidate_document)` pairs for top-k:
+   - MemReranker-0.6B if pinned/published.
+   - Qwen3-Reranker-0.6B fallback while MemReranker-0.6B is unavailable.
+   - MemReranker-4B for calibration and audit sweeps.
+7. Convert reranker outputs + corpus qrels into graded relevance using the five-level memory relevance scale.
 8. Compute `nDCG@10`, `MRR@10`, `Recall@5`, `Recall@10`.
 9. Compute temporal and relation sub-metrics.
 10. Score candidate minus parent.
@@ -227,6 +250,14 @@ Activation sequence:
 - Add embedding generation/pinning pipeline.
 - Add hard-negative audit reports per domain/family.
 - Build `CortexBench-v1` fixture from DACR/V3 with train/calibration/eval-hidden splits.
+- Add MemReranker hard-case labels:
+  - lexical-overlap traps
+  - temporal interference
+  - coreference / dialogue-context disambiguation
+  - multi-hop reasoning
+  - entity confusion
+  - numerical / attribute precision
+  - granularity mismatch
 
 ### Phase C: Substrate Decoder
 
@@ -240,7 +271,11 @@ Activation sequence:
 - Implement `evaluateRetrievalBenchmarkState`.
 - Implement `evaluateRetrievalBenchmarkPatch`.
 - Implement `ndcgAtK`, `mrrAtK`, `recallAtK`.
-- Integrate Qwen3 reranker as mandatory production reranker.
+- Integrate memory reranker selection:
+  - `CORETEX_RERANKER=memreranker-06b`
+  - `CORETEX_RERANKER=qwen3`
+  - `CORETEX_RERANKER=memreranker-4b`
+- Require a pinned revision and per-file hashes for every production reranker.
 
 ### Phase E: Coordinator Integration
 
@@ -272,4 +307,3 @@ CoreTex V4.1 is production-ready only when:
 - Replay independently recomputes the same retrieval metrics.
 - Corpus expansion, hidden query sampling, and difficulty rotation run every epoch.
 - All production envs fail closed if deterministic reranker or unverified bundle is configured.
-
