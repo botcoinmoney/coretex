@@ -1,319 +1,224 @@
 /**
- * Production CortexBench evaluator wiring for cortex-server.
+ * Production CoreTex evaluator wiring for cortex-server.
  *
- * The HTTP server should not ever issue production receipts from the inline
- * stub. This module installs a real evaluator when the operator provides a
- * state source:
+ * Spec: specs/retrieval_benchmark_v0.md, specs/determinism_v0.md.
+ *
+ * The HTTP server installs the real retrieval-benchmark scorer when the
+ * operator provides:
  *
  *   CORTEX_REAL_EVAL=1
- *   CORTEX_STATE_PACKED_PATH=/var/lib/cortex/current-state.bin
+ *   CORETEX_RERANKER_PRODUCTION=1
+ *   CORETEX_CORPUS=/path/to/corpus.json
+ *   CORETEX_BUNDLE_MANIFEST=/path/to/bundle-manifest.json
+ *   CORETEX_EXPECTED_BUNDLE_HASH=0x...
+ *   CORETEX_EVAL_SEED_HEX=0x...                  # rotated per epoch
+ *   CORETEX_EPOCH_ID=N                            # rotated per epoch
+ *   CORTEX_STATE_PACKED_PATH=/path/to/state.bin
  *
- * The packed state must be the 32768-byte CortexState whose Merkle root equals
- * the active challenge parentStateRoot. For genesis, operators may omit the
- * file and rely on the frozen Baseline A genesis state in this repo.
+ * Refusal modes (specs/determinism_v0.md):
+ *   - acceleratorPolicy != cpu_only
+ *   - any GPU env var set
+ *   - on-chain coreVersionHash != bundleHash
+ *   - reranker model id == labeling reranker model id
+ *   - missing CORETEX_RERANKER_PRODUCTION in production mode
  */
 
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import {
   applyPatch,
   bytesToHex,
   decodePatch,
-  evaluatePatchWithReranker,
   hexToBytes,
   keccak256,
-  loadProductionCorpus,
   merkleizeState,
   unpack,
   rerankerFromEnv,
+  loadProductionCorpus,
+  evaluateRetrievalBenchmarkPatch,
+  deriveQueryPack,
+  biEncoderFromEnv,
+  biEncoderModelIdHash,
+  type CoreTexBundleManifest,
+  type ProductionCorpus,
+  type CrossEncoderReranker,
+  type CortexState,
+  type ScoringOptions,
 } from '@botcoin/cortex';
-import type { CortexState, CrossEncoderReranker, ProductionCorpus } from '@botcoin/cortex';
+import type { BiEncoder } from '@botcoin/cortex';
 import { setEvaluator, type EvalInput, type EvalReport, type EvalResult } from './workers/eval-pool.js';
 
 const SCALE = 1_000_000;
 
-interface BenchModule {
-  loadRealCorpus(opts: { repoRoot: string }): unknown;
-  scoreState(
-    state: CortexState,
-    corpus: unknown,
-    opts?: { shardId?: string; evalItemsPerFamily?: number },
-  ): { composite: number; familyScores?: Record<string, number> };
-}
-
-interface FrozenConfig {
-  genesisStateRoot: string;
-  winner: string;
-}
-
 let installed = false;
-let localModelEvalPromise: Promise<{
-  evaluatePatchWithLocalModel: Function;
-  createTransformersEmbedder: Function;
-  embedder: unknown;
-}> | null = null;
+
+interface InstalledState {
+  corpus: ProductionCorpus;
+  reranker: CrossEncoderReranker;
+  biEncoder: BiEncoder;
+  manifest: CoreTexBundleManifest;
+  scoringOpts: ScoringOptions;
+  evalSeedHex: string;
+  epochId: number;
+  bundleHash: string;
+}
+
+let state: InstalledState | null = null;
 
 export async function installRealEvaluatorFromEnv(): Promise<void> {
   if (installed) return;
-  const enabled = process.env['CORTEX_REAL_EVAL'] === '1' || Boolean(process.env['CORTEX_STATE_PACKED_PATH']);
+
+  const enabled = process.env['CORTEX_REAL_EVAL'] === '1';
   if (!enabled) return;
 
+  const productionMode = process.env['CORETEX_RERANKER_PRODUCTION'] === '1';
+
   const repoRoot = resolve(process.env['CORTEX_REPO_ROOT'] ?? process.cwd());
-  const frozen = readFrozen(repoRoot);
-  const evalItemsPerFamily = nonNegativeSafeIntFromEnv('CORTEX_EVAL_ITEMS_PER_FAMILY');
-  if (process.env['CORTEX_RERANKER_EVAL'] !== '0') {
-    const corpusPath = resolve(
-      repoRoot,
-      process.env['CORETEX_CORPUS']
-        ?? process.env['CORTEX_CORPUS_PATH']
-        ?? 'benchmark/fixtures/dacr-v0/coretex_dacr.json',
-    );
-    const corpus = loadProductionCorpus(corpusPath);
-    const reranker = await rerankerFromEnv();
-    const threshold = rerankerThresholdFromEnv();
-    setEvaluator(async (input) => evaluateWithRealReranker(input, corpus, reranker, frozen, repoRoot, threshold));
-    installed = true;
-    console.log(`[cortex-server] real CoreTex reranker evaluator installed model=${reranker.model} threshold=${threshold}`);
-    return;
+  const manifestPath = process.env['CORETEX_BUNDLE_MANIFEST'];
+  if (!manifestPath) throw new Error('CORETEX_BUNDLE_MANIFEST is required');
+  const manifest = JSON.parse(readFileSync(resolve(repoRoot, manifestPath), 'utf8')) as CoreTexBundleManifest;
+
+  const expectedBundleHash = process.env['CORETEX_EXPECTED_BUNDLE_HASH'];
+  if (!expectedBundleHash) throw new Error('CORETEX_EXPECTED_BUNDLE_HASH is required');
+  if (manifest.bundleHash.toLowerCase() !== expectedBundleHash.toLowerCase()) {
+    throw new Error(`bundle manifest hash mismatch: ${manifest.bundleHash} vs ${expectedBundleHash}`);
+  }
+  if (manifest.evaluator.profile.acceleratorPolicy !== 'cpu_only') {
+    throw new Error(`acceleratorPolicy must be cpu_only, got ${manifest.evaluator.profile.acceleratorPolicy}`);
+  }
+  if (manifest.model.reranker.modelId === manifest.model.labelingReranker.modelId
+   && manifest.model.reranker.revision === manifest.model.labelingReranker.revision) {
+    throw new Error('labelingReranker must differ from production reranker');
+  }
+  if (productionMode) {
+    refuseGpu();
+    if (process.env['CORETEX_RERANKER'] === 'deterministic') {
+      throw new Error('CORETEX_RERANKER=deterministic is rejected in production mode');
+    }
   }
 
-  const bench = await import(pathToFileURL(resolve(repoRoot, 'experiments/harness/cortex-bench-eval.mjs')).href) as BenchModule;
-  const corpus = bench.loadRealCorpus({ repoRoot });
-  const threshold = Number(process.env['CORTEX_SCORE_THRESHOLD'] ?? 0);
+  const corpusPath = resolve(repoRoot, process.env['CORETEX_CORPUS'] ?? '');
+  if (!corpusPath) throw new Error('CORETEX_CORPUS is required');
+  const corpus = loadProductionCorpus(corpusPath);
 
-  setEvaluator(async (input) => evaluateWithRealBench(input, bench, corpus, frozen, repoRoot, threshold, evalItemsPerFamily));
+  const reranker = await rerankerFromEnv();
+  const biEncoder = biEncoderFromEnv(manifest.model.biEncoder.retrievalKeyLayout, {
+    modelId: manifest.model.biEncoder.modelId,
+    revision: manifest.model.biEncoder.revision,
+  });
+
+  const evalSeedHex = process.env['CORETEX_EVAL_SEED_HEX'];
+  if (!evalSeedHex) throw new Error('CORETEX_EVAL_SEED_HEX is required (rotated per epoch)');
+  const epochId = Number(process.env['CORETEX_EPOCH_ID'] ?? '0');
+  if (!Number.isInteger(epochId) || epochId < 0) throw new Error('CORETEX_EPOCH_ID must be non-negative integer');
+
+  const profile = manifest.evaluator.profile;
+  const scoringOpts: ScoringOptions = {
+    weights: profile.compositeWeights,
+    biEncoder,
+    reranker,
+    retrievalKeyLayout: manifest.model.biEncoder.retrievalKeyLayout,
+    biEncoderHash: biEncoderModelIdHash(
+      manifest.model.biEncoder.modelId,
+      manifest.model.biEncoder.revision,
+      manifest.model.biEncoder.mode,
+    ),
+    relationHopBudget: profile.relationHopBudget,
+    abstentionThreshold: profile.abstentionThreshold,
+    rerankerTopK: profile.rerankerTopK,
+    retrievalKeyTopK: profile.retrievalKeyTopK,
+  };
+
+  state = {
+    corpus, reranker, biEncoder, manifest, scoringOpts,
+    evalSeedHex, epochId,
+    bundleHash: manifest.bundleHash,
+  };
+
+  setEvaluator(async (input) => evaluateWithRetrievalBenchmark(input, state!, repoRoot));
   installed = true;
-  console.log('[cortex-server] real CortexBench evaluator installed');
+  // eslint-disable-next-line no-console
+  console.log(
+    `[cortex-server] real CoreTex retrieval-benchmark evaluator installed `
+    + `bundleHash=${manifest.bundleHash.slice(0, 10)} `
+    + `reranker=${manifest.model.reranker.modelId} `
+    + `biEncoder=${manifest.model.biEncoder.modelId} `
+    + `weights=retrieval@${profile.compositeWeights.w_retrieval}`,
+  );
 }
 
-async function evaluateWithRealReranker(
+function refuseGpu(): void {
+  for (const envVar of ['CORETEX_USE_GPU', 'PYTORCH_USE_MPS']) {
+    const v = process.env[envVar];
+    if (v && v !== '0') throw new Error(`refuse to start with ${envVar}=${v}`);
+  }
+  if (process.env['CUDA_VISIBLE_DEVICES']) throw new Error('refuse to start with CUDA_VISIBLE_DEVICES set');
+  const ortProviders = process.env['ONNXRUNTIME_PROVIDERS'] ?? '';
+  if (ortProviders.includes('CUDA') || ortProviders.includes('MPS')) {
+    throw new Error(`refuse to start with ONNXRUNTIME_PROVIDERS=${ortProviders}`);
+  }
+}
+
+async function evaluateWithRetrievalBenchmark(
   input: EvalInput,
-  corpus: ProductionCorpus,
-  reranker: CrossEncoderReranker,
-  frozen: FrozenConfig,
+  s: InstalledState,
   repoRoot: string,
-  threshold: number,
 ): Promise<EvalResult> {
   const t0 = performance.now();
   const patchBytes = hexToBytes(input.patchHex.startsWith('0x') ? input.patchHex : `0x${input.patchHex}`);
   const patch = decodePatch(patchBytes);
   const patchHash = bytesToHex(keccak256(patchBytes));
 
-  if (input.experienceCorpusRoot.toLowerCase() !== corpus.corpusRoot.toLowerCase()) {
+  if (input.experienceCorpusRoot.toLowerCase() !== s.corpus.corpusRoot.toLowerCase()) {
     return rejectedReport(input, patchHash, input.parentStateRoot, 'E_CORPUS_ROOT_MISMATCH', performance.now() - t0);
   }
-  const expectedBundleHash = process.env['CORETEX_EXPECTED_BUNDLE_HASH'];
-  if (expectedBundleHash && input.coreVersionHash.toLowerCase() !== expectedBundleHash.toLowerCase()) {
+  if (input.coreVersionHash.toLowerCase() !== s.bundleHash.toLowerCase()) {
     return rejectedReport(input, patchHash, input.parentStateRoot, 'E_CORE_VERSION_BUNDLE_MISMATCH', performance.now() - t0);
   }
 
-  const parentState = await loadParentState(input.parentStateRoot, frozen, repoRoot);
+  const parentState = await loadParentState(input.parentStateRoot, repoRoot);
   const parentRoot = bytesToHex(merkleizeState(parentState));
   if (parentRoot.toLowerCase() !== input.parentStateRoot.toLowerCase()) {
     return rejectedReport(input, patchHash, parentRoot, 'E01_PARENT_STATE_SOURCE_MISMATCH', performance.now() - t0);
   }
 
-  const evaluated = await evaluatePatchWithReranker(parentState, patch, {
-    corpus,
-    reranker,
-    threshold,
-  });
+  const pack = deriveQueryPack(s.epochId, s.evalSeedHex, s.corpus, s.manifest.evaluator.profile.hiddenPack);
+  const result = await evaluateRetrievalBenchmarkPatch(parentState, patch, s.corpus, pack, s.scoringOpts, s.manifest.evaluator.profile.patchAcceptanceFloors);
+
   const applied = applyPatch(parentState, patch);
   const newStateRoot = applied.ok ? bytesToHex(merkleizeState(applied.state)) : undefined;
   const latencyMs = performance.now() - t0;
+  const baselineScore = Math.round(result.before.composite * SCALE);
+  const candidateScore = Math.round(result.after.composite * SCALE);
+  const families: Record<string, number> = {};
+  for (const [k, v] of Object.entries(result.perFamilyDelta)) families[k] = v;
   const report: EvalReport = {
-    scoreDelta: evaluated.scoreDelta,
-    baselineScore: Math.round(evaluated.before.composite * SCALE),
-    candidateScore: Math.round(evaluated.after.composite * SCALE),
-    protectedRegressionClean: evaluated.noRegression,
+    scoreDelta: result.deltaPpm,
+    baselineScore,
+    candidateScore,
+    protectedRegressionClean: result.accepted || (result.reason !== undefined && !result.reason.startsWith('protected_regression')),
     stateCompliant: applied.ok,
     latencyMs,
-    families: evaluated.after.familyHitRates,
-    localModel: {
-      model: evaluated.after.model ?? reranker.model,
-      threshold,
-      noRegression: evaluated.noRegression,
-      regressions: evaluated.regressions,
-      beforeComponents: evaluated.before.components,
-      afterComponents: evaluated.after.components,
-    },
-    ...(!evaluated.pass ? { errorCode: evaluated.errorCode ?? 'RERANKER_THRESHOLD' } : {}),
+    families,
+    ...(!result.accepted ? { errorCode: result.reason ?? 'NO_RETRIEVAL_IMPROVEMENT' } : {}),
   };
   return {
-    pass: evaluated.pass,
+    pass: result.accepted,
     report,
     evalReportHash: reportHash(input, report, patchHash, newStateRoot ?? null),
     ...(newStateRoot ? { newStateRoot } : {}),
   };
 }
 
-async function evaluateWithRealBench(
-  input: EvalInput,
-  bench: BenchModule,
-  corpus: unknown,
-  frozen: FrozenConfig,
-  repoRoot: string,
-  threshold: number,
-  evalItemsPerFamily: number,
-): Promise<EvalResult> {
-  const t0 = performance.now();
-  const patchBytes = hexToBytes(input.patchHex.startsWith('0x') ? input.patchHex : `0x${input.patchHex}`);
-  const patch = decodePatch(patchBytes);
-  const parentState = await loadParentState(input.parentStateRoot, frozen, repoRoot);
-  const parentRoot = bytesToHex(merkleizeState(parentState));
-  const patchHash = bytesToHex(keccak256(patchBytes));
-
-  if (parentRoot.toLowerCase() !== input.parentStateRoot.toLowerCase()) {
-    return rejectedReport(input, patchHash, parentRoot, 'E01_PARENT_STATE_SOURCE_MISMATCH', performance.now() - t0);
-  }
-
-  const scoreOpts = {
-    shardId: input.shardId,
-    ...(evalItemsPerFamily > 0 ? { evalItemsPerFamily } : {}),
-  };
-  const baseScore = bench.scoreState(parentState, corpus, scoreOpts);
-  const applied = applyPatch(parentState, patch);
-  if (!applied.ok) {
-    return rejectedReport(input, patchHash, parentRoot, applied.code, performance.now() - t0, baseScore.composite);
-  }
-
-  const candidateScore = bench.scoreState(applied.state, corpus, scoreOpts);
-  const delta = candidateScore.composite - baseScore.composite;
-  const scoreDelta = Math.round(delta * SCALE);
-  const newStateRoot = bytesToHex(merkleizeState(applied.state));
-  const latencyMs = performance.now() - t0;
-  let pass = delta > threshold;
-  const report: EvalReport = {
-    scoreDelta,
-    baselineScore: Math.round(baseScore.composite * SCALE),
-    candidateScore: Math.round(candidateScore.composite * SCALE),
-    protectedRegressionClean: pass,
-    stateCompliant: true,
-    latencyMs,
-    families: candidateScore.familyScores ?? {},
-  };
-
-  if (pass && process.env['CORTEX_LOCAL_MODEL_EVAL'] !== '0') {
-    const local = await runLocalModelEval(parentState, patch, corpus, repoRoot);
-    report.localModel = local.summary;
-    pass = local.pass;
-    if (!pass) {
-      report.protectedRegressionClean = false;
-      report.errorCode = 'L02_LOCAL_MODEL_NO_SIGNAL';
-    }
-  }
-
-  const evalReportHash = reportHash(input, report, patchHash, newStateRoot);
-  return { pass, report, evalReportHash, newStateRoot };
-}
-
-function nonNegativeSafeIntFromEnv(name: string): number {
-  const raw = process.env[name];
-  if (raw === undefined || raw === '') return 0;
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new RangeError(`${name} must be a non-negative safe integer`);
-  }
-  return value;
-}
-
-function rerankerThresholdFromEnv(): number {
-  const ppm = process.env['CORTEX_RERANKER_MIN_DELTA_PPM'] ?? process.env['CORETEX_RERANKER_MIN_DELTA_PPM'];
-  if (ppm !== undefined && ppm !== '') return Number(ppm) / SCALE;
-  return Number(process.env['CORTEX_RERANKER_MIN_DELTA'] ?? process.env['CORTEX_SCORE_THRESHOLD'] ?? 0.0025);
-}
-
-async function runLocalModelEval(
-  parentState: CortexState,
-  patch: unknown,
-  corpus: unknown,
-  repoRoot: string,
-): Promise<{ pass: boolean; summary: unknown }> {
-  if (!localModelEvalPromise) {
-    localModelEvalPromise = (async () => {
-      const mod = await import(pathToFileURL(resolve(repoRoot, 'experiments/harness/local-model-eval.mjs')).href) as {
-        evaluatePatchWithLocalModel: Function;
-        createTransformersEmbedder: Function;
-        prewarmLocalModelEmbedder: Function;
-      };
-      const embedder = await mod.createTransformersEmbedder({
-        model: process.env['CORTEX_LOCAL_MODEL'],
-        cacheDir: process.env['CORTEX_LOCAL_MODEL_CACHE'],
-        localOnly: process.env['CORTEX_LOCAL_MODEL_LOCAL_ONLY'] === '1',
-      });
-      if (process.env['CORTEX_LOCAL_MODEL_PREWARM'] !== '0') {
-        const warm = await mod.prewarmLocalModelEmbedder(embedder, corpus);
-        console.log(
-          `[cortex-server] local model eval prewarmed ${warm.textCount} texts in ${warm.latencyMs.toFixed(1)}ms`,
-        );
-      }
-      return { ...mod, embedder };
-    })();
-  }
-
-  const { evaluatePatchWithLocalModel, embedder } = await localModelEvalPromise;
-  const threshold = Number(process.env['CORTEX_LOCAL_MODEL_MIN_DELTA'] ?? 0);
-  const local = await evaluatePatchWithLocalModel(parentState, patch, {
-    applyPatch,
-    corpus,
-    embedder,
-    threshold,
-  }) as {
-    pass: boolean;
-    scoreDelta: number;
-    delta: number;
-    noRegression: boolean;
-    regressions: string[];
-    before: { composite: number; components: unknown; model?: string };
-    after: { composite: number; components: unknown; model?: string };
-  };
-  return {
-    pass: local.pass,
-    summary: {
-      model: local.after.model ?? local.before.model,
-      scoreDelta: local.scoreDelta,
-      beforeComposite: Math.round(local.before.composite * SCALE),
-      afterComposite: Math.round(local.after.composite * SCALE),
-      delta: local.delta,
-      minDelta: threshold,
-      noRegression: local.noRegression,
-      regressions: local.regressions,
-      beforeComponents: local.before.components,
-      afterComponents: local.after.components,
-    },
-  };
-}
-
-async function loadParentState(parentStateRoot: string, frozen: FrozenConfig, repoRoot: string): Promise<CortexState> {
+async function loadParentState(_parentStateRoot: string, repoRoot: string): Promise<CortexState> {
   const packedPath = process.env['CORTEX_STATE_PACKED_PATH'];
-  if (packedPath) {
-    const bytes = readFileSync(resolve(repoRoot, packedPath));
-    return unpack(new Uint8Array(bytes));
+  if (!packedPath) {
+    throw new Error('CORTEX_REAL_EVAL requires CORTEX_STATE_PACKED_PATH');
   }
-
-  if (parentStateRoot.toLowerCase() === frozen.genesisStateRoot.toLowerCase()) {
-    const baseline = await import(pathToFileURL(resolve(repoRoot, 'experiments/baselines/baseline_a_empty/index.mjs')).href) as {
-      genesisState(): CortexState;
-    };
-    if (frozen.winner !== 'A') {
-      throw new Error(`CORTEX_REAL_EVAL genesis fallback only supports frozen winner A, got ${frozen.winner}`);
-    }
-    return baseline.genesisState();
-  }
-
-  throw new Error(
-    'CORTEX_REAL_EVAL needs CORTEX_STATE_PACKED_PATH for non-genesis parent roots. ' +
-    `No packed state source for ${parentStateRoot}.`,
-  );
-}
-
-function readFrozen(repoRoot: string): FrozenConfig {
-  const fp = resolve(repoRoot, 'ops/v0-frozen.json');
-  if (!existsSync(fp)) throw new Error('ops/v0-frozen.json missing; run scripts/freeze-core-version.mjs');
-  const j = JSON.parse(readFileSync(fp, 'utf8')) as FrozenConfig;
-  if (!j.genesisStateRoot || !j.winner) throw new Error('ops/v0-frozen.json missing genesisStateRoot/winner');
-  return j;
+  const abs = resolve(repoRoot, packedPath);
+  if (!existsSync(abs)) throw new Error(`CORTEX_STATE_PACKED_PATH not found: ${abs}`);
+  const bytes = readFileSync(abs);
+  return unpack(new Uint8Array(bytes));
 }
 
 function rejectedReport(
@@ -322,12 +227,11 @@ function rejectedReport(
   observedParentRoot: string,
   code: string,
   latencyMs: number,
-  baseComposite = 0,
 ): EvalResult {
   const report = {
     scoreDelta: 0,
-    baselineScore: Math.round(baseComposite * SCALE),
-    candidateScore: Math.round(baseComposite * SCALE),
+    baselineScore: 0,
+    candidateScore: 0,
     protectedRegressionClean: false,
     stateCompliant: false,
     latencyMs,

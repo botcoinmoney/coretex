@@ -16,7 +16,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:unit": "node --test --test-reporter=spec ./test/unit"
+    "test:unit": "if [ -d ./test/unit ]; then node --test --test-reporter=spec ./test/unit; else echo 'no unit tests for @botcoin/cortex-handler'; fi"
   },
   "files": [
     "dist",

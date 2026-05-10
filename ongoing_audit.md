@@ -1026,8 +1026,6 @@ No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
 
 No diffs since prior HEAD `a57e0eb`. Outstanding findings unchanged.
 
----
-
 ## Orchestrator handoff round 2 (2026-05-09 ~04:00)
 
 The auditor role is closed for this session. Audit hand-off note:
@@ -1108,3 +1106,41 @@ substrate, replay, evaluator, difficulty, reward law, and one
 live mining cycle are self-consistent end to end.
 
 (Auditor artifact closed for this session.)
+
+## Orchestrator handoff round 3 (2026-05-10)
+
+The frontier-retrieval hardening implementation was reviewed and corrected
+against the production benchmark goal. The major corrections landed in the
+working tree:
+
+- Scorer no longer injects oracle truth documents; retrieval nDCG is earned
+  only from substrate-retrieved candidates.
+- BGE-M3/Qwen3/MemReranker bundle pins now include immutable revisions and
+  per-file SHA-256 metadata.
+- Corpus generation now emits answer-bearing qrels, hard negatives capped at
+  non-answer relevance, multi-hop target relations, and production-mode
+  refusal for deterministic labeling.
+- Corpus expansion emits disk-serializable embedding-bearing deltas with
+  `previousRoot -> nextRoot` continuity.
+- State reserved-bit validation was aligned with retrieval substrate semantics;
+  malformed payloads are now the decoder's responsibility.
+- Phase 13 now requires accepted retrieval-state advances and rejects the
+  correct-id/bad-vector adversarial patch.
+
+Verification run:
+
+```text
+npm run build
+npm run test:unit
+npm run typecheck
+node scripts/validate-retrieval-corpus.mjs ...
+node scripts/calibrate.mjs ...
+npm run build:bundle ...
+node test/e2e/phase-13/run.mjs
+```
+
+All local deterministic smoke gates passed, including Phase 13 accepting 2/2
+retrieval-state advances and rejecting `no_retrieval_improvement` on the
+adversarial patch. See
+`docs/CORETEX_FRONTIER_RETRIEVAL_EXECUTION_HANDOFF.md` for commands and
+file-of-record details.
