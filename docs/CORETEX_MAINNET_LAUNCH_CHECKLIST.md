@@ -54,6 +54,9 @@ Each box must be green before the next is started.
 
 ## 4. Corpus generation
 
+- [ ] `node scripts/estimate-coretex-corpus-capacity.mjs` passes the launch
+      gate for the intended epoch cadence. Minimum launch target:
+      `seeds-per-domain=512`, `pack-size=128`, `min-months=6`.
 - [ ] `node scripts/generate-coretex-retrieval-corpus.mjs --source
       challenge-library` produced a corpus reproducing byte-identically
       across two clean hosts from the same built challenge package.

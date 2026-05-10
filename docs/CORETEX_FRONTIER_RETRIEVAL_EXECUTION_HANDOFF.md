@@ -76,6 +76,42 @@ CoreTex template fallback:
 - the old template generator remains only behind `--source synthetic` for
   offline fallback and is not the launch corpus path.
 
+## Launch Capacity
+
+The checked-in/local smoke corpus is deliberately small. The current smoke
+artifact contains 876 events; it is not a launch corpus.
+
+The production launch profile is documented in
+`docs/CORETEX_CALIBRATION_AGENT_RUNBOOK.md` and measured with
+`scripts/estimate-coretex-corpus-capacity.mjs`.
+
+Capacity estimate for `seedsPerDomain=512`, four launch domains,
+`modifierCounts=0,1,2,3`, `constraintDifficulties=easy,medium,hard`,
+`trapCount=2`, `packSize=128`:
+
+```
+totalEvents=678910
+evalHiddenEvents=101836
+noRepeatEpochs=795
+noRepeatMonths=26.5 at 1 epoch/day
+noRepeatMonths=8.83 at 3 epochs/day
+```
+
+This estimate is before ongoing epoch deltas. The coordinator should append new
+challenge-library seeds every epoch, so corpus growth should exceed hidden-pack
+consumption.
+
+## Agent Runbooks
+
+- `docs/CORETEX_CALIBRATION_AGENT_RUNBOOK.md`: standalone calibration agent
+  instructions for capacity gating, launch corpus generation, pinned-model
+  determinism, calibration, final bundle build, real-reranker Phase 13, and
+  corpus-delta rehearsal.
+- `docs/CORETEX_COORDINATOR_INTEGRATION_RUNBOOK.md`: coordinator host wiring
+  instructions. The intended integration is a thin route mount around
+  `handleCoreTexCoordinatorRoute` plus a `CoreTexCoordinatorDataSource`; the
+  bundle/corpus/replay artifacts remain independently verifiable.
+
 ## Local Verification Run
 
 Commands run on 2026-05-10:

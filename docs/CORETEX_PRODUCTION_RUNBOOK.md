@@ -23,6 +23,8 @@ There is no migration. Mainnet launch is a fresh deploy to fresh addresses.
 - Source data audit `docs/CORETEX_SOURCE_DATA_AUDIT.md` exists and the
   outcome (`reject_current_data` for launch) is reflected in the corpus
   build script choice.
+- Corpus capacity gate passes:
+  `node scripts/estimate-coretex-corpus-capacity.mjs --seeds-per-domain 512 --pack-size 128 --epochs-per-day <cadence> --min-months 6`.
 - Generated corpus reproduces byte-identical `corpusRoot` on two clean
   hosts (run `node scripts/generate-coretex-retrieval-corpus.mjs --source
   challenge-library` on both with the same built challenge package and model
