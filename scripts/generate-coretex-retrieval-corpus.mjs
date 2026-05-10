@@ -99,6 +99,14 @@ if (productionCorpusMode && env.CORETEX_LABELER !== 'pinned') {
   console.error('generate-coretex-retrieval-corpus: production corpus generation requires CORETEX_LABELER=pinned');
   exit(2);
 }
+if (productionCorpusMode && env.CORETEX_BIENCODER !== 'pinned') {
+  console.error('generate-coretex-retrieval-corpus: production corpus generation requires CORETEX_BIENCODER=pinned');
+  exit(2);
+}
+if (productionCorpusMode && source !== 'challenge-library') {
+  console.error('generate-coretex-retrieval-corpus: production corpus generation requires --source challenge-library');
+  exit(2);
+}
 
 const layout = manifest.model.biEncoder.retrievalKeyLayout;
 const biEncoder = biEncoderFromEnv(layout, {
