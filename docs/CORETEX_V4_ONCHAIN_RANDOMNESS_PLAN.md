@@ -30,25 +30,103 @@ The auditor's diagnosis stands: **a live `POST /coretex/evaluate` oracle is unsa
 
 ## Seed Formula
 
+Two domain-separated seeds are derived per patch — the gate pack and
+the confirm pack. A patch must clear threshold on BOTH packs to be
+accepted. See §"Dual-Pack Confirmation" below for the rationale.
+
 ```text
-evalSeed_patch = keccak256(
-  "coretex-eval-v1",      # domain prefix
-  epochSecret,            # 32 bytes, committed at epoch start
-  blockhash(targetBlock), # 32 bytes, targetBlock = receivedAtBlock + targetBlockOffset
+evalSeed_gate = keccak256(
+  "coretex-eval-v1-gate",  # gate-pack domain prefix
+  epochSecret,             # 32 bytes, committed at epoch start
+  blockhash(targetBlock),  # 32 bytes, targetBlock = receivedAtBlock + targetBlockOffset
   uint64(epochId),
-  patchHash,              # keccak256(normalized patchBytes)
-  parentRoot,             # 32 bytes
-  minerAddress,           # 20 bytes
-  corpusRoot,             # 32 bytes
-  bundleHash              # 32 bytes
+  patchHash,               # keccak256(normalized patchBytes)
+  parentRoot,              # 32 bytes
+  minerAddress,            # 20 bytes
+  corpusRoot,              # 32 bytes
+  bundleHash               # 32 bytes
+)
+
+evalSeed_confirm = keccak256(
+  "coretex-eval-v1-confirm",  # confirm-pack domain prefix
+  epochSecret, blockhash(targetBlock), uint64(epochId),
+  patchHash, parentRoot, minerAddress, corpusRoot, bundleHash
 )
 ```
+
+Distinct domain prefixes → packs are statistically independent draws
+from `eval_hidden`. Same blockhash, same wait — no second RPC round-
+trip, no additional latency.
 
 Where:
 
 - `targetBlockOffset = 30` (≈ 60 seconds on Base at 2s block time). Pinned in `EvaluatorProfile.baseRpcConfig`. Aligned with the per-miner challenge-submit rate limit (1/minute) — naturally gates submission cadence to match.
 - `epochSecret` is committed at epoch start via `CortexState.initializeEpoch(...evalSeedCommit...)` and revealed at epoch close via `revealEvalSeed`. Held in multisig escrow.
 - `receivedAtBlock` is the Base block number observed by the coordinator when the patch HTTP request entered the queue. Recorded in the signed receipt; replay watchers cross-check against a per-receipt published submission relay (see §"Receipt honesty").
+
+## Dual-Pack Confirmation
+
+The earlier sealed-eval design had gate + confirm packs for the same
+reason this design does: a patch that clears one random pack might be
+pack-lucky on a borderline result. Requiring confirmation on a second
+independent pack drops the false-acceptance probability from `p` to
+`p²`. Strong filter against single-pack noise.
+
+In the per-patch design this is essentially free:
+
+- Same blockhash, same wait — only the domain prefix changes.
+- Pack-id sampling is bi-encoder-id-only (no new BGE-M3 forward passes
+  per pack; embeddings already attached to corpus events).
+- The two scoring passes (BGE-M3 + Qwen3 over each pack's queries)
+  run sequentially on the same in-memory substrate. Total extra cost
+  ≈ 1× per-patch eval = ~5–10 s on the pinned profile.
+
+Acceptance rule:
+
+```text
+accepted = (score_gate ≥ minImprovementPpm + replayTolerancePpm + baselineVariancePpm)
+         AND
+           (score_confirm ≥ minImprovementPpm + replayTolerancePpm + baselineVariancePpm)
+```
+
+Both scores are committed to the signed receipt. Replay watchers
+recompute both and verify the AND. A miner whose patch passes only
+one pack receives a `pack-luck-filtered` rejection — the receipt is
+still signed (for audit), but no credit is awarded and the state
+does not advance.
+
+## Canary Overfitting Watchdog
+
+The corpus split assignment puts ~6 % of events in the `canary` split.
+Canary events are deterministic-id-public but never sampled into a
+gate or confirm pack (`hidden-query-pack.ts` filters them out at pack
+derivation time). They serve two purposes:
+
+1. **Public verifiability** — any third party can run their own
+   reranker against canary qrels and reproduce the bundle's canary
+   scores, since canary content is unredacted in the corpus.
+2. **Overfitting detection** — if a miner's substrate scores well on
+   canary queries while NOT being sampled there, it's evidence the
+   substrate is memorizing eval_hidden in a way that bleeds into
+   canary. Statistical drift on aggregate canary scores → overfitting
+   signal.
+
+`scripts/canary-overfitting-watchdog.mjs` (new) runs as a coordinator
+cron job:
+
+- Reads the last N accepted patches' eval receipts from
+  `/var/lib/coretex/eval-reports/`.
+- For each receipt, recomputes the substrate's score against the
+  full canary set (deterministic, no model needed — uses the receipt's
+  pinned bi-encoder embeddings + bundle's reranker pin).
+- Tracks rolling mean and stdev of canary-set composite score.
+- Alarms (writes to `/var/lib/coretex/reports/canary-alarms.log` and
+  emits a webhook) when the rolling mean drifts > 3σ above the
+  bundle's `baselineParentScorePpm` baseline.
+
+Detection-only. The watchdog does not reject patches — operator
+investigates alarms and decides whether to retire the corpus delta
+(triggering a bundle rotation that invalidates prior overfitting).
 
 ## Architectural Changes
 
@@ -77,7 +155,8 @@ Where:
 **`packages/cortex/src/eval/seed-derivation.ts`** (new, pure)
 
 ```ts
-export const EVAL_SEED_DOMAIN_PREFIX = 'coretex-eval-v1';
+export const EVAL_SEED_GATE_DOMAIN_PREFIX    = 'coretex-eval-v1-gate';
+export const EVAL_SEED_CONFIRM_DOMAIN_PREFIX = 'coretex-eval-v1-confirm';
 
 export interface EvalSeedInput {
   readonly epochSecret: string;       // bytes32 hex
@@ -90,12 +169,14 @@ export interface EvalSeedInput {
   readonly bundleHash: string;        // bytes32 hex
 }
 
-export function deriveEvalSeed(input: EvalSeedInput): string; // 0x + 64 hex
+export function deriveGateEvalSeed(input: EvalSeedInput): string;    // 0x + 64 hex
+export function deriveConfirmEvalSeed(input: EvalSeedInput): string; // 0x + 64 hex
 export function computePatchHash(patchBytes: Uint8Array): string;
 export function computeDedupKey(parentRoot: string, normalizedPatchBytes: Uint8Array): string;
 ```
 
-Pure hashing only. No I/O, no model loads. Same shape as `sealed-eval.ts`'s primitives but per-patch.
+Pure hashing only. No I/O, no model loads. Two domain-separated
+seeds per patch (gate + confirm) — see §"Dual-Pack Confirmation".
 
 **`packages/cortex/src/coordinator/base-blockhash.ts`** (new, thin RPC client)
 
