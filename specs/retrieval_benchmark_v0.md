@@ -5,10 +5,19 @@ Status: launch-blocking spec. Pinned by bundle hash.
 ## Scope
 
 This spec defines the IR-style metrics evaluated by the production CoreTex
-reward law. They are computed by the coordinator over a per-epoch hidden
-query pack derived from the corpus and the revealed seed (see
-`hidden_query_pack_v0.md`). They are reproducible deterministically from the
-pinned bundle (see `determinism_v0.md`).
+reward law. They are computed by the coordinator over a hidden query pack
+derived from the corpus and a revealed seed (see `hidden_query_pack_v0.md`).
+They are reproducible deterministically from the pinned bundle (see
+`determinism_v0.md`).
+
+**Dual-pack acceptance** (per `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md`):
+production scores every live patch on TWO domain-separated packs derived
+from the same on-chain blockhash — a `gate` pack and a `confirm` pack.
+A patch is accepted only if BOTH packs clear
+`patchAcceptanceFloors.minImprovementPpm + replayTolerancePpm +
+baselineVariancePpm`. The confirm-pack draw is independent of the gate-pack
+draw, so a pack-lucky borderline result on one pack is filtered by the
+other (false-acceptance probability `p` drops to `p²`).
 
 The reward law is composite: retrieval-dominant (≥70% of weight), with
 sanity, temporal, multi-hop, and abstention components. The reward law and

@@ -2,12 +2,26 @@
 
 Status: launch-blocking spec. Pinned by bundle hash.
 
+> **Per-patch on-chain randomness update** — production derives gate +
+> confirm packs PER PATCH from the per-patch eval seeds defined in
+> `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md`. Same sampling +
+> stratification rules apply; the seed input is broader (includes
+> `blockhash(targetBlock)`, `patchHash`, `parentRoot`, `minerAddress`
+> in addition to `epochSecret` + `epochId`). The legacy per-epoch seed
+> below remains the source for the baseline pack
+> (`baselineEvalSeedHex` pinned in the bundle profile), so pre-patch
+> baseline scoring stays reproducible from `(bundle, corpus)` alone.
+
 ## Scope
 
-The hidden query pack is the per-epoch set of queries against which the
+The hidden query pack is the set of queries against which the
 coordinator scores patches. It is derived deterministically from
-`(epoch, evalSeed, corpusRoot)` so that the seed-reveal alone is sufficient
-for any third party to reproduce the pack and the resulting scores.
+either:
+  - `(evalSeedPatch, corpusRoot)` — per-patch live-eval packs (gate + confirm)
+  - `(epoch, baselineEvalSeed, corpusRoot)` — per-epoch baseline pack at
+    calibration / epoch rotation
+The seed-reveal (`epochSecret` post-epoch + on-chain `blockhash`)
+suffices for any third party to reproduce every pack + score.
 
 ## Commit-reveal
 

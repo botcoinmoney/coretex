@@ -9,9 +9,28 @@ fp16 inference and CUDA/MPS kernels are not bitwise reproducible across
 hardware. CoreTex therefore commits to CPU-only inference on the canonical
 scoring path.
 
-A replay watcher with the bundle, the corpus + delta history, and the
-revealed seed reproduces every signed `scoreAfterPpm` within
-`replayTolerancePpm`.
+A replay watcher with the bundle, the corpus + delta history, the
+revealed `epochSecret`, and Base RPC access reproduces every signed
+`scoreAfterPpm` within `replayTolerancePpm`. The canonical input
+chain for per-patch eval seeds (see
+`docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md`):
+
+```
+evalSeed_{gate|confirm} = keccak256(
+  "coretex-eval-v1-{gate|confirm}",
+  epochSecret,
+  blockhash(receivedAtBlock + targetBlockOffset),
+  uint64(epochId),
+  patchHash, parentRoot, minerAddress,
+  corpusRoot, bundleHash,
+)
+```
+
+Replay watchers fetch `blockhash(targetBlock)` from a Base RPC archive
+(lookback ≥ `replayBlockhashLookbackBlocks` pinned in the bundle's
+`baseRpcConfig`). Anti-pre-testing invariant: `deriveGateEvalSeed`
+refuses zero-blockhash input — a coordinator who signs a receipt
+against an unobserved block fails verification.
 
 ## CPU-only contract
 
