@@ -372,6 +372,88 @@ After implementation lands, update:
 - **No knobs.** `targetBlockOffset` is bundle-pinned; not operator-configurable at runtime.
 - **No GPU path.** All inference stays CPU-only.
 
+## Auditor Follow-Ups (queued)
+
+Items flagged by external review that are not blockers for pre-corpus
+pure-code phase. Grouped by readiness.
+
+### Post-corpus, model-dependent (task #38 + subtasks)
+
+- **HTTP wiring** for `POST /coretex/evaluate`, `POST /coretex/evaluate-async`,
+  `GET /coretex/result/:patchHash` in cortex-server. Per-patch
+  orchestrator (`runPerPatchEvaluation`) and replay verifier
+  (`verifyPerPatchReceipt`) are landed and tested; HTTP integration
+  needs the real models loaded for end-to-end validation.
+- **Phase 13 e2e rewrite** to exercise the new flow: mock Base RPC
+  schedule, per-patch dual-pack scoring, mock `revealEvalSeed`, replay
+  reproduces both seeds + both scores within `replayTolerancePpm`.
+  Adversarial sub-test: wrong epochSecret → every receipt fails
+  signature.
+- **`scripts/check-per-patch-pack-determinism.mjs`** — synthesize 50
+  distinct `(patchHash, parentRoot, minerAddress)` triples, derive
+  gate + confirm packs 3× each from the launch corpus, assert
+  byte-identical reproduction. Needs corpus to derive packs from.
+
+### Post-calibration
+
+- **Baseline / difficulty publication** in epoch rotation manifests.
+  `epoch-rotation.ts` currently does not emit `baselineParentScorePpm`,
+  `baselineVariancePpm`, `baselineEvalSeedHex`, or major-delta grace
+  state. Finalize after the calibration run pins these values into the
+  bundle; the manifest emitter then surfaces them so any watcher can
+  reproduce the difficulty calculation from the signed manifest.
+- **Composite golden values** locked into `evaluateRetrievalBenchmarkPatch`
+  acceptance — currently the scorer only enforces
+  `minImprovementPpm`; callers must fold in `replayTolerancePpm` +
+  `baselineVariancePpm`. Move the addition into the scorer so it is
+  enforced uniformly and can't be skipped at a call site.
+
+### Post-corpus regeneration
+
+The launch corpus is mid-flight; these items require a future corpus
+delta or regeneration to take effect, so they don't block launch:
+
+- **Populate `causalDepth` / `relationHopDepth`** on generated events.
+  Hidden-pack stratification has depth-predicate quotas
+  (`hidden-query-pack.ts`), but the generator doesn't emit these
+  fields, so depth predicates always evaluate to 1. Wire the
+  challenge-library output into the generator's event constructor
+  and re-emit a delta when the calibration corpus is regenerated.
+- **Streaming `--previous-corpus`** support in
+  `generate-coretex-retrieval-corpus.mjs`. The streaming refactor
+  intentionally refuses `--previous-corpus` (would require streaming
+  the previous corpus too). Extend if delta builds at launch scale
+  are needed; not required for the initial epoch-0 corpus.
+
+### Pre-corpus polish (small, low priority)
+
+- **Seed golden vectors** — `test/fixtures/seed-derivation-golden.json`
+  with 10 hand-picked input tuples + their expected bytes32 outputs,
+  read by `seed-derivation.test.mjs`. Locks the wire format against
+  drift across Node versions / keccak implementations.
+- **BLAS / thread-count pinning** in the bi-encoder + reranker
+  subprocess envs (`OMP_NUM_THREADS`, `MKL_NUM_THREADS`,
+  `OPENBLAS_NUM_THREADS`) — currently the worker count is set but
+  thread counts inside BLAS can drift, contributing to
+  `replayTolerancePpm` budget consumption. Pin to a single thread
+  per worker and document in `determinism_v0.md`.
+- **Patch hash duality naming clarity** — chain-replay uses raw
+  `keccak256(patchBytes)`; per-patch receipts use the domain-separated
+  `computePatchHash` (with prefix `coretex-patch-hash-v1`). Both are
+  correct in their respective contexts but the naming overlap is
+  confusing. Rename downstream usages to `patchBytesHash` vs
+  `evalPatchHash` and document.
+- **`relevantNearCollisionPpm` required at the wire boundary** —
+  `work-units.ts:234` currently marks it optional; promote to required
+  when emitting work receipts so the field is always observed in
+  audit logs.
+- **`replay/per-patch.ts` rejection-receipt hardening** — pre-RPC
+  rejection receipts (admission-failed) verify with patchHash +
+  dedupKey checks only. For audit completeness, also re-derive the
+  admission decision (`liveEvalAdmissionDecision`) from the receipt's
+  inputs and assert it produces the same `rejectionReason`. Catches
+  a coordinator that fabricates rejection reasons.
+
 ## Phasing
 
 **Pre-corpus-completion (now, while launch corpus runs ~58h remaining):**

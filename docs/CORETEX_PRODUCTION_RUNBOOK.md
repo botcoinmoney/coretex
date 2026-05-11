@@ -70,7 +70,7 @@ Captures (record into `docs/contract-addresses-mainnet.md`):
 
 ```
 cast send $CORTEX_STATE_ADDRESS \
-  "initializeEpoch(uint64,uint32,bytes32,bytes32,bytes32,bytes32,uint16,uint32,bytes32)" \
+  "initializeEpoch(uint64,uint32,bytes32,bytes32,bytes32,bytes32,uint16,bytes32,uint32,bytes32)" \
   0 \
   $RULES_VERSION \
   $WORK_POLICY_HASH \
@@ -78,10 +78,14 @@ cast send $CORTEX_STATE_ADDRESS \
   $CORETEX_CORE_VERSION_HASH \
   $GENESIS_STATE_ROOT \
   1024 \
+  $PARENT_CORPUS_ROOT \
   $CORETEX_MIN_IMPROVEMENT_PPM \
   $EVAL_SEED_COMMIT \
   --private-key $OWNER_PK
 ```
+
+`$PARENT_CORPUS_ROOT` is the previous epoch's corpus root; on launch
+(epoch 0) it is `0x0000…0000`.
 
 Then freeze:
 
@@ -386,14 +390,18 @@ Per-patch flow inside `real-evaluator.ts`:
 4. receivedAtBlock = await rpc.getLatestBlockNumber()
 5. targetBlock     = receivedAtBlock + 30          # ≈ 60s on Base
 6. { blockhash }   = await rpc.waitForBlock(targetBlock, timeoutMs=120_000)
-7. evalSeed = deriveEvalSeed({
-     epochSecret, blockhash, epochId, patchHash,
-     parentRoot, minerAddress, corpusRoot, bundleHash,
-   })
-8. pack    = deriveQueryPack(evalSeed, corpus, hiddenPackProfile)
-9. result  = await evaluateRetrievalBenchmarkPatch(parentState, patch, corpus, pack, ...)
-10. receipt = signEvalReport({ ...result, receivedAtBlock, targetBlock, blockhash,
-                                evalSeed, patchHash, dedupKey })
+7. gateSeed    = deriveGateEvalSeed({  epochSecret, blockhash, epochId,
+                                       patchHash, parentRoot, minerAddress,
+                                       corpusRoot, bundleHash })
+   confirmSeed = deriveConfirmEvalSeed({ ...same inputs... })
+8. gatePack    = deriveQueryPack(epochId, gateSeed,    corpus, hiddenPackProfile)
+   confirmPack = deriveQueryPack(epochId, confirmSeed, corpus, hiddenPackProfile)
+9. gateScore    = await evaluateRetrievalBenchmarkPatch(parent, patch, corpus, gatePack,    ...).deltaPpm
+   confirmScore = await evaluateRetrievalBenchmarkPatch(parent, patch, corpus, confirmPack, ...).deltaPpm
+10. accepted = gateScore ≥ threshold AND confirmScore ≥ threshold   # dual-pack
+    receipt = signEvalReport({ ..., receivedAtBlock, targetBlock, blockhash,
+                                gateSeed, confirmSeed, gateScorePpm, confirmScorePpm,
+                                patchHash, dedupKey })
 11. dedupCache.set(dedupKey, receipt); return receipt
 ```
 
@@ -402,13 +410,17 @@ The canonical hashing primitives are pure functions exported from
 
 ```ts
 import {
-  deriveEvalSeed,
+  deriveGateEvalSeed,
+  deriveConfirmEvalSeed,
   computePatchHash,
   computeDedupKey,
-  EVAL_SEED_DOMAIN_PREFIX,
+  EVAL_SEED_GATE_DOMAIN_PREFIX,
+  EVAL_SEED_CONFIRM_DOMAIN_PREFIX,
+  createBaseRpcClient,
+  liveEvalAdmissionDecision,
+  runPerPatchEvaluation,
+  verifyPerPatchReceipt,
 } from '@botcoin/cortex';
-import { createBaseRpcClient } from '@botcoin/cortex/coordinator/base-blockhash';
-import { screenerAdmissionDecision } from '@botcoin/cortex/eval/live-eval-admission';
 ```
 
 `targetBlockOffset = 30` is pinned in the bundle's `EvaluatorProfile.baseRpcConfig`.
@@ -431,9 +443,9 @@ and survives coordinator restarts via the WorkReceipt journal —
 replay watchers reproduce the same dedup behavior from public chain
 data.
 
-`screenerAdmissionDecision` (the surviving piece of the previous
-sealed-eval design) enforces the three anti-abuse rules at patch
-admission, before the costly blockhash wait:
+`liveEvalAdmissionDecision` (the surviving piece of the previous
+sealed-eval design, adapted for the live path) enforces the three
+anti-abuse rules at patch admission, before the costly blockhash wait:
 
 - **Structural validity** — patch decodes, indices in range, no
   duplicate words, EIP-712 signature valid.

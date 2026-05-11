@@ -120,18 +120,34 @@ KEY_FLAGS reserved bits 1–15 MUST be zero.
 
 ### Range E: Temporal (words 800–895)
 
-96 words = 96 temporal-slot entries × 1 word each.
+96 words = 12 temporal records × 8 words each. The canonical decoder
+(`packages/cortex/src/substrate/retrieval-decoder.ts:decodeTemporal`)
+and `substrate_retrieval_semantics_v0.md §Temporal records` are
+authoritative for the per-record layout; the earlier "96 entries × 1
+word" framing was a planning sketch and is superseded — miners who
+follow it will produce patches the decoder drops.
 
-**Entry layout** (1 word per entry, entry `k` at word `800 + k`, for `k` ∈ [0, 95]):
+**Per-record layout** (8 words per record, record `k` occupies words
+`800 + k*8 .. 800 + k*8 + 7`, for `k` ∈ [0, 11]). Only word 0 carries
+data; words 1..7 MUST be zero.
 
-| Field            | Bits    | Type    | Description                                                |
-|------------------|---------|---------|------------------------------------------------------------|
-| MEM_IDX          | 255:240 | uint16  | Index into MemoryIndex (0–43) this record covers           |
-| VALID_FROM_EPOCH | 239:176 | uint64  | First epoch for which this record is valid                 |
-| VALID_UNTIL_EPOCH| 175:112 | uint64  | Last epoch (inclusive) or 0 = unbounded                    |
-| REVOKE_EPOCH     | 111:48  | uint64  | Epoch at which revoked; 0 = not revoked                    |
-| TEMPORAL_FLAGS   | 47:32   | uint16  | Bit 0: is_revoked snapshot. Bits 1–15: reserved MUST zero  |
-| reserved_tmp     | 31:0    | —       | Reserved; MUST be zero                                     |
+Word 0 fields:
+
+| Field                      | Bits      | Type    | Description                                            |
+|----------------------------|-----------|---------|--------------------------------------------------------|
+| memorySlot                 | 255:248   | uint8   | Target MemoryIndex slot (0–43)                         |
+| supersededBy_memorySlot    | 247:240   | uint8   | Slot that supersedes this one; `0xFF` = none           |
+| validFromEpoch             | 239:200   | uint40  | First epoch for which this record is valid             |
+| validUntilEpoch            | 199:160   | uint40  | Last epoch (inclusive); 0 = unbounded                  |
+| flags                      | 159:152   | uint8   | Bit 0 `currentStaleFlag`; bits 1–7 reserved MUST zero  |
+| reserved_tmp               | 151:0     | —       | Reserved; MUST be zero                                 |
+
+Decoder failure modes (record dropped silently):
+- `memorySlot >= 44`
+- `validFromEpoch > validUntilEpoch`
+- non-zero reserved bits in word 0 or non-zero words 1..7
+- `currentStaleFlag` set without the referenced MemoryIndex slot's
+  `revoked` bit also set
 
 ### Range F: Codebook (words 896–991)
 

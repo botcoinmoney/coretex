@@ -23,27 +23,33 @@ either:
 The seed-reveal (`epochSecret` post-epoch + on-chain `blockhash`)
 suffices for any third party to reproduce every pack + score.
 
-## Commit-reveal
+## Commit-reveal (epoch secret)
 
 At epoch initialization the coordinator commits
 
 ```
-evalSeedCommit = keccak256(evalSeed)
+epochSecretCommit = keccak256(epochSecret)        # 32 bytes
 ```
 
-on chain via `CortexState.initializeEpoch(... evalSeedCommit)`. The 32-byte
-`evalSeed` preimage is held by the coordinator until epoch close.
+on chain via `CortexState.initializeEpoch(... epochSecretCommit ...)`. The
+32-byte `epochSecret` preimage is held by the coordinator (multisig
+escrow) until epoch close.
 
-At epoch close the coordinator calls `CortexState.revealEvalSeed(epochId, evalSeed)`.
-The contract enforces
+At epoch close the coordinator calls
+`CortexState.revealEvalSeed(epochId, epochSecret)`. The contract enforces
 
 ```
-evalSeed != bytes32(0)
-keccak256(evalSeed) == epoch.evalSeedCommit
+epochSecret != bytes32(0)
+keccak256(epochSecret) == epoch.evalSeedCommit
 ```
 
-Once revealed, every receipt produced during the epoch is independently
-recomputable from the bundle + seed + corpus delta history.
+(The contract field is named `evalSeedCommit` for historical reasons;
+the preimage is the per-epoch `epochSecret` used to derive both the
+per-patch eval seeds and the per-epoch baseline pack seed.)
+
+Once revealed, every per-patch receipt and the per-epoch baseline pack
+are independently recomputable from the bundle + epochSecret + corpus
+delta history + Base RPC blockhash lookups.
 
 ## Sampling rule
 
@@ -51,12 +57,26 @@ Let `eval_hidden` be the lex-sorted-by-id list of corpus records whose
 `splitForRecord(id, corpusEpoch) == 'eval_hidden'`. Let `K` be the pack
 size (calibration output, pinned in bundle).
 
+The sampling rule is the same for per-patch live eval and the per-epoch
+baseline pack — only the seed input differs:
+
+- **Per-patch live eval**: `seed = deriveGateEvalSeed(...)` or
+  `deriveConfirmEvalSeed(...)` per
+  `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md`. The seed input already
+  includes `epochId`, so the `epoch` term in the sampling rule below
+  is fixed across an epoch's live evals (the seed entropy carries the
+  per-patch uniqueness).
+- **Per-epoch baseline**: `seed = baselineEvalSeedHex` pinned in the
+  bundle profile. Used by `evaluateBaseline` at calibration / epoch
+  rotation; the `epoch` term distinguishes baseline samples across
+  epochs.
+
 ```
 sortedEvalHidden = sorted(eval_hidden, key=id)
-queryPack(epoch, evalSeed, corpus) =
+queryPack(epoch, seed, corpus) =
     [
         sortedEvalHidden[
-            uint256(keccak256(evalSeed || epoch || u64(i))) mod len(sortedEvalHidden)
+            uint256(keccak256(seed || epoch || u64(i))) mod len(sortedEvalHidden)
         ]
         for i in [0, K)
     ]

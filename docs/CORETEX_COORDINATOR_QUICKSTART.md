@@ -8,11 +8,12 @@ For full design context see
 `docs/CORETEX_COORDINATOR_INTEGRATION_RUNBOOK.md`. This file is the
 copy-paste shortcut.
 
-> Pre-launch hardening note: public full hidden-set evaluation is sealed for
-> launch. Do not expose `POST /coretex/evaluate` as an interactive miner oracle
-> over the active hidden pack. Implement the commit/reveal + batch-settlement
-> flow in `docs/CORETEX_SEALED_EPOCH_EVAL_HARDENING_PLAN.md`; keep live
-> screening structural/visible-only until the epoch's hidden pack is retired.
+> Pre-launch hardening note: `POST /coretex/evaluate` is live, but every
+> patch's eval seed binds to a future Base blockhash (per-patch on-chain
+> randomness — see `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md`) so
+> coordinator pre-testing is structurally impossible. The earlier sealed-
+> eval commit/reveal design (`CORETEX_SEALED_EPOCH_EVAL_HARDENING_PLAN.md`)
+> is superseded.
 
 ## 1. Install the bundle artifacts
 
@@ -150,12 +151,13 @@ The eval-seed for each patch is bound to a future Base blockhash the
 coordinator cannot observe at receive time. See
 `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md` for the full design.
 
-| File (post-rip) | Exports |
-| --------------- | ------- |
-| `src/eval/seed-derivation.ts` | `deriveEvalSeed`, `computePatchHash`, `computeDedupKey`, `EVAL_SEED_DOMAIN_PREFIX` |
+| File | Exports |
+| ---- | ------- |
+| `src/eval/seed-derivation.ts` | `deriveGateEvalSeed`, `deriveConfirmEvalSeed`, `computePatchHash`, `computeDedupKey`, `EVAL_SEED_GATE_DOMAIN_PREFIX`, `EVAL_SEED_CONFIRM_DOMAIN_PREFIX` |
 | `src/coordinator/base-blockhash.ts` | `createBaseRpcClient`, `BaseRpcClient` (`getLatestBlockNumber`, `getBlockHash`, `waitForBlock`) |
-| `src/eval/live-eval-admission.ts` | `screenerAdmissionDecision` (anti-spam: dedup-key collapse + per-miner cap) |
-| `cortex-server/src/real-evaluator.ts` | sync `POST /coretex/evaluate` + async `POST /coretex/evaluate` (returns pending) + `GET /coretex/result/:patchHash` |
+| `src/eval/live-eval-admission.ts` | `liveEvalAdmissionDecision` (anti-spam: structural / dedup-key collapse / per-miner cap) |
+| `src/coordinator/per-patch-evaluator.ts` | `runPerPatchEvaluation` (compose: hash → admit → blockhash bind → derive gate+confirm seeds → dual-pack score → receipt) |
+| `src/replay/per-patch.ts` | `verifyPerPatchReceipt` (re-derive seeds + re-score against per-patch packs; tolerates `replayTolerancePpm`) |
 
 The earlier sealed-eval (`commit → reveal → status` flow with per-epoch
 sealed packs) was superseded by this design. Old sealed-eval modules
