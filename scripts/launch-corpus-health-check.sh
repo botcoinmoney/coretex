@@ -14,7 +14,10 @@ NOW=$(date -Iseconds)
 echo "=== health $NOW ===" >> "$HEALTH"
 
 # 1. Is the launch corpus generator still alive?
-PIDS=$(pgrep -f "node /root/cortex/scripts/generate-coretex-retrieval-corpus.mjs --bundle-manifest /etc/coretex/template-bundle.json --source challenge-library --domains companies,quantum_physics,computational_biology,scrna_imputation --seeds-per-domain 512" || true)
+# Pattern tolerates optional node flags between the binary and the
+# script path (e.g. --max-old-space-size=8192). Match on the launch-
+# distinctive substring: the script path + --seeds-per-domain 512.
+PIDS=$(pgrep -f "generate-coretex-retrieval-corpus.mjs.*--seeds-per-domain 512" || true)
 if [ -z "$PIDS" ]; then
   echo "  status: CORPUS GEN NOT RUNNING — investigate" >> "$HEALTH"
   echo "  last-log:" >> "$HEALTH"
