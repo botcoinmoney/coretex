@@ -120,6 +120,59 @@ for (const family of families.keys()) {
   }
 }
 
+// Optional depth-predicate quotas — only emitted when the corpus has
+// events with synthesizer-set causalDepth > 1 (Phase H1 / H2 hardening
+// from docs/CORETEX_V4_INDEFINITE_SCALABILITY_HARDENING_PLAN.md). Old
+// corpora and the launch corpus generated with default depth=1 don't
+// trigger any depth quotas — `eventSatisfiesStratum` will only match
+// `depth>=N` if the synthesizer set the field, so unsatisfiable depth
+// quotas would fail closed.
+//
+// runwayShare is the fraction of the pack reserved for each predicate
+// stratum (defaults to ~10% per active depth level), sized so total
+// pinned quotas stay under 80% of pack size to leave fill slack.
+const depthRunwayShare = Number(flag('depth-runway-share', '0.10'));
+const maxDepthSeen = Math.max(
+  1,
+  ...evalHiddenEvents.map((e) => e.causalDepth ?? 1),
+  ...evalHiddenEvents.map((e) => e.relationHopDepth ?? 1),
+);
+for (let d = 2; d <= maxDepthSeen; d++) {
+  const haveCausal = evalHiddenEvents.filter((e) => (e.causalDepth ?? 1) >= d).length;
+  if (haveCausal > 0) {
+    quotas.push({
+      stratum: `depth>=${d}`,
+      minCount: Math.min(haveCausal, Math.max(1, Math.floor(packSize * depthRunwayShare))),
+    });
+  }
+  const haveRel = evalHiddenEvents.filter((e) => (e.relationHopDepth ?? 1) >= d).length;
+  if (haveRel > 0) {
+    quotas.push({
+      stratum: `relationHop>=${d}`,
+      minCount: Math.min(haveRel, Math.max(1, Math.floor(packSize * depthRunwayShare))),
+    });
+  }
+}
+
+// Total quota footprint check — keep under 80% of pack size to avoid
+// unsatisfiable strata after deduplication and stratification fill.
+const quotaSum = quotas.reduce((s, q) => s + q.minCount, 0);
+const quotaSlackCap = Math.floor(packSize * 0.80);
+if (quotaSum > quotaSlackCap) {
+  // Proportionally trim minCounts so the sum sits at the cap.
+  const scale = quotaSlackCap / quotaSum;
+  for (const q of quotas) q.minCount = Math.max(1, Math.floor(q.minCount * scale));
+}
+
+// Major-delta grace threshold (Phase H1 / H2). The number of new
+// eval_hidden events in a single delta above which the next epoch
+// freezes minImprovementPpm for one cycle (see
+// `nextMinImprovementPpm({ majorDeltaActive: true })`). Default ~5%
+// of the launch eval_hidden population, calibrator-overridable.
+const majorDeltaThreshold = Number(
+  flag('major-delta-threshold', String(Math.max(100, Math.floor(evalHiddenEvents.length * 0.05)))),
+);
+
 function bucketOf(event) {
   let max = 0;
   const truthIds = new Set(event.truthDocuments.map((d) => d.id));
@@ -181,6 +234,20 @@ const relationEdgeTypes = [
 
 // ─── Compose the profile ─────────────────────────────────────────────────────
 
+// negCategoryRelevanceMap is part of the bundle profile shape since the
+// synthesizer-labeled corpus pivot. Pass it through from the input
+// template manifest unchanged — calibration doesn't tune it; the map
+// is reviewed pre-launch via the label↔reranker correlation report
+// (scripts/validate-label-reranker-correlation.mjs).
+const negCategoryRelevanceMap = manifest.evaluator?.profile?.negCategoryRelevanceMap;
+if (!negCategoryRelevanceMap) {
+  console.error(
+    'calibrate: input bundle manifest is missing evaluator.profile.negCategoryRelevanceMap; ' +
+      'rebuild the template bundle (scripts/build-template-bundle.mjs) so the field is present',
+  );
+  exit(1);
+}
+
 const profile = {
   name: 'coretex-v4-launch',
   version: 'v2-calibrated',
@@ -201,6 +268,20 @@ const profile = {
   retrievalKeyTopK,
   relationEdgeTypes,
   revealGracePeriodSeconds,
+  negCategoryRelevanceMap,
+  // Phase H1/H2 hardening: published as a calibrator output so the
+  // coordinator's daily 24h ritual can decide whether to set
+  // `majorDeltaActive=true` for the next epoch (see
+  // `nextMinImprovementPpm` and `isMajorDelta`).
+  majorDeltaThreshold,
+  // baselineParentScorePpm + baselineVariancePpm are NOT computed here —
+  // they require running BGE-M3 + Qwen3 against the parent substrate
+  // and the hidden pack, which is the next step in the orchestrator
+  // (scripts/pin-baseline-into-bundle.mjs after the bundle build).
+  // Leaving them unset means the coordinator's grace-rule guard treats
+  // the bundle as "no baseline pinned yet" and falls back to the
+  // pre-grace difficulty rule until the baseline is published in the
+  // signed epoch rotation manifest.
 };
 
 const out = {
@@ -219,7 +300,8 @@ mkdirSync(dirname(outPath), { recursive: true });
 writeFileSync(outPath, JSON.stringify(out, null, 2));
 console.log(`calibrate: wrote ${outPath}`);
 console.log(`  replayTolerancePpm=${replayTolerancePpm}`);
-console.log(`  packSize=${packSize}`);
+console.log(`  packSize=${packSize} (quotas: ${quotas.length}, sum=${quotas.reduce((s, q) => s + q.minCount, 0)})`);
 console.log(`  compositeWeights.w_retrieval=${compositeWeights.w_retrieval}`);
 console.log(`  patchAcceptanceFloors=${JSON.stringify(patchAcceptanceFloors)}`);
+console.log(`  majorDeltaThreshold=${majorDeltaThreshold} (eval_hidden=${evalHiddenEvents.length})`);
 exit(0);

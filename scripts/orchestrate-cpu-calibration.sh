@@ -60,21 +60,21 @@ export CORTEX_REAL_EVAL=1
 
 step() { echo; echo "==== $* ===="; }
 
-step "1/7 validate corpus shape"
+step "1/9 validate corpus shape"
 node /root/cortex/scripts/validate-retrieval-corpus.mjs \
   --corpus "$CORPUS" \
   --min-events 100 --min-per-family 1 --min-hard-negatives 3 \
   --out "$REPORTS/corpus-validation.json"
 node -e "const r=JSON.parse(require('fs').readFileSync('$REPORTS/corpus-validation.json','utf8')); if((r.errors||[]).length){console.error(r.errors); process.exit(1);} console.log('corpus errors=0 events='+r.eventCount+' families='+JSON.stringify(r.familyCounts));"
 
-step "2/7 build determinism fixture"
+step "2/9 build determinism fixture"
 if [ ! -f "$DETERMINISM_FIXTURE" ]; then
   node /root/cortex/scripts/build-determinism-fixture.mjs --corpus "$CORPUS" --out "$DETERMINISM_FIXTURE" --max-pairs 200
 else
   echo "(reusing existing fixture)"
 fi
 
-step "3/7 determinism check on this host (3 logical hosts via repeated runs)"
+step "3/9 determinism check on this host (3 logical hosts via repeated runs)"
 for HOST in host_a host_b host_c; do
   REPORT="$REPORTS/determinism-host-$HOST.json"
   if [ ! -f "$REPORT" ]; then
@@ -89,33 +89,47 @@ for HOST in host_a host_b host_c; do
   fi
 done
 
-step "4/7 aggregate determinism"
+step "4/9 aggregate determinism"
 node /root/cortex/scripts/aggregate-determinism.mjs \
   --reports "$REPORTS/determinism-host-*.json" \
   --max-tolerance-ppm 250 \
   --out "$REPORTS/determinism-aggregate.json"
 
-step "5/7 calibrate bundle profile"
+step "5/9 calibrate bundle profile"
 node /root/cortex/scripts/calibrate.mjs \
   --bundle-manifest "$TEMPLATE_BUNDLE" \
   --calibration-corpus "$CORPUS" \
   --determinism-aggregate "$REPORTS/determinism-aggregate.json" \
   --out "$PROFILE"
 
-step "6/7 build final bundle manifest"
+step "6/9 build initial bundle manifest"
 node /root/cortex/scripts/build-coretex-bundle.mjs \
   --repo-root /root/cortex \
   --corpus "$CORPUS" \
   --profile "$PROFILE" \
   --out "$BUNDLE"
 
-step "7/8 Phase 13 e2e against real models + final bundle + calibration corpus"
+step "7/9 pin baselineParentScorePpm + variancePpm into the bundle (Phase H2)"
+# Genesis-baseline eval seed used to derive the query pack the
+# baseline is computed against. Independent of per-epoch evalSeeds
+# used on chain. Stored in the bundle profile so any verifier can
+# reproduce the same pack + baseline score from public artifacts only.
+BASELINE_EVAL_SEED=${CORETEX_BASELINE_EVAL_SEED:-$(openssl rand -hex 32)}
+node /root/cortex/scripts/pin-baseline-into-bundle.mjs \
+  --bundle-manifest "$BUNDLE" \
+  --corpus "$CORPUS" \
+  --eval-seed-hex "$BASELINE_EVAL_SEED" \
+  --epoch-id 0 \
+  --samples ${CORETEX_BASELINE_SAMPLES:-1} \
+  --out "$BUNDLE"
+
+step "8/9 Phase 13 e2e against real models + final bundle + calibration corpus"
 ITERATIONS=${ITERATIONS:-5} \
 CORETEX_BUNDLE_MANIFEST="$BUNDLE" \
 CORETEX_CORPUS="$CORPUS" \
 node /root/cortex/test/e2e/phase-13/run.mjs 2>&1 | tee "$REPORTS/phase13-real.log"
 
-step "8/8 offline corpus auditor (1% sample, MemReranker-4B agreement vs synthesizer labels)"
+step "9/9 offline corpus auditor (1% sample, MemReranker-4B agreement vs synthesizer labels)"
 # Diagnostic; never blocks. Replaces the per-event 4B labeling call the
 # old pipeline paid for. Scales linearly with --sample-pct, default 1%.
 RERANKER_NUM_THREADS=16 node /root/cortex/scripts/audit-corpus-with-labeler.mjs \
