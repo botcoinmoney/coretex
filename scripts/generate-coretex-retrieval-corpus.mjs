@@ -38,7 +38,8 @@
  *   CORETEX_LABELER=deterministic|pinned      # default deterministic for offline gen
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream, createReadStream, unlinkSync } from 'node:fs';
+import { createInterface } from 'node:readline';
 import { resolve, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { argv, exit, env } from 'node:process';
@@ -54,6 +55,8 @@ import {
   loadProductionCorpus,
   buildCorpusDelta,
   serializeCorpusDelta,
+  keccak256,
+  canonicalJsonForCorpus,
 } from '@botcoin/cortex';
 
 function flag(name, fallback) {
@@ -496,11 +499,25 @@ async function generateChallengeLibraryCorpus() {
     exit(2);
   }
 
-  const generated = [];
-  // Live throughput reporter so the parallel driver (and a human watching
-  // a single-worker run) can see events/sec in real time instead of only
-  // the final summary at writeCorpusOutput. Emits a tagged line every
-  // PROGRESS_INTERVAL_MS (default 5s) and at every 1000-event milestone.
+  // Streaming corpus generator: events are written to an NDJSON shadow
+  // file as they are produced; nothing accumulates in memory. The launch-
+  // scale corpus (~679k events) blows past V8's 4 GB default heap if
+  // events.push(...) is allowed to accumulate. NDJSON gives the
+  // finalizer enough to compute corpusRoot (one event per line, two
+  // streaming passes) and to stream-write the final canonical JSON
+  // without ever holding the full events array in memory.
+  mkdirSync(dirname(resolve(outPath)), { recursive: true });
+  const eventsNdjsonPath = `${resolve(outPath)}.events.ndjson`;
+  // Start clean — partial runs leave an NDJSON shadow that would
+  // double-count if we appended on restart.
+  if (existsSync(eventsNdjsonPath)) unlinkSync(eventsNdjsonPath);
+  const eventsStream = createWriteStream(eventsNdjsonPath);
+  let eventCount = 0;
+
+  // The progress reporter previously read generated.length. Now it
+  // reads eventCount directly. Output format unchanged so external
+  // tooling (launch-corpus-health-check.sh, parallel driver) keeps
+  // working byte-identically.
   const progressIntervalMs = Number(env.CORETEX_PROGRESS_INTERVAL_MS ?? '5000');
   const tStart = Date.now();
   let lastReport = tStart;
@@ -509,16 +526,27 @@ async function generateChallengeLibraryCorpus() {
     const now = Date.now();
     const elapsed = (now - tStart) / 1000;
     const sinceLast = (now - lastReport) / 1000;
-    if (!force && sinceLast < progressIntervalMs / 1000 && (generated.length - lastCount) < 1000) return;
-    const ratePerSec = generated.length / Math.max(elapsed, 0.001);
-    const recentRate = (generated.length - lastCount) / Math.max(sinceLast, 0.001);
+    if (!force && sinceLast < progressIntervalMs / 1000 && (eventCount - lastCount) < 1000) return;
+    const ratePerSec = eventCount / Math.max(elapsed, 0.001);
+    const recentRate = (eventCount - lastCount) / Math.max(sinceLast, 0.001);
     console.log(
-      `[progress] events=${generated.length} elapsed=${elapsed.toFixed(1)}s ` +
+      `[progress] events=${eventCount} elapsed=${elapsed.toFixed(1)}s ` +
         `overall=${ratePerSec.toFixed(2)}/s recent=${recentRate.toFixed(2)}/s`,
     );
     lastReport = now;
-    lastCount = generated.length;
+    lastCount = eventCount;
   }
+
+  // Write an event line + apply backpressure. JSON.stringify on a
+  // single event is bounded (~10 KB) so no stringify-OOM risk.
+  async function appendEvent(event) {
+    const line = JSON.stringify(event) + '\n';
+    if (!eventsStream.write(line)) {
+      await new Promise((res) => eventsStream.once('drain', res));
+    }
+    eventCount++;
+  }
+
   for (const domain of domains) {
     const questionMeta = loadDomainQuestionMetadata(domain);
     for (let s = seedOffset; s < seedOffset + seedsPerDomain; s++) {
@@ -535,7 +563,7 @@ async function generateChallengeLibraryCorpus() {
             domain,
           );
           const challengeKey = `${domain}/seed-${s}/m${modifierCount}/${constraintDifficulty}`;
-          generated.push(...await recordsFromChallenge({
+          const records = await recordsFromChallenge({
             challenge,
             domain,
             sourceSeed: s,
@@ -543,7 +571,8 @@ async function generateChallengeLibraryCorpus() {
             constraintDifficulty,
             challengeKey,
             questionMeta,
-          }));
+          });
+          for (const record of records) await appendEvent(record);
           reportProgress();
         }
       }
@@ -551,7 +580,13 @@ async function generateChallengeLibraryCorpus() {
   }
   reportProgress(true);
 
-  await writeCorpusOutput(generated, 'challenge-library');
+  await new Promise((res, rej) => eventsStream.end((err) => (err ? rej(err) : res())));
+
+  await writeCorpusOutputStreaming({
+    ndjsonPath: eventsNdjsonPath,
+    eventCount,
+    sourceName: 'challenge-library',
+  });
 }
 
 function deriveWorldSeed(domain, seed, modifierCount, constraintDifficulty) {
@@ -936,6 +971,154 @@ function sharedPrefixLength(a, b) {
   let i = 0;
   while (i < a.length && i < b.length && a[i] === b[i]) i++;
   return i;
+}
+
+async function writeCorpusOutputStreaming({ ndjsonPath, eventCount, sourceName }) {
+  // --previous-corpus is intentionally NOT supported on the streaming
+  // path. The launch run does not pass it; an incremental merge that
+  // also holds the previous corpus in memory would defeat the OOM fix.
+  // If we need delta builds at launch scale later, both inputs become
+  // streaming.
+  if (previousCorpusPath) {
+    throw new Error(
+      'writeCorpusOutputStreaming: --previous-corpus is incompatible with the streaming path; ' +
+      'rerun without it or extend this function to stream the previous corpus too.',
+    );
+  }
+  if (deltaOutPath) {
+    throw new Error(
+      'writeCorpusOutputStreaming: --delta-out requires a previous corpus, which is not streamable in this path.',
+    );
+  }
+
+  // Pass 1: streaming leaf computation. Read NDJSON line by line, hash
+  // each event into a 32-byte Merkle leaf, keep {id, leaf} so the
+  // sort-by-id step (matches computeCorpusRoot's contract) can run
+  // without re-reading events. 32 bytes × 679k events ≈ 22 MB —
+  // trivial.
+  const familyTally = Object.create(null);
+  const splitTally = Object.create(null);
+  let leavesIndex = [];
+  {
+    const rl = createInterface({ input: createReadStream(ndjsonPath), crlfDelay: Infinity });
+    const enc = new TextEncoder();
+    // canonicalJsonForCorpus returns a STRING; keccak256 wants bytes.
+    // canonicalJson treats Uint8Array (runtime form) and hex-string (on-
+    // disk form) identically — both serialize to the same JSON token —
+    // so we can hash the on-disk event directly without an
+    // eventsToMemory round-trip.
+    for await (const line of rl) {
+      if (!line) continue;
+      const event = JSON.parse(line);
+      const leaf = keccak256(enc.encode(canonicalJsonForCorpus(event)));
+      leavesIndex.push({ id: event.id, leaf });
+      familyTally[event.family] = (familyTally[event.family] ?? 0) + 1;
+      splitTally[event.split] = (splitTally[event.split] ?? 0) + 1;
+    }
+  }
+  if (leavesIndex.length !== eventCount) {
+    throw new Error(
+      `writeCorpusOutputStreaming: ndjson line count ${leavesIndex.length} != generator counter ${eventCount}`,
+    );
+  }
+  leavesIndex.sort((a, b) => a.id.localeCompare(b.id));
+
+  // Merkle pairing — identical to computeCorpusRoot's pairing loop in
+  // packages/cortex/src/eval/retrieval-corpus.ts. Inlined here because
+  // the public function takes an array of full events, which is what
+  // we are trying NOT to materialize.
+  let leaves = leavesIndex.map((x) => x.leaf);
+  leavesIndex = null; // free
+  const corpusRoot = (() => {
+    if (leaves.length === 0) return '0x' + '00'.repeat(32);
+    const zero = new Uint8Array(32);
+    let n = 1;
+    while (n < leaves.length) n <<= 1;
+    while (leaves.length < n) leaves.push(zero);
+    while (leaves.length > 1) {
+      const next = [];
+      for (let i = 0; i < leaves.length; i += 2) {
+        const pair = new Uint8Array(64);
+        pair.set(leaves[i], 0);
+        pair.set(leaves[i + 1], 32);
+        next.push(keccak256(pair));
+      }
+      leaves = next;
+    }
+    let hex = '';
+    for (const b of leaves[0]) hex += b.toString(16).padStart(2, '0');
+    return '0x' + hex;
+  })();
+
+  // Pass 2: stream-write the final canonical corpus JSON. The on-disk
+  // format is unchanged (coretex.production-corpus.v1); only the
+  // production path is streaming. Downstream consumers that call
+  // JSON.parse on this file may need a heap bump to load the launch-
+  // scale corpus — that is a separate change (loadProductionCorpus
+  // streaming variant), tracked outside this script.
+  mkdirSync(dirname(resolve(outPath)), { recursive: true });
+  const out = createWriteStream(resolve(outPath));
+  const writeChunk = (s) =>
+    new Promise((res) => (out.write(s) ? res() : out.once('drain', res)));
+
+  // Header — write fields one at a time so the result is human-readable
+  // and stable for diffing against the legacy in-memory path.
+  await writeChunk('{\n');
+  await writeChunk(`  "schemaVersion": "coretex.production-corpus.v1",\n`);
+  await writeChunk(`  "corpusEpoch": ${JSON.stringify(corpusEpoch)},\n`);
+  await writeChunk(`  "source": ${JSON.stringify(sourceName)},\n`);
+  await writeChunk(`  "challengeLibrary": ${JSON.stringify({
+    root: challengeLibRoot,
+    modifierCounts,
+    constraintDifficulties,
+    trapCount,
+  })},\n`);
+  await writeChunk(`  "biEncoder": ${JSON.stringify({
+    modelId: manifest.model.biEncoder.modelId,
+    revision: manifest.model.biEncoder.revision,
+    layout,
+  })},\n`);
+  await writeChunk(`  "labelingModel": ${JSON.stringify({
+    modelId: manifest.model.labelingReranker.modelId,
+    revision: manifest.model.labelingReranker.revision,
+  })},\n`);
+  await writeChunk('  "events": [\n');
+
+  // Stream NDJSON lines into the events array. The on-disk JSON is not
+  // sorted (computeCorpusRoot sorts internally for hashing). Order is
+  // generation order, which matches the legacy non-streaming path
+  // since it also wrote `events: outputEvents` without re-sorting.
+  {
+    const rl = createInterface({ input: createReadStream(ndjsonPath), crlfDelay: Infinity });
+    let first = true;
+    for await (const line of rl) {
+      if (!line) continue;
+      // Re-encode with the 2-space indent the legacy path used. Re-
+      // parsing + re-stringifying preserves canonical key order
+      // (insertion-order on this Node version) and avoids carrying
+      // any whitespace artifacts from the NDJSON line.
+      const reEncoded = JSON.stringify(JSON.parse(line), null, 2)
+        .split('\n')
+        .map((l, i) => (i === 0 ? l : '    ' + l))
+        .join('\n');
+      await writeChunk((first ? '    ' : ',\n    ') + reEncoded);
+      first = false;
+    }
+  }
+  await writeChunk('\n  ],\n');
+  await writeChunk(`  "corpusRoot": ${JSON.stringify(corpusRoot)}\n`);
+  await writeChunk('}\n');
+  await new Promise((res, rej) => out.end((err) => (err ? rej(err) : res())));
+
+  console.log(`generate-coretex-retrieval-corpus: wrote ${eventCount} ${sourceName} events to ${outPath}`);
+  console.log(`  corpusRoot=${corpusRoot}`);
+  console.log(`  splits=${JSON.stringify(splitTally)}`);
+  console.log(`  families=${JSON.stringify(familyTally)}`);
+
+  // Retain the NDJSON shadow on disk so downstream consumers that prefer
+  // streaming reads (over a multi-GB JSON.parse) can use it. Cheap to
+  // keep — same disk footprint as the canonical JSON's events array.
+  console.log(`  events-ndjson=${ndjsonPath}`);
 }
 
 async function writeCorpusOutput(events, sourceName) {
