@@ -144,6 +144,28 @@ after settlement. The rest of the data-source callbacks are reads against
 `/var/lib/coretex/{patches,eval-reports,substrates}` — direct file-by-hash
 reads, no new logic.
 
+### 3a. Sealed-eval primitives (where the code lives)
+
+The hashes, seeds, and orchestration the coordinator needs are pure
+functions exported from `@botcoin/cortex`. None of them load models or
+touch storage — the host wires persistence and scoring on top.
+
+| File | Exports |
+| ---- | ------- |
+| `src/coordinator/sealed-eval.ts` | `buildPatchCommitment`, `computePatchCommitmentHash`, `verifyPatchReveal`, `computeDuplicateKey`, `computeCommitmentRoot`, `deriveCoretexEvalSeed`, `deriveGateSeed`, `deriveConfirmSeed`, `screenerAdmissionDecision`, `computeGatePackId`, `computeConfirmPackId`, `isPackRetired` |
+| `src/coordinator/sealed-eval-orchestration.ts` | `runGateEvaluation`, `runConfirmEvaluation`, `selectBatchWinners`, `sortFinalists`, `patchesConflict`, `SealedScorer` type |
+
+The orchestration takes an **injectable scorer** so the gate/confirm/
+settlement logic can be unit-tested with a deterministic fake (see
+`test/unit/sealed-eval-full-session.test.mjs` for the full lifecycle
+composition). Production wires `evaluateRetrievalBenchmarkPatch` into
+the same shape after the launch corpus completes.
+
+After settlement, retire the gate and confirm packs via
+`computeGatePackId` / `computeConfirmPackId` and store the IDs in the
+host's persistent retired-set so future hidden-pack derivation
+excludes them (plan §S6).
+
 ## 4. Daily epoch ritual (existing 24-hour V3 cycle, +3 lines for CoreTex)
 
 The coordinator already finalizes V3 epochs every 24h with reward
