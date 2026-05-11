@@ -8,6 +8,12 @@ For full design context see
 `docs/CORETEX_COORDINATOR_INTEGRATION_RUNBOOK.md`. This file is the
 copy-paste shortcut.
 
+> Pre-launch hardening note: public full hidden-set evaluation is sealed for
+> launch. Do not expose `POST /coretex/evaluate` as an interactive miner oracle
+> over the active hidden pack. Implement the commit/reveal + batch-settlement
+> flow in `docs/CORETEX_SEALED_EPOCH_EVAL_HARDENING_PLAN.md`; keep live
+> screening structural/visible-only until the epoch's hidden pack is retired.
+
 ## 1. Install the bundle artifacts
 
 On the coordinator host:
@@ -113,7 +119,7 @@ const coretexDataSource = createRetrievalDataSource({
   authorize: (ctx) => requireBearer(ctx, process.env.CORETEX_OPERATOR_TOKEN!),
   rateLimit: perMinerAndPerIpLimiter,
   screen: hostScreenHandler,       // structural-only validation
-  evaluate: hostEvaluateHandler,   // calls evaluateRetrievalBenchmarkPatch + signs receipt
+  evaluate: hostEvaluateHandler,   // settlement/admin only; never a public live hidden oracle
   health: () => ({ ok: true, bundleHash: manifest.bundleHash }),
   // optional: add getCurrentSubstrate / getCorpusDelta / etc as you go
 });
@@ -130,12 +136,11 @@ challenge-book, corpus-delta, client-bundle, bundle, corpus record,
 embedding, coverage-hints, health) are all dispatched by
 `handleCoreTexCoordinatorRoute` — you don't write per-route handlers.
 
-`hostEvaluateHandler` is the only non-trivial one to write — it reads the
-proposed compact patch, runs `evaluateRetrievalBenchmarkPatch` from
-`@botcoin/cortex` against the host's pinned scorer, refuses if the score
-delta < calibrated `minImprovementPpm`, persists the eval-report by hash,
-and signs an EIP-712 receipt with `COORDINATOR_SIGNING_KEY`. ~80 LOC. The
-rest of the data-source callbacks are reads against
+`hostEvaluateHandler` is settlement/admin-only in the sealed launch flow. It
+must run after commit close, seed derivation, and patch reveal — never as an
+interactive hidden-pack scorer during the live mining window. The public miner
+path is `commit -> reveal -> status`; detailed eval reports are published only
+after settlement. The rest of the data-source callbacks are reads against
 `/var/lib/coretex/{patches,eval-reports,substrates}` — direct file-by-hash
 reads, no new logic.
 
