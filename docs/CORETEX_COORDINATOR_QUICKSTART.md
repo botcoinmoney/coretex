@@ -180,6 +180,55 @@ in-band as miners submit `submitWorkReceipt`, and V4's reward lane
 divides epoch-end CoreTex rewards pro-rata over those credits — same
 shape as V3.
 
+### 4a. Major-delta grace (Phase H3 hardening, ~5 lines)
+
+When the coordinator publishes a new corpus delta whose new
+`eval_hidden` count exceeds `manifest.evaluator.profile.majorDeltaThreshold`
+(pinned by the calibrator, ~5% of the launch eval_hidden population),
+the next epoch enters one-cycle "grace": the difficulty calculator
+freezes `minImprovementPpm` at the prior value and suppresses decay,
+while the calibration host re-runs `evaluateBaseline` and publishes a
+fresh `BaselineScores` in the signed epoch rotation manifest. After
+one cycle the threshold resumes normal adjustment against the new
+baseline.
+
+```ts
+import { isMajorDelta, nextMinImprovementPpm } from '@botcoin/cortex';
+
+const isMajor = isMajorDelta(
+  newDelta.evalHiddenCount,
+  prevEpochMetadata.evalHiddenCount,
+  manifest.evaluator.profile.majorDeltaThreshold,
+);
+if (isMajor) {
+  // Hand off to the calibration host (separate job): re-run
+  //   node scripts/pin-baseline-into-bundle.mjs
+  //     --bundle-manifest /etc/coretex/bundle-manifest.json
+  //     --corpus /var/lib/coretex/corpus-epoch-N+1.json
+  //     --eval-seed-hex <new evalSeed for epoch N+1>
+  //     --epoch-id <N+1>
+  //     --out /etc/coretex/bundle-manifest.epoch-N+1.json
+  // Then publish the new BaselineScores in the epoch rotation manifest.
+}
+
+const next = nextMinImprovementPpm({
+  current: currentMinImprovementPpm,
+  observedAdvances: prevEpochMetadata.acceptedAdvances,
+  targetAdvances: targetAdvancesPerEpoch,
+  qualityAttempts: prevEpochMetadata.qualityAttempts,
+  majorDeltaActive: isMajor,
+});
+```
+
+This is the only thing that changes about the daily ritual when a
+delta is "major." On normal days, `isMajor=false` and the difficulty
+logic runs exactly as before — backward compatible.
+
+Rate limits stay flat per-miner ceilings + global backpressure (503
+on queue saturation). Never credit-aware. The credit/BPS tier system
+already provides economic differentiation; rate limits exist only to
+prevent abuse.
+
 ## 5. Smoke test (3 commands, no chain side effects)
 
 After mount, before announcing the coordinator endpoint to miners:
