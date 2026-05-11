@@ -497,6 +497,28 @@ async function generateChallengeLibraryCorpus() {
   }
 
   const generated = [];
+  // Live throughput reporter so the parallel driver (and a human watching
+  // a single-worker run) can see events/sec in real time instead of only
+  // the final summary at writeCorpusOutput. Emits a tagged line every
+  // PROGRESS_INTERVAL_MS (default 5s) and at every 1000-event milestone.
+  const progressIntervalMs = Number(env.CORETEX_PROGRESS_INTERVAL_MS ?? '5000');
+  const tStart = Date.now();
+  let lastReport = tStart;
+  let lastCount = 0;
+  function reportProgress(force = false) {
+    const now = Date.now();
+    const elapsed = (now - tStart) / 1000;
+    const sinceLast = (now - lastReport) / 1000;
+    if (!force && sinceLast < progressIntervalMs / 1000 && (generated.length - lastCount) < 1000) return;
+    const ratePerSec = generated.length / Math.max(elapsed, 0.001);
+    const recentRate = (generated.length - lastCount) / Math.max(sinceLast, 0.001);
+    console.log(
+      `[progress] events=${generated.length} elapsed=${elapsed.toFixed(1)}s ` +
+        `overall=${ratePerSec.toFixed(2)}/s recent=${recentRate.toFixed(2)}/s`,
+    );
+    lastReport = now;
+    lastCount = generated.length;
+  }
   for (const domain of domains) {
     const questionMeta = loadDomainQuestionMetadata(domain);
     for (let s = seedOffset; s < seedOffset + seedsPerDomain; s++) {
@@ -522,10 +544,12 @@ async function generateChallengeLibraryCorpus() {
             challengeKey,
             questionMeta,
           }));
+          reportProgress();
         }
       }
     }
   }
+  reportProgress(true);
 
   await writeCorpusOutput(generated, 'challenge-library');
 }

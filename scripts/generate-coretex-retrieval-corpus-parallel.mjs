@@ -117,7 +117,11 @@ function runShard(shard) {
       ...process.env,
       CORETEX_CORPUS_PRODUCTION: '1',
       CORETEX_BIENCODER: 'pinned',
-      CORETEX_LABELER: 'pinned',
+      // CORETEX_LABELER intentionally unset — production qrels are now
+      // resolved from the bundle's negCategoryRelevanceMap at the
+      // synthesizer's construction-time category, not from a per-event
+      // 4B reranker call. Set CORETEX_LABELER=pinned in env explicitly
+      // (override to this driver) only for the offline A/B audit path.
       CORTEX_REAL_EVAL: '1',
       CORETEX_BIENCODER_PYTHON: pythonBin,
       CORETEX_RERANKER_PYTHON: pythonBin,
