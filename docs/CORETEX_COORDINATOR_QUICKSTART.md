@@ -144,27 +144,28 @@ after settlement. The rest of the data-source callbacks are reads against
 `/var/lib/coretex/{patches,eval-reports,substrates}` — direct file-by-hash
 reads, no new logic.
 
-### 3a. Sealed-eval primitives (where the code lives)
+### 3a. Per-patch eval-seed primitives
 
-The hashes, seeds, and orchestration the coordinator needs are pure
-functions exported from `@botcoin/cortex`. None of them load models or
-touch storage — the host wires persistence and scoring on top.
+The eval-seed for each patch is bound to a future Base blockhash the
+coordinator cannot observe at receive time. See
+`docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md` for the full design.
 
-| File | Exports |
-| ---- | ------- |
-| `src/coordinator/sealed-eval.ts` | `buildPatchCommitment`, `computePatchCommitmentHash`, `verifyPatchReveal`, `computeDuplicateKey`, `computeCommitmentRoot`, `deriveCoretexEvalSeed`, `deriveGateSeed`, `deriveConfirmSeed`, `screenerAdmissionDecision`, `computeGatePackId`, `computeConfirmPackId`, `isPackRetired` |
-| `src/coordinator/sealed-eval-orchestration.ts` | `runGateEvaluation`, `runConfirmEvaluation`, `selectBatchWinners`, `sortFinalists`, `patchesConflict`, `SealedScorer` type |
+| File (post-rip) | Exports |
+| --------------- | ------- |
+| `src/eval/seed-derivation.ts` | `deriveEvalSeed`, `computePatchHash`, `computeDedupKey`, `EVAL_SEED_DOMAIN_PREFIX` |
+| `src/coordinator/base-blockhash.ts` | `createBaseRpcClient`, `BaseRpcClient` (`getLatestBlockNumber`, `getBlockHash`, `waitForBlock`) |
+| `src/eval/live-eval-admission.ts` | `screenerAdmissionDecision` (anti-spam: dedup-key collapse + per-miner cap) |
+| `cortex-server/src/real-evaluator.ts` | sync `POST /coretex/evaluate` + async `POST /coretex/evaluate` (returns pending) + `GET /coretex/result/:patchHash` |
 
-The orchestration takes an **injectable scorer** so the gate/confirm/
-settlement logic can be unit-tested with a deterministic fake (see
-`test/unit/sealed-eval-full-session.test.mjs` for the full lifecycle
-composition). Production wires `evaluateRetrievalBenchmarkPatch` into
-the same shape after the launch corpus completes.
+The earlier sealed-eval (`commit → reveal → status` flow with per-epoch
+sealed packs) was superseded by this design. Old sealed-eval modules
+are removed; the screener-admission helper survives the rip and moves
+here.
 
-After settlement, retire the gate and confirm packs via
-`computeGatePackId` / `computeConfirmPackId` and store the IDs in the
-host's persistent retired-set so future hidden-pack derivation
-excludes them (plan §S6).
+After every patch eval, the coordinator caches the signed receipt by
+`dedupKey = keccak256(parentRoot, normalizedPatchBytes)`. Duplicate
+submissions return the cached verdict — anti-probing without
+commit/reveal overhead.
 
 ## 4. Daily epoch ritual (existing 24-hour V3 cycle, +3 lines for CoreTex)
 

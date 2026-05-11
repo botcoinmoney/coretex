@@ -4,6 +4,11 @@ Last updated: 2026-05-11. Revised down from the 6-phase auditor draft to a 3-pha
 
 Status: pre-launch refinement. **Additive only** to `CORETEX_LAUNCH_PLAN_v2.md`. No new reward law, no new on-chain field, no operator-controlled hardness lever, no credit-based rate gating, no GPU path, no change to the 1024-word substrate body or 24h epoch cadence.
 
+> **See also:** `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md` for the orthogonal
+> hardening axis (eval-seed unforgeability via per-patch on-chain randomness).
+> H1–H3 here address corpus-growth scaling; that plan addresses pre-test gaming
+> of `POST /coretex/evaluate`. No overlap.
+
 ## What stayed from the auditor's draft
 
 - The architectural diagnosis is correct: difficulty must emerge from the corpus growing against a fixed 1024-word substrate, scored by the same pinned evaluator. No `CorpusHardnessIndex`. No "hardness knob."

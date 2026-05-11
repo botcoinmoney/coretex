@@ -4,10 +4,27 @@ Last updated: 2026-05-11.
 
 Audience: calibration / coordinator implementation agent.
 
-Status: required pre-launch hardening. This plan removes the live hidden-eval
-oracle while preserving the retrieval-native benchmark, open-source verifier,
-24-hour BOTCOIN epoch cadence, fixed 1024-word substrate, pinned CPU models,
-and public replay.
+> **⚠ SUPERSEDED.** Production picks **per-patch on-chain randomness** instead
+> of commit/reveal sealed evaluation. See
+> `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md` for the live design.
+>
+> This document is retained for design history. The S0–S6 phases below describe
+> a defense against the same threat (adaptive hidden-pack probing) using a
+> different mechanism — commit/reveal + per-epoch sealed packs. The replacement
+> design binds each patch's eval seed to a future Base blockhash the coordinator
+> cannot observe at patch-receive time, keeping `/coretex/evaluate` live while
+> achieving the same anti-pre-testing property with ~5× less code.
+>
+> The screener-admission helper from §Phase S5 survives the rip and moves to
+> `eval/live-eval-admission.ts` for the live-eval flow. Everything else is
+> removed.
+
+## Original Intent (historical)
+
+This plan was the required pre-launch hardening before the per-patch on-chain
+randomness design was finalized. It removes the live hidden-eval oracle while
+preserving the retrieval-native benchmark, open-source verifier, 24-hour BOTCOIN
+epoch cadence, fixed 1024-word substrate, pinned CPU models, and public replay.
 
 ## Executive Decision
 

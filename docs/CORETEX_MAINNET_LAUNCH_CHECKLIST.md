@@ -45,6 +45,10 @@ Each box must be green before the next is started.
   - [ ] composite weights, patch acceptance floors, split ratios,
         hidden-pack profile, relation hop budget, abstention threshold,
         reveal grace period
+  - [ ] `baseRpcConfig: { chainId: 8453, blockTimeSeconds: 2, targetBlockOffset: 30 }`
+        (per-patch eval-seed binding — see
+        `CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md` §Seed Formula)
+  - [ ] `replayBlockhashLookbackBlocks: 50000` (~28h coverage at 2s blocks)
 - [ ] `bundleHash` is the production `coreVersionHash`.
 
 ## 3. Determinism check
@@ -54,6 +58,24 @@ Each box must be green before the next is started.
 - [ ] `node scripts/aggregate-determinism.mjs` returned exit 0 with
       P99 ≤ `replayTolerancePpm`.
 - [ ] Aggregate report archived in `reports/determinism-aggregate.json`.
+- [ ] Seed-derivation golden vectors pass:
+      `node --test packages/cortex/test/unit/seed-derivation.test.mjs`
+      returns 100% reproduction over 1000-input random property test
+      (per `CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md` §Testing Checkpoints).
+- [ ] Per-patch QueryPack determinism passes:
+      `node scripts/check-per-patch-pack-determinism.mjs --bundle <bundle>
+       --corpus <corpus> --patches 50` returns 150/150 byte-identical reproductions,
+      0 collisions across 50 triples.
+
+## 3.5 Base RPC verification
+
+- [ ] `node scripts/verify-base-rpc.mjs --rpc-url $BASE_MAINNET_RPC --lookback 50000`
+      returns exit 0. `eth_blockNumber` and `eth_getBlockByNumber(latest-50000)`
+      both succeed within 10s.
+- [ ] RPC tier documented in `reports/base-rpc-tier.json` confirms blockhash
+      lookback ≥ `replayBlockhashLookbackBlocks` (50000 ≈ 28h on Base).
+- [ ] Independent replay watcher hosts each verified against the same RPC
+      tier (different provider acceptable; same lookback floor required).
 
 ## 4. Corpus generation
 
@@ -83,6 +105,12 @@ Each box must be green before the next is started.
       `replayTolerancePpm`.
 - [ ] `node test/e2e/phase-13/run.mjs` refuses to run with
       `CORETEX_RERANKER=deterministic` in production mode.
+- [ ] Mining loop uses mock Base RPC with deterministic blockhash
+      schedule; per-patch eval-seed reproduces byte-identically on
+      replay (per `CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md` §Testing
+      Checkpoints #3).
+- [ ] Adversarial epoch-secret sub-test: replay with wrong epochSecret
+      rejects 5/5 receipt signatures.
 
 ## 6. Contract deploy
 
