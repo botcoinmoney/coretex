@@ -1,188 +1,160 @@
-# CoreTex V4 — Indefinite Scalability Hardening Plan (Surgical, Baseline-Normalized)
+# CoreTex V4 — Indefinite Scalability Hardening Plan (Simplified)
 
-Last updated: 2026-05-10 (post Phase-13 / anvil e2e; revised to remove corpus-hardness abstraction entirely).
+Last updated: 2026-05-11. Revised down from the 6-phase auditor draft to a 3-phase plan with fewer knobs and a single baseline signal. Original auditor draft preserved in git history (commit 9f63e2c) for reference.
 
-Status: pre-launch refinement. This plan is **additive only** to the controlling `CORETEX_LAUNCH_PLAN_v2.md` and `CORETEX_V4_FRONTIER_RETRIEVAL_HARDENING_PLAN.md`. It hardens long-term scaling by making difficulty emerge naturally from corpus growth against the fixed 1024-word substrate, scored by the same pinned evaluator, with baseline re-evaluation per corpus root. No new meta-knobs, no credit-based gating, no operator-controlled hardness levers.
+Status: pre-launch refinement. **Additive only** to `CORETEX_LAUNCH_PLAN_v2.md`. No new reward law, no new on-chain field, no operator-controlled hardness lever, no credit-based rate gating, no GPU path, no change to the 1024-word substrate body or 24h epoch cadence.
 
-Non-negotiables preserved:
-- 24-hour epochs (V3 finalize cron unchanged).
-- Credit/BPS system (`coretexCredits`, screener lane + state-advance tiers in `work-units.ts`) remains the sole economic differentiator.
-- Substrate remains fixed 1024-word body; miners compete on retrieval compression into that fixed capacity.
-- Difficulty levers remain `minImprovementPpm` ramp/decay + pack size + strata quotas (never structural-commitment or slot-count).
-- Replay determinism (`replayTolerancePpm`) and `bundleHash` binding unchanged.
-- Small/API-only miners retain viable persistence path via screener credits + tiered BPS.
+## What stayed from the auditor's draft
 
-Goal: as the corpus expands (more records, domains, temporal revisions, relation depth, distractors, hidden queries), the same 1024-word substrate must compress more useful retrieval structure. Improvement becomes naturally harder. Difficulty scales because the benchmark task scales, not because a second system says “hardness went up.”
+- The architectural diagnosis is correct: difficulty must emerge from the corpus growing against a fixed 1024-word substrate, scored by the same pinned evaluator. No `CorpusHardnessIndex`. No "hardness knob."
+- The three identified risks are real:
+  1. The difficulty calculator only sees miner-output signals; large corpus deltas can shift the underlying score distribution and the threshold drifts on stale signal.
+  2. Hidden-pack stratification compresses each event into one stratum string, so deep causal / multi-hop / temporal events get under-sampled because they collapse into a single high-frequency family bucket.
+  3. The coordinator's rate-limit envelope must stay flat per-miner ceilings + global backpressure — abuse prevention only. Credit-based or weighted-queue policies are over-engineering.
+- Role separation (calibration host / coordinator host / independent verifier) belongs in the production runbook, not in the source-code change set. `evaluateBaseline` runs on the calibration host and the coordinator only republishes the signed result.
 
-## Core Design Principle (User-Corrected)
+## What changed
 
-Difficulty must emerge from the benchmark distribution + fixed substrate constraint, not from an extra meta-score.
+| Item | Auditor draft | This plan |
+|---|---|---|
+| Phases | S1 → S6 (6 sequential phases) | H1 → H3 (3 phases) |
+| Baseline signal | `BaselineScores` with 4 baselines (empty, parent, frequency, visible-split) + variance | `BaselineScores` with **1** baseline (`parentScorePpm`) + `variancePpm` (sampled). The other three are diagnostic; the only baseline the acceptance rule needs is the parent's score on the new pack. |
+| Major-delta grace | New module `rewards/baseline.ts` + state-machine over multiple epochs | One optional boolean input (`majorDeltaActive`) on `nextMinImprovementPpm` that short-circuits to `current` for exactly one epoch. No state machine. |
+| `majorDeltaThreshold` | "calibrated value" (location unspecified) | Calibrator output, pinned in the bundle profile. Not a runtime knob, not a hardcoded constant. |
+| Strata | `strataOf(event): string[]` + predicate quotas | Same. (No simplification possible — multi-strata is the right shape.) |
+| Causal/relation depth | Required field on all new records | **Optional** field on all records (default 1 for backward compat). Old corpora keep working; new corpora opt in by setting the field. |
+| Dynamic quotas | Calibrator-computed | Same, pinned in the bundle. (Phase H2.) |
 
-The scalable loop is:
-1. Corpus expands with richer structure.
-2. Same pinned evaluator scores the current parent substrate against the new hidden pack.
-3. Canonical baselines (empty, previous-epoch, frequency/coverage, visible-split) are re-evaluated on the same pack.
-4. Miner patches are accepted only if they improve the parent substrate by `minImprovementPpm` calibrated against baseline variance + replay tolerance.
-5. As corpus richness grows, the fixed 1024-word capacity forces better compression; raw improvement becomes harder while the comparison baseline stays fair.
+## Three phases
 
-**We do not implement any CorpusHardnessIndex or hardness knob.** Such a knob would be operator-controlled over-engineering that risks cliffs, false signals, and unnecessary complexity. The correct mechanism is baseline re-evaluation + direct benchmark controls (pack size, strata depth, distractor density, protected floors, fixed capacity).
+### Phase H1 — Types + grace + strata (LANDS NOW, while launch corpus runs)
 
-## Identified Scaling Risks (Corrected Scope)
+All changes in this phase are additive, optional, backward-compatible, and require **zero model work** — safe to land while the multi-day launch corpus generation is in flight.
 
-1. **Difficulty calculator is miner-output-only** (`rewards/difficulty.ts`). Large corpus deltas can shift raw score distributions. A +2500 ppm improvement on yesterday’s corpus may not mean the same thing on tomorrow’s richer corpus. Without baseline re-evaluation, we risk either false easing (decay when the task got harder) or zero-advance cliffs (threshold stays high while baseline scores dropped). The fix is not a hardness knob; the fix is to re-run the baseline suite on every new corpus root / hidden pack and normalize acceptance against observed baseline variance.
+**H1.1** `ProductionCorpusEvent` gains optional `causalDepth?: number` and `relationHopDepth?: number`. Old records (and the launch corpus already in flight) default to 1 in `strataOf`. New corpora generated by a future challenge-library bridge bump set them at synthesis time.
 
-2. **Hidden-pack stratification lacks explicit depth / causal / temporal pressure** (`eval/hidden-query-pack.ts`). Current `stratumOf` returns a single exact string (`family=...,bucket=...`). Deep causal chains, long relation paths, and high temporal churn can be under-sampled. Miners will naturally optimize the easier high-frequency strata. The fix is `strataOf(event): string[]` + synthesis-time `causalDepth` / `relationHopDepth` metadata + dynamic runway-based quotas so the benchmark samples the intended skills at scale.
+**H1.2** `strataOf(event): string[]` (new export, alongside the legacy `stratumOf`) returns:
+- the legacy `family=X`, `bucket=Y`, `family=X,bucket=Y` strings (for backward-compat quotas)
+- when `causalDepth > 1`, an additional `depth>=N` and `family=X,depth>=N` for each `2 ≤ N ≤ causalDepth`
+- when `relationHopDepth > 1`, the same `relationHop>=N` and combined-with-family strings
 
-3. **Coordinator rate-limit envelope and delta handling are static**. Large deltas or sudden miner floods can create head-of-line blocking. We need a one-epoch “major delta grace” guard (re-evaluate baselines before allowing any threshold movement) and abuse-only rate limits (flat per-miner ceilings + global backpressure). No credit math.
+`eventSatisfiesStratum(event, stratum)` is the matcher used by `deriveQueryPack` and `packQuotaCoverage`. Exact-string match against `strataOf(event)`. Unknown stratum strings return false (fail-closed). This replaces the previous `stratumOf(e) === quota.stratum` comparison in two call sites — the legacy quota strings are still in the strata list, so the change is byte-identical for any existing pinned bundle.
 
-**We explicitly reject any credit-based or “rich get richer” rate-limit policy.** Rate limits exist solely to prevent abuse. The credit/BPS tier system already provides economic differentiation. Adding credit multipliers, weighted fair queues, or reserved lanes adds complexity with zero abuse-model benefit and risks starving the very miners the tiered BPS is meant to protect. Flat ceilings + backpressure are sufficient.
+**H1.3** `nextMinImprovementPpm` gains one optional input `majorDeltaActive?: boolean`. When true, short-circuits to:
 
-These are the only gaps. The architecture already supports indefinite scaling once baseline re-evaluation and proper strata sampling are wired in.
+```ts
+{ next: clampPpm(current), reason: 'major_delta_grace', ratioApplied: 1.0, clamped: false }
+```
 
-## Surgical Changes (minimal, additive, existing paths only)
+When false (or omitted), all existing branches behave exactly as before. The `'major_delta_grace'` reason joins the `DifficultyOutput['reason']` union.
 
-All changes are pure extensions or one-line wirings. No removal of existing logic, no new reward law, no GPU path, no change to 1024-word layout or epoch length.
-
-### Change Set A — Baseline Re-Evaluation + Major-Delta Grace (addresses risk #1)
-
-**No CorpusHardnessIndex or hardness knob is added.** Difficulty emerges from corpus growth + fixed 1024-word substrate + same pinned evaluator.
-
-**A.1** New small pure helper `evaluateBaselines` in `rewards/baseline.ts` (or append to `difficulty.ts`):
+**H1.4** `rewards/baseline.ts` (new file) exports:
 
 ```ts
 export interface BaselineScores {
-  readonly emptySubstrate: number;
-  readonly previousEpoch: number;
-  readonly frequencyBaseline: number;
-  readonly visibleSplitBaseline: number;
-  readonly variancePpm: number;
+  readonly parentScorePpm: number;   // composite × 1e6, integer
+  readonly variancePpm: number;      // population std-dev across `samples`
+  readonly samples: number;
+  readonly corpusRoot: string;
+  readonly epochId: number;
+  readonly compositeScore: CompositeScore;  // full breakdown from sample 0
 }
 
-export function evaluateBaselines(
-  queryPack: QueryPack,
+export async function evaluateBaseline(
+  parentSubstrate: CortexState,
   corpus: ProductionCorpus,
-  biEncoder: BiEncoder,
-  reranker: CrossEncoderReranker
-): BaselineScores;
+  pack: QueryPack,
+  scoringOpts: ScoringOptions,
+  opts?: { samples?: number },
+): Promise<BaselineScores>;
+
+export function isMajorDelta(
+  newEvalHiddenCount: number,
+  prevEvalHiddenCount: number,
+  majorDeltaThreshold: number,
+): boolean;
 ```
 
-This re-runs the existing `evaluateRetrievalBenchmarkState` on four canonical substrates. Deterministic, CPU-only, cheap relative to the full pack.
+`evaluateBaseline` is a thin orchestrator over the existing `evaluateRetrievalBenchmarkState`. No new scoring path. Variance is the standard deviation over `samples` repeated runs; on a single byte-deterministic host with `samples=1` it's always 0. Calibration on heterogeneous hardware uses `samples ≥ 3` to capture real reranker noise.
 
-**A.2** In `nextMinImprovementPpm`, add one guard (no new ratio branch):
+**H1.5** Tests added: `difficulty-grace.test.mjs` (4 tests for the grace branch + 4 tests for `isMajorDelta`), `strata-of.test.mjs` (8 tests for `strataOf` + `eventSatisfiesStratum`). 251/251 unit tests pass.
 
-- If the just-applied `CorpusDelta` is large (new eval-hidden count > calibrated majorDeltaThreshold), set `reason = 'major_delta_grace'` and:
-  - Freeze `minImprovementPpm` at the prior value (no upward movement).
-  - Suppress decay (do not ease).
-- Grace lasts exactly one epoch. During grace the coordinator must re-run the baseline suite and publish new baseline scores + observed variance before the next `initializeEpoch`.
-- After grace, `minImprovementPpm` may move only if observed ability to beat the parent substrate (relative to baseline variance + replay tolerance) supports it.
+### Phase H2 — Calibration wiring (after launch corpus completes)
 
-Existing ramp/decay on pure miner-output signals remain unchanged.
+H2 ties the H1 primitives into the calibration pipeline. Lands together with the final calibration round on the launch corpus.
 
-**A.3** Wiring (one call site):
-- After `applyCorpusDelta`, if delta is major, mark grace flag and require baseline re-evaluation before next epoch freeze.
-- Baseline scores recorded in epoch metadata (off-chain, signed, reproducible by watchers).
+**H2.1** `scripts/calibrate.mjs` runs `evaluateBaseline` once against the parent substrate (empty / genesis state for epoch 0) and writes:
 
-**A.4** Reporting:
-- Every signed receipt includes (or links to) the four baseline scores for that epoch’s hidden pack.
-- Miners/watchers see exact headroom above the strongest baseline.
+```
+bundle-profile.json:
+  baselineParentScorePpm: <int>
+  baselineVariancePpm:    <int>
+  baselineSamples:        <int>
+  majorDeltaThreshold:    <int>   # ~5% of eval_hidden count, calibrator output
+```
 
-This solves score-shift across corpus growth without any external hardness lever. Improvement is always relative to the actual parent substrate on the actual current corpus distribution.
+**H2.2** `HiddenPackProfile.quotas` is computed dynamically:
 
-### Change Set B — Causal-Depth Stratification in Hidden Packs (addresses risk #2)
+- For each stratum (legacy + depth predicates that have non-zero availability in the corpus's `eval_hidden` split), `minCount = floor(availability * runwayShare)` where `runwayShare` is the calibrator-target fraction (default 70% of pack size split across present strata, capped so all minCounts sum to ≤ 80% of pack size to leave slack).
+- Hardcoded quotas removed from `bundle/index.ts`'s default profile; calibrator emits the actual numbers from the launch corpus's distribution.
 
-**B.1** Replace `stratumOf(event)` with `strataOf(event): string[]` in `eval/hidden-query-pack.ts`. An event can now satisfy multiple overlapping strata simultaneously (family, bucket, depth predicates). This is a one-function change; the quota matcher in `buildQueryPack` is updated to accept predicate-style quota strings such as `depth>=2` or `family=multi_hop_relation,depth>=3`.
+**H2.3** Final bundle build pins `baselineParentScorePpm`, `baselineVariancePpm`, `majorDeltaThreshold`, and the calibrator-computed `quotas` in `manifest.evaluator.profile`. Bundle hash now reflects these calibration outputs — replay reproduces them deterministically from the same corpus + pack + reranker.
 
-**B.2** Add two first-class numeric fields to `ProductionCorpusEvent` (and the synthesizer output schema):
+**H2.4** Phase 13 e2e re-run with the launch corpus + final bundle: confirms the dynamic quotas are satisfiable (deriveQueryPack succeeds) and the production scoring graph still accepts retrieval improvements above the new normalized threshold.
 
-- `causalDepth: number` — explicit depth of the longest causal / temporal / derivation chain leading to this record (computed by the challenge-library bridge at synthesis time from the session-pair / bookend structure).
-- `relationHopDepth: number` — maximum relation-graph distance from any truth document to the query (also synthesis-time).
+### Phase H3 — Operational guard (post-launch, coordinator-side)
 
-These are **not** inferred post-hoc from edge count. The corpus generator (already the source of truth for families and qrels) now emits them. Old records default to 1.
+H3 ties Phase H1's `majorDeltaActive` flag into the coordinator's daily 24h ritual. This is **not** a code change to the cortex repo — it's a one-paragraph addition to `docs/CORETEX_COORDINATOR_QUICKSTART.md` §4 and to the production runbook §Phase 5.
 
-**B.3** `HiddenPackProfile` quotas remain `PackQuota[]` but the calibrator (`scripts/calibrate.mjs`) now **computes** the minCount values dynamically from:
+**H3.1** Coordinator's daily epoch-rotation cron (already in the V3 finalize pipeline) calls:
 
-- current availability of each stratum in eval_hidden
-- desired per-stratum runway (epochs until exhaustion under current pack size K and cadence)
+```ts
+const isMajor = isMajorDelta(currentEvalHiddenCount, prevEvalHiddenCount, manifest.evaluator.profile.majorDeltaThreshold);
+if (isMajor) {
+  // 1. Re-run evaluateBaseline on the calibration host (separate job)
+  // 2. Publish the new BaselineScores in the signed epoch rotation manifest
+  // 3. Pass majorDeltaActive=true to nextMinImprovementPpm for this epoch
+}
+const next = nextMinImprovementPpm({ ..., majorDeltaActive: isMajor });
+```
 
-Hardcoded examples like `depth=2 min 8` are removed. The bundle profile records the computed quotas + the runway target; replay uses the same deterministic computation from the pinned corpus.
+The `BaselineScores` object is published in the signed epoch rotation manifest the coordinator already writes. Any independent watcher reproduces it from the bundle + corpus + eval seed + pinned models.
 
-**B.4** No change to `multiHopRelationRecallAtK`, `ir-metrics.ts`, or composite weights. The existing sub-metric already rewards reachability within the calibrated hop budget. The new strata simply guarantee that deep causal / temporal / multi-hop memory is sampled at a rate proportional to its growing importance in the corpus.
+**H3.2** Rate limits stay flat per-miner ceilings + global backpressure. **Never** credit-weighted. The credit/BPS tier system is the sole economic differentiator and that's enough.
 
-This makes the v3-style causal reasoning challenges first-class, satisfiable, and non-brittle inside the retrieval benchmark without altering the reward law or creating unsatisfiable quotas.
+**H3.3** Coordinator quickstart §4 gets one sentence noting the grace flag, with a code snippet pasteable into the existing 24h cron.
 
-### Change Set C — Major-Delta Grace + Abuse-Only Rate Limits (addresses risk #3)
+## What we explicitly will not build
 
-**C.1** Add `deltaEventCount` and `isMajorDelta` to the epoch snapshot (already computed during delta application).
+- No `CorpusHardnessIndex` or any other meta-score that operators tune. Difficulty emerges from the benchmark + fixed substrate + same evaluator; there is nothing else to tune.
+- No credit-aware rate limiting, weighted queues, or reserved lanes. Credit/BPS is the economic differentiator; rate limits are abuse prevention only.
+- No 4-baseline `evaluateBaselines` (the auditor's empty + parent + frequency + visible-split). The only baseline the acceptance rule consumes is the parent's score on the new pack. The other three are diagnostic and do not change behavior — adding them adds knobs and confusion. Operators who want them can compute them ad-hoc from the public artifacts.
+- No expansion of the relations region or the relation hop budget in v4. Those are calibration outputs; future bundle rotations can change them. The current shape (32 KB substrate, 36 retrieval-key slots, 128 relation edges, hopBudget 2-3) lives until the substrate saturates against the corpus, which is the natural trigger for the first architectural rotation.
 
-**C.2** "Major delta grace" rule (one paragraph in difficulty logic and production runbook): after a corpus delta whose new eval-hidden count exceeds the calibrated majorDeltaThreshold, the next epoch freezes `minImprovementPpm` and suppresses decay. The coordinator must re-run the baseline suite before the following `initializeEpoch`. Grace lasts exactly one 24 h cycle. The grace flag is recorded in epoch metadata for replay.
+## Why this is enough
 
-**C.3** Rate limits remain flat per-miner ceilings + global backpressure (503 on queue saturation). No credit math, no weighted queuing, no reserved lanes. Abuse prevention only.
+After H1 + H2 + H3:
 
-This is the minimal guard that prevents one-epoch cliffs after large corpus expansions while keeping the difficulty signal clean.
-
-## Implementation Phases (sequential, each with green gate before next)
-
-### Phase S1 — Spec & Type Extensions
-- Add `evaluateBaselines` helper + `BaselineScores` type (new file or append to `rewards/difficulty.ts`).
-- Replace `stratumOf` with `strataOf(event): string[]`, add `causalDepth` / `relationHopDepth` to `ProductionCorpusEvent`.
-- Update `specs/hidden_query_pack_v0.md` and `specs/retrieval_benchmark_v0.md` (one paragraph each on baseline re-evaluation and dynamic quota computation).
-- Acceptance gate: `npm run typecheck && npm test -- rewards/difficulty.test.ts hidden-query-pack.test.ts` (new tests pass; no hardness or credit code).
-
-### Phase S2 — Difficulty Module Hardening
-- Implement the major-delta grace guard in `nextMinImprovementPpm` (freeze + no-decay for one epoch after large delta; require baseline re-run before next movement).
-- Add unit tests: "large delta triggers grace and freezes threshold"; "baseline variance is published and used for acceptance".
-- Re-run existing difficulty histogram (identical output when no major delta).
-- Gate: `node scripts/difficulty-sweep.mjs --with-baseline-grace` passes; no regression.
-
-### Phase S3 — Pack Stratification + Dynamic Causal Quotas
-- Implement `strataOf` + predicate quota matcher in `hidden-query-pack.ts`.
-- Add `causalDepth` / `relationHopDepth` emission to the corpus generator (challenge-library bridge at synthesis time).
-- Update calibrator to compute stratum quotas from availability + desired runway (no hardcoded examples).
-- Gate: Phase-13 e2e re-run with corpus containing explicit depth≥3 causal records; deep-causal strata are proportionally represented and contribute to `multiHopRelationRecallAtK`.
-
-### Phase S4 — Baseline Re-Evaluation + Major-Grace Wiring + Abuse-Only Limits
-- Wire `evaluateBaselines` call after every major delta (one call site in epoch-close reducer).
-- Implement grace flag + baseline publication in coordinator finalize path.
-- Confirm flat per-miner ceilings + global backpressure in endpoints (no credit math anywhere).
-- Update production runbook §6 with grace rule, baseline reporting, and "abuse-prevention only" rate-limit policy.
-- Gate: anvil e2e with 5k-event delta; baselines re-evaluated, grace applied correctly, no zero-advance cliff, replay matches.
-
-### Phase S5 — Full Validation & Bundle Pin
-- Re-run full calibration + determinism + Phase 13 on the launch corpus (v2 Phase 4) with baseline re-evaluation and dynamic strata.
-- Run `validate-retrieval-corpus.mjs` + capacity estimator with projected daily deltas.
-- Gate: all acceptance criteria from the frontier retrieval hardening plan remain green; new scalability tests (baseline normalization, deep causal strata satisfiable, no credit gating, no hardness knob) pass.
-
-### Phase S6 — Mainnet Canary + Watcher Fleet
-- Same as v2 Phase 6–8, plus one extra watcher alert: "major corpus delta — baseline re-evaluation + grace epoch active".
-- After first 7 epochs with real deltas, publish a short addendum confirming difficulty emerges naturally from corpus growth + fixed substrate, baselines are reproducible, and deep causal memory remains incentivized.
-
-## Why These Changes Deliver Indefinite Scaling
-
-- **Difficulty emerges naturally from corpus growth + fixed substrate**: as the corpus expands with richer structure (more domains, deeper causal/temporal chains, higher distractor density), the same 1024-word substrate must compress more useful retrieval information. The same pinned evaluator scores the parent substrate against the new distribution; improvement becomes harder without any external knob.
-- **Baseline re-evaluation keeps comparisons fair across corpus deltas**: every major delta triggers a one-epoch grace during which the canonical baseline suite (empty, previous-epoch, frequency, visible-split) is re-run on the new hidden pack. Acceptance is normalized against observed baseline variance + replay tolerance. No score-shift cliffs or false easing.
-- **Credit / BPS system remains the sole economic differentiator**: small/API miners retain the screener lane + tiered state-advance BPS. Rate limits are flat abuse-prevention only (no credit math, no weighted queuing).
-- **v3 causal reasoning merges cleanly and satisfiably**: synthesis-time `causalDepth` / `relationHopDepth` + `strataOf(event): string[]` + dynamic runway-based quotas guarantee deep causal / temporal / multi-hop memory is proportionally sampled without unsatisfiable strings or post-hoc inference.
-- **1024-word substrate as perpetual frontier**: as corpus richness grows, the only way to keep winning advances is better compression and retrieval inside the fixed layout. Future forks can expand the word count; v4 stays on the current 1024-word compression arms race.
-- **Operational envelope scales**: major-delta baseline grace + abuse-only rate limits prevent both starvation and one-epoch cliffs. Daily deltas remain cheap (CPU-only BGE-M3 + synthesizer labels) and automatically feed the baseline re-evaluation loop.
-- **Replay & determinism untouched**: all new values (baseline scores, strata, grace flags) are deterministic functions of corpus + delta + epoch seed; watchers reproduce them exactly.
-
-## Non-Changes (intentional)
-
-- No modification to `nDCG@10` dominance, composite weights, `replayTolerancePpm`, model pins, or bundleHash semantics.
-- No expansion of Relations region or hop budget in v4 (those are calibration outputs; future fork can increase them).
-- No new on-chain fields or contract changes (difficulty snapshot stays off-chain, same as current `qualityAttempts`).
-- Epoch length, finalize cron, and V3 credit ledger unchanged.
+1. **Difficulty emerges naturally from corpus growth + fixed substrate** because every new `eval_hidden` event widens the benchmark distribution while the substrate stays at 1024 words. The same pinned evaluator scores the parent substrate against the new distribution; raw improvement gets harder without any external knob.
+2. **Major-delta grace prevents one-epoch cliffs** by freezing the threshold for exactly one epoch after a large delta, while the calibration host re-runs the baseline. After grace, normal ramp/decay/drift resumes against the new baseline.
+3. **Deep causal / temporal / multi-hop memory stays sampled** because `strataOf` emits depth predicates and the calibrator pins quotas proportional to availability. Miners can't optimize away the hard families because they always meet a pinned floor in every pack.
+4. **Replay determinism is unchanged**. Baseline scores, strata, grace flag are all deterministic functions of corpus + delta + epoch seed; watchers reproduce them exactly from public artifacts.
+5. **Small/API-only miners retain viable persistence** through the existing tiered BPS + screener lane; rate limits are flat abuse-only; no economic or queueing differentiator beyond credit accumulation.
 
 ## Acceptance for "indefinitely scalable production system"
 
-After Phase S5:
-- `evaluateBaselines` runs on every major corpus delta; baseline scores (empty, previous-epoch, frequency, visible-split) + variance are published and reproducible by watchers.
-- Major-delta grace (one-epoch threshold freeze + no decay) prevents both inappropriate easing and zero-advance cliffs after large corpus expansions.
-- `strataOf(event): string[]` + synthesis-time `causalDepth` / `relationHopDepth` + dynamic runway-based quotas make deep causal / temporal / multi-hop strata proportionally represented and satisfiable in every hidden pack.
-- No credit-based gating, weighted queuing, or hardness knob exists anywhere in the coordinator or difficulty path.
-- Historical difficulty histogram + projected 6-month corpus growth shows `minImprovementPpm` tracking real substrate improvement (relative to baselines) without hitting MAX or causing zero-advance epochs.
-- All existing Phase-13 / anvil / determinism / replay guarantees remain byte-identical.
+After H2 lands on the launch corpus:
 
-This plan closes the only three loops that could have caused difficulty to plateau or small miners to be crowded out, while preserving every non-negotiable of the current v4 architecture. It is the minimal surgical hardening required for the "path to scaling indefinitely in size / difficulty" requirement. Difficulty emerges naturally because the retrieval task grows while the substrate stays fixed at 1024 words. No over-engineering (hardness knobs, credit-aware limits, brittle delta triggers, or post-hoc depth inference) is introduced.
+- `bundle-profile.json` pins `baselineParentScorePpm`, `baselineVariancePpm`, `majorDeltaThreshold`, and dynamically-computed `quotas`.
+- `nextMinImprovementPpm` accepts `majorDeltaActive=true` and freezes for exactly one epoch.
+- `strataOf(event): string[]` is the matcher used by `deriveQueryPack` and `packQuotaCoverage`; legacy `stratumOf` strings still match exactly.
+- Unit tests cover the grace branch, `isMajorDelta`, multi-strata membership, and predicate quota matching.
+- Phase 13 e2e re-runs against the launch corpus + final bundle and passes with deltaPpm comfortably above the new normalized threshold.
 
-Next step after launch: re-calibrate the exact major-delta threshold, grace duration, baseline variance multiplier for `minImprovementPpm`, and dynamic quota runway targets on the first 30 mainnet epochs (same process as the original calibration phase). The mechanism is already in place; only the numeric pins move.
+After H3 lands on the coordinator (post-launch):
+
+- The 24h epoch-rotation cron passes `majorDeltaActive` to `nextMinImprovementPpm` based on the actual delta size against `majorDeltaThreshold`.
+- The signed epoch rotation manifest carries `BaselineScores` for the current epoch.
+- Rate limits remain flat per-miner + global backpressure.
+
+This is the minimal hardening the v4 architecture needs to scale indefinitely against a growing corpus. No over-engineering. The next architectural move (relations expansion, bundle rotation) only triggers when the substrate truly saturates, which is the corpus growing several orders of magnitude past launch — observable from the difficulty histogram tracking in production, not a guess we make today.
