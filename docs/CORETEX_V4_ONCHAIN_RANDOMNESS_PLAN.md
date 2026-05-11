@@ -372,6 +372,52 @@ After implementation lands, update:
 - **No knobs.** `targetBlockOffset` is bundle-pinned; not operator-configurable at runtime.
 - **No GPU path.** All inference stays CPU-only.
 
+## Staged Active Root
+
+Full launch-scale corpus generation produces a 512-seeds-per-domain
+**reserve**, but day-0 mining doesn't need the entire reserve to be
+"active" — that just slows the difficulty ramp and exposes the
+whole hidden-set surface immediately. Instead the active root is a
+deterministic prefix of the reserve, advanced forward by routine
+daily deltas.
+
+Pinned in the bundle profile as `corpusStagingPolicy`:
+
+```ts
+{
+  initialActiveSeedsPerDomain: 128,        // active root = seeds[0..128) per domain
+  routineDeltaMaxMajorFraction: 0.50,      // daily delta ≤ 50% of major-delta-grace threshold
+  initialActiveRunwayDays: 60,             // hidden-pack runway requirement (capacity gate)
+}
+```
+
+The active root is a deterministic prefix:
+`reserve.events.filter(e => seedOf(e) < S)` where S =
+`initialActiveSeedsPerDomain`. The corpus generator already supports
+`--seed-offset` for appending later seeds as deltas, so daily corpus
+deltas at launch+N use `--seed-offset (S + N × seedsPerDayDelta)`.
+
+**Selection law** — `scripts/calibrate-initial-active-size.mjs` picks
+the smallest S satisfying every existing launch gate:
+- **Capacity**: `floor(evalHidden / packSize) / epochsPerDay ≥ runwayDays`
+- **Family coverage**: every required family has ≥ `minPerFamily`
+  events in the active prefix
+- **Routine delta safety**: a 2-seed/domain/day delta (≈1,240 events
+  on 4 domains × ~155 events/seed) stays ≤
+  `routineDeltaMaxMajorFraction × majorDeltaThreshold`
+
+Why this is safe vs. running the full 512-seed corpus active from
+day 0:
+- Reserve seeds [S..512) remain bound to the bundle's `corpusRoot`
+  (the Merkle root is over the full event set) — they're verifiable
+  but not yet sampled into hidden packs.
+- Seed determinism is preserved (`--seed-offset` writes new seeds at
+  monotone indices; the substrate decoder's per-event provenance
+  chain is intact).
+- Bundle rotation triggers (major-delta-grace, baseline pin) all
+  operate on the active root's `eval_hidden` population, which grows
+  in the normal-delta regime.
+
 ## Auditor Follow-Ups (queued)
 
 Items flagged by external review that are not blockers for pre-corpus

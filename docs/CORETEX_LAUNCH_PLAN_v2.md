@@ -267,8 +267,20 @@ node scripts/generate-coretex-retrieval-corpus-parallel.mjs \
 
 No labeler in the loop. BGE-M3 encoding only. Estimated wall on this
 32-core CPU host: ~9 hours single-worker, ~3-4 hours with 4-worker
-parallel. The launch corpus is **single-source-of-truth**; the
-calibration corpus is retired after Phase 4.
+parallel.
+
+> **Staged active root** (per `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md`
+> §"Staged Active Root"): the full 512-seed corpus is generated up-front
+> as the **reserve**, not the active root. At launch the active root is
+> a deterministic prefix `seeds[0..S)` where S is picked by
+> `scripts/calibrate-initial-active-size.mjs` (default candidate set:
+> 64, 96, 128, 192, 256; default target runway: 60 days). Daily corpus
+> deltas advance the active root forward with `--seed-offset S +
+> daysSinceLaunch × seedsPerDay` so growth stays under
+> `routineDeltaMaxMajorFraction × majorDeltaThreshold`. The reserve
+> + active-prefix construction preserves the deterministic seed
+> lineage the substrate decoder depends on for reproducibility. The
+> calibration corpus is retired after Phase 4.
 
 ### Phase 4 — Final calibration on launch corpus
 

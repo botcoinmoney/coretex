@@ -125,6 +125,13 @@ export class EvalPool {
   private readonly queues: Array<{ busy: boolean; queue: PendingTask[] }>;
   private workerIndex = 0;
 
+  /** Number of worker threads currently in the pool. Used by /healthz
+   *  to report pool liveness — 0 means the pool was closed or never
+   *  initialized. */
+  get size(): number {
+    return this.workers.length;
+  }
+
   constructor(size?: number) {
     // Production gate: if no real evaluator is registered AND the operator
     // hasn't opted into stub mode, refuse to construct the pool. Better to

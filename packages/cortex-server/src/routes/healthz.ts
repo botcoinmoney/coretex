@@ -24,15 +24,30 @@ export function handleHealthz(db: CortexDb, pool: EvalPool) {
         dbOk = false;
       }
 
+      // Pool liveness — `_pool` parameter was previously declared but
+      // never queried, so a stuck pool reported `pool: 'ok'`. Probe
+      // via the worker pool's reported size; size === 0 means the
+      // pool has been closed or never initialized.
+      const poolOk = (() => {
+        try {
+          return typeof pool.size === 'number' && pool.size > 0;
+        } catch {
+          return false;
+        }
+      })();
+
+      const ok = dbOk && poolOk;
       const body = JSON.stringify({
-        ok: true,
+        ok,
         service: 'cortex-server',
         phase: '5',
         db: dbOk ? 'ok' : 'error',
-        pool: 'ok',
+        pool: poolOk ? 'ok' : 'error',
       });
 
-      res.writeHead(200, { 'content-type': 'application/json' });
+      // Return 503 when any dependency is unhealthy so upstream load
+      // balancers + nginx health checks remove this host from rotation.
+      res.writeHead(ok ? 200 : 503, { 'content-type': 'application/json' });
       res.end(body);
     })();
   };

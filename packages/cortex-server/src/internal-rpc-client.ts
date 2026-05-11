@@ -20,7 +20,21 @@
 const INTERNAL_RPC_URL = process.env['INTERNAL_RPC_URL'] ?? 'http://127.0.0.1:8080';
 const INTERNAL_RPC_SECRET = process.env['INTERNAL_RPC_SHARED_SECRET'] ?? '';
 
+// Production safety: refuse to issue internal RPC calls without an
+// explicit shared secret. The earlier `?? ''` + conditional-attach
+// pattern silently fell back to unauthenticated requests if the env
+// var was missing — fine for local dev (set `CORTEX_ALLOW_UNSAFE_RPC=1`
+// to opt back in), unsafe by default for production.
+const INTERNAL_RPC_ALLOW_UNSAFE = process.env['CORTEX_ALLOW_UNSAFE_RPC'] === '1';
+
 function authHeaders(): Record<string, string> {
+  if (!INTERNAL_RPC_SECRET && !INTERNAL_RPC_ALLOW_UNSAFE) {
+    throw new Error(
+      'INTERNAL_RPC_SHARED_SECRET is required to make internal RPC calls. ' +
+      'Set CORTEX_ALLOW_UNSAFE_RPC=1 only in local-dev contexts where the SWCP ' +
+      'coordinator runs on localhost without auth.',
+    );
+  }
   const h: Record<string, string> = { 'content-type': 'application/json' };
   if (INTERNAL_RPC_SECRET) {
     h['x-internal-secret'] = INTERNAL_RPC_SECRET;
