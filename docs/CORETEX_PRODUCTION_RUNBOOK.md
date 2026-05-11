@@ -363,73 +363,93 @@ Rate limits remain flat per-miner ceilings + global backpressure (503
 on queue saturation). **Never** credit-aware. The credit/BPS tier
 system is the sole economic differentiator.
 
-## 8.3 Sealed evaluation lifecycle (S0 / S1 / S2 cortex side)
+## 8.3 Per-patch on-chain randomness lifecycle
 
-`POST /coretex/evaluate` is sealed during the active mining window
-(Phase S0): the route shim short-circuits to
-`403 coretex-hidden-eval-sealed` before the host's evaluate callback
-ever runs. The miner-facing path during commit window is the new
-sealed-eval surface added by Phase S1:
+`POST /coretex/evaluate` is live during the active mining window. Each
+patch's eval seed is bound to a future Base blockhash the coordinator
+cannot observe at patch-receive time, so coordinator pre-testing is
+structurally impossible. See `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md`
+for the full design and threat model.
 
 ```
-POST /coretex/commit                 → commit a patch hash + salt
-POST /coretex/reveal                 → open the commitment after close
-GET  /coretex/commit/:commitmentHash → read commit ledger entry
-GET  /coretex/epoch/:epochId/status  → poll the epoch seal status
+POST /coretex/evaluate          → sync: signed receipt after ~60s wait
+POST /coretex/evaluate-async    → async: returns {status:'pending', patchHash, targetBlock}
+GET  /coretex/result/:patchHash → poll: 202 while pending, 200 + receipt when ready
 ```
 
-The host wires these to its own commit-ledger storage and on-chain
-anchoring via the `submitCommit`, `submitReveal`, `getCommit`,
-`getEpochStatus` callbacks on `CoreTexCoordinatorDataSource`. The
-canonical wire shape (hashing, duplicate-key, commitmentRoot
-Merkleization) is provided as pure functions by `@botcoin/cortex` —
-no host arithmetic, no off-by-one risk:
+Per-patch flow inside `real-evaluator.ts`:
+
+```text
+1. patchHash = computePatchHash(normalizedPatchBytes)
+2. dedupKey  = computeDedupKey(parentRoot, normalizedPatchBytes)
+3. if dedupCache.has(dedupKey): return dedupCache.get(dedupKey)
+4. receivedAtBlock = await rpc.getLatestBlockNumber()
+5. targetBlock     = receivedAtBlock + 30          # ≈ 60s on Base
+6. { blockhash }   = await rpc.waitForBlock(targetBlock, timeoutMs=120_000)
+7. evalSeed = deriveEvalSeed({
+     epochSecret, blockhash, epochId, patchHash,
+     parentRoot, minerAddress, corpusRoot, bundleHash,
+   })
+8. pack    = deriveQueryPack(evalSeed, corpus, hiddenPackProfile)
+9. result  = await evaluateRetrievalBenchmarkPatch(parentState, patch, corpus, pack, ...)
+10. receipt = signEvalReport({ ...result, receivedAtBlock, targetBlock, blockhash,
+                                evalSeed, patchHash, dedupKey })
+11. dedupCache.set(dedupKey, receipt); return receipt
+```
+
+The canonical hashing primitives are pure functions exported from
+`@botcoin/cortex`:
 
 ```ts
 import {
-  computePatchCommitmentHash,
-  buildPatchCommitment,
-  verifyPatchReveal,
-  computeDuplicateKey,
-  computeCommitmentRoot,
-  deriveCoretexEvalSeed,
-  deriveGateSeed,
-  deriveConfirmSeed,
+  deriveEvalSeed,
+  computePatchHash,
+  computeDedupKey,
+  EVAL_SEED_DOMAIN_PREFIX,
 } from '@botcoin/cortex';
+import { createBaseRpcClient } from '@botcoin/cortex/coordinator/base-blockhash';
+import { screenerAdmissionDecision } from '@botcoin/cortex/eval/live-eval-admission';
 ```
 
-At commit close the operator runs:
+`targetBlockOffset = 30` is pinned in the bundle's `EvaluatorProfile.baseRpcConfig`.
+Aligned with the per-miner challenge rate limit (1/minute). Tightening or
+loosening this offset requires a bundle rotation (new `coreVersionHash`).
 
-```text
-commitmentRoot = computeCommitmentRoot(allAcceptedCommitmentHashes)
-                                              # sort + dedupe + Merkle
-anchor commitmentRoot on chain                # before revealing the seed
-reveal epochSecret                            # multisig escrow output
-fetch futureBlockHash for the pinned future block height
-                                              # block must be AFTER commit close
-optionalDrandRoundHash = fetch from drand     # recommended, optional
+`receivedAtBlock` is the **only** seed input the coordinator picks
+unilaterally. To prevent dishonest delay-to-favorable-blockhash, the
+coordinator publishes a signed `PatchReceivedNotice { patchHash,
+receivedAtBlock, timestamp }` to a publicly-readable append-only log
+within the same Base block as `receivedAtBlock`. Replay watchers
+cross-check every receipt against the notice log. Mismatched
+`receivedAtBlock` → invalid receipt. (Post-launch upgrade path: replace
+the off-chain notice log with a `PatchReceived` contract event.)
 
-coretexEvalSeed = deriveCoretexEvalSeed({
-  epochId, epochParentRoot, corpusRoot, bundleHash,
-  commitmentRoot, epochSecret, futureBlockHash,
-  optionalDrandRoundHash,
-})
-gateSeed    = deriveGateSeed(coretexEvalSeed)
-confirmSeed = deriveConfirmSeed(coretexEvalSeed)
-```
+The dedup cache enforces anti-probing: a miner submitting the same
+patch twice gets the cached verdict from the first eval, not a fresh
+roll. The cache key is `keccak256(parentRoot, normalizedPatchBytes)`
+and survives coordinator restarts via the WorkReceipt journal —
+replay watchers reproduce the same dedup behavior from public chain
+data.
 
-`deriveCoretexEvalSeed` REFUSES a zero `futureBlockHash` (would
-collapse to coordinator-only randomness — explicitly forbidden by the
-hardening plan rule 5). A zero futureBlockHash means "block not yet
-observed" and the seed derivation must wait, not silently degrade.
+`screenerAdmissionDecision` (the surviving piece of the previous
+sealed-eval design) enforces the three anti-abuse rules at patch
+admission, before the costly blockhash wait:
 
-The legacy `POST /v1/cortex/submit` interactive screener is now
-disabled by default. Hosts that intentionally want the pre-sealed-eval
-flow (local dev, staging without an active hidden pack) opt in by
-setting `CORETEX_LEGACY_SUBMIT_ENABLED=1` in the coordinator env.
-Default (env unset) returns `410 coretex-legacy-submit-disabled` so a
-stale deployment cannot accidentally accept active hidden-pack
-screener submissions over the sealed-eval window.
+- **Structural validity** — patch decodes, indices in range, no
+  duplicate words, EIP-712 signature valid.
+- **Duplicate-key collapse** — patches with the same `dedupKey` as a
+  prior accepted patch in this epoch return the cached verdict.
+- **Per-miner cap** — once a miner reaches `perMinerCap` admissions
+  in an epoch, further admissions don't earn credit (the patch still
+  flows into eval, but no additional screener credit).
+
+The legacy `POST /v1/cortex/submit` interactive screener is disabled by
+default. Hosts that intentionally want the pre-V4 flow (local dev,
+staging without an active hidden pack) opt in by setting
+`CORETEX_LEGACY_SUBMIT_ENABLED=1` in the coordinator env. Default (env
+unset) returns `410 coretex-legacy-submit-disabled` so a stale
+deployment cannot accidentally accept active hidden-pack screener
+submissions.
 
 Coordinator-affiliated wallets (coordinator owner/signing, calibration
 host, operator staff, privileged infra) MUST be excluded from mining.
