@@ -427,32 +427,38 @@ delta or regeneration to take effect, so they don't block launch:
 
 ### Pre-corpus polish (small, low priority)
 
-- **Seed golden vectors** — `test/fixtures/seed-derivation-golden.json`
-  with 10 hand-picked input tuples + their expected bytes32 outputs,
-  read by `seed-derivation.test.mjs`. Locks the wire format against
+- ✅ **Seed golden vectors** (`e6f695e`) — `test/fixtures/seed-derivation-golden.json`
+  with hand-picked input tuples covering edge cases; loaded by
+  `seed-derivation-golden.test.mjs`. Locks the wire format against
   drift across Node versions / keccak implementations.
-- **BLAS / thread-count pinning** in the bi-encoder + reranker
-  subprocess envs (`OMP_NUM_THREADS`, `MKL_NUM_THREADS`,
-  `OPENBLAS_NUM_THREADS`) — currently the worker count is set but
-  thread counts inside BLAS can drift, contributing to
-  `replayTolerancePpm` budget consumption. Pin to a single thread
-  per worker and document in `determinism_v0.md`.
-- **Patch hash duality naming clarity** — chain-replay uses raw
-  `keccak256(patchBytes)`; per-patch receipts use the domain-separated
-  `computePatchHash` (with prefix `coretex-patch-hash-v1`). Both are
-  correct in their respective contexts but the naming overlap is
-  confusing. Rename downstream usages to `patchBytesHash` vs
-  `evalPatchHash` and document.
+- ✅ **BLAS / thread-count pinning** (`4037885`) — bi-encoder + reranker
+  subprocess envs now propagate `OMP_NUM_THREADS`, `MKL_NUM_THREADS`,
+  `OPENBLAS_NUM_THREADS`, `NUMEXPR_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS`
+  from the canonical worker thread-count var BEFORE torch import.
+  Documented in `specs/determinism_v0.md` §"BLAS thread pinning".
+- ✅ **Patch hash duality naming clarity** (`4566371`) —
+  `specs/patch_format_v0.md` documents `patchBytesHash` (chain
+  domain, raw keccak) vs `evalPatchHash` (eval domain,
+  `coretex-patch-hash-v1` prefix). Full code rename queued for a
+  follow-up touch when the post-corpus integration lands.
 - **`relevantNearCollisionPpm` required at the wire boundary** —
-  `work-units.ts:234` currently marks it optional; promote to required
-  when emitting work receipts so the field is always observed in
-  audit logs.
+  `work-units.ts:234` currently treats it optional; the runtime
+  check is skipped if the field is omitted. The eval pipeline does
+  not yet produce the signal (no caller computes it), so making the
+  field required at the wire requires a corresponding eval-side
+  emit. Tied to the model integration in task #38 — promote to
+  required there, alongside computing the value from
+  `evalResult.report.families['near_collision']` and wiring it into
+  receipts.
 - **`replay/per-patch.ts` rejection-receipt hardening** — pre-RPC
   rejection receipts (admission-failed) verify with patchHash +
   dedupKey checks only. For audit completeness, also re-derive the
   admission decision (`liveEvalAdmissionDecision`) from the receipt's
   inputs and assert it produces the same `rejectionReason`. Catches
-  a coordinator that fabricates rejection reasons.
+  a coordinator that fabricates rejection reasons. Defer to task #38
+  where the receipt format firms up (the admission decision needs
+  per-epoch dedup-set + miner-admission counters from chain state,
+  which the watcher reconstructs from accepted-receipt history).
 
 ## Phasing
 
