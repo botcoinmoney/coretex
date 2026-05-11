@@ -25,6 +25,9 @@ CPU-only enforcement (both modes):
     - CUDA / MPS / ONNXRUNTIME GPU providers refused before torch import
     - aborts if torch.cuda.is_available() or MPS detected
     - torch threads pinned to RERANKER_NUM_THREADS (default = available cores)
+    - BLAS thread counts (OMP/MKL/OPENBLAS/NUMEXPR/VECLIB) propagated
+      from RERANKER_NUM_THREADS BEFORE torch import so the BLAS pool
+      doesn't drift across hosts (replay tolerance hardening)
     - tokenizer truncation to RERANKER_MAX_SEQ_LEN (default 2048)
 
 Wire format:
@@ -59,6 +62,18 @@ if os.environ.get("CORETEX_USE_GPU") == "1":
 if os.environ.get("PYTORCH_USE_MPS") == "1":
     print(json.dumps({"error": "PYTORCH_USE_MPS=1 not allowed"}), file=sys.stdout)
     sys.exit(2)
+
+# Pin BLAS thread counts BEFORE torch is imported. torch.set_num_threads()
+# only controls torch's intra-op pool — the underlying BLAS libraries
+# (MKL, OpenBLAS) and numexpr read their thread counts from env at
+# library-load time, and a drifting BLAS pool contributes to replay
+# tolerance budget. We propagate RERANKER_NUM_THREADS to all of them
+# so determinism is reproducible across hosts. Match the canonical
+# scoring-path env block in scripts/orchestrate-cpu-calibration.sh.
+_blas_threads = os.environ.get("RERANKER_NUM_THREADS", str(os.cpu_count() or 1))
+for _v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+           "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    os.environ.setdefault(_v, _blas_threads)
 
 
 def fail(msg: str, code: int = 1) -> None:

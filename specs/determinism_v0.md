@@ -32,7 +32,7 @@ Replay watchers fetch `blockhash(targetBlock)` from a Base RPC archive
 refuses zero-blockhash input — a coordinator who signs a receipt
 against an unobserved block fails verification.
 
-## CPU-only contract
+## CPU-only contract + BLAS thread pinning
 
 The canonical scoring path (coordinator and watchers) runs both the
 bi-encoder and the cross-encoder on CPU only. GPU/accelerated inference
@@ -46,6 +46,29 @@ startup assertion refuses to run if any of the following is set:
 - `PYTORCH_USE_MPS=1`
 - `ONNXRUNTIME_PROVIDERS` containing `CUDAExecutionProvider` or
   `MPSExecutionProvider`
+
+## BLAS thread pinning
+
+`torch.set_num_threads()` controls only torch's intra-op pool. The
+underlying BLAS libraries (MKL, OpenBLAS) and numexpr read their
+thread counts from environment variables at library-load time, and
+a drifting BLAS pool size contributes to the replay-tolerance budget
+even when all model bytes match.
+
+The canonical scoring runners (`scripts/bi_encoder_runner.py`,
+`scripts/reranker_runner.py`) therefore pin the full BLAS env BEFORE
+importing torch:
+
+```
+OMP_NUM_THREADS          ← BIENCODER_NUM_THREADS or RERANKER_NUM_THREADS
+MKL_NUM_THREADS          ← same
+OPENBLAS_NUM_THREADS     ← same
+NUMEXPR_NUM_THREADS      ← same
+VECLIB_MAXIMUM_THREADS   ← same   (macOS Accelerate framework, harmless on Linux)
+```
+
+The propagation uses `os.environ.setdefault` so an explicit override
+(e.g. a benchmark sweep) still wins.
 
 ## Pinned runtime
 
