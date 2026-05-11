@@ -363,6 +363,80 @@ Rate limits remain flat per-miner ceilings + global backpressure (503
 on queue saturation). **Never** credit-aware. The credit/BPS tier
 system is the sole economic differentiator.
 
+## 8.3 Sealed evaluation lifecycle (S0 / S1 / S2 cortex side)
+
+`POST /coretex/evaluate` is sealed during the active mining window
+(Phase S0): the route shim short-circuits to
+`403 coretex-hidden-eval-sealed` before the host's evaluate callback
+ever runs. The miner-facing path during commit window is the new
+sealed-eval surface added by Phase S1:
+
+```
+POST /coretex/commit                 → commit a patch hash + salt
+POST /coretex/reveal                 → open the commitment after close
+GET  /coretex/commit/:commitmentHash → read commit ledger entry
+GET  /coretex/epoch/:epochId/status  → poll the epoch seal status
+```
+
+The host wires these to its own commit-ledger storage and on-chain
+anchoring via the `submitCommit`, `submitReveal`, `getCommit`,
+`getEpochStatus` callbacks on `CoreTexCoordinatorDataSource`. The
+canonical wire shape (hashing, duplicate-key, commitmentRoot
+Merkleization) is provided as pure functions by `@botcoin/cortex` —
+no host arithmetic, no off-by-one risk:
+
+```ts
+import {
+  computePatchCommitmentHash,
+  buildPatchCommitment,
+  verifyPatchReveal,
+  computeDuplicateKey,
+  computeCommitmentRoot,
+  deriveCoretexEvalSeed,
+  deriveGateSeed,
+  deriveConfirmSeed,
+} from '@botcoin/cortex';
+```
+
+At commit close the operator runs:
+
+```text
+commitmentRoot = computeCommitmentRoot(allAcceptedCommitmentHashes)
+                                              # sort + dedupe + Merkle
+anchor commitmentRoot on chain                # before revealing the seed
+reveal epochSecret                            # multisig escrow output
+fetch futureBlockHash for the pinned future block height
+                                              # block must be AFTER commit close
+optionalDrandRoundHash = fetch from drand     # recommended, optional
+
+coretexEvalSeed = deriveCoretexEvalSeed({
+  epochId, epochParentRoot, corpusRoot, bundleHash,
+  commitmentRoot, epochSecret, futureBlockHash,
+  optionalDrandRoundHash,
+})
+gateSeed    = deriveGateSeed(coretexEvalSeed)
+confirmSeed = deriveConfirmSeed(coretexEvalSeed)
+```
+
+`deriveCoretexEvalSeed` REFUSES a zero `futureBlockHash` (would
+collapse to coordinator-only randomness — explicitly forbidden by the
+hardening plan rule 5). A zero futureBlockHash means "block not yet
+observed" and the seed derivation must wait, not silently degrade.
+
+The legacy `POST /v1/cortex/submit` interactive screener is now
+disabled by default. Hosts that intentionally want the pre-sealed-eval
+flow (local dev, staging without an active hidden pack) opt in by
+setting `CORETEX_LEGACY_SUBMIT_ENABLED=1` in the coordinator env.
+Default (env unset) returns `410 coretex-legacy-submit-disabled` so a
+stale deployment cannot accidentally accept active hidden-pack
+screener submissions over the sealed-eval window.
+
+Coordinator-affiliated wallets (coordinator owner/signing, calibration
+host, operator staff, privileged infra) MUST be excluded from mining.
+This is simpler than trying to prove privileged actors did not
+inspect hidden material before committing; the disqualification list
+is auditable from on-chain stake/account records.
+
 ## 9. Audit-trail signing scheme
 
 Every coordinator-issued artifact carries an EIP-712 or ECDSA signature:

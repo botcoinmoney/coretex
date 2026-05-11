@@ -1,5 +1,24 @@
 /**
- * POST /v1/cortex/submit
+ * POST /v1/cortex/submit — LEGACY interactive screener.
+ *
+ * STATUS: deprecated for sealed launch (Phase S0 of
+ * docs/CORETEX_SEALED_EPOCH_EVAL_HARDENING_PLAN.md).
+ *
+ * This route signs a screener receipt synchronously off a single
+ * patch submission — the pre-sealed-eval flow. In sealed launch the
+ * miner-facing path is commit → reveal → admission-screen and
+ * screener credit is awarded only after post-commit admission. The
+ * cortex package exposes the canonical commit/reveal primitives via
+ * `@botcoin/cortex` (sealed-eval module) and the four new
+ * /coretex/commit, /coretex/reveal, /coretex/commit/:hash,
+ * /coretex/epoch/:epochId/status route handlers.
+ *
+ * Production hosts must set CORETEX_LEGACY_SUBMIT_ENABLED=1 to keep
+ * this route mounted. Default (env unset, or any value other than
+ * `1`) refuses the route at request time with 410 Gone so a stale
+ * deployment cannot accidentally accept screener submissions over the
+ * active sealed-eval hidden pack. Local dev / staging that wants the
+ * old interactive flow can opt in explicitly.
  *
  * Body:
  * {
@@ -245,9 +264,30 @@ function nonNegativeSafeIntFromEnv(name: string): number {
 
 const RECENT_SCREENER_NOISE_FLOOR_PPM = nonNegativeSafeIntFromEnv('CORTEX_SCREENER_NOISE_FLOOR_PPM');
 
+/**
+ * Sealed-launch refusal flag. The legacy route is OFF by default; hosts
+ * that intentionally want the pre-sealed-eval interactive screener
+ * (local dev, staging clusters without an active hidden pack) opt in
+ * by setting CORETEX_LEGACY_SUBMIT_ENABLED=1. The flag is read at
+ * request time, not module load time, so toggling the env on a live
+ * service has the expected effect without a restart.
+ */
+function legacySubmitEnabled(): boolean {
+  return process.env.CORETEX_LEGACY_SUBMIT_ENABLED === '1';
+}
+
 export function handleSubmit(db: CortexDb) {
   return (req: IncomingMessage, res: ServerResponse): void => {
     void (async () => {
+      if (!legacySubmitEnabled()) {
+        res.writeHead(410, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'coretex-legacy-submit-disabled',
+          hint: 'use POST /coretex/commit + POST /coretex/reveal (sealed-eval); ' +
+                'set CORETEX_LEGACY_SUBMIT_ENABLED=1 to re-enable the legacy interactive screener',
+        }));
+        return;
+      }
       const miner = extractMiner(req);
       if (!miner) {
         res.writeHead(400, { 'content-type': 'application/json' });
