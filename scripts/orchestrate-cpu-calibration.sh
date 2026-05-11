@@ -21,7 +21,12 @@
 #   /var/lib/coretex/reports/final-launch-summary.md
 set -euo pipefail
 
-CORPUS=/var/lib/coretex/corpus-epoch-0-calibration.json
+# Default corpus path is the launch corpus; for staging/calibration runs
+# pass CORETEX_ORCHESTRATE_CORPUS=/var/lib/coretex/corpus-epoch-0-calibration.json
+# (or any other generated corpus). The orchestrator binds the bundle to
+# whichever corpus root it is given — that becomes the canonical bundle
+# for the artifacts produced under /etc/coretex/.
+CORPUS=${CORETEX_ORCHESTRATE_CORPUS:-/var/lib/coretex/corpus-epoch-0-launch.json}
 TEMPLATE_BUNDLE=/etc/coretex/template-bundle.json
 DETERMINISM_FIXTURE=/var/lib/coretex/determinism-1k-pairs.json
 REPORTS=/var/lib/coretex/reports
@@ -31,7 +36,8 @@ BUNDLE=/etc/coretex/bundle-manifest.json
 mkdir -p "$REPORTS"
 
 if [ ! -f "$CORPUS" ]; then
-  echo "orchestrate: corpus not present at $CORPUS — run the calibration corpus first" >&2
+  echo "orchestrate: corpus not present at $CORPUS — generate the corpus first" >&2
+  echo "  (set CORETEX_ORCHESTRATE_CORPUS to point at a different file if needed)" >&2
   exit 1
 fi
 
@@ -103,11 +109,21 @@ node /root/cortex/scripts/build-coretex-bundle.mjs \
   --profile "$PROFILE" \
   --out "$BUNDLE"
 
-step "7/7 Phase 13 e2e against real models + final bundle + calibration corpus"
+step "7/8 Phase 13 e2e against real models + final bundle + calibration corpus"
 ITERATIONS=${ITERATIONS:-5} \
 CORETEX_BUNDLE_MANIFEST="$BUNDLE" \
 CORETEX_CORPUS="$CORPUS" \
 node /root/cortex/test/e2e/phase-13/run.mjs 2>&1 | tee "$REPORTS/phase13-real.log"
+
+step "8/8 offline corpus auditor (1% sample, MemReranker-4B agreement vs synthesizer labels)"
+# Diagnostic; never blocks. Replaces the per-event 4B labeling call the
+# old pipeline paid for. Scales linearly with --sample-pct, default 1%.
+RERANKER_NUM_THREADS=16 node /root/cortex/scripts/audit-corpus-with-labeler.mjs \
+  --corpus "$CORPUS" \
+  --bundle-manifest "$BUNDLE" \
+  --sample-pct ${CORETEX_AUDIT_SAMPLE_PCT:-1} \
+  --max-pairs ${CORETEX_AUDIT_MAX_PAIRS:-500} \
+  --report "$REPORTS/corpus-labeler-audit.json" 2>&1 | tee "$REPORTS/corpus-labeler-audit.log"
 
 step "DONE — writing summary"
 node -e "
@@ -152,7 +168,21 @@ const out = [
   '## phase 13',
   '- log: $REPORTS/phase13-real.log',
   '',
-].join('\\n');
-fs.writeFileSync('$REPORTS/final-launch-summary.md', out);
+  '## offline labeler audit (synthesizer category vs MemReranker bucket)',
+];
+try {
+  const audit = JSON.parse(fs.readFileSync('$REPORTS/corpus-labeler-audit.json','utf8'));
+  out.push('- sampled events: ' + audit.sampledEvents + ' / ' + audit.totalEvents);
+  out.push('- pairs scored: ' + audit.scoredPairs);
+  out.push('- overall agreement %: ' + audit.overallAgreePct.toFixed(1));
+  out.push('- per category:');
+  for (const [cat, s] of Object.entries(audit.perCategory)) {
+    out.push('    ' + cat.padEnd(28) + ' assigned=' + s.assignedBucket + ' agree=' + s.agreePct.toFixed(1) + '% n=' + s.pairs);
+  }
+} catch (e) {
+  out.push('- (audit report missing or unreadable: ' + e.message + ')');
+}
+out.push('');
+fs.writeFileSync('$REPORTS/final-launch-summary.md', out.join('\\n'));
 console.log('summary at $REPORTS/final-launch-summary.md');
 "
