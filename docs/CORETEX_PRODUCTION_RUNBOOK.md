@@ -298,6 +298,71 @@ because each delta preserves `previousRoot -> nextRoot` continuity and embeds
 all bytes needed for replay watchers to recompute scores without coordinator
 cache trust.
 
+## 8.2 Major-delta grace and baseline re-evaluation
+
+When a `CorpusDelta` adds a large number of new `eval_hidden` events
+(empirically ≥ 5% of the prior eval_hidden population, threshold pinned
+in `manifest.evaluator.profile.majorDeltaThreshold`), the difficulty
+calculator's miner-output signal from the prior epoch is no longer a
+reliable estimate of "is the threshold right" — the underlying score
+distribution has shifted under the substrate. Without the major-delta
+grace, the threshold could ramp up on stale signal (decay when the task
+got harder) or freeze when baselines actually moved. Phase H1/H2 of
+`docs/CORETEX_V4_INDEFINITE_SCALABILITY_HARDENING_PLAN.md` adds a
+one-cycle grace that prevents this without introducing any new operator
+knob.
+
+Operational ritual on a major delta day (in addition to §8.1):
+
+```bash
+# 1. The coordinator computes the delta size and decides whether to enter
+#    grace. Pure predicate, no model work:
+node -e "
+import('@botcoin/cortex').then(({ isMajorDelta }) => {
+  const isMajor = isMajorDelta(NEW_EVAL_HIDDEN, PREV_EVAL_HIDDEN, MAJOR_DELTA_THRESHOLD);
+  console.log(JSON.stringify({ isMajor }));
+});
+"
+
+# 2. If major: hand off to the calibration host to re-pin the baseline
+#    against the new corpus root + a fresh eval seed for the next epoch.
+#    Outputs a new bundle-manifest with baselineParentScorePpm + variancePpm
+#    populated, plus an updated bundleHash.
+EVAL_SEED_NEXT=0x$(openssl rand -hex 32)
+node scripts/pin-baseline-into-bundle.mjs \
+  --bundle-manifest /etc/coretex/bundle-manifest.json \
+  --corpus /var/lib/coretex/corpus-epoch-N-plus-1.json \
+  --eval-seed-hex $EVAL_SEED_NEXT \
+  --epoch-id $NEXT_CHAIN_EPOCH \
+  --samples 1 \
+  --out /etc/coretex/bundle-manifest.epoch-N-plus-1.json
+
+# 3. Publish the new BaselineScores + grace flag in the signed epoch
+#    rotation manifest the coordinator already writes for §3 reveal flow.
+#    Any independent watcher reproduces the baseline from
+#    (bundle, corpus, baselineEvalSeedHex) — no coordinator-private state.
+
+# 4. Pass majorDeltaActive=true to nextMinImprovementPpm for this one
+#    cycle so the threshold freezes at `current` and decay is suppressed
+#    while operators absorb the new baseline. After one cycle the rule
+#    resumes normal ramp/decay/drift against the new BaselineScores.
+```
+
+The `majorDeltaThreshold`, `baselineParentScorePpm`, `baselineVariancePpm`,
+`baselineSamples`, and `baselineEvalSeedHex` fields on the bundle profile
+are validated **all-or-nothing** by `verifyBundleManifest`: if any one
+of the baseline-* group is set, all four must be set and consistent
+(`baselineParentScorePpm` non-negative, `baselineVariancePpm` non-negative,
+`baselineSamples` ≥ 1, `baselineEvalSeedHex` exactly `0x` + 64 hex).
+This prevents a half-pinned bundle from silently invalidating the
+acceptance normalization. Bundles that predate the hardening (no
+baseline-* fields, no `majorDeltaThreshold`) verify clean and the
+coordinator falls back to the pre-grace difficulty rule.
+
+Rate limits remain flat per-miner ceilings + global backpressure (503
+on queue saturation). **Never** credit-aware. The credit/BPS tier
+system is the sole economic differentiator.
+
 ## 9. Audit-trail signing scheme
 
 Every coordinator-issued artifact carries an EIP-712 or ECDSA signature:
