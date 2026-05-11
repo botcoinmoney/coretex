@@ -156,8 +156,31 @@ The E2E "old-words reconstruction parity" test verifies that a patch with old wo
 
 ---
 
+## Patch hash domains
+
+Two distinct hashes are derived from the same `wireBytes`. They serve
+different purposes and are NOT interchangeable:
+
+| Hash name | Definition | Domain prefix | Used by |
+|-----------|-----------|----------------|---------|
+| `patchBytesHash` | `keccak256(wireBytes)` | (none, raw) | On-chain `CoretexPatchBytes` event topic; replay state-root continuity (`replay/v4.ts`); patch dedup at the contract level |
+| `evalPatchHash` | `keccak256("coretex-patch-hash-v1" \|\| wireBytes)` | `coretex-patch-hash-v1` | Per-patch eval seed derivation (`seed-derivation.ts:computePatchHash`); receipts; replay verification of per-patch decisions |
+
+Both are deterministic functions of `wireBytes`, so a watcher with the
+patch bytes can reproduce either. The distinct domains exist so that
+a value computed for one purpose cannot be silently substituted for
+the other (replay forgery defense — see
+`docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md` §"Domain Separation").
+
+In code, both currently appear under the name `patchHash`. Naming will
+be tightened in a future commit; the canonical definitions above are
+the source of truth.
+
+---
+
 ## See also
 
 - `cortex_state_v0.md` — field definitions and rejection error codes
 - `merkleization_spec_v0.md` — computing `parentStateRoot`
 - `packing_spec_v0.md` — word serialization
+- `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md` — per-patch eval-seed derivation, dual-pack confirmation
