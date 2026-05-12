@@ -471,6 +471,20 @@ delta or regeneration to take effect, so they don't block launch:
   the previous corpus too). Extend if delta builds at launch scale
   are needed; not required for the initial epoch-0 corpus.
 
+### Substrate ladder observability (post-launch, governance-data path)
+
+- **Dead-slot count metric** — per `specs/cortex_state_v0.md` §"Future
+  ladder step: 1024 → 2048". After substrate decode each epoch, count
+  slots whose bytes are structurally zero across MemoryIndex,
+  RetrievalKey, Relations, Temporal, and Codebook ranges. Publish as
+  `deadSlotCount` in the signed epoch rotation manifest. Replay
+  watchers verify the count from the published state root.
+  - Detection-only: NOT a miner reward input, NOT a ladder trigger
+  - Governance uses the trend (months of low dead-slot count + flat
+    retrieval headroom EMA) to authorize the 1024→2048 ladder
+  - Ships alongside the epoch-rotation-manifest baseline/difficulty
+    publication in task #38
+
 ### Pre-corpus polish (small, low priority)
 
 - ✅ **Seed golden vectors** (`e6f695e`) — `test/fixtures/seed-derivation-golden.json`

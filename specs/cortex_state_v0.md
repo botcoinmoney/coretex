@@ -183,6 +183,44 @@ The genesis state is seeded from the Phase 7 baseline E winner (revocation-aware
 
 ---
 
+## Future ladder step: 1024 → 2048 (informational)
+
+The launch substrate is fixed at 1024 words. A future widening to 2048
+is reserved as a single ladder step, not a recurring schedule. The
+mechanism is intentionally minimal:
+
+- **Wire path already supports it.** `CortexState.initializeEpoch` takes
+  `uint16 wordCount` as an argument. Switching to 2048 is a parameter
+  change at epoch init plus a new pinned bundle, not a contract migration.
+  Merkle tree depth grows from 10 → 11 levels; pack/unpack already
+  parameterizes on `wordCount`.
+- **Region layout doubles where it helps, dead-pads where it doesn't.**
+  Indicative shape: MemoryIndex 44→88 slots, RetrievalKeys 36→72 slots,
+  Relations 128→256 entries, Temporal 12→24 records, Codebook 48→96
+  entries, plus a reserved region for further ladder steps. Concrete
+  ranges land in the spec when the ladder triggers — not before.
+- **Trigger is governance-on-data, not preemptive.** The launch design
+  publishes a per-epoch dead-slot count (Definition A: slots whose bytes
+  are structurally zero — cheap, observable, in the epoch rotation
+  manifest, NEVER an input to miner reward). When dead-slot count trends
+  toward zero over many epochs while retrieval headroom flattens,
+  governance has visible data to authorize the ladder rotation. Until
+  then, 1024 stays.
+- **Replay stays clean.** Bundle hash changes on the rotation (different
+  `wordCount` + region layout + spec hash), so the pre-rotation and
+  post-rotation epochs anchor to distinct `coreVersionHash` values.
+  Watchers verify each epoch against its own bundle.
+
+The protocol explicitly does NOT reward "more substrate used", does NOT
+gate the ladder on a vote, and does NOT preemptively allocate 2048.
+Dead-slot count is published as a diagnostic; everything else flows
+from miner competition under retrieval-native scoring. See
+`docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md` §"Auditor Follow-Ups" for
+the dead-slot-metric implementation, which lands as part of task #38
+alongside the epoch rotation manifest changes.
+
+---
+
 ## See also
 
 - `cortex_schema_v0.json` — machine-readable field registry

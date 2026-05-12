@@ -1,6 +1,6 @@
 {
   "schemaVersion": "coretex.seed-derivation-golden.v1",
-  "note": "Hand-picked fixtures locking the wire format of seed-derivation primitives. Drift in keccak primitive, byte ordering, or domain prefix breaks these assertions.",
+  "note": "Hand-picked fixtures locking the wire format. Drift in keccak primitive, byte ordering, or domain prefix breaks these assertions. minerAddress is intentionally NOT a seed input — see seed-derivation.ts header.",
   "domainPrefixes": {
     "gate": "coretex-eval-v1-gate",
     "confirm": "coretex-eval-v1-confirm",
@@ -17,12 +17,11 @@
         "epochId": 0,
         "patchHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
         "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
-        "minerAddress": "0x0000000000000000000000000000000000000000",
         "corpusRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
         "bundleHash": "0x0000000000000000000000000000000000000000000000000000000000000000"
       },
-      "gateSeed": "0x9b2dec0135757e68b63acd5e31df9b69908db90b8ffe116729119638492012ce",
-      "confirmSeed": "0xb3ee51535650315d9c6f84335d48bef7f1feb986c215af1360051b2a9c33376a"
+      "gateSeed": "0x84255643886d29c7b293b4e8edb219d61a974129e3b2ea6dd1bd725fc6be52f5",
+      "confirmSeed": "0x21fb79203e1c14b34b25d5bb991baf956d124adf7c57fa56e6494f9928f1ff6a"
     },
     {
       "tag": "all-ones",
@@ -33,12 +32,11 @@
         "epochId": "18446744073709551615",
         "patchHash": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         "parentRoot": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-        "minerAddress": "0xffffffffffffffffffffffffffffffffffffffff",
         "corpusRoot": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         "bundleHash": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
       },
-      "gateSeed": "0x6048df52292e26fdaf388f843c549d391ea2abd96dcd637d3d02bc69bda884bb",
-      "confirmSeed": "0x8b20ec2dbad6fd87cad4b1b91ecc66ebe94c41593343419f6a1572a323463def"
+      "gateSeed": "0x7a3510d495855b11fe5fd6a1ef4e0c79c2b583694fa497ca5293a538ee007bb5",
+      "confirmSeed": "0xe8c5b7c35a16b04b5fb99b633431e1a174a053a103b99af670665e0dea6fd671"
     },
     {
       "tag": "launch-genesis",
@@ -49,12 +47,11 @@
         "epochId": 1,
         "patchHash": "0x3333333333333333333333333333333333333333333333333333333333333333",
         "parentRoot": "0x4444444444444444444444444444444444444444444444444444444444444444",
-        "minerAddress": "0x5555555555555555555555555555555555555555",
         "corpusRoot": "0x6666666666666666666666666666666666666666666666666666666666666666",
         "bundleHash": "0x7777777777777777777777777777777777777777777777777777777777777777"
       },
-      "gateSeed": "0x8d281fa9fe38714ce140e03c8e4fb1c8e98d113f5e03b5949591c00e08b30933",
-      "confirmSeed": "0x6e1e5a7755667b1635f1b75aec7dc3b40497460c1d5c15c3787a303030c917ed"
+      "gateSeed": "0x6c0efb867df8c2f7efe2826cfb8e3b2733cf0bea763145b8c9675abe2aa2109d",
+      "confirmSeed": "0xd7c7a8e1bc32c866457175316e90cda982c80e0faf0a8a55169da026285d6034"
     },
     {
       "tag": "epoch-42-base-blockhash",
@@ -65,12 +62,11 @@
         "epochId": 42,
         "patchHash": "0xabababababababababababababababababababababababababababababababab",
         "parentRoot": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
-        "minerAddress": "0xefefefefefefefefefefefefefefefefefefefef",
         "corpusRoot": "0x1212121212121212121212121212121212121212121212121212121212121212",
         "bundleHash": "0x3434343434343434343434343434343434343434343434343434343434343434"
       },
-      "gateSeed": "0x6cfc0e273a3bbbadbc5d5bfd4b2a4491e4a69b3b6e8f4a142618c22d7b2d9cc3",
-      "confirmSeed": "0xd08e4136f5025ba7a79ed6e8f2c79e88a1c5925323cf889331eca6a150417f1b"
+      "gateSeed": "0x471f40ba9d5ec19a557aadf6cb9b68868e19c3c94eb1e02aac8c390e60464a7f",
+      "confirmSeed": "0x4feb5b3efa34da724f5365683786bf9756da6080ed70862a39c984e07bf4e63d"
     },
     {
       "tag": "high-epoch-id-2pow40",
@@ -81,12 +77,11 @@
         "epochId": "1099511627776",
         "patchHash": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
         "parentRoot": "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
-        "minerAddress": "0xc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
         "corpusRoot": "0xd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
         "bundleHash": "0xe5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"
       },
-      "gateSeed": "0x8017fa86c5e978a7d1e89745fe881b9c855d8c93c7a3a398f7f2ff5fcbec4fd6",
-      "confirmSeed": "0x9631129858b67e9d1a2d86eb8115b292100516502842dd8a73e72442daba751a"
+      "gateSeed": "0x3a39e2eea79ea6bba256aec9abdcf2cb1623b0d9d445057c0dfda9c34c129f85",
+      "confirmSeed": "0x903579983e28c5f25836ab92db882f256eb6f9f5d490cb949ffdc3f79d053331"
     }
   ],
   "patchHashCases": [
