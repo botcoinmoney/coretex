@@ -91,7 +91,6 @@ GET  /coretex/client-bundle/:coreVersionHash
 GET  /coretex/bundle/:bundleHash
 GET  /coretex/corpus/:recordId
 GET  /coretex/corpus/:recordId/embedding
-GET  /coretex/coverage-hints
 GET  /coretex/health
 ```
 
@@ -146,7 +145,6 @@ const coretexDataSource = createRetrievalDataSource({
   getChallengeBook: readChallengeBookByEpoch,
   getCorpusDelta: readCorpusDeltaByEpoch,
   getClientBundle: readClientBundleByCoreVersionHash,
-  getCoverageHintsForCurrent: computeVisibleCoverageHints,
   health: coretexHealth,
 });
 

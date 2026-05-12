@@ -420,7 +420,6 @@ Keep:
 - `GET /coretex/client-bundle/:coreVersionHash`
 - `GET /coretex/corpus/:recordId` with hidden/canary masking
 - `GET /coretex/corpus/:recordId/embedding` with hidden/canary masking
-- `GET /coretex/coverage-hints` for visible split only
 - `GET /coretex/health`
 - `POST /coretex/screen` as structural/visible-only, no hidden score
 

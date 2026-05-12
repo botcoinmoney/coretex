@@ -132,9 +132,9 @@ server.all('/coretex/*', async (req, res, next) => {
 });
 ```
 
-The 14 `/coretex/*` routes (screen, evaluate, substrate, patch, eval-report,
+The `/coretex/*` routes (screen, evaluate, substrate, patch, eval-report,
 challenge-book, corpus-delta, client-bundle, bundle, corpus record,
-embedding, coverage-hints, health) are all dispatched by
+embedding, health, evaluate-async, result-by-hash) are all dispatched by
 `handleCoreTexCoordinatorRoute` — you don't write per-route handlers.
 
 `hostEvaluateHandler` is settlement/admin-only in the sealed launch flow. It

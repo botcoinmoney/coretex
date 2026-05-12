@@ -324,7 +324,7 @@ What the miner sees:
 A miner's optimal strategy without any local model:
 
 1. Read the current packed substrate via `/coretex/substrate/current` and decode active slots (decoder is a small library, no model required).
-2. Inspect the visible split to identify which `train_visible` queries the substrate currently answers poorly. Heuristic: queries whose answer-bearing record is not pointed-to by any active `MemoryIndex` slot, or whose pointed-to slot's vector L2-distance from the query vector is large. The coordinator can precompute this and serve it via an optional `GET /coretex/coverage-hints` endpoint as a convenience.
+2. Inspect the visible split to identify which `train_visible` queries the substrate currently answers poorly. Heuristic: queries whose answer-bearing record is not pointed-to by any active `MemoryIndex` slot, or whose pointed-to slot's vector L2-distance from the query vector is large. Miners compute this locally from the visible split; the coordinator does NOT publish a per-record nDCG breakdown (that would leak hidden-split coverage gaps and reward reconnaissance over substrate insight — see `CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md §"Post-corpus, gameability + multi-host hardening"`).
 3. Choose a target `eval_hidden`-adjacent improvement: a candidate corpus record (visible) the miner believes is also helpful for the hidden split's distribution. The miner is betting on generalization.
 4. Construct a patch:
    - Pick a target `RetrievalKeys` slot (an empty one or one carrying a low-value vector).
@@ -516,7 +516,6 @@ Acceptance gate: `docs/CORETEX_SOURCE_DATA_AUDIT.md` exists, the audit script ru
 - `POST /coretex/evaluate`: full retrieval scoring; signs receipt only if accepted.
 - `GET /coretex/corpus/:id` returns `train_visible` qrels + `truthDocuments` + `hardNegatives`; serves 404 for `eval_hidden` and `canary` until reveal.
 - `GET /coretex/corpus/:id/embedding` returns precomputed embedding bytes.
-- `GET /coretex/coverage-hints` (optional convenience): per-`train_visible`-query, the substrate's current `nDCG@10` and the per-record contribution to that score. Read-only.
 - Coordinator startup asserts the on-chain `coreVersionHash` matches the pinned bundle hash and refuses to run on mismatch (existing primitive).
 - Eval reports are persisted: `(epochId, miner, patchHash, queryPackId, perMetricBreakdown, modelHash, timestamp)` — signed by the coordinator and stored for audit. Retention defined by ops policy.
 - Acceptance gate: a smoke test against a real anvil + the pinned bundle produces a screener and a state advance using `POST /coretex/screen` and `POST /coretex/evaluate`; on-chain state advances; replay watcher reproduces the score within tolerance.

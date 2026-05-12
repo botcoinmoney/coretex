@@ -161,7 +161,7 @@ Required env variables:
 ```
 BASE_RPC_URL=<authenticated Base RPC>
 OWNER_PK=<owner/coordinator key from secure secret store>
-CORETEX_CHALLENGE_LIB_ROOT=/root/botcoin-coordinator-live/packages/challenges
+CORETEX_CHALLENGE_LIB_ROOT=/root/botcoin-coordinator/packages/challenges
 CORETEX_BIENCODER=pinned
 CORETEX_RERANKER=qwen3
 CORETEX_RERANKER_PRODUCTION=1
@@ -190,7 +190,7 @@ cd /root/botcoin
 forge build
 forge test -vvv
 
-cd /root/botcoin-coordinator-live/packages/challenges
+cd /root/botcoin-coordinator/packages/challenges
 npm ci
 npm run build
 ```
@@ -413,7 +413,6 @@ Route smoke:
 curl -fsS http://127.0.0.1:8080/coretex/health
 curl -fsS http://127.0.0.1:8080/coretex/bundle/$CORETEX_BUNDLE_HASH
 curl -fsS http://127.0.0.1:8080/coretex/substrate/current
-curl -fsS http://127.0.0.1:8080/coretex/coverage-hints
 ```
 
 Hidden split masking:

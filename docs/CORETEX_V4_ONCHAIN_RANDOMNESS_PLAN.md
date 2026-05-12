@@ -440,6 +440,67 @@ pure-code phase. Grouped by readiness.
   gate + confirm packs 3× each from the launch corpus, assert
   byte-identical reproduction. Needs corpus to derive packs from.
 
+### Post-corpus, gameability + multi-host hardening (launch-blocking)
+
+- **Exhaustive screener-admission gameability tests** — the
+  `qualifiedScreenerPassesSinceLastStateAdvance` counter feeds a 4×
+  BPS uplift in `work-units.ts`. This is a real economic seam: a
+  coordinator or colluding miner that inflates the counter manufactures
+  reward, reintroducing exactly the "GPU-monopoly emergence" the credit
+  design is meant to prevent. Build an adversarial test suite that
+  (a) replays admission against fabricated dedup-key sets,
+  (b) verifies per-miner caps are enforced on-chain via watcher
+  reconstruction, (c) probes structural / dedup collapse rules with
+  synthesized colliding patches, (d) asserts the counter resets
+  correctly on every state advance, (e) tests the ramp curve for
+  diminishing returns or capping, (f) runs an economic simulation
+  sizing how much credit a single high-throughput miner can extract
+  vs blind submitters across an epoch. Pre-launch gate.
+
+- **Remove the `GET /coretex/coverage-hints` endpoint** — verified
+  live in `packages/cortex/src/coordinator/endpoints.ts:13,42,196-201`
+  and `packages/cortex/src/coordinator/retrieval-data-source.ts:52,100-117`.
+  The documented production override at
+  `CORETEX_COORDINATOR_INTEGRATION_RUNBOOK.md:149` returns per-record
+  nDCG contribution — the exact "weakest-covered slots" leak that
+  rewards reconnaissance over substrate insight. Strip route, type,
+  default impl, override hook, contract test, and 8 doc mentions.
+
+- **Multi-hardware determinism validation (≥3 physically distinct
+  CPU configs)** — `CORETEX_V4_FRONTIER_RETRIEVAL_HARDENING_PLAN.md`
+  mandates this; current calibration ran on one physical host with 3
+  logical replicas. Provision two additional CPU configurations
+  (different microarchitecture / BLAS dispatch / vendor where
+  possible), run `determinism-check.mjs` per host, aggregate via
+  `aggregate-determinism.mjs`, require ≥3-physical-host agreement
+  within `replayTolerancePpm = 250 ppm` before signing the launch
+  bundle.
+
+- **PatchReceivedNotice publisher wiring** — host HTTP ingress for
+  `packages/cortex/src/coordinator/patch-received-notice.ts` is not
+  invoked by the coordinator; replay-watcher does not require the
+  notice. Wire publisher into the host POST flow and gate watcher
+  acceptance on notice presence.
+
+- **Hidden-pack replay publication** — no post-epoch publisher of
+  accepted patches' gate/confirm pack IDs + qrels exists. Replay
+  verifiers cannot reconstruct per-patch pack derivation without it.
+  Per-epoch publisher emitting `{patchHash → {gatePackId,
+  confirmPackId, qrels}}` to `/var/lib/coretex/eval-reports/`.
+
+- **Runtime fingerprint in determinism report** —
+  `scripts/determinism-check.mjs:97-114` omits Python / torch /
+  transformers / tokenizers versions, `/proc/cpuinfo` flags, the
+  resolved BLAS backend, OMP/MKL/OPENBLAS/NUMEXPR/VECLIB thread
+  counts, and BIENCODER/RERANKER inner batch sizes. Without these,
+  cross-host disagreement is uninvestigable.
+
+- **Coordinator-affiliated wallet exclusion** —
+  `CORETEX_PRODUCTION_RUNBOOK.md` references the exclusion list but
+  no on-chain mechanism, no published list, and no test exists.
+  Define list contract, publish signed by coordinator, watcher
+  assertion that excluded wallets cannot accrue `coretexCredits`.
+
 ### Post-calibration
 
 - **Baseline / difficulty publication** in epoch rotation manifests.
@@ -502,7 +563,7 @@ delta or regeneration to take effect, so they don't block launch:
   `coretex-patch-hash-v1` prefix). Full code rename queued for a
   follow-up touch when the post-corpus integration lands.
 - **`relevantNearCollisionPpm` required at the wire boundary** —
-  `work-units.ts:234` currently treats it optional; the runtime
+  `work-units.ts:117` currently treats it optional; the runtime
   check is skipped if the field is omitted. The eval pipeline does
   not yet produce the signal (no caller computes it), so making the
   field required at the wire requires a corresponding eval-side

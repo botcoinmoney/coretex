@@ -15,7 +15,7 @@ Each word is a packed bit field: sub-word fields are extracted by masking and sh
 | Header         | 0 – 31            | 32    | Protocol header, schema hash fragments, score counters, epoch metadata |
 | MemoryIndex    | 32 – 383          | 352   | Memory-object index slots: event IDs, type, validity, domain code, checksum |
 | RetrievalKeys  | 384 – 671         | 288   | Binary / multi-vector retrieval keys                  |
-| Relations      | 672 – 799         | 128   | Relation and routing weights                          |
+| Relations      | 672 – 799         | 128   | Typed directed edges over MemoryIndex slots           |
 | Temporal       | 800 – 895         | 96    | Temporal validity / revocation map                    |
 | Codebook       | 896 – 991         | 96    | Codebook / operator table                             |
 | Reserved       | 992 – 1023        | 32    | Reserved / experimental / future compatibility        |
@@ -110,13 +110,24 @@ KEY_FLAGS reserved bits 1–15 MUST be zero.
 
 **Entry layout** (1 word per entry, entry `k` at word `672 + k`, for `k` ∈ [0, 127]):
 
-| Field          | Bits    | Type    | Description                                          |
-|----------------|---------|---------|------------------------------------------------------|
-| SRC_IDX        | 255:240 | uint16  | Source slot index in MemoryIndex (0–43) or 0xFFFF = unset |
-| DST_IDX        | 239:224 | uint16  | Destination slot index in MemoryIndex (0–43) or 0xFFFF = unset |
-| REL_TYPE       | 223:208 | uint16  | Relation type: 0x0001 = RELATES_TO, 0x0002 = SUPERSEDES, 0x0003 = ROUTES_TO, others reserved |
-| WEIGHT         | 207:192 | uint16  | Routing weight, fixed-point Q8.8 (value = raw/256)   |
-| reserved_rel   | 191:0   | —       | Reserved; MUST be zero                               |
+| Bits     | Field            | Notes                                                |
+|----------|------------------|------------------------------------------------------|
+| 255:240  | weight           | uint16, 0 means empty entry                          |
+| 239:224  | edgeType         | uint16 enum (see below)                              |
+| 223:208  | reserved         | must be zero                                         |
+| 207:192  | reserved         | must be zero                                         |
+| 191:96   | sourceMemorySlot | 96-bit padded uint8, low 8 bits = MemoryIndex slot 0..43 |
+| 95:0     | targetMemorySlot | 96-bit padded uint8, low 8 bits = MemoryIndex slot 0..43 |
+
+edgeType enum:
+  0x1 supports
+  0x2 supersedes
+  0x3 coreference_of
+  0x4 causes
+  0x5 derived_from
+  0x6 co_occurs_with
+
+> Note (decoder authority). The canonical decoder lives at `packages/cortex/src/substrate/retrieval-decoder.ts:decodeRelations`. The bit layout above mirrors `specs/substrate_retrieval_semantics_v0.md §Relations entries`, which is authoritative. The earlier RELATES_TO / SUPERSEDES (only) / ROUTES_TO and SRC_IDX-top framing was a planning sketch and is superseded — miners who follow it will produce patches the decoder drops.
 
 ### Range E: Temporal (words 800–895)
 
@@ -218,6 +229,38 @@ from miner competition under retrieval-native scoring. See
 `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md` §"Auditor Follow-Ups" for
 the dead-slot-metric implementation, which lands as part of task #38
 alongside the epoch rotation manifest changes.
+
+**Trigger criteria (pinned pre-launch, ladder execution deferred until met):**
+
+1. **Dead-slot count threshold**: when `bundle.deadSlotCount` (currently
+   surfaced via the canary-overfitting watchdog at
+   `scripts/canary-overfitting-watchdog.mjs`) drops below `4` for `5`
+   consecutive epoch rotations on the MemoryIndex region, retrieval
+   capacity in 1024-words is provably saturated.
+2. **Retrieval headroom flatness**: when the
+   `minImprovementPpm` ratchet has been at `replayNoiseP90Ppm` (its
+   floor) for `10` consecutive epochs AND `observedAdvances / target` >
+   1.5 (miners advancing faster than the calibrator anticipates), the
+   PID loop is exhausted as a difficulty lever.
+3. **Typed-relations scorer lever exhausted**: by then we should
+   already have activated the typed/weighted Relations traversal lever
+   (`packages/cortex/src/eval/retrieval-benchmark.ts:287-293,337` —
+   currently performs untyped/unweighted BFS even though the substrate
+   stores 6 edge types + per-edge weights). If activation has not
+   moved the needle, the substrate width itself is the bottleneck.
+
+**Governance** (deferred but pinned now): bundle-rotation step requires
+co-signed approval from the same multisig that controls the seed-escrow
+contract. No additional governance contract — reuse the existing
+signer set.
+
+**Drill** (deferred, documented now): a dry-run bundle rotation against
+a 2048-word test substrate is scheduled for post-launch epoch 4. The
+drill must demonstrate (a) byte-identical reproducibility of the
+2048-word canonical state hash across the ≥3 calibrated hosts,
+(b) all replay watchers verify both 1024-word and 2048-word epoch
+manifests within the same binary, (c) miner-side substrate update
+flow rotates cleanly without lost in-flight patches.
 
 ---
 

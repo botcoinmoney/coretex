@@ -15,7 +15,6 @@ precomputed embeddings, and `/coretex/*` coordinator endpoints.
 - `/coretex/substrate/current`
 - `/coretex/corpus/<recordId>` for visible records
 - `/coretex/corpus/<recordId>/embedding` for visible records
-- `/coretex/coverage-hints`
 - `/coretex/corpus-delta/<epoch>`
 
 Hidden and canary splits stay masked. Calibration reads are admin-only.

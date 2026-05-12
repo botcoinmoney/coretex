@@ -217,7 +217,7 @@ on-chain substrate changes map correctly to the new corpus.
 - Mint stake to a test miner.
 - Build a real compact patch: pick a candidate event from the new
   corpus, encode the patch using
-  `evaluatePatchWithReranker`-derived state advance, sign EIP-712
+  `evaluateRetrievalBenchmarkPatch`-derived state advance, sign EIP-712
   receipt with the coordinator key.
 - Submit `submitWorkReceipt` to V4. Asserts:
   - V4 emits `WorkCreditAccepted`.
@@ -288,10 +288,13 @@ parallel.
   650000 --min-per-family 25000`)
 - Build determinism fixture from launch corpus (`--max-pairs 1000` per
   spec)
-- Run determinism check × 3 hosts on this single CPU host (SAME box,
-  3 logical hosts; the streaming reranker is byte-deterministic so
-  cross-run agrees by construction; multi-hardware re-runs are an
-  ops-side gate)
+- Run determinism check on ≥3 physically distinct CPU configurations
+  (different microarchitecture / BLAS dispatch). Logical-replica runs
+  on a single host are NOT a substitute — they only prove same-binary
+  same-CPU reproducibility, not cross-host agreement within
+  `replayTolerancePpm`. See
+  `CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md §"Post-corpus, gameability +
+  multi-host hardening"` for the binding gate.
 - Aggregate determinism (P99 ≤ replayTolerancePpm)
 - Run calibrate.mjs against launch corpus
 - Build final bundle manifest → canonical `bundleHash`
