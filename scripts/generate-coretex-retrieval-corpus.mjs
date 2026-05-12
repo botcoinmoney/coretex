@@ -508,11 +508,49 @@ async function generateChallengeLibraryCorpus() {
   // without ever holding the full events array in memory.
   mkdirSync(dirname(resolve(outPath)), { recursive: true });
   const eventsNdjsonPath = `${resolve(outPath)}.events.ndjson`;
-  // Start clean — partial runs leave an NDJSON shadow that would
-  // double-count if we appended on restart.
-  if (existsSync(eventsNdjsonPath)) unlinkSync(eventsNdjsonPath);
-  const eventsStream = createWriteStream(eventsNdjsonPath);
-  let eventCount = 0;
+
+  // --resume mode: read the existing NDJSON shadow, identify which
+  // (domain, seed, modifierCount, constraintDifficulty) tuples have
+  // ALREADY been written, and skip those tuples on re-execution.
+  // Multi-day model runs that die from outside-the-script reasons
+  // (orphaned by harness/SSH session, OOM-kill, accidental SIGKILL)
+  // can then resume from the next un-touched tuple instead of losing
+  // every previously-emitted event.
+  //
+  // Skip granularity is the FULL tuple — if any event for a tuple is
+  // already on disk, the whole tuple is skipped. That loses at most
+  // one tuple's-worth of records (≈28 events) but guarantees no
+  // duplicate IDs in the resulting corpus, no matter where the prior
+  // run was interrupted within a tuple.
+  const resume = argv.includes('--resume');
+  const touchedTuples = new Set();
+  let resumedEventCount = 0;
+  if (resume && existsSync(eventsNdjsonPath)) {
+    const rl = createInterface({ input: createReadStream(eventsNdjsonPath), crlfDelay: Infinity });
+    for await (const line of rl) {
+      if (!line) continue;
+      // Parse challengeId of shape "<domain>/seed-<seed>/m<modifier>/<difficulty>".
+      // The challengeKey is stable per-tuple (built at line 565) so all events
+      // emitted by a given tuple share the same one — perfect tuple identity.
+      try {
+        const ev = JSON.parse(line);
+        const cid = ev?.provenance?.challengeId;
+        if (typeof cid === 'string') touchedTuples.add(cid);
+        resumedEventCount++;
+      } catch {
+        // Skip a corrupt trailing line silently — last write may have
+        // been mid-flush when the process died. The corresponding
+        // tuple will be re-generated.
+      }
+    }
+    console.log(`[resume] read ${resumedEventCount} existing events covering ${touchedTuples.size} tuples`);
+  } else if (existsSync(eventsNdjsonPath)) {
+    // Without --resume, start clean. Partial runs leave an NDJSON
+    // shadow that would double-count if we appended on restart.
+    unlinkSync(eventsNdjsonPath);
+  }
+  const eventsStream = createWriteStream(eventsNdjsonPath, { flags: resume ? 'a' : 'w' });
+  let eventCount = resumedEventCount;
 
   // The progress reporter previously read generated.length. Now it
   // reads eventCount directly. Output format unchanged so external
@@ -552,6 +590,14 @@ async function generateChallengeLibraryCorpus() {
     for (let s = seedOffset; s < seedOffset + seedsPerDomain; s++) {
       for (const modifierCount of modifierCounts) {
         for (const constraintDifficulty of constraintDifficulties) {
+          const challengeKey = `${domain}/seed-${s}/m${modifierCount}/${constraintDifficulty}`;
+          // Resume-mode skip: every event in a previously-completed
+          // tuple shares this challengeKey, so a Set membership check
+          // is sufficient to skip the whole tuple. Safe under partial
+          // writes — see the prelude comment.
+          if (resume && touchedTuples.has(challengeKey)) {
+            continue;
+          }
           const worldSeed = deriveWorldSeed(domain, s, modifierCount, constraintDifficulty);
           const challenge = challengeLib.generateInterchangeableChallenge(
             worldSeed,
@@ -562,7 +608,6 @@ async function generateChallengeLibraryCorpus() {
             },
             domain,
           );
-          const challengeKey = `${domain}/seed-${s}/m${modifierCount}/${constraintDifficulty}`;
           const records = await recordsFromChallenge({
             challenge,
             domain,
