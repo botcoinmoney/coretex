@@ -1,0 +1,13 @@
+[Unit]
+Description=CoreTex services slice
+Documentation=file:///root/cortex/docs/CORETEX_LAUNCH_PLAN_v2.md
+Before=slices.target
+
+[Slice]
+# Reserve plenty of RAM headroom — corpus + bundle + model caches.
+# 32 GiB hard cap protects the rest of the host if something
+# unexpectedly balloons.
+MemoryMax=64G
+# Don't choke other workloads on the box. corpus gen is steady-state
+# CPU-bound; let it use everything but yield gracefully.
+CPUWeight=100
