@@ -303,6 +303,16 @@ Pass criteria:
 
 ## Phase 2 - Pinned Model Determinism And Calibration
 
+> **Prior-run evidence:** the 2026-05-10 calibration pass produced
+> `/var/lib/coretex/reports/determinism-host-host_{a,b,c}.json` +
+> `/var/lib/coretex/reports/determinism-aggregate.json` with
+> P50/P90/P99 = 0 ppm. The bi-encoder-stage cross-CPU axis was
+> additionally A/B-tested across AVX-512 ↔ AVX-2 hosts on 2026-05-13
+> (see `CORETEX_CROSS_SYSTEM_REPRODUCIBILITY_PROOF.md`). The launch-corpus
+> determinism run uses the same scripts; see
+> `CORETEX_POST_CORPUS_PLAYBOOK.md §"Step 5–6"` for the post-corpus
+> re-run sequence.
+
 Run model determinism on every CPU calibration host:
 
 ```bash

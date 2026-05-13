@@ -79,6 +79,15 @@ Required outputs:
 
 ## Procedure
 
+> **Note on prior-run evidence.** A complete end-to-end calibration pass
+> on 2026-05-10 already validated every step of this runbook against a
+> 1,752-event interim corpus (errors=0, determinism 0 ppm, Phase 13 PASS
+> with adversarial sub-test rejected per spec). Full evidence at
+> `/var/lib/coretex/reports/` and narrative at
+> `docs/CORETEX_CALIBRATION_2026-05-10.md`. When re-running against the
+> launch corpus, consult `docs/CORETEX_POST_CORPUS_PLAYBOOK.md` for the
+> 11-step sequence and prior-run reference numbers to compare against.
+
 1. Build CoreTex and the coordinator challenge package.
 
 ```bash

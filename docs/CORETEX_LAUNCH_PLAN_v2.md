@@ -73,7 +73,12 @@ BEFORE the launch corpus is built.
   against the interim corpus. Phase 13: 3/5 accepted with deltaPpm
   7009/3505/2542, 2/5 rejected with correct spec reasons, adversarial
   rejected. **Validates the streaming pipeline + scoring graph; will
-  be re-run against the new labeling scheme.**
+  be re-run against the new labeling scheme.** Full on-disk evidence
+  at `/var/lib/coretex/reports/` (corpus-validation, determinism-host-{a,b,c},
+  determinism-aggregate, phase13-real.log, final-launch-summary.md,
+  orchestrate.log). See `CORETEX_POST_CORPUS_PLAYBOOK.md` for the
+  exact 11-step sequence that re-runs against the launch corpus
+  without redoing already-validated methodology.
 - **Mainnet read-only verification** — Base mainnet bindings agree
   with `docs/contract-addresses-mainnet.md`.
 
