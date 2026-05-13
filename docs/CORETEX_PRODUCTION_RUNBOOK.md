@@ -367,7 +367,39 @@ Rate limits remain flat per-miner ceilings + global backpressure (503
 on queue saturation). **Never** credit-aware. The credit/BPS tier
 system is the sole economic differentiator.
 
-## 8.3 Per-patch on-chain randomness lifecycle
+## 8.3 Incentive rationale: screener-count-linked state-advance multiplier
+
+The `qualifiedScreenerPassesSinceLastStateAdvance`-linked multiplier is
+intentional. It encodes **observed search difficulty** from the live
+market, not a fixed static hardness guess.
+
+Operational interpretation:
+
+- A qualified screener pass is treated as a real candidate that had a
+  plausible chance to improve state.
+- As baseline quality improves, the screener threshold tightens against
+  remaining headroom and measured noise, so qualifying passes become
+  harder.
+- Therefore, more qualified passes before the next successful state
+  advance indicate a harder search landscape.
+
+Reward logic follows that interpretation: successful advances in harder
+landscapes earn higher `workUnitsBps`, which keeps state-advancer
+incentives aligned with real marginal difficulty.
+
+This rationale is valid only if both conditions stay true in production:
+
+1. Screener calibration remains baseline- and noise-adaptive (not static).
+2. Anti-gaming controls prevent cheap pass inflation (opaque rejection
+   surface, dedup collapse, per-miner caps, and host rate limits).
+
+Audit evidence for (1) is encoded in unit coverage for
+`computeCoreTexScreenerThresholdPpm` and
+`evaluateCoreTexWorkQualification` (`packages/cortex/test/unit/work-units.test.mjs`),
+including monotonic baseline/noise behavior, clamp bounds, and exact
+threshold pass/fail boundaries.
+
+## 8.4 Per-patch on-chain randomness lifecycle
 
 `POST /coretex/evaluate` is live during the active mining window. Each
 patch's eval seed is bound to a future Base blockhash the coordinator
