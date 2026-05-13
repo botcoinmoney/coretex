@@ -145,6 +145,15 @@ calibration on physically distinct hardware will be repeated as part of
 the live coordinator deployment per the FINAL orchestrator runbook
 Phase 2.
 
+**Update 2026-05-13** — the cross-CPU axis (AVX-512 ↔ AVX-2 OpenBLAS
+dispatch) has been A/B-tested at the bi-encoder stage on a physically
+distinct second host (AMD EPYC 7313P / Zen 3 / AVX-2). See
+`docs/CORETEX_CROSS_SYSTEM_REPRODUCIBILITY_PROOF.md` for the standing
+proof: post-header int8 vector bytes are byte-identical across CPUs,
+float32 scale drift is ≤ 1 ppm, cosine similarity is algebraically
+unchanged. The full scoring-stage cert against the launch corpus is
+queued as task #13 in `CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md`.
+
 ## Phase 13 (real Qwen3 + BGE-M3 against the calibration corpus)
 
 ```

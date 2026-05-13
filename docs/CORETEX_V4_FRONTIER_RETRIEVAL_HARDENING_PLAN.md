@@ -350,7 +350,7 @@ Several values in this plan are calibration outputs, not design decisions. They 
 The calibration process is itself part of the plan. It runs against:
 
 - A held-out internal calibration corpus subset (separate from `eval_hidden`).
-- A multi-host CPU rig (≥3 hardware configurations) to measure cross-host score spread.
+- A multi-host CPU rig (≥3 hardware configurations) to measure cross-host score spread.  Empirical evidence for the bi-encoder stage's cross-CPU behavior is in `docs/CORETEX_CROSS_SYSTEM_REPRODUCIBILITY_PROOF.md` (A/B between Zen 4 AVX-512 and Zen 3 AVX-2 OpenBLAS dispatch paths).
 - The pinned models at their pinned revisions.
 
 Outputs (all bind into bundle profile or bundle manifest):
@@ -411,7 +411,7 @@ Acceptance gate: the test suite passes after the deletion (smaller suite is fine
 - Pin Qwen3-Reranker-0.6B (already structurally present); add MemReranker-0.6B/MemReranker-4B factories that all share a `CrossEncoderReranker` interface. The audit/reference model is a separate slot in the bundle (not the production reranker).
 - Implement a bi-encoder runtime under `eval/bi-encoder.ts` (CPU-only, named runtime, named quantization). Output bytes are the substrate-slot wire format.
 - Implement determinism harness `scripts/determinism-check.mjs` that runs both models on a 1k-pair sample across configured runtimes, emits a CSV of `|score_a - score_b|` per pair, and exits non-zero if the P99 exceeds `MAX_TOLERANCE_PPM = 5000` before final calibration pins the tighter bundle value.
-- Acceptance gate: `npm run determinism-check` passes on ≥3 hardware configurations using the pinned model revisions and runtime version. Output P99 disagreement is recorded.
+- Acceptance gate: `npm run determinism-check` passes on ≥3 hardware configurations using the pinned model revisions and runtime version. Output P99 disagreement is recorded.  See `docs/CORETEX_CROSS_SYSTEM_REPRODUCIBILITY_PROOF.md` for the standing bi-encoder-stage cross-CPU A/B (Zen 4 ↔ Zen 3, dated 2026-05-13); the final scoring-stage cert against the launch corpus closes this gate (queued as task #13 in `CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md §"Post-corpus, gameability + multi-host hardening"`).
 
 ### Phase C — Substrate Decoder
 
