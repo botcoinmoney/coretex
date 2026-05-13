@@ -5,6 +5,11 @@
  * map benchmark: graded answer-bearing qrels, hidden splits, embedding
  * payloads, temporal/current-stale annotations, multi-hop targets, and
  * deterministic corpus-root reproduction.
+ *
+ * Memory note:
+ *   This script does whole-file JSON parsing (`JSON.parse(readFileSync(...))`).
+ *   Large launch corpora (~2 GB) require a larger V8 heap, e.g.:
+ *     node --max-old-space-size=8192 scripts/validate-retrieval-corpus.mjs ...
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';

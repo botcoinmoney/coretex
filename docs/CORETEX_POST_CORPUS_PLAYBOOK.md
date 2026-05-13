@@ -144,7 +144,7 @@ This step closes **task #13** in the active task list.
 ```bash
 node /root/cortex/scripts/calibrate.mjs \
   --bundle-manifest /etc/coretex/template-bundle.json \
-  --corpus /var/lib/coretex/corpus-epoch-0-launch.json \
+  --calibration-corpus /var/lib/coretex/corpus-epoch-0-launch.json \
   --determinism-aggregate /var/lib/coretex/reports/determinism-aggregate-launch.json \
   --out /etc/coretex/bundle-profile-launch.json
 ```
@@ -163,7 +163,6 @@ If the launch-corpus calibration produces materially different numbers, that's a
 
 ```bash
 node /root/cortex/scripts/build-coretex-bundle.mjs \
-  --template /etc/coretex/template-bundle.json \
   --corpus /var/lib/coretex/corpus-epoch-0-launch.json \
   --profile /etc/coretex/bundle-profile-launch.json \
   --out /etc/coretex/bundle-manifest-launch.json
@@ -176,8 +175,11 @@ node /root/cortex/scripts/build-coretex-bundle.mjs \
 
 ```bash
 node /root/cortex/scripts/pin-baseline-into-bundle.mjs \
-  --bundle /etc/coretex/bundle-manifest-launch.json \
-  --corpus /var/lib/coretex/corpus-epoch-0-launch.json
+  --bundle-manifest /etc/coretex/bundle-manifest-launch.json \
+  --corpus /var/lib/coretex/corpus-epoch-0-launch.json \
+  --eval-seed-hex "$(openssl rand -hex 32)" \
+  --epoch-id 0 \
+  --samples 1
 # writes baselineParentScorePpm, baselineVariancePpm into the bundle
 ```
 

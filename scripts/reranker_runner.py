@@ -82,13 +82,22 @@ def fail(msg: str, code: int = 1) -> None:
 
 
 def _build_qwen3_prompt(query: str, document: str) -> str:
+    # Match the Qwen3-Reranker model-card template so score calibration is
+    # consistent with upstream yes/no relevance guidance.
+    instruction = os.environ.get(
+        "CORETEX_RERANKER_INSTRUCTION",
+        "Given a web search query, retrieve relevant passages that answer the query",
+    )
     return (
-        "<|im_start|>system\nYou are a relevance judge.\n<|im_end|>\n"
+        "<|im_start|>system\n"
+        "Judge whether the Document meets the requirements based on the Query and the Instruct provided. "
+        "Note that the answer can only be \"yes\" or \"no\"."
+        "<|im_end|>\n"
         "<|im_start|>user\n"
-        f"Query: {query}\nDocument: {document}\n"
-        "Is the document relevant? Answer yes or no."
+        f"<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {document}"
         "<|im_end|>\n"
         "<|im_start|>assistant\n"
+        "<think>\n\n</think>\n\n"
     )
 
 
@@ -120,12 +129,10 @@ def _load_model(model_id: str, revision: str):
     model.to("cpu")
     model.eval()
 
-    yes_ids = tokenizer.encode("yes", add_special_tokens=False)
-    no_ids = tokenizer.encode("no", add_special_tokens=False)
-    if not yes_ids or not no_ids:
+    yes_id = tokenizer.convert_tokens_to_ids("yes")
+    no_id = tokenizer.convert_tokens_to_ids("no")
+    if yes_id is None or no_id is None or yes_id < 0 or no_id < 0:
         fail("could not resolve yes/no token ids")
-    yes_id = yes_ids[-1]
-    no_id = no_ids[-1]
     return torch, tokenizer, model, yes_id, no_id
 
 
