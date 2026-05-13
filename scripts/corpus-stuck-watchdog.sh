@@ -12,6 +12,17 @@
 set -euo pipefail
 
 UNIT="${UNIT:-coretex-corpus.service}"
+# Resolve NDJSON path from the same source the corpus generator reads.
+# Falls back to the launch default if /etc/default/coretex-corpus is
+# unavailable. This must auto-track post-swap CORETEX_CORPUS_OUT changes,
+# or the watchdog will SIGTERM a healthy process whose new output file
+# the watchdog is unaware of (see 2026-05-13 host-1 swap incident).
+if [ -z "${NDJSON:-}" ] && [ -f /etc/default/coretex-corpus ]; then
+  CORPUS_OUT=$(grep -E "^CORETEX_CORPUS_OUT=" /etc/default/coretex-corpus | cut -d= -f2-)
+  if [ -n "$CORPUS_OUT" ]; then
+    NDJSON="${CORPUS_OUT}.events.ndjson"
+  fi
+fi
 NDJSON="${NDJSON:-/var/lib/coretex/corpus-epoch-0-launch.json.events.ndjson}"
 STUCK_THRESHOLD_SECONDS="${STUCK_THRESHOLD_SECONDS:-900}"   # 15 min
 LOG="${LOG:-/var/lib/coretex/corpus-stuck-watchdog.log}"

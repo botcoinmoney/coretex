@@ -38,7 +38,13 @@ log "============================================"
 ###########################
 # HOST 1 (this host)
 ###########################
-HOST1_NDJSON=/var/lib/coretex/corpus-epoch-0-launch.json.events.ndjson
+# Resolve host-1 NDJSON from /etc/default/coretex-corpus so swaps that
+# change CORETEX_CORPUS_OUT are auto-tracked (see 2026-05-13 incident).
+if [ -f /etc/default/coretex-corpus ]; then
+  HOST1_CORPUS_OUT=$(grep -E "^CORETEX_CORPUS_OUT=" /etc/default/coretex-corpus | cut -d= -f2-)
+fi
+HOST1_NDJSON="${HOST1_CORPUS_OUT:+${HOST1_CORPUS_OUT}.events.ndjson}"
+HOST1_NDJSON="${HOST1_NDJSON:-/var/lib/coretex/corpus-epoch-0-launch.json.events.ndjson}"
 HOST1_LOG=/var/lib/coretex/corpus-epoch-0-launch.log
 HOST1_FLAGS=()
 
