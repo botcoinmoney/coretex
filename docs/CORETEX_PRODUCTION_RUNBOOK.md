@@ -375,8 +375,9 @@ market, not a fixed static hardness guess.
 
 Operational interpretation:
 
-- A qualified screener pass is treated as a real candidate that had a
-  plausible chance to improve state.
+- With auto-calibrating screener thresholds against an improving onchain
+  state baseline, a qualified screener pass represents a real candidate
+  that had a plausible chance to improve state.
 - As baseline quality improves, the screener threshold tightens against
   remaining headroom and measured noise, so qualifying passes become
   harder.
@@ -387,13 +388,11 @@ Reward logic follows that interpretation: successful advances in harder
 landscapes earn higher `workUnitsBps`, which keeps state-advancer
 incentives aligned with real marginal difficulty.
 
-This rationale is valid only if both conditions stay true in production:
+Anti-gaming controls (opaque rejection surface, dedup collapse, per-miner
+caps, and host rate limits) prevent cheap pass inflation while preserving
+this difficulty-linked incentive.
 
-1. Screener calibration remains baseline- and noise-adaptive (not static).
-2. Anti-gaming controls prevent cheap pass inflation (opaque rejection
-   surface, dedup collapse, per-miner caps, and host rate limits).
-
-Audit evidence for (1) is encoded in unit coverage for
+Audit evidence for screener auto-calibration is encoded in unit coverage for
 `computeCoreTexScreenerThresholdPpm` and
 `evaluateCoreTexWorkQualification` (`packages/cortex/test/unit/work-units.test.mjs`),
 including monotonic baseline/noise behavior, clamp bounds, and exact
