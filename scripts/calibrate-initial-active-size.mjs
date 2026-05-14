@@ -10,6 +10,7 @@
  *   --candidates 64,96,128,192,256    S values to try (ascending)
  *   --runway-days 60                  minimum hidden-pack runway target
  *   --epochs-per-day 1                hidden-pack consumption rate
+ *   --daily-seeds-per-domain 2        planned routine expansion cadence
  *   --pack-size <N>                   override; otherwise reads from bundle
  *   --domains-csv companies,...       active domains list (matches reserve)
  *   --seeds-per-domain-total 512      reserve's seeds-per-domain (sanity)
@@ -25,8 +26,9 @@
  *   4. Runs `validate-retrieval-corpus` quotas in-memory: every
  *      family present with ≥ min-per-family events.
  *   5. Computes majorDeltaThreshold = max(100, floor(evalHidden * 0.05))
- *      and asserts a 2-seed daily delta (~2 × ~155 events = ~310 events
- *      per domain × N domains) stays under 0.50 × majorDeltaThreshold.
+ *      and asserts the planned routine daily delta stays under
+ *      0.50 × majorDeltaThreshold using empirical events/seed density from
+ *      the reserve corpus (p50 expected and p90 conservative estimates).
  *
  * Outputs the smallest S that passes all gates, plus the per-candidate
  * gate report. Picks the policy `initialActiveSeedsPerDomain = S`,
@@ -50,6 +52,7 @@ const candidates = String(flag('candidates', '64,96,128,192,256'))
   .sort((a, b) => a - b);
 const runwayDays = Number(flag('runway-days', '60'));
 const epochsPerDay = Number(flag('epochs-per-day', '1'));
+const dailySeedsPerDomain = Number(flag('daily-seeds-per-domain', '2'));
 const packSizeOverride = flag('pack-size');
 const domainsCsv = flag('domains-csv', 'companies,quantum_physics,computational_biology,scrna_imputation');
 const totalSeedsPerDomain = Number(flag('seeds-per-domain-total', '512'));
@@ -64,8 +67,22 @@ if (!Number.isInteger(runwayDays) || runwayDays < 1) {
   console.error('calibrate-initial-active-size: --runway-days must be a positive integer');
   exit(2);
 }
+if (!Number.isInteger(dailySeedsPerDomain) || dailySeedsPerDomain < 1) {
+  console.error('calibrate-initial-active-size: --daily-seeds-per-domain must be a positive integer');
+  exit(2);
+}
 if (candidates.length === 0) {
   console.error('calibrate-initial-active-size: --candidates must list ≥1 positive integers');
+  exit(2);
+}
+if (!Number.isInteger(totalSeedsPerDomain) || totalSeedsPerDomain < 1) {
+  console.error('calibrate-initial-active-size: --seeds-per-domain-total must be a positive integer');
+  exit(2);
+}
+if (candidates.some((s) => s > totalSeedsPerDomain)) {
+  console.error(
+    `calibrate-initial-active-size: candidate exceeds --seeds-per-domain-total (${totalSeedsPerDomain}); candidates=${candidates.join(',')}`,
+  );
   exit(2);
 }
 
@@ -87,13 +104,32 @@ const ndjsonShadow = `${resolve(reservePath)}.events.ndjson`;
 let useNdjson = false;
 if (existsSync(ndjsonShadow)) useNdjson = true;
 
-function challengeIdSeed(challengeId) {
-  // challengeId format from the generator: "<domain>/<seed>" or
-  // "<domain>/seed-<seed>/...". Both shapes are deterministic; extract
-  // the integer seed.
-  const m = /\/seed-(\d+)|\/(\d+)/.exec(challengeId);
-  if (!m) return null;
-  return Number(m[1] ?? m[2]);
+function challengeMeta(challengeId) {
+  // Supported shapes:
+  //   "<domain>/<seed>"
+  //   "<domain>/seed-<seed>/..."
+  //   "coretex_v1:<domain>:s<seed>:..."
+  let domain = null;
+  for (const d of domains) {
+    if (
+      challengeId.startsWith(`${d}/`)
+      || challengeId.includes(`:${d}:`)
+      || challengeId.includes(`/${d}/`)
+    ) {
+      domain = d;
+      break;
+    }
+  }
+  const m = /\/seed-(\d+)|\/(\d+)|:s(\d+)(?::|$)/.exec(challengeId);
+  if (!m) return { domain, seed: null };
+  return { domain, seed: Number(m[1] ?? m[2] ?? m[3]) };
+}
+
+function quantile(values, q) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const i = Math.min(sorted.length - 1, Math.floor(sorted.length * q));
+  return sorted[i];
 }
 
 const perCandidate = candidates.map((S) => ({
@@ -103,6 +139,7 @@ const perCandidate = candidates.map((S) => ({
   totalEvents: 0,
   splits: Object.create(null),
 }));
+const perDomainSeedCounts = new Map(domains.map((d) => [d, new Map()]));
 
 async function* eventsFromNdjson() {
   const rl = createInterface({ input: createReadStream(ndjsonShadow), crlfDelay: Infinity });
@@ -119,8 +156,12 @@ async function* eventsFromJson() {
 
 const source = useNdjson ? eventsFromNdjson() : eventsFromJson();
 for await (const ev of source) {
-  const seed = challengeIdSeed(ev.provenance?.challengeId ?? '');
+  const { domain, seed } = challengeMeta(ev.provenance?.challengeId ?? '');
   if (seed === null || !Number.isInteger(seed)) continue;
+  if (domain && perDomainSeedCounts.has(domain)) {
+    const seedMap = perDomainSeedCounts.get(domain);
+    seedMap.set(seed, (seedMap.get(seed) ?? 0) + 1);
+  }
   for (const c of perCandidate) {
     if (seed >= c.S) continue;
     c.totalEvents++;
@@ -132,6 +173,35 @@ for await (const ev of source) {
 
 // Per-candidate gate evaluation.
 const requiredFamilies = ['near_collision', 'temporal', 'long_horizon', 'multi_hop_relation'];
+const domainSeedStats = {};
+for (const d of domains) {
+  const seedMap = perDomainSeedCounts.get(d);
+  const counts = [...seedMap.values()];
+  if (counts.length === 0) {
+    domainSeedStats[d] = {
+      observedSeeds: 0,
+      perSeedMin: 0,
+      perSeedP50: 0,
+      perSeedP90: 0,
+      perSeedMax: 0,
+      perSeedMean: 0,
+    };
+    continue;
+  }
+  const sum = counts.reduce((s, v) => s + v, 0);
+  domainSeedStats[d] = {
+    observedSeeds: counts.length,
+    perSeedMin: Math.min(...counts),
+    perSeedP50: quantile(counts, 0.50),
+    perSeedP90: quantile(counts, 0.90),
+    perSeedMax: Math.max(...counts),
+    perSeedMean: sum / counts.length,
+  };
+}
+const dailyDeltaEventsExpected = dailySeedsPerDomain
+  * domains.reduce((s, d) => s + (domainSeedStats[d]?.perSeedP50 ?? 0), 0);
+const dailyDeltaEventsConservative = dailySeedsPerDomain
+  * domains.reduce((s, d) => s + (domainSeedStats[d]?.perSeedP90 ?? 0), 0);
 
 const evaluated = perCandidate.map((c) => {
   const noRepeatMonths = (c.evalHidden / packSize) / epochsPerDay / 30;
@@ -141,11 +211,10 @@ const evaluated = perCandidate.map((c) => {
   const familyMisses = requiredFamilies.filter((f) => (c.families[f] ?? 0) < minPerFamily);
 
   const majorDeltaThreshold = Math.max(100, Math.floor(c.evalHidden * 0.05));
-  // Routine delta cap = 2 seeds/domain × ~155 events/seed × N domains
-  const ESTIMATED_EVENTS_PER_SEED = 155;
-  const dailyDeltaEvents = 2 * ESTIMATED_EVENTS_PER_SEED * domains.length;
+  // Routine delta cap based on empirical reserve density rather than a fixed
+  // hardcoded events/seed assumption.
   const halfMajor = majorDeltaThreshold * 0.50;
-  const routineDeltaPass = dailyDeltaEvents <= halfMajor;
+  const routineDeltaPass = dailyDeltaEventsConservative <= halfMajor;
 
   const pass = runwayPass && familyPass && routineDeltaPass;
   return {
@@ -159,7 +228,9 @@ const evaluated = perCandidate.map((c) => {
     familyCoverage: { minPerFamily, requiredFamilies, missing: familyMisses, pass: familyPass },
     routineDelta: {
       majorDeltaThreshold,
-      dailyDeltaEvents,
+      dailySeedsPerDomain,
+      dailyDeltaEventsExpected,
+      dailyDeltaEventsConservative,
       halfMajor,
       pass: routineDeltaPass,
     },
@@ -176,7 +247,9 @@ const report = {
   packSize,
   runwayDays,
   epochsPerDay,
+  dailySeedsPerDomain,
   domains,
+  domainSeedStats,
   totalSeedsPerDomain,
   recommendedS: passing?.S ?? null,
   candidates: evaluated,
@@ -203,6 +276,6 @@ if (!passing) {
 console.log(
   `calibrate-initial-active-size: smallest passing S=${passing.S} ` +
   `(evalHidden=${passing.evalHidden}, runway=${passing.capacity.noRepeatMonths.toFixed(1)}mo, ` +
-  `daily-delta=${passing.routineDelta.dailyDeltaEvents}/${passing.routineDelta.majorDeltaThreshold} ` +
+  `daily-delta(p90)=${passing.routineDelta.dailyDeltaEventsConservative}/${passing.routineDelta.majorDeltaThreshold} ` +
   `majorThreshold). Report: ${outPath}`,
 );

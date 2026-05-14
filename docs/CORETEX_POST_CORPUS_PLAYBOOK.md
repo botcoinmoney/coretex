@@ -183,6 +183,129 @@ node /root/cortex/scripts/pin-baseline-into-bundle.mjs \
 # writes baselineParentScorePpm, baselineVariancePpm into the bundle
 ```
 
+### Step 9.5: Active-root size calibration (launch-binding policy)
+
+This step chooses `initialActiveSeedsPerDomain` for launch and binds the
+launch corpus root policy used by bundle/on-chain artifacts.
+
+**Provisional launch default:** `initialActiveSeedsPerDomain=128` unless the
+final empirical post-corpus run strongly supports a smaller passing value.
+
+**Goal:** avoid both extremes:
+- **Too small:** weak family/depth coverage or insufficient hidden-pack runway.
+- **Too large:** day-0 surface too broad, poor staged-expansion headroom.
+
+**9.5.a Preflight (script/version and units sanity)**
+
+Before trusting results from this step, verify the active-size calibrator
+implementation includes:
+- `--daily-seeds-per-domain`
+- empirical per-domain seed-density stats (`min/p50/p90/max/mean`)
+- conservative p90 routine-delta output telemetry
+- candidate-by-candidate gate telemetry
+
+If the script is still on the older fixed-estimate implementation, patch it
+before continuing (do not run launch sizing on stale logic).
+
+**Critical units rule:** routine-delta safety is an `eval_hidden` gate. The
+safety comparison must be conservative **daily eval_hidden delta** against
+`majorDeltaThreshold` (which is computed from `eval_hidden`), not total daily
+events. If tooling output is unit-mismatched, stop and fix tooling before
+proceeding.
+
+**9.5.b Capacity + coverage + routine-delta safety (no model work)**
+
+```bash
+node /root/cortex/scripts/calibrate-initial-active-size.mjs \
+  --reserve-corpus /var/lib/coretex/corpus-epoch-0-launch.json \
+  --bundle-manifest /etc/coretex/bundle-manifest-launch.json \
+  --candidates 64,96,128,160,192,224,256 \
+  --runway-days 60 \
+  --epochs-per-day 1 \
+  --pack-size 128 \
+  --daily-seeds-per-domain 2 \
+  --seeds-per-domain-total 512 \
+  --out /var/lib/coretex/reports/initial-active-size-launch.json
+```
+
+This report now computes routine-delta pressure from **empirical per-domain
+events/seed density** in the actual launch reserve (`p50` expected and `p90`
+conservative), not a fixed constant.
+
+**Decision rule (hard gate):**
+- Choose the **smallest** candidate `S` with `pass=true`.
+- If no candidate passes, do not launch staging policy; re-run with expanded
+  candidate set and record why each gate failed.
+- Tie-break policy: if both 96 and 128 pass, prefer `128` unless `96` shows
+  clearly comfortable conservative margin in the routine-delta gate.
+
+**9.5.c Reranker sanity at launch scale (model work)**
+
+```bash
+node /root/cortex/scripts/validate-label-reranker-correlation.mjs \
+  --corpus /var/lib/coretex/corpus-epoch-0-launch.json \
+  --bundle-manifest /etc/coretex/bundle-manifest-launch.json \
+  --max-pairs-per-category 50 \
+  --report /var/lib/coretex/reports/label-reranker-correlation-launch.json
+
+node -e "const r=require('/var/lib/coretex/reports/label-reranker-correlation-launch.json'); if(!r.pass){console.error('label-reranker correlation failed'); process.exit(1)}"
+```
+
+**Decision rule (hard gate):**
+- `label-reranker-correlation-launch.json.pass` must be `true`.
+
+**9.5.d Baseline-noise sanity (reuse Step 9 output)**
+
+From `/etc/coretex/bundle-manifest-launch.json` after Step 9:
+- `baselineVariancePpm`
+- `replayTolerancePpm`
+- `minImprovementPpm`
+
+**Decision rule (hard gate):**
+- `baselineVariancePpm <= replayTolerancePpm`
+- `minImprovementPpm >= (replayTolerancePpm + baselineVariancePpm)`
+
+These prevent launching a policy where score noise is too close to acceptance
+difficulty.
+
+**9.5.e Anti-overtune tie-breaker (only when multiple S pass)**
+
+If multiple candidates pass 9.5.a/9.5.b/9.5.c:
+1. pick the smallest `S` with runway >= target (`runwayDays`) and
+2. `dailyDeltaEventsConservative / majorDeltaThreshold <= 0.50` already true
+   by gate, then
+3. prefer the smallest `S` unless operator has a written reason to increase.
+
+No manual weight tuning, no hand-set ad-hoc thresholds beyond the gates above.
+
+**9.5.f Launch root binding rule (required)**
+
+Once `S` is selected:
+- Materialize a deterministic active-prefix corpus artifact:
+  - `/var/lib/coretex/corpus-epoch-0-active-S<S>.json`
+- Validate and record its `corpusRoot`.
+- Launch bundle and on-chain epoch pinning must reference the **active-prefix**
+  `corpusRoot`.
+- Keep the full reserve corpus root as an operator/audit artifact only; it is
+  not the launch root.
+
+This prevents ambiguity between reserve-root and launch-root semantics.
+
+**9.5.g Target-advances launch posture**
+
+For initial launch posture with staged active root:
+- set epoch-rotation `targetAdvances=10` for `nextMinImprovementPpm`
+- keep corpus-size choice and target-advances choice as separate knobs:
+  - corpus size sets search terrain breadth
+  - target advances sets feedback pressure on threshold dynamics
+
+**Deliverables to archive:**
+- `/var/lib/coretex/reports/initial-active-size-launch.json`
+- `/var/lib/coretex/reports/label-reranker-correlation-launch.json`
+- `/var/lib/coretex/corpus-epoch-0-active-S<S>.json`
+- `/etc/coretex/bundle-manifest-launch.json` (baseline pinned, active-root bound)
+- one-line decision record: `chosen initialActiveSeedsPerDomain=<S>`
+
 ### Step 10: Phase 13 e2e against the launch bundle + launch corpus
 
 ```bash
@@ -227,6 +350,8 @@ This step closes **task #14** in the active task list (the canonical corpus is p
 | Corpus validation errors = 0 | `reports/corpus-validation-launch.json` | step 3 |
 | Cross-host P99 score divergence ≤ 250 ppm | `reports/determinism-aggregate-launch.json` | step 6, **task #13** |
 | Bundle profile params within sane bounds vs v2 reference | manual diff vs prior | step 7 |
+| Active-root launch root is unambiguous (active-prefix root pinned, reserve root archival only) | `corpus-epoch-0-active-S<S>.json`, launch `bundle-manifest`, epoch pinning records | step 9.5 |
+| Active-root size decision is gated by empirical reserve density + reranker + baseline-noise checks | `initial-active-size-launch.json`, `label-reranker-correlation-launch.json`, baseline fields in launch bundle | step 9.5 |
 | Phase 13 all iterations behave per spec + adversarial rejected | `reports/phase13-launch.log` | step 10 |
 | `final-launch-summary.md` references launch corpusRoot + launch bundleHash | summary | step 11 |
 | Screener gameability suite passes | `test/unit/screener-admission-gameability.test.mjs` | **task #6** (handed off to parallel agent, see `HANDOFFS/HANDOFF_2026-05-13_PARALLEL_WORK.md`) |
