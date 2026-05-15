@@ -342,6 +342,134 @@ It writes the chained log to `/var/lib/coretex/reports/orchestrate.log` (appendi
 
 This step closes **task #14** in the active task list (the canonical corpus is produced; the rest of the orchestration runs against it).
 
+**Commit point** (after step 11): commit the calibration write-down doc (next section) + any updated `/etc/coretex/*` configs that travel with the repo. Do **not** commit `/var/lib/coretex/reports/` artifacts; they are runtime evidence — capture their SHA-256s in the write-down doc instead.
+
+### Step 12: Build mining-flow fixtures (outside-perspective harness inputs)
+
+The mining-flow e2e and integration tests need three pre-mined patches with annotated expected outcomes:
+
+| Bucket | Expected envelope | What triggers it |
+|---|---|---|
+| `screener_reject` | `{ status: 'rejected', code: 'rejected' }` (opaque) | malformed bytes, oversized newWords, wrong patchType, etc. |
+| `screener_pass_no_advance` | `{ status: 'accepted', patchHash, evalReportHash }` (no `receipt`) | valid patch that admits but produces `deltaPpm < minImprovementPpm` |
+| `state_advance` | `{ status: 'accepted', patchHash, evalReportHash, receipt }` | valid patch with `deltaPpm >> minImprovementPpm`; would trigger on-chain `submitWorkReceipt` |
+
+The fixtures are persisted at `benchmark/fixtures/mining-flow/epoch-0.fixtures.json` (committed) so the integration test is CI-fast and the e2e script can run in replay mode.
+
+```bash
+node /root/cortex/scripts/mining-flow-e2e.mjs \
+  --bundle-manifest /etc/coretex/bundle-manifest-launch.json \
+  --corpus /var/lib/coretex/corpus-epoch-0-launch.json \
+  --persist-fixtures benchmark/fixtures/mining-flow/epoch-0.fixtures.json \
+  --max-iterations 200 \
+  --out /var/lib/coretex/reports/mining-flow-fixtures-launch.json
+# exits 0 once all 3 outcome buckets observed at least once; persists the
+# 3 sample patches that triggered each bucket
+```
+
+If the script exhausts `--max-iterations` without observing all 3 buckets, that is a calibration signal: either `minImprovementPpm` is too tight (no state-advance ever) or too loose (no pass-but-no-advance bucket).
+
+### Step 13: Mining-flow e2e through the HTTP shim (closes gap A+B+F)
+
+Re-run the same script in replay mode to assert the three persisted fixtures produce the expected envelopes when driven through the actual `createCoreTexCoordinatorRouteHandler` route table:
+
+```bash
+node /root/cortex/scripts/mining-flow-e2e.mjs \
+  --bundle-manifest /etc/coretex/bundle-manifest-launch.json \
+  --corpus /var/lib/coretex/corpus-epoch-0-launch.json \
+  --fixtures benchmark/fixtures/mining-flow/epoch-0.fixtures.json \
+  --mode replay \
+  --base-url in-process \
+  --out /var/lib/coretex/reports/mining-flow-e2e-launch.json
+# expected: 3/3 envelopes match annotated outcomes
+```
+
+`--base-url in-process` mounts the handler directly; pass an http URL (e.g. `http://127.0.0.1:18081`) to drive a real TCP server instead. The fixtures travel with the repo so this step is reproducible from any fresh clone.
+
+**Commit point** (after step 13): commit `benchmark/fixtures/mining-flow/epoch-0.fixtures.json` and reference it in the calibration write-down.
+
+### Step 14: Base fork rehearsal of on-chain state advance (closes gap C)
+
+Drives the `state_advance` fixture through `BotcoinMiningV4.submitWorkReceipt` against a Base-mainnet fork at the pinned production addresses (`CortexState 0x5d3B…555d`, `BotcoinMiningV4 0x12ff…94A4`). Uses `anvil_impersonateAccount` on the coordinator signer `0x6463…F635`; no real signature required, no real funds touched.
+
+```bash
+BASE_RPC_URL=<your authenticated Base RPC> \
+  node /root/cortex/scripts/base-fork-rehearsal.mjs \
+    --bundle-manifest /etc/coretex/bundle-manifest-launch.json \
+    --fixtures benchmark/fixtures/mining-flow/epoch-0.fixtures.json \
+    --out /var/lib/coretex/reports/base-fork-rehearsal-launch.json
+# expected: tx mined on the fork; CortexStateAdvanced + WorkCreditAccepted
+# events emitted at the pinned addresses; new stateRoot matches the patch's
+# newStateRoot field
+```
+
+This step does NOT touch mainnet. It only confirms the wire shape and signature scaffolding are correct against the exact production contracts.
+
+### Step 15: Replay watcher independent verification (closes gap E)
+
+A fresh-clone auditor must be able to reconstruct every state advance from on-chain logs without trusting the coordinator. Verify the watcher reads the fork-emitted events:
+
+```bash
+RPC_URL=http://127.0.0.1:8545 \
+CORTEX_STATE_ADDRESS=0x5d3B9D9b246cf8457F320Bb27f008186B69D555d \
+BOTCOIN_MINING_V4_ADDRESS=0x12ff0B47389AE6d6293d44991B0D6A27394494A4 \
+  node /root/cortex/packages/cortex/dist/replay-cli.js watch \
+    --bundle-manifest /etc/coretex/bundle-manifest-launch.json \
+    --corpus /var/lib/coretex/corpus-epoch-0-launch.json \
+    --from-block <fork start block> \
+    --out /var/lib/coretex/reports/replay-watcher-launch.json
+# expected: watcher reproduces the patch byte-identically (patchHash
+# matches), recomputes deltaPpm within replayTolerancePpm of the
+# coordinator's evaluation
+```
+
+### Step 16: Controlled mainnet canary (gap D — operator-gated, NO SCRIPT)
+
+This step is intentionally NOT scripted. It is the only post-corpus step that touches real mainnet funds and gas. The procedure lives in `docs/CORETEX_FINAL_PRODUCTION_E2E_ORCHESTRATOR_RUNBOOK.md` Phase 6; the safety rails are:
+
+1. Dry-run preflight via `cast call` against the pinned `BotcoinMiningV4` contract (returns the call result without submitting).
+2. Hard `--gas-limit` ceiling (default: 2 × dry-run estimate, never above the rate-limit `perMinerCap` for the epoch).
+3. Single-receipt cap — refuse to submit if the operator passes more than one patch in a batch.
+4. Abort if patch byte size is greater than 4 words (the production substrate cap).
+5. The replay watcher (step 15) must already be running and confirm pickup within 5 blocks before submitting a second canary.
+6. Operator must pass `--i-confirm-mainnet` explicitly. There is no env-var override.
+
+After the canary, the watcher report must show: `coordinatorPatchHash === watcherPatchHash`, `coordinatorDeltaPpm` within `replayTolerancePpm` of `watcherDeltaPpm`, and `CortexStateAdvanced` event observed on mainnet at the pinned `CortexState` address.
+
+**Commit point** (after step 16): commit the canary's audit-trail entry to `docs/CORETEX_CALIBRATION_<date>.md`.
+
+## Calibration write-down format
+
+Every post-corpus run captures its evidence in a single dated narrative doc at `docs/CORETEX_CALIBRATION_<YYYY-MM-DD>.md`. The 2026-05-10 calibration doc (`docs/CORETEX_CALIBRATION_2026-05-10.md`) is the canonical template — mirror its section structure exactly so cross-epoch diffs are trivial.
+
+Required sections, in order:
+
+1. **Summary** — one-paragraph plain-language outcome (PASS / PARTIAL / FAIL), date, operator handle, host inventory.
+2. **Inputs** — paths + SHA-256 of: launch corpus JSON, bundle manifest, evalSeed (commit-hash only; preimage stays in the secure store), challenge-library root revision, both pinned model revisions.
+3. **Per-step results** — one row per playbook step (1–16) with: command run, output artifact path, output SHA-256, pass/fail, reference value from the 2026-05-10 calibration.
+4. **Mining-flow report excerpt** — copy the 3 bucket records from `mining-flow-e2e-launch.json` (the bucket name, the patchHash, the deltaPpm, the envelope echo).
+5. **Base fork rehearsal** — tx hash on the fork (synthetic), CortexStateAdvanced event payload, new stateRoot.
+6. **Replay watcher reconciliation** — the watcher's reproduction of each accepted patch's deltaPpm, with the cross-comparison diff in ppm.
+7. **Deltas vs 2026-05-10** — any number that changed materially (>5% on a profile weight, or >250 ppm on a determinism number) with operator-written rationale.
+8. **Mainnet canary** (only if step 16 was executed) — receipt hash on mainnet, gas consumed, block, mempool inclusion latency, replay-watcher reconciliation.
+9. **Open follow-ups** — any item that came out of this run and needs to land before the next epoch.
+
+The doc is committed at the end of step 11 (initial form) and amended after steps 13, 14, 15, 16 (further commit points). Do not write transient findings docs — everything lands in this one file.
+
+## Commit cadence summary
+
+Per-step commit/push markers introduced above, consolidated:
+
+| After step | What to commit |
+|---|---|
+| 11 | Initial `docs/CORETEX_CALIBRATION_<date>.md` with sections 1–3 populated, plus any `/etc/coretex/*` config that the repo tracks |
+| 13 | `benchmark/fixtures/mining-flow/epoch-0.fixtures.json` + sections 4–5 of the calibration doc + reference to `mining-flow-e2e-launch.json` SHA-256 |
+| 14 | Section 5 final values (fork tx hash, event payload) |
+| 15 | Section 6 (replay reconciliation) |
+| 16 | Section 8 (mainnet canary), only after explicit operator confirmation |
+
+Push to `origin/main` after each commit so the public CoreTex repo reflects post-corpus state in real time.
+
 ## After all 11 steps: launch readiness gates
 
 | Gate | Source | Closed by |
