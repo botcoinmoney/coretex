@@ -1,0 +1,71 @@
+{
+  "schemaVersion": "coretex.corpus-shard-manifest.v1",
+  "shardId": "host2-comp_bio-epoch0",
+  "corpusEpoch": 0,
+  "domain": "comp_bio",
+  "perShardCorpusRoot": "0xde70ec40d97f255894d1d43a202b2a1481e6b2d2bd1854b1016526bc11ce376e",
+  "producer": {
+    "hostLabel": "host2",
+    "machineDescription": "dedicated bare-metal coretex-2 (185.8.106.77), AMD EPYC 7313P (Zen 3, AVX-2)",
+    "decommissionAfter": "post-shard archive (this manifest)"
+  },
+  "producedAtUtc": "2026-05-15T02:24:46Z",
+  "archivedAtUtc": "2026-05-15T03:00:00Z",
+  "archive": {
+    "destinationHost": "host1",
+    "destinationPaths": [
+      "/var/lib/coretex/corpus-epoch-0-launch-host2.json",
+      "/var/lib/coretex/corpus-epoch-0-launch-host2.json.events.ndjson"
+    ],
+    "transferMethod": "rsync over SSH; verified byte-identical via sha256 round-trip"
+  },
+  "events": {
+    "total": 159744,
+    "splits": {
+      "train_visible": 111932,
+      "eval_hidden": 23898,
+      "calibration": 16011,
+      "canary": 7903
+    },
+    "families": {
+      "near_collision": 92160,
+      "temporal": 6144,
+      "long_horizon": 56974,
+      "multi_hop_relation": 4466
+    }
+  },
+  "challengeLibrary": {
+    "root": "/root/botcoin-coordinator/packages/challenges",
+    "modifierCounts": [0, 1, 2, 3],
+    "constraintDifficulties": ["easy", "medium", "hard"],
+    "trapCount": 2
+  },
+  "biEncoder": {
+    "modelId": "BAAI/bge-m3",
+    "revision": "5617a9f61b028005a4858fdac845db406aefb181",
+    "layout": { "dim": 243, "quantization": "int8", "headerBytes": 9 }
+  },
+  "labelingModel": {
+    "modelId": "IAAR-Shanghai/MemReranker-4B",
+    "revision": "7fe33c1385f652f52d370b8822d6b620b32b6ec4"
+  },
+  "files": [
+    {
+      "path": "corpus-epoch-0-launch-host2.json",
+      "role": "finalized-snapshot",
+      "bytes": 1691352680,
+      "sha256": "c6116c812b3be5a0caa8b47f333bb3cd28d1d3af8c567e6407b7241fcd449fec"
+    },
+    {
+      "path": "corpus-epoch-0-launch-host2.json.events.ndjson",
+      "role": "streaming-ndjson",
+      "bytes": 1544819750,
+      "sha256": "a7f1c9222f5e9627cff8a41bc30056f6c7dec321c23e17a3d8432004ba29f3c1"
+    }
+  ],
+  "crossSystemAttestation": {
+    "proof": "docs/CORETEX_CROSS_SYSTEM_REPRODUCIBILITY_PROOF.md",
+    "sortedSha256": "773ca653247cdade8529bf8f2572bb1eb6e86c8b39a6eb0831ccd3e13aabd7e8",
+    "summary": "32-event A/B sample vs host1: 0/48,790 post-header bytes diverged; scale-only drift sub-ppm; cosine similarity algebraically byte-identical."
+  }
+}

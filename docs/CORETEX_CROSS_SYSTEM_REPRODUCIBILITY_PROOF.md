@@ -284,15 +284,15 @@ After the launch corpus is committed, run `scripts/determinism-check.mjs` on eac
 
 This proof covers the **bi-encoder embedding stage**. The full pipeline also includes:
 
-1. **Reranker scoring** (`packages/cortex/src/eval/retrieval-benchmark.ts`, MemReranker-4B or qwen3 reranker). The reranker takes the int8 embeddings as input. Because the embeddings are cross-host byte-identical (post-header), the reranker's int8 input is identical, and its int8 output should be identical too — but this is not yet measured against AVX-2 dispatch. **Tracked as task #13.**
+1. **Reranker scoring** (`packages/cortex/src/eval/retrieval-benchmark.ts`, MemReranker-4B or qwen3 reranker). The reranker is its own forward pass with its own BLAS dispatch sensitivity; the embedding-stage proof above does not transitively cover it. The cross-host reranker cert is intentionally deferred to the post-merge stage and is rolled into task #13: `scripts/determinism-check.mjs` runs on each host against the canonical launch bundle, and `scripts/aggregate-determinism.mjs` computes cross-host P99 against the 250 ppm criterion. This requires the merged launch corpus (task #14), not host 2 specifically — any second CPU at task-#13 time suffices.
 
-2. **Composite-score reduction** (`computeAcceptanceThresholdPpm`, family weighting). Pure deterministic float arithmetic over identical inputs; expected to be byte-identical, not yet measured cross-host.
+2. **Composite-score reduction** (`computeAcceptanceThresholdPpm`, family weighting). Pure deterministic float arithmetic over identical inputs; expected to be byte-identical, lands inside the same task #13 measurement.
 
-3. **Three-host vs two-host**. The launch criterion mandates **≥3 distinct CPU configurations**. This proof covers 2. The third host is a cheap follow-up (Intel Sapphire Rapids or Ice Lake on cloud spot is sufficient) and is queued. The 2-host pass strongly predicts a 3-host pass because the cross-kernel axis is already exercised; adding an Intel host adds vendor diversity but not new dispatch paths within OpenBLAS.
+3. **Three-host vs two-host**. The launch criterion mandates **≥3 distinct CPU configurations**. This proof covers 2. The third host is intentionally deferred: the 2-host pass exercises the only meaningful cross-kernel axis (AVX-512 vs AVX-2 OpenBLAS dispatch), and adding a third vendor (Intel) does not add a new dispatch path within OpenBLAS. The third-host run is queued as a cheap pre-mainnet follow-up; it does not gate corpus shutdown.
 
 4. **Aggregate replay drift over a full epoch** (~thousands of patches). The math above proves per-event scoring is identical to within float32 representation precision; aggregate drift is bounded by the same.
 
-Items 1–3 are the residual launch-blocking work to fully close the multi-hardware cert.
+None of items 1–4 requires the original host 2 instance to remain online. Items 1 and 2 are measured at task #13 against the merged launch corpus on whatever CPU pair is online then. Item 3 is a deliberate launch-readiness follow-up. Item 4 is bounded analytically by the per-event proof above. The host 2 instance was decommissioned after its comp_bio corpus shard was produced and archived under `release/corpus-shards/host2-comp_bio-epoch0.manifest.json`; the section-9 reproducibility evidence captured before shutdown is the canonical audit artifact.
 
 ---
 
@@ -314,7 +314,8 @@ Items 1–3 are the residual launch-blocking work to fully close the multi-hardw
 | Float32 scale P99 relative drift | ≤ 1 ppm |
 | Cosine similarity drift | algebraically 0 ppm |
 | Launch criterion (`replayTolerancePpm`) | 250 ppm |
-| Margin | unbounded for cosine, formal cert pending via `determinism-check.mjs` |
+| Margin | unbounded for cosine; formal reranker-stage cert is task #13 against the merged launch corpus, runnable on any CPU pair |
+| Host 2 status post-test | comp_bio corpus shard produced; archive manifest at `release/corpus-shards/host2-comp_bio-epoch0.manifest.json`; instance scheduled for decommission |
 
 ---
 
