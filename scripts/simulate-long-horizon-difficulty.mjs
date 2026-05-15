@@ -416,6 +416,14 @@ async function main() {
     abstentionThreshold: profile.abstentionThreshold,
     rerankerTopK: profile.rerankerTopK,
     retrievalKeyTopK: profile.retrievalKeyTopK,
+    // v2-lens pipeline params — fall back to defaults pre-calibration.
+    firstStageTopK: profile.firstStageTopK ?? 200,
+    lensTopK: profile.lensTopK ?? 36,
+    lensWeight: profile.lensWeight ?? 0.10,
+    anchorWeight: profile.anchorWeight ?? 0.15,
+    relationExpansionBudget: profile.relationExpansionBudget ?? 50,
+    temporalCurrentBoost: profile.temporalCurrentBoost ?? 0.10,
+    temporalStaleSuppression: profile.temporalStaleSuppression ?? 0.10,
   };
 
   let currentState = { words: new Array(1024).fill(0n) };

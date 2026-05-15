@@ -115,6 +115,14 @@ const scoringOpts = {
   abstentionThreshold: profile.abstentionThreshold,
   rerankerTopK: profile.rerankerTopK,
   retrievalKeyTopK: profile.retrievalKeyTopK,
+  // v2-lens pipeline params — fall back to defaults pre-Run-0/1 calibration.
+  firstStageTopK: profile.firstStageTopK ?? 200,
+  lensTopK: profile.lensTopK ?? 36,
+  lensWeight: profile.lensWeight ?? 0.10,
+  anchorWeight: profile.anchorWeight ?? 0.15,
+  relationExpansionBudget: profile.relationExpansionBudget ?? 50,
+  temporalCurrentBoost: profile.temporalCurrentBoost ?? 0.10,
+  temporalStaleSuppression: profile.temporalStaleSuppression ?? 0.10,
 };
 
 // Genesis / empty parent substrate — all-zero 1024-word state.

@@ -276,6 +276,18 @@ const profile = {
   // `majorDeltaActive=true` for the next epoch (see
   // `nextMinImprovementPpm` and `isMajorDelta`).
   majorDeltaThreshold,
+  // v2-lens pipeline (substrate-hardening §6.3). Pre-Run-0/1 calibration
+  // defaults; real values land via the dedicated calibration runs.
+  pipelineVersion: 'coretex-retrieval-v2-lens',
+  firstStageTopK: Number(flag('first-stage-top-k', '200')),
+  lensTopK: Number(flag('lens-top-k', '36')),
+  lensWeight: Number(flag('lens-weight', '0.10')),
+  anchorWeight: Number(flag('anchor-weight', '0.15')),
+  relationExpansionBudget: Number(flag('relation-expansion-budget', '50')),
+  temporalCurrentBoost: Number(flag('temporal-current-boost', '0.10')),
+  temporalStaleSuppression: Number(flag('temporal-stale-suppression', '0.10')),
+  lensDiversityFloor: Number(flag('lens-diversity-floor', '0.70')),
+  corpusDocDedupe: 'canonical-doc-id',
   // baselineParentScorePpm + baselineVariancePpm are NOT computed here —
   // they require running BGE-M3 + Qwen3 against the parent substrate
   // and the hidden pack, which is the next step in the orchestrator
