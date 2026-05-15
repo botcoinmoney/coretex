@@ -160,12 +160,16 @@ Each box must be green before the next is started.
 - [ ] Botcoin core team performs the on-chain-reads-only mining cycle
       end-to-end:
   - [ ] read `getEpoch(0)`
-  - [ ] `GET /coretex/substrate/current`
-  - [ ] `GET /coretex/corpus/<train_visible_id>`
-  - [ ] `GET /coretex/corpus/<train_visible_id>/embedding`
-  - [ ] `POST /coretex/screen` returns 200
-  - [ ] `POST /coretex/evaluate` returns a signed receipt
-  - [ ] receipt submission to `BotcoinMiningV4.acceptTransition` succeeds
+  - [ ] `GET /coretex/status` (cross-check epochId, bundleHash, corpusRoot)
+  - [ ] `GET /coretex/challenge` returns a packet with parentStateRoot
+  - [ ] `GET /coretex/substrate/<stateRoot>` returns the substrate snapshot
+  - [ ] `POST /coretex/submit` returns either
+        `{status:'accepted', patchHash, evalReportHash?, receipt?}` or an
+        opaque `{status:'rejected', code:'rejected', patchHash?}` envelope
+  - [ ] accepted receipt submission to
+        `BotcoinMiningV4.submitWorkReceipt(...)` succeeds
+  - [ ] `GET /coretex/patch-received/<patchHash>` returns the strict-shape
+        notice for the accepted patch
   - [ ] on-chain state advances; `coretexCredits[miner]` increases
 
 ## 12. Post-launch monitoring

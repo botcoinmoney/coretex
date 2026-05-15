@@ -8,12 +8,12 @@ For full design context see
 `docs/CORETEX_COORDINATOR_INTEGRATION_RUNBOOK.md`. This file is the
 copy-paste shortcut.
 
-> Pre-launch hardening note: `POST /coretex/evaluate` is live, but every
-> patch's eval seed binds to a future Base blockhash (per-patch on-chain
-> randomness — see `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md`) so
-> coordinator pre-testing is structurally impossible. The earlier sealed-
-> eval commit/reveal design (`CORETEX_SEALED_EPOCH_EVAL_HARDENING_PLAN.md`)
-> is superseded.
+> Pre-launch hardening note: `POST /coretex/submit` is the single public
+> write-path. Every patch's eval seed binds to a future Base blockhash
+> (per-patch on-chain randomness — see
+> `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md`) so coordinator pre-testing
+> is structurally impossible. The earlier sealed-eval commit/reveal design
+> (`CORETEX_SEALED_EPOCH_EVAL_HARDENING_PLAN.md`) is superseded.
 
 ## 1. Install the bundle artifacts
 
@@ -92,11 +92,10 @@ Anywhere in the coordinator's HTTP layer, before the catch-all 404:
 
 ```ts
 import {
-  handleCoreTexCoordinatorRoute,
   createRetrievalDataSource,
-  loadProductionCorpus,
-  assertBundleBindingAtStartup,
+  createCoreTexCoordinatorRouteHandler,
   verifyBundleManifest,
+  assertBundleBindingAtStartup,
 } from '@botcoin/cortex';
 import * as fs from 'node:fs';
 
@@ -111,39 +110,44 @@ assertBundleBindingAtStartup({
   installedRuntimeVersions: readInstalledRuntimeVersions(),
 });
 
-const corpus = loadProductionCorpus(process.env.CORETEX_CORPUS!);
-
-const coretexDataSource = createRetrievalDataSource({
-  corpus,
+const ds = createRetrievalDataSource({
   bundleManifest: manifest,
   bundleHash: manifest.bundleHash,
+  getChallenge: () => coordinator.currentChallenge(),
+  submit:       (body) => coordinator.acceptPatch(body),  // dual-pack evaluator here
+  getStatus:    () => coordinator.publicStatus(),
+  // optional artifact readers (default bundle path is built-in):
+  getSubstrate, getPatch, getPatchReceivedNotice, getEvalReport,
+  getCorpusDelta, getBundleByCoreVersionHash,
   authorize: (ctx) => requireBearer(ctx, process.env.CORETEX_OPERATOR_TOKEN!),
   rateLimit: perMinerAndPerIpLimiter,
-  screen: hostScreenHandler,       // structural-only validation
-  evaluate: hostEvaluateHandler,   // settlement/admin only; never a public live hidden oracle
-  health: () => ({ ok: true, bundleHash: manifest.bundleHash }),
-  // optional: add getCurrentSubstrate / getCorpusDelta / etc as you go
 });
 
-server.all('/coretex/*', async (req, res, next) => {
-  const r = await handleCoreTexCoordinatorRoute(toCoreTexReq(req), coretexDataSource);
+const handle = createCoreTexCoordinatorRouteHandler(ds);
+
+app.use(async (req, res, next) => {
+  const r = await handle({ method: req.method, path: req.path, body: req.body, headers: req.headers });
   if (!r.handled) return next();
   res.status(r.status).json(r.body);
 });
 ```
 
-The `/coretex/*` routes (screen, evaluate, substrate, patch, eval-report,
-challenge-book, corpus-delta, client-bundle, bundle, corpus record,
-embedding, health, evaluate-async, result-by-hash) are all dispatched by
-`handleCoreTexCoordinatorRoute` — you don't write per-route handlers.
+The 11 `/coretex/*` routes (`challenge`, `submit`, `status`, `substrate/:stateRoot`,
+`patch/:hash`, `patch-received/:hash`, `eval-report/:hash`,
+`corpus-delta/:epoch`, `bundle/by-core-version/:coreVersionHash`,
+`bundle/:bundleHash`, `health`) are all dispatched by
+`createCoreTexCoordinatorRouteHandler` — you don't write per-route handlers.
 
-`hostEvaluateHandler` is settlement/admin-only in the sealed launch flow. It
-must run after commit close, seed derivation, and patch reveal — never as an
-interactive hidden-pack scorer during the live mining window. The public miner
-path is `commit -> reveal -> status`; detailed eval reports are published only
-after settlement. The rest of the data-source callbacks are reads against
-`/var/lib/coretex/{patches,eval-reports,substrates}` — direct file-by-hash
-reads, no new logic.
+`coordinator.acceptPatch(body)` is the dual-pack per-patch evaluator wired into
+the single public write-path. It runs after admission (`liveEvalAdmissionDecision`),
+binds to a future Base blockhash, derives gate + confirm packs, scores on both,
+and returns either an `{status:'accepted', patchHash, evalReportHash?, receipt?}`
+envelope or an opaque `{status:'rejected', code:'rejected', patchHash?}` envelope.
+The route handler strips any non-allow-listed fields from the `receipt` before
+they reach the miner. Detailed eval reports are retrievable post-acceptance via
+`GET /coretex/eval-report/:hash`. The rest of the data-source callbacks are reads
+against `/var/lib/coretex/{patches,eval-reports,substrates,patch-received}` —
+direct file-by-hash reads, no new logic.
 
 ### 3a. Per-patch eval-seed primitives
 
@@ -269,14 +273,12 @@ curl -fsS -H "authorization: Bearer $CORETEX_OPERATOR_TOKEN" \
   http://127.0.0.1:8080/coretex/health
 # → { "ok": true, "bundleHash": "0x7260c12036…" }
 
-# (b) public corpus record + masking gate
+# (b) public dynamic status reflects the pinned epoch
 curl -fsS -H "authorization: Bearer $CORETEX_OPERATOR_TOKEN" \
-  http://127.0.0.1:8080/coretex/corpus/<a train_visible record id>
-# → 200 with serialized record
-
-curl -fsS -H "authorization: Bearer $CORETEX_OPERATOR_TOKEN" \
-  http://127.0.0.1:8080/coretex/corpus/<an eval_hidden record id>
-# → 200 with { "error": "coretex-corpus-hidden", "split": "eval_hidden" }
+  http://127.0.0.1:8080/coretex/status \
+  | jq '{lane,epochId,stateRoot,corpusRoot,bundleHash,statusVersion}'
+# → all five fields populated; bundleHash matches $CORETEX_BUNDLE_HASH;
+#   statusVersion is a 0x + 64-hex poll token auto-injected by the route handler.
 
 # (c) bundle manifest by hash
 curl -fsS http://127.0.0.1:8080/coretex/bundle/$CORETEX_BUNDLE_HASH \
@@ -285,8 +287,8 @@ curl -fsS http://127.0.0.1:8080/coretex/bundle/$CORETEX_BUNDLE_HASH \
 ```
 
 If all three return as expected, the wiring is complete. The first
-miner submitting `/coretex/screen` + `/coretex/evaluate` exercises
-the live evaluator — no further coordinator work needed.
+miner submitting `POST /coretex/submit` exercises the live dual-pack
+evaluator — no further coordinator work needed.
 
 ## 6. Rollback (one env flag)
 

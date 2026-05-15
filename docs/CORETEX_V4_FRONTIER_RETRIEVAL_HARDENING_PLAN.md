@@ -311,27 +311,26 @@ Lever values are calibration outputs and bind into bundle/profile per epoch.
 What the miner sees:
 
 - On-chain: `cortexState.getEpoch(epochId)` returns `(parentStateRoot, corpusRoot, coreVersionHash, minImprovementPpm, evalSeedCommit, ...)`. `BotcoinMiningV4` events stream `CoretexPatchBytes` and `CortexStateAdvanced` for the prior epoch's accepted advances.
-- Coordinator API:
-  - `GET /coretex/substrate/current` → packed 32 KB substrate body for the current state root.
-  - `GET /coretex/substrate/:stateRoot` → historical bodies.
-  - `GET /coretex/corpus/:recordId` → record metadata (query text, family, domain, hardness signal, public qrels for `train_visible` records). Hides `truthDocuments`, `hardNegatives`, and `qrels` for `eval_hidden` and `canary` rows.
-  - `GET /coretex/corpus/:recordId/embedding` → the pinned bi-encoder embedding for the record (in the bundle's quantization). For `train_visible` rows it returns the precomputed bytes. For `eval_hidden`, returns 404 until epoch close + reveal.
-  - `GET /coretex/bundle/:bundleHash` → the full pinned bundle manifest (read-only). Required for any miner who wants to verify their own patch off-line.
-  - `GET /coretex/challenge-book/:epoch` → published per-epoch challenge book covering the visible split.
-  - `POST /coretex/screen` → submit a candidate patch for cheap structural screening (returns pass/fail + earns base credits if the screener accepts; never advances state).
-  - `POST /coretex/evaluate` → submit a candidate patch for full retrieval evaluation. The coordinator runs the bi-encoder + reranker + composite scorer, returns `(scoreBeforePpm, scoreAfterPpm, deltaPpm, perMetricBreakdown)` and, if the delta clears `minImprovementPpm` and all veto checks pass, returns a signed `WorkReceipt` the miner can submit to the V4 contract.
+- Coordinator API (the 11-endpoint surface; see `CORETEX_COORDINATOR_INTEGRATION_RUNBOOK.md` for the canonical list):
+  - `GET /coretex/status` → non-secret dynamic context (lane, epochId, stateRoot, corpusRoot, coreVersionHash, bundleHash, minImprovementPpm, evalSeedCommit, substrate.uri, bundle.uri, plus auto-injected `statusVersion`).
+  - `GET /coretex/challenge` → singular dynamic packet (lane, challengeId, expiresAt, epochId, parentStateRoot, coreVersionHash, bundleHash, substrate descriptor).
+  - `GET /coretex/substrate/:stateRoot` → immutable substrate snapshot for the requested root.
+  - `GET /coretex/bundle/:bundleHash` and `GET /coretex/bundle/by-core-version/:coreVersionHash` → the full pinned bundle manifest (read-only). Required for any miner who wants to verify their own patch off-line; the corpus snapshot in the bundle carries the `train_visible` records and precomputed embeddings the miner uses to construct a patch.
+  - `GET /coretex/corpus-delta/:epoch` → signed corpus delta with embedding payloads.
+  - `POST /coretex/submit` → single public write-path. The coordinator runs the dual-pack per-patch evaluator (bound to a future Base blockhash; see `CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md`) and returns either `{status:'accepted', patchHash, evalReportHash?, receipt?}` (the `receipt` is what the miner submits to V4) or an opaque `{status:'rejected', code:'rejected', patchHash?}` envelope.
+  - `GET /coretex/eval-report/:hash`, `GET /coretex/patch/:hash`, `GET /coretex/patch-received/:hash` → audit artifacts for replay watchers.
 
 A miner's optimal strategy without any local model:
 
-1. Read the current packed substrate via `/coretex/substrate/current` and decode active slots (decoder is a small library, no model required).
-2. Inspect the visible split to identify which `train_visible` queries the substrate currently answers poorly. Heuristic: queries whose answer-bearing record is not pointed-to by any active `MemoryIndex` slot, or whose pointed-to slot's vector L2-distance from the query vector is large. Miners compute this locally from the visible split; the coordinator does NOT publish a per-record nDCG breakdown (that would leak hidden-split coverage gaps and reward reconnaissance over substrate insight — see `CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md §"Post-corpus, gameability + multi-host hardening"`).
+1. Fetch `GET /coretex/status` to read the current `stateRoot` and confirm `bundleHash` matches the on-chain epoch; fetch the packed substrate via `GET /coretex/substrate/<stateRoot>` and decode active slots (decoder is a small library, no model required).
+2. Inspect the visible split (shipped inside the published bundle / corpus-delta artifacts) to identify which `train_visible` queries the substrate currently answers poorly. Heuristic: queries whose answer-bearing record is not pointed-to by any active `MemoryIndex` slot, or whose pointed-to slot's vector L2-distance from the query vector is large. Miners compute this locally from the bundle; the coordinator does NOT publish a per-record nDCG breakdown (that would leak hidden-split coverage gaps and reward reconnaissance over substrate insight — see `CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md §"Post-corpus, gameability + multi-host hardening"`).
 3. Choose a target `eval_hidden`-adjacent improvement: a candidate corpus record (visible) the miner believes is also helpful for the hidden split's distribution. The miner is betting on generalization.
 4. Construct a patch:
    - Pick a target `RetrievalKeys` slot (an empty one or one carrying a low-value vector).
-   - Fetch the candidate record's precomputed embedding via `/coretex/corpus/:id/embedding`. Bytes copy directly into the patch; no local inference.
+   - Take the candidate record's precomputed embedding from the bundle's corpus snapshot or the latest corpus delta. Bytes copy directly into the patch; no local inference.
    - Fetch the matching `MemoryIndex` slot bytes (record id, family bits, retrieval-slot pointer to the chosen RetrievalKey).
    - Encode as a 1–4 word compact patch.
-5. Submit to `POST /coretex/screen` first (cheap pre-validation); if that passes, submit to `POST /coretex/evaluate`. If the coordinator returns a signed receipt, broadcast it to the V4 contract.
+5. `POST /coretex/submit` the patch. If the coordinator returns an accepted envelope, broadcast the included `receipt` to the V4 contract.
 
 A miner who wants more leverage can:
 
@@ -341,7 +340,7 @@ A miner who wants more leverage can:
 
 None of this is required. The patch wire is just bytes; the bytes the miner submits come from the coordinator's API or the published bundle. CoreTex never asks a miner to run a 0.6B model.
 
-The screener path is rate-limited per-miner; the evaluate path is rate-limited per-miner and globally to protect the coordinator's CPU budget.
+The `POST /coretex/submit` path is rate-limited per-miner and globally to protect the coordinator's CPU budget.
 
 ## Calibration Phase
 
@@ -511,14 +510,13 @@ Acceptance gate: `docs/CORETEX_SOURCE_DATA_AUDIT.md` exists, the audit script ru
 
 ### Phase F — Coordinator
 
-- Replace the production scoring path with `evaluateRetrievalBenchmarkPatch` driven by the bundle's pinned models.
-- `POST /coretex/screen`: structural validation only — patch wire bytes valid, parent root match, score delta non-negative, decode succeeds on the candidate. Earns base screener credits.
-- `POST /coretex/evaluate`: full retrieval scoring; signs receipt only if accepted.
-- `GET /coretex/corpus/:id` returns `train_visible` qrels + `truthDocuments` + `hardNegatives`; serves 404 for `eval_hidden` and `canary` until reveal.
-- `GET /coretex/corpus/:id/embedding` returns precomputed embedding bytes.
+- Replace the production scoring path with `evaluateRetrievalBenchmarkPatch` driven by the bundle's pinned models, invoked from the host's `submit` callback.
+- `POST /coretex/submit`: single public write-path. Admission (structural + dedup + per-miner cap) → blockhash bind → dual-pack score → signed receipt iff both packs clear `minImprovementPpm + replayTolerancePpm + baselineVariancePpm`. Returns either an accepted envelope or an opaque `{status:'rejected', code:'rejected', patchHash?}`.
+- `GET /coretex/status` returns the 14 required dynamic-context fields plus an auto-injected `statusVersion`. `GET /coretex/challenge` returns the per-miner challenge packet. Neither leaks hidden-pack content.
+- Visible-split qrels and embeddings ship inside the published bundle / corpus-delta artifacts, not as standalone records over HTTP.
 - Coordinator startup asserts the on-chain `coreVersionHash` matches the pinned bundle hash and refuses to run on mismatch (existing primitive).
-- Eval reports are persisted: `(epochId, miner, patchHash, queryPackId, perMetricBreakdown, modelHash, timestamp)` — signed by the coordinator and stored for audit. Retention defined by ops policy.
-- Acceptance gate: a smoke test against a real anvil + the pinned bundle produces a screener and a state advance using `POST /coretex/screen` and `POST /coretex/evaluate`; on-chain state advances; replay watcher reproduces the score within tolerance.
+- Eval reports are persisted: `(epochId, miner, patchHash, gatePackId, confirmPackId, perMetricBreakdown, modelHash, timestamp)` — signed by the coordinator and stored for audit. Readable via `GET /coretex/eval-report/:hash`. Retention defined by ops policy.
+- Acceptance gate: a smoke test against a real anvil + the pinned bundle produces a state advance using `POST /coretex/submit`; on-chain state advances; replay watcher reproduces the score within tolerance.
 
 ### Phase G — End-to-End Real Reranker Mining Cycle
 
@@ -531,11 +529,11 @@ Acceptance gate: `docs/CORETEX_SOURCE_DATA_AUDIT.md` exists, the audit script ru
   1. Reads on-chain substrate.
   2. Picks a candidate corpus record (heuristic: greatest predicted nDCG gain on visible queries).
   3. Constructs a patch with the precomputed embedding from the corpus.
-  4. POSTs to `POST /coretex/evaluate` (the coordinator runs **the real Qwen3-Reranker-0.6B**, not the deterministic stub).
+  4. POSTs to `POST /coretex/submit` (the coordinator runs **the real Qwen3-Reranker-0.6B** dual-pack evaluator, not the deterministic stub).
   5. Submits the signed receipt to V4.
   6. Asserts on-chain state advanced + `coretexCredits[miner]` increased.
 - After all iterations, reveals the eval seed; replays every transition with `coretex-replay watch`; asserts every replayed `nDCG@10` is within `replayTolerancePpm` of the coordinator's signed `scoreAfterPpm`.
-- Adversarial sub-test: an iteration submits a patch that writes a correct memory-index pointer with a uniform-random retrieval vector. Coordinator's evaluate endpoint must return `{ accepted: false, reason: 'no_retrieval_improvement' }` (or equivalent), and the contract receives no signed receipt for it.
+- Adversarial sub-test: an iteration submits a patch that writes a correct memory-index pointer with a uniform-random retrieval vector. The `POST /coretex/submit` endpoint must return the opaque `{ status: 'rejected', code: 'rejected', patchHash? }` envelope (the host-side eval report retained for audit records the actual reason, e.g., `no_retrieval_improvement`), and the contract receives no signed receipt for it.
 - Acceptance gate: the test passes with `CORETEX_RERANKER=qwen3 CORTEX_REAL_EVAL=1 CORETEX_RERANKER_PRODUCTION=1` and refuses to run with `CORETEX_RERANKER=deterministic` in production mode.
 
 ### Phase H — Mainnet Launch

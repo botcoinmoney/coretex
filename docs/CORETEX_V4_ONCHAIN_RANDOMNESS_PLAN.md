@@ -8,7 +8,7 @@ Audience: calibration / coordinator implementation agent.
 
 ## Executive Decision
 
-The auditor's diagnosis stands: **a live `POST /coretex/evaluate` oracle is unsafe if the coordinator can pre-test patches**. Two architectural responses were viable:
+The auditor's diagnosis stands: **a live evaluator oracle is unsafe if the coordinator can pre-test patches**. (At the time this plan was drafted, the public write-path used a separate per-patch evaluate endpoint; the per-patch evaluator described below is now folded into the `submit` callback behind `POST /coretex/submit`. Endpoint name aside, the architectural threat model and mitigations below stand.) Two architectural responses were viable:
 
 1. **Sealed evaluation** (S0–S6): kill the live oracle; commit/reveal flow; per-epoch sealed pack scored after commit close.
 2. **Per-patch on-chain randomness**: keep the live oracle; bind each patch's eval seed to a future Base blockhash the coordinator can't observe at receive time.
@@ -220,9 +220,9 @@ Re-exports `screenerAdmissionDecision` adapted: replaces `commitmentHash` with `
 
 **`packages/cortex-server/src/real-evaluator.ts`**
 
-Per-patch flow (sync variant):
+Per-patch flow (the `submit` callback invoked by `POST /coretex/submit`):
 ```
-1. POST /coretex/evaluate { patch, parentRoot, minerAddress }
+1. submit({ patch, parentRoot, minerAddress })  // entered from POST /coretex/submit
 2. patchHash = computePatchHash(normalizedPatchBytes)
 3. dedupKey = computeDedupKey(parentRoot, normalizedPatchBytes)
 4. if (dedupCache.has(dedupKey)) return dedupCache.get(dedupKey)
@@ -237,13 +237,20 @@ Per-patch flow (sync variant):
 12. dedupCache.set(dedupKey, receipt); return receipt
 ```
 
-Async variant: step 1 returns `{ status:'pending', patchHash, targetBlock }` immediately; coordinator continues steps 5–12 in background; GET `/coretex/result/:patchHash` polls until `dedupCache.has(...)`. Both endpoints ship in the same PR.
+The current public contract is a single `POST /coretex/submit` write. The
+coordinator may implement the dedup wait internally as either synchronous
+(hold the connection until the blockhash lands and the dual-pack score
+completes — typical ~60s) or asynchronous (return a pending envelope and
+let a follow-up `POST /coretex/submit` with the same `(parentRoot,
+patchBytes)` collapse via dedup-key into the cached verdict). Either
+strategy is invisible to the caller — both ultimately return the same
+`{status:'accepted', ...}` or opaque `{status:'rejected', code:'rejected', patchHash?}` envelope. Audit detail is fetched separately via `GET /coretex/eval-report/:hash` after the patch lands on chain.
 
 **`packages/cortex/src/coordinator/retrieval-data-source.ts`**
 
 - Remove `sealedHiddenEval` option entirely (default behavior is now live + per-patch-bound).
 - `evaluate` callback still wired into route shim; implementation now does the lock-then-eval flow internally.
-- Add `result` callback for `GET /coretex/result/:patchHash` polling.
+- Dedup-cache lookups are internal to the `submit` callback; there is no separate result-polling endpoint on the public surface.
 
 **`packages/cortex/src/bundle/index.ts` — `EvaluatorProfile`**
 
@@ -332,11 +339,10 @@ Numbered to match the calibration-flow steps above. Each is a hard gate — must
    - First call invokes the full eval pipeline; calls 2–100 return cached receipt with `<1ms` latency
    - **Pass criterion:** 1 cache miss, 99 cache hits, all 100 receipts byte-identical.
 
-7. **Async variant end-to-end** (separate integration test)
-   - POST `/coretex/evaluate` returns `{ status:'pending', patchHash, targetBlock }` within 100ms
-   - GET `/coretex/result/:patchHash` returns 202 while pending
-   - GET returns 200 + full receipt after targetBlock + eval complete
-   - **Pass criterion:** sync receipt and async receipt for same patch are byte-identical.
+7. **Submit dedup fidelity end-to-end** (separate integration test)
+   - First `POST /coretex/submit` for a `(parentRoot, patchBytes)` runs the full per-patch flow and returns the accepted/rejected envelope
+   - A second `POST /coretex/submit` with the same `(parentRoot, patchBytes)` collapses via `dedupKey` and returns a byte-identical envelope without re-rolling the blockhash bind
+   - **Pass criterion:** first call's envelope and second call's envelope are byte-identical; the second call's host-side latency reflects cache-hit, not a fresh eval.
 
 ## Acceptance Criteria
 
@@ -425,11 +431,13 @@ pure-code phase. Grouped by readiness.
 
 ### Post-corpus, model-dependent (task #38 + subtasks)
 
-- **HTTP wiring** for `POST /coretex/evaluate`, `POST /coretex/evaluate-async`,
-  `GET /coretex/result/:patchHash` in cortex-server. Per-patch
-  orchestrator (`runPerPatchEvaluation`) and replay verifier
-  (`verifyPerPatchReceipt`) are landed and tested; HTTP integration
-  needs the real models loaded for end-to-end validation.
+- **HTTP wiring** for the unified `POST /coretex/submit` write-path in
+  cortex-server (folds the per-patch evaluator and the dedup-cache lookup
+  into one endpoint; the sync + async + result-poll triplet from this
+  plan's draft is superseded by the single submit envelope). Per-patch
+  orchestrator (`runPerPatchEvaluation`) and
+  replay verifier (`verifyPerPatchReceipt`) are landed and tested; HTTP
+  integration needs the real models loaded for end-to-end validation.
 - **Phase 13 e2e rewrite** to exercise the new flow: mock Base RPC
   schedule, per-patch dual-pack scoring, mock `revealEvalSeed`, replay
   reproduces both seeds + both scores within `replayTolerancePpm`.

@@ -324,8 +324,9 @@ Operator with `OWNER_PK` access:
   + `corpusRoot` (this is the first 24h cycle the new bundle is
   pinned). Three-call ritual: `initializeEpoch` + `freezeEpoch` at
   cycle start, `revealEvalSeed` at cycle close.
-- Single test miner submits one `/coretex/screen` then one
-  `/coretex/evaluate`, then `submitWorkReceipt` against V4.
+- Single test miner fetches `/coretex/status` + `/coretex/challenge`,
+  builds a patch, submits to `POST /coretex/submit`, then takes the
+  returned receipt and calls `submitWorkReceipt` against V4.
 - Confirm `CortexStateAdvanced` event emitted on Base mainnet.
 - Confirm fresh-clone `coretex-replay watch --once` on this CPU host
   reproduces the state advance from chain logs + downloaded bundle.

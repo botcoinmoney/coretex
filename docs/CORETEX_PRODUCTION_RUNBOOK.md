@@ -118,7 +118,7 @@ CORETEX_EPOCH_ID=<current epoch id>
 CORETEX_MULTISIG_ESCROW_ADDR=<escrow contract or oracle address>
 CORETEX_RATE_LIMIT_PER_MINER_PER_MIN=20
 CORETEX_RATE_LIMIT_GLOBAL_PER_MIN=200
-CORETEX_RATE_LIMIT_EVALUATE_GLOBAL_PER_MIN=60
+CORETEX_RATE_LIMIT_SUBMIT_GLOBAL_PER_MIN=60
 ```
 
 GPU env vars must be **unset**: `CORETEX_USE_GPU`, `CUDA_VISIBLE_DEVICES`,
@@ -149,10 +149,12 @@ PagerDuty + Slack alarm via the watcher's `--alarm-webhook` flag.
 
 The first miner uses only on-chain reads + REST: `cast call` against
 `CortexState.getEpoch(0)` to read `evalSeedCommit` etc., then `curl
-$COORDINATOR/coretex/substrate/current` and `curl
-$COORDINATOR/coretex/corpus/<id>/embedding` to construct a candidate
-patch, then `POST /coretex/screen` and `POST /coretex/evaluate`. The
-miner-side workflow is documented in `docs/CORETEX_MINER_QUICKSTART.md`.
+$COORDINATOR/coretex/status` and `curl
+$COORDINATOR/coretex/challenge` to fetch the per-miner challenge packet
+(it carries `parentStateRoot` + substrate descriptor), fetch the
+substrate via `curl $COORDINATOR/coretex/substrate/<stateRoot>`,
+construct a compact patch, then `POST /coretex/submit`. The miner-side
+workflow is documented in `docs/CORETEX_MINER_QUICKSTART.md`.
 
 ## 2. Replay watcher topology
 
@@ -183,8 +185,11 @@ operator alarm.
 ### 3.2 Reveal time (epoch close)
 
 1. Coordinator calls `CortexState.revealEvalSeed(epochId, evalSeed)`.
-2. Coordinator publishes the seed in the `/coretex/eval-report/*`
-   endpoints and `coretex/challenge-book/*`.
+2. Coordinator publishes the seed reveal in subsequent
+   `/coretex/eval-report/:hash` responses and surfaces it in the signed
+   per-epoch rotation manifest; the seed appears in every post-reveal
+   eval report's `signedFields` so replay watchers can re-derive each
+   patch's gate + confirm packs.
 
 ### 3.3 Reveal-grace-period escalation
 
@@ -221,17 +226,22 @@ The coordinator refuses to start if any of:
 7. Installed Python venv versions do not match `runtimePin.versions`
 8. `CORETEX_MULTISIG_ESCROW_ADDR` unset in production mode
 
-## 6. Per-evaluator GPU/CPU saturation guard
+## 6. Per-evaluator CPU saturation guard
 
-The evaluate endpoint's worker pool exposes a queue-depth probe:
+The `POST /coretex/submit` worker pool exposes a queue-depth probe:
 
 - Soft watermark: queue depth > 50 → return `503 retry-after`
-- Hard watermark: queue depth > 200 → reject with `{ error: 'evaluator_overloaded' }`
+- Hard watermark: queue depth > 200 → reject with an opaque
+  `{ status: 'rejected', code: 'rejected' }` envelope. Internal saturation
+  state is never surfaced to the miner; the operator dashboard is the
+  authoritative signal.
 
 Per-miner rate limiter (token bucket; `CORETEX_RATE_LIMIT_PER_MINER_PER_MIN`)
 applied before the evaluator is consulted. Global rate limit
-(`CORETEX_RATE_LIMIT_GLOBAL_PER_MIN`) protects the worker pool from
-collective DoS.
+(`CORETEX_RATE_LIMIT_GLOBAL_PER_MIN`) and the dedicated submit-pool limit
+(`CORETEX_RATE_LIMIT_SUBMIT_GLOBAL_PER_MIN`) together protect the worker
+pool from collective DoS. GPU is not on the canonical scoring path; the
+guard is CPU-only.
 
 ## 7. Kill switch / rollback
 
@@ -400,19 +410,26 @@ threshold pass/fail boundaries.
 
 ## 8.4 Per-patch on-chain randomness lifecycle
 
-`POST /coretex/evaluate` is live during the active mining window. Each
-patch's eval seed is bound to a future Base blockhash the coordinator
-cannot observe at patch-receive time, so coordinator pre-testing is
-structurally impossible. See `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md`
-for the full design and threat model.
+`POST /coretex/submit` is the single public write-path live during the
+active mining window. Each patch's eval seed is bound to a future Base
+blockhash the coordinator cannot observe at patch-receive time, so
+coordinator pre-testing is structurally impossible. See
+`docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md` for the full design and
+threat model.
 
 ```
-POST /coretex/evaluate          → sync: signed receipt after ~60s wait
-POST /coretex/evaluate-async    → async: returns {status:'pending', patchHash, targetBlock}
-GET  /coretex/result/:patchHash → poll: 202 while pending, 200 + receipt when ready
+POST /coretex/submit → either
+  { status:'accepted', patchHash, evalReportHash?, receipt? }    (after ~60s wait
+                                                                  for blockhash + dual-pack score)
+  { status:'rejected', code:'rejected', patchHash? }             (opaque; no internal reason)
 ```
 
-Per-patch flow inside `real-evaluator.ts`:
+Replay watchers cross-check every accepted patch via
+`GET /coretex/patch-received/:hash` (strict shape:
+`{patchHash, receivedAtBlock, receivedAtTimestamp, coordinatorAddress, signer?}`)
+and fetch the audit-grade detail via `GET /coretex/eval-report/:hash`.
+
+Per-patch flow inside the host's `submit` callback (`real-evaluator.ts`):
 
 ```text
 1. patchHash = computePatchHash(normalizedPatchBytes)
@@ -538,7 +555,7 @@ Steps:
 
 ### 10.3 Coordinator-corpus drift
 
-Symptom: `evaluate` returns `E_CORPUS_ROOT_MISMATCH`.
+Symptom: `POST /coretex/submit` returns rejection envelopes en masse and the host-side log shows `E_CORPUS_ROOT_MISMATCH` against the submit callback.
 
 Steps:
 1. Confirm coordinator and miner are both reading the same `corpusRoot`

@@ -7,7 +7,7 @@ Status: pre-launch refinement. **Additive only** to `CORETEX_LAUNCH_PLAN_v2.md`.
 > **See also:** `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md` for the orthogonal
 > hardening axis (eval-seed unforgeability via per-patch on-chain randomness).
 > H1–H3 here address corpus-growth scaling; that plan addresses pre-test gaming
-> of `POST /coretex/evaluate`. No overlap.
+> of `POST /coretex/submit`. No overlap.
 
 ## What stayed from the auditor's draft
 

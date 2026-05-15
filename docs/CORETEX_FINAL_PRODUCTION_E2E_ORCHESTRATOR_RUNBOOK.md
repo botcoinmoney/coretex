@@ -422,7 +422,8 @@ Route smoke:
 ```bash
 curl -fsS http://127.0.0.1:8080/coretex/health
 curl -fsS http://127.0.0.1:8080/coretex/bundle/$CORETEX_BUNDLE_HASH
-curl -fsS http://127.0.0.1:8080/coretex/substrate/current
+STATE_ROOT=$(curl -fsS http://127.0.0.1:8080/coretex/status | jq -r .stateRoot)
+curl -fsS http://127.0.0.1:8080/coretex/substrate/$STATE_ROOT
 ```
 
 Hidden split masking:
@@ -533,23 +534,32 @@ cast call --rpc-url "$BASE_RPC_URL" $BOTCOIN_MINING_V4_ADDRESS 'cortexState()(ad
 cast call --rpc-url "$BASE_RPC_URL" $CORTEX_STATE_ADDRESS 'rewardLane()(address)'
 ```
 
-Run a single miner canary through coordinator HTTP:
+Run a single miner canary through coordinator HTTP. The canary fetches the
+challenge packet, builds a patch, and posts it to the single public
+write-path:
 
 ```bash
-curl -fsS -X POST http://127.0.0.1:8080/coretex/screen \
-  -H "content-type: application/json" \
+curl -fsS http://127.0.0.1:8080/coretex/status \
   -H "authorization: Bearer $CORETEX_OPERATOR_TOKEN" \
-  --data @/var/lib/coretex/canary/screen-request.json \
-  | tee /var/lib/coretex/reports/mainnet-canary-screen.json
+  | tee /var/lib/coretex/reports/mainnet-canary-status.json
 
-curl -fsS -X POST http://127.0.0.1:8080/coretex/evaluate \
+curl -fsS http://127.0.0.1:8080/coretex/challenge \
+  -H "authorization: Bearer $CORETEX_OPERATOR_TOKEN" \
+  | tee /var/lib/coretex/reports/mainnet-canary-challenge.json
+
+curl -fsS -X POST http://127.0.0.1:8080/coretex/submit \
   -H "content-type: application/json" \
   -H "authorization: Bearer $CORETEX_OPERATOR_TOKEN" \
-  --data @/var/lib/coretex/canary/evaluate-request.json \
-  | tee /var/lib/coretex/reports/mainnet-canary-evaluate.json
+  --data @/var/lib/coretex/canary/submit-request.json \
+  | tee /var/lib/coretex/reports/mainnet-canary-submit.json
 ```
 
-Submit the signed receipt returned by `/coretex/evaluate` using the miner key:
+The response is either an accepted envelope
+(`{status:'accepted', patchHash, evalReportHash?, receipt?}`) — in which
+case the `receipt` is what the miner submits to V4 — or an opaque
+rejection (`{status:'rejected', code:'rejected', patchHash?}`).
+
+Submit the signed receipt returned by `/coretex/submit` using the miner key:
 
 ```bash
 cast send --rpc-url "$BASE_RPC_URL" --private-key "$MINER_PK" \

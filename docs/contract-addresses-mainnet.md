@@ -84,7 +84,7 @@ The coordinator now needs to:
 
 4. Run `coretex-replay watch --rpc $BASE_RPC_URL --v4 0x12ff0B47389AE6d6293d44991B0D6A27394494A4 --cortex-state 0x5d3B9D9b246cf8457F320Bb27f008186B69D555d --bundle-manifest <path> --expected-bundle-hash 0xe1a957805f855828338a2a9d1f90c46eb78c378d85f10c8d8c83a1ce6eb388d3 --parent-state <packed-genesis-state>` to verify replay.
 
-5. Smoke-test: a miner submits a screener via `/coretex/screen`, then a state advance via `/coretex/evaluate` → V4 emits `CortexStateAdvanced` → replay watcher reproduces.
+5. Smoke-test: a miner fetches `/coretex/status` + `/coretex/challenge`, builds a patch, posts it to `/coretex/submit`, broadcasts the accepted receipt to V4 → V4 emits `CortexStateAdvanced` → replay watcher reproduces.
 
 That's the entire wire-up. From there the coordinator is live.
 
