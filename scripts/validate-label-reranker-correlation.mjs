@@ -122,11 +122,11 @@ for (const cat of byCategory.keys()) {
   perCategory[cat] = {
     assignedRelevance: map[cat],
     count: ss.length,
-    min: Math.min(...ss),
+    min: ss.reduce((a, b) => (a < b ? a : b), Number.POSITIVE_INFINITY),
     p25: quantile(ss, 0.25),
     p50: quantile(ss, 0.5),
     p75: quantile(ss, 0.75),
-    max: Math.max(...ss),
+    max: ss.reduce((a, b) => (a > b ? a : b), Number.NEGATIVE_INFINITY),
     mean: ss.reduce((s, v) => s + v, 0) / ss.length,
   };
 }

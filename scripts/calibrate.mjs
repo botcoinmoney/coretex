@@ -132,11 +132,13 @@ for (const family of families.keys()) {
 // stratum (defaults to ~10% per active depth level), sized so total
 // pinned quotas stay under 80% of pack size to leave fill slack.
 const depthRunwayShare = Number(flag('depth-runway-share', '0.10'));
-const maxDepthSeen = Math.max(
-  1,
-  ...evalHiddenEvents.map((e) => e.causalDepth ?? 1),
-  ...evalHiddenEvents.map((e) => e.relationHopDepth ?? 1),
-);
+// reduce() instead of Math.max(...array) — at launch scale (~100k eval_hidden
+// events) the spread blows the call stack.
+let maxDepthSeen = 1;
+for (const e of evalHiddenEvents) {
+  if ((e.causalDepth ?? 1) > maxDepthSeen) maxDepthSeen = e.causalDepth ?? 1;
+  if ((e.relationHopDepth ?? 1) > maxDepthSeen) maxDepthSeen = e.relationHopDepth ?? 1;
+}
 for (let d = 2; d <= maxDepthSeen; d++) {
   const haveCausal = evalHiddenEvents.filter((e) => (e.causalDepth ?? 1) >= d).length;
   if (haveCausal > 0) {

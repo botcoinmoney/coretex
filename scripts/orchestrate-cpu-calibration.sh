@@ -66,10 +66,15 @@ step() { echo; echo "==== $* ===="; }
 NODE_LAUNCH_HEAP="--max-old-space-size=16384"
 
 step "1/9 validate corpus shape"
-node $NODE_LAUNCH_HEAP /root/cortex/scripts/validate-retrieval-corpus.mjs \
-  --corpus "$CORPUS" \
-  --min-events 100 --min-per-family 1 --min-hard-negatives 3 \
-  --out "$REPORTS/corpus-validation.json"
+if [ ! -f "$REPORTS/corpus-validation.json" ] \
+    || [ "$(stat -c %Y "$REPORTS/corpus-validation.json" 2>/dev/null || echo 0)" -lt "$(stat -c %Y "$CORPUS")" ]; then
+  node $NODE_LAUNCH_HEAP /root/cortex/scripts/validate-retrieval-corpus.mjs \
+    --corpus "$CORPUS" \
+    --min-events 100 --min-per-family 1 --min-hard-negatives 3 \
+    --out "$REPORTS/corpus-validation.json"
+else
+  echo "(reusing $REPORTS/corpus-validation.json — newer than corpus)"
+fi
 node -e "const r=JSON.parse(require('fs').readFileSync('$REPORTS/corpus-validation.json','utf8')); if((r.errors||[]).length){console.error(r.errors); process.exit(1);} console.log('corpus errors=0 events='+r.eventCount+' families='+JSON.stringify(r.familyCounts));"
 
 step "2/9 build determinism fixture"
