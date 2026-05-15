@@ -132,7 +132,7 @@ for (let k = 0; k < numPacks; k++) {
     multiHopRecall10: score.multiHopRecall10,
     elapsedMs: elapsed,
   });
-  console.log(`  pack ${k+1}/${numPacks}: composite=${score.composite.toFixed(4)} (${elapsed} ms)`);
+  console.error(`  pack ${k+1}/${numPacks}: composite=${score.composite.toFixed(4)} (${elapsed} ms)`);
 }
 
 // Compute σ and 95% CI on σ.

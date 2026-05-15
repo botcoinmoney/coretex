@@ -188,7 +188,7 @@ async function scoreSubstrate(words, pack) {
 
 // Score parent substrate once (empty for v0; bigger configs follow).
 const EMPTY_WORDS = new Array(1024).fill(0n);
-console.log(`[run4-minimp] scoring empty parent on visible + hidden`);
+console.error(`[run4-minimp] scoring empty parent on visible + hidden`);
 const tParent = Date.now();
 const parentVisible = await scoreSubstrate(EMPTY_WORDS, visiblePack);
 const parentHidden = await scoreSubstrate(EMPTY_WORDS, hiddenPack);
@@ -196,7 +196,7 @@ console.log(`  empty visible composite=${parentVisible.composite.toFixed(4)}  hi
 
 const surfaces = ['lens', 'anchor', 'relation', 'mixed'];
 const randomTrials = [];
-console.log(`[run4-minimp] scoring ${numPatches} random patches across surfaces...`);
+console.error(`[run4-minimp] scoring ${numPatches} random patches across surfaces...`);
 for (let i = 0; i < numPatches; i++) {
   const surface = surfaces[i % surfaces.length];
   const salt = `random:${i}`;
@@ -207,13 +207,13 @@ for (let i = 0; i < numPatches; i++) {
   const visibleDelta = Math.round((childVisible.composite - parentVisible.composite) * 1e6);
   const hiddenDelta = Math.round((childHidden.composite - parentHidden.composite) * 1e6);
   randomTrials.push({ idx: i, surface, visibleDelta, hiddenDelta });
-  if ((i + 1) % 25 === 0) console.log(`  random ${i+1}/${numPatches}`);
+  if ((i + 1) % 25 === 0) console.error(`  random ${i+1}/${numPatches}`);
 }
 
 // Adversarial hill-climbing: pick a starting random patch, mutate it for N steps,
 // accepting mutations that improve visible composite. Then evaluate hidden.
 const adversarialTrials = [];
-console.log(`[run4-minimp] running ${hillSteps}-step hill-climbing × ${surfaces.length} surfaces...`);
+console.error(`[run4-minimp] running ${hillSteps}-step hill-climbing × ${surfaces.length} surfaces...`);
 for (const surface of surfaces) {
   let bestPatch = randomPatch(surface, EMPTY_WORDS, `adv:${surface}:0`);
   let bestWords = applyPatchToWords(EMPTY_WORDS, bestPatch);
@@ -232,7 +232,7 @@ for (const surface of surfaces) {
   const hidden = (await scoreSubstrate(bestWords, hiddenPack)).composite;
   const visibleDelta = Math.round((bestVisible - parentVisible.composite) * 1e6);
   const hiddenDelta = Math.round((hidden - parentHidden.composite) * 1e6);
-  console.log(`  hill[${surface}] visibleΔ=${visibleDelta} hiddenΔ=${hiddenDelta}`);
+  console.error(`  hill[${surface}] visibleΔ=${visibleDelta} hiddenΔ=${hiddenDelta}`);
   adversarialTrials.push({ surface, visibleDelta, hiddenDelta });
 }
 

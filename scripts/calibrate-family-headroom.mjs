@@ -215,21 +215,21 @@ const results = [];
 for (const fam of families) {
   const pack = buildPackForFamily(fam);
   if (!pack) { console.log(`  skip ${fam} (no events)`); continue; }
-  console.log(`\n[run3-headroom] family=${fam} pack=${pack.events.length}`);
+  console.error(`\n[run3-headroom] family=${fam} pack=${pack.events.length}`);
 
   const tEmpty = Date.now();
   const emptyScore = await evaluateRetrievalBenchmarkState(ZERO_STATE, corpus, pack, opts);
   const tEmptyMs = Date.now() - tEmpty;
-  console.log(`  empty: composite=${emptyScore.composite.toFixed(4)} nDCG=${emptyScore.nDCG10.toFixed(4)} (${tEmptyMs} ms)`);
+  console.error(`  empty: composite=${emptyScore.composite.toFixed(4)} nDCG=${emptyScore.nDCG10.toFixed(4)} (${tEmptyMs} ms)`);
 
   const featState = buildFeasibleUpperBound(pack.events, fam);
   const tFeat = Date.now();
   const featScore = await evaluateRetrievalBenchmarkState(featState, corpus, pack, opts);
   const tFeatMs = Date.now() - tFeat;
-  console.log(`  feasible: composite=${featScore.composite.toFixed(4)} nDCG=${featScore.nDCG10.toFixed(4)} (${tFeatMs} ms)`);
+  console.error(`  feasible: composite=${featScore.composite.toFixed(4)} nDCG=${featScore.nDCG10.toFixed(4)} (${tFeatMs} ms)`);
 
   const headroomPpm = Math.round((featScore.composite - emptyScore.composite) * 1_000_000);
-  console.log(`  HEADROOM = ${headroomPpm} ppm`);
+  console.error(`  HEADROOM = ${headroomPpm} ppm`);
 
   results.push({
     family: fam,
