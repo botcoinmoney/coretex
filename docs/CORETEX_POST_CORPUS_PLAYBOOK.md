@@ -1,9 +1,30 @@
 # CoreTex Post-Corpus Playbook
 
-> **Status:** authoritative execution checklist for the work that runs **after** the launch corpus generation completes.
-> **Last updated:** 2026-05-13.
+> **Status:** PAUSED at step 6/9 pending substrate-expansion hardening (see `CORETEX_SUBSTRATE_EXPANSION_HARDENING.md`). The launch corpus is produced and validated; calibration produced `bundle-profile.json`. The scoring pipeline itself is the blocker — the current `scoreSubstrateAgainstQuery` reaches at most 36 corpus events out of 678,910 per query, so any calibration produced against it would bake in a glorified-bookmark scorer. Resume after the hardening plan lands its Phase A (two-stage retrieval scorer).
+> **Last updated:** 2026-05-15.
 > **Audience:** the next orchestrator agent or human operator running the post-corpus sequence.
-> **Companion docs:** `CORETEX_LAUNCH_PLAN_v2.md` (controlling plan), `CORETEX_CALIBRATION_AGENT_RUNBOOK.md` (per-step procedure), `CORETEX_FINAL_PRODUCTION_E2E_ORCHESTRATOR_RUNBOOK.md` (8-phase reference), `CORETEX_CROSS_SYSTEM_REPRODUCIBILITY_PROOF.md` (auditor proof).
+> **Companion docs:** `CORETEX_LAUNCH_PLAN_v2.md` (controlling plan), `CORETEX_SUBSTRATE_EXPANSION_HARDENING.md` (current launch blocker), `CORETEX_CALIBRATION_AGENT_RUNBOOK.md` (per-step procedure), `CORETEX_FINAL_PRODUCTION_E2E_ORCHESTRATOR_RUNBOOK.md` (8-phase reference), `CORETEX_CROSS_SYSTEM_REPRODUCIBILITY_PROOF.md` (auditor proof).
+
+## Pause-state checkpoint (2026-05-15)
+
+Where the launch run stopped:
+
+| Step | Status | Artifact |
+|---|---|---|
+| 1 validate | ✅ PASS | `/var/lib/coretex/reports/corpus-validation.json` (errors=0, events=678910) |
+| 2 determinism fixture | ✅ reused | 200-pair calibration-vintage fixture |
+| 3 determinism check ×3 logical hosts | ✅ reused | calibration-vintage reports |
+| 4 aggregate determinism | ✅ PASS | P50/P90/P99 = 0 ppm vs 250 tolerance |
+| 5 calibrate bundle profile | ✅ PASS | `/etc/coretex/bundle-profile.json` — replayTolerancePpm=250, minImprovementPpm=2500, packSize=128, majorDeltaThreshold=5076 (eval_hidden=101526) |
+| 6 build initial bundle manifest | ❌ FAILED + paused | second `readFileSync` over 6.3 GB corpus at `verifyBundleManifest` (separate site from `hashFile` which was fixed at 85a159d) |
+| 7-9 baseline-pin / Phase 13 / labeler audit | ⏸ not run | — |
+
+Resume preconditions:
+1. Land Phase A of `CORETEX_SUBSTRATE_EXPANSION_HARDENING.md` (two-stage retrieval scorer with stage 1 BGE-M3 over full corpus + stage 2 substrate-as-bias). Without this, step 8 Phase 13 would validate the wrong pipeline.
+2. Patch `verifyBundleManifest` in `packages/cortex/src/bundle/index.ts` to use the streaming-sha256 helper added at 85a159d for any file > 2 GiB (mirror change).
+3. Recalibrate `baselineVariancePpm` under the new scorer — the value step 5 wrote was measured against the bookmark-cache scorer and will not be accurate for the lens-routing scorer.
+
+When the substrate hardening lands, re-run from step 5 (calibrate). Steps 1-4 stay valid (corpus shape + bi-encoder determinism are unchanged by the scorer refactor).
 
 ## Why this doc exists
 
