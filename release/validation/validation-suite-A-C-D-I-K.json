@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "coretex.validation-suite.v1",
+  "generatedAt": "2026-05-15T10:57:05.600Z",
+  "inputs": {
+    "corpus": "/var/lib/coretex/corpus-epoch-0-launch-MERGED.json",
+    "corpusRoot": "0x4cfa859477d2bd67f585d4425ee5c00cc5680d377dbffee068bd4a471b89fe17",
+    "rerankerMode": "deterministic",
+    "rerankerModel": "deterministic-reranker-256",
+    "packSize": 8
+  },
+  "summary": {
+    "pass": 5,
+    "fails": 0,
+    "total": 5
+  },
+  "tests": [
+    {
+      "name": "A: empty substrate composite equals zeroed-stage-2 composite",
+      "passed": true,
+      "summary": "normal=0.080977 zeroed=0.080977 delta=0.00e+0",
+      "normalComposite": 0.0809767409352368,
+      "zeroedComposite": 0.0809767409352368
+    },
+    {
+      "name": "C: firstStageCandidates type signature accepts only PublicCorpusIndex",
+      "passed": true,
+      "summary": "signature=\"declare function firstStageCandidates(queryVec: Float32Array, index: PublicCorpusIndex, k: number)\" → accepts=true noProdCorpus=true noQrels=true"
+    },
+    {
+      "name": "D: byte-identical CompositeScore across 2 runs same input",
+      "passed": true,
+      "summary": "byte-identical"
+    },
+    {
+      "name": "I: p50/p95/p99 latency budget",
+      "passed": true,
+      "summary": "p50=1060ms p95=1119ms p99=1119ms (deterministic — budget skipped)",
+      "latencies": [
+        904,
+        1012,
+        1060,
+        1087,
+        1119
+      ]
+    },
+    {
+      "name": "K: coretex-eval harness produces CompositeScore via same pipeline",
+      "passed": true,
+      "summary": "harness composite=0.0569 (direct=0.0810 on different pack — same pipeline shape)",
+      "harnessComposite": 0.056914885026424965,
+      "directComposite": 0.0809767409352368
+    }
+  ]
+}
