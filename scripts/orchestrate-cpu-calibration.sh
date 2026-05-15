@@ -60,8 +60,13 @@ export CORTEX_REAL_EVAL=1
 
 step() { echo; echo "==== $* ===="; }
 
+# Launch-corpus consumers hold ~9 GB of parsed events in heap; default
+# Node heap (~4 GB) OOMs. Use 16 GB heap for every script that runs
+# loadProductionCorpus against the launch artifact.
+NODE_LAUNCH_HEAP="--max-old-space-size=16384"
+
 step "1/9 validate corpus shape"
-node /root/cortex/scripts/validate-retrieval-corpus.mjs \
+node $NODE_LAUNCH_HEAP /root/cortex/scripts/validate-retrieval-corpus.mjs \
   --corpus "$CORPUS" \
   --min-events 100 --min-per-family 1 --min-hard-negatives 3 \
   --out "$REPORTS/corpus-validation.json"
@@ -69,7 +74,7 @@ node -e "const r=JSON.parse(require('fs').readFileSync('$REPORTS/corpus-validati
 
 step "2/9 build determinism fixture"
 if [ ! -f "$DETERMINISM_FIXTURE" ]; then
-  node /root/cortex/scripts/build-determinism-fixture.mjs --corpus "$CORPUS" --out "$DETERMINISM_FIXTURE" --max-pairs 200
+  node $NODE_LAUNCH_HEAP /root/cortex/scripts/build-determinism-fixture.mjs --corpus "$CORPUS" --out "$DETERMINISM_FIXTURE" --max-pairs 200
 else
   echo "(reusing existing fixture)"
 fi
@@ -96,14 +101,14 @@ node /root/cortex/scripts/aggregate-determinism.mjs \
   --out "$REPORTS/determinism-aggregate.json"
 
 step "5/9 calibrate bundle profile"
-node /root/cortex/scripts/calibrate.mjs \
+node $NODE_LAUNCH_HEAP /root/cortex/scripts/calibrate.mjs \
   --bundle-manifest "$TEMPLATE_BUNDLE" \
   --calibration-corpus "$CORPUS" \
   --determinism-aggregate "$REPORTS/determinism-aggregate.json" \
   --out "$PROFILE"
 
 step "6/9 build initial bundle manifest"
-node /root/cortex/scripts/build-coretex-bundle.mjs \
+node $NODE_LAUNCH_HEAP /root/cortex/scripts/build-coretex-bundle.mjs \
   --repo-root /root/cortex \
   --corpus "$CORPUS" \
   --profile "$PROFILE" \
@@ -115,7 +120,7 @@ step "7/9 pin baselineParentScorePpm + variancePpm into the bundle (Phase H2)"
 # used on chain. Stored in the bundle profile so any verifier can
 # reproduce the same pack + baseline score from public artifacts only.
 BASELINE_EVAL_SEED=${CORETEX_BASELINE_EVAL_SEED:-$(openssl rand -hex 32)}
-node /root/cortex/scripts/pin-baseline-into-bundle.mjs \
+node $NODE_LAUNCH_HEAP /root/cortex/scripts/pin-baseline-into-bundle.mjs \
   --bundle-manifest "$BUNDLE" \
   --corpus "$CORPUS" \
   --eval-seed-hex "$BASELINE_EVAL_SEED" \
@@ -127,12 +132,12 @@ step "8/9 Phase 13 e2e against real models + final bundle + calibration corpus"
 ITERATIONS=${ITERATIONS:-5} \
 CORETEX_BUNDLE_MANIFEST="$BUNDLE" \
 CORETEX_CORPUS="$CORPUS" \
-node /root/cortex/test/e2e/phase-13/run.mjs 2>&1 | tee "$REPORTS/phase13-real.log"
+node $NODE_LAUNCH_HEAP /root/cortex/test/e2e/phase-13/run.mjs 2>&1 | tee "$REPORTS/phase13-real.log"
 
 step "9/9 offline corpus auditor (1% sample, MemReranker-4B agreement vs synthesizer labels)"
 # Diagnostic; never blocks. Replaces the per-event 4B labeling call the
 # old pipeline paid for. Scales linearly with --sample-pct, default 1%.
-RERANKER_NUM_THREADS=16 node /root/cortex/scripts/audit-corpus-with-labeler.mjs \
+RERANKER_NUM_THREADS=16 node $NODE_LAUNCH_HEAP /root/cortex/scripts/audit-corpus-with-labeler.mjs \
   --corpus "$CORPUS" \
   --bundle-manifest "$BUNDLE" \
   --sample-pct ${CORETEX_AUDIT_SAMPLE_PCT:-1} \
