@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "coretex.mining-flow-report.v1",
+  "generatedAt": "2026-05-15T13:02:27.061Z",
+  "mode": "replay",
+  "bundleHash": "0x0de6db67643ac788df48529084ebdfc957468ece46e21d2d2fe43679e33a336f",
+  "fixtures": [
+    {
+      "bucket": "screener_reject",
+      "observedBucket": "screener_reject",
+      "matches": true,
+      "envelope": {
+        "status": "rejected",
+        "code": "rejected"
+      },
+      "envelopeSha256": "0x76eff4493a3f16bfebbd16f8abaa0db120e2d2f2ad0504726aeb536f6f9408c9"
+    },
+    {
+      "bucket": "screener_pass_no_advance",
+      "observedBucket": "screener_pass_no_advance",
+      "matches": true,
+      "envelope": {
+        "status": "accepted",
+        "patchHash": "0x3d756a9d7360f690febf3d52f07fb18970e42a44616babe4d9b822778313da33",
+        "evalReportHash": "0xc6a8e5d633c4f4f07a53ee274e0bd0c2862468c0e59d7f60f27c0acceecc85dc"
+      },
+      "envelopeSha256": "0xc8abb8a168fb3ab37f3c40092b7d45741f56bf8625d3b8c3e2b9c46bf4870edc"
+    },
+    {
+      "bucket": "state_advance",
+      "observedBucket": "state_advance",
+      "matches": true,
+      "envelope": {
+        "status": "accepted",
+        "patchHash": "0x60872a95f31585e982bd248f11d328254a7e97a067d0dd365848ee8773a33c72",
+        "evalReportHash": "0x09d782572686ffa56ebe7d84548118687aa0c6ce549616122f38b2ac0c4e84ce",
+        "receipt": {
+          "keyId": "coordinator-v4",
+          "algorithm": "ECDSA-SHA256",
+          "signature": "0x986107e80576b41fc0c21fbd939fa4f5965f567baac04e5b13088ee60495174c42d4271fb77742f6ef43c5acb61e898f2b8e57a203c43c56c30d7ed0f91a0826",
+          "signedFields": [
+            "patchHash",
+            "evalReportHash",
+            "parentStateRoot",
+            "newStateRoot"
+          ]
+        }
+      },
+      "envelopeSha256": "0x0e082648edc7f7c3f70d8559eddc43e72a0cc704264d04ba2c5c31aec9aa7180"
+    }
+  ]
+}

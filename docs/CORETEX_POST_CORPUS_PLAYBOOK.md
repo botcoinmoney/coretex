@@ -1,13 +1,17 @@
 # CoreTex Post-Corpus Playbook
 
-> **Status:** PAUSED at step 6/9 pending substrate-expansion hardening (see `CORETEX_SUBSTRATE_EXPANSION_HARDENING.md`). The launch corpus is produced and validated; calibration produced `bundle-profile.json`. The scoring pipeline itself is the blocker — the current `scoreSubstrateAgainstQuery` reaches at most 36 corpus events out of 678,910 per query, so any calibration produced against it would bake in a glorified-bookmark scorer. Resume after the hardening plan lands its Phase A (two-stage retrieval scorer).
+> **Status:** Phase A + B substrate hardening SHIPPED (commit 944e2c9). Launch bundle `bundleHash 0x0de6db67…` pinned against `corpusRoot 0x4cfa8594…`. The scoring pipeline is now the v2-lens two-stage retriever with stage-1 BGE-M3 over the full corpus + stage-2 substrate-as-bias + Phase B category-lens BFS over corpus-native relations. Deterministic calibration done (Runs 1-4); Qwen3 refinement of variance/headroom/minImprovement remains as a launch-readiness recalibration trigger (see `CORETEX_SUBSTRATE_EXPANSION_HARDENING.md` §8 + §11).
 > **Last updated:** 2026-05-15.
 > **Audience:** the next orchestrator agent or human operator running the post-corpus sequence.
 > **Companion docs:** `CORETEX_LAUNCH_PLAN_v2.md` (controlling plan), `CORETEX_SUBSTRATE_EXPANSION_HARDENING.md` (current launch blocker), `CORETEX_CALIBRATION_AGENT_RUNBOOK.md` (per-step procedure), `CORETEX_FINAL_PRODUCTION_E2E_ORCHESTRATOR_RUNBOOK.md` (8-phase reference), `CORETEX_CROSS_SYSTEM_REPRODUCIBILITY_PROOF.md` (auditor proof).
 
-## Pause-state checkpoint (2026-05-15)
+## Substrate hardening complete — execution log (2026-05-15)
 
-Where the launch run stopped:
+Phase A + Phase B landed. Calibration Runs 1-4 ran end-to-end. v3-lens
+bundle pinned. Validation suite A/C/D/I/K + Test G PASS. Detailed
+status in `CORETEX_SUBSTRATE_EXPANSION_HARDENING.md` §8.
+
+Pre-hardening checkpoint (kept as historical context):
 
 | Step | Status | Artifact |
 |---|---|---|

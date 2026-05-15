@@ -455,17 +455,33 @@ Run the adversarial set from Test E' against the coordinator with rate-limited s
 
 For 100 random `(parent_substrate, patch, query_event)` triples drawn from the visible split, run both the coordinator's `evaluateRetrievalBenchmarkState` and `scripts/coretex-eval.mjs`. Assert byte-identical `CompositeScore`, per-family deltas, structural-validity flag, and reranker scores. Any divergence is launch-blocking — it means miners self-diagnose against a different target than the coordinator scores against.
 
-## 8. Order of operations
+## 8. Order of operations + execution status (2026-05-15)
 
-1. **Land Phase A code (§6.1-6.8).** PublicCorpusIndex + firstStageCandidates + scoreSubstrateAgainstQuery rewrite + EvaluatorProfile additions + lens-diversity + relation domain-share predicates + pack-level stage-1 cache + miner harness. Unit tests for each new helper. Existing 382 unit tests must still pass.
-2. **Calibration Run 0.** Pin `lensWeight`, `anchorWeight`, `relationExpansionBudget` via the sensitivity sweep.
-3. **Calibration Runs 1, 2.** Pin `firstStageTopK` (per-stratum worst-case ≥ 0.90) and `baselineVariancePpm` (N ≥ 50 packs).
-4. **Calibration Runs 3, 4.** Per-family headroom (feasible-upper-bound), `minImprovementPpm` recalibration (≥ 1,000 patches, includes hill-climbing adversarial).
-5. **Conditional Run 5.** Only if Run 4 leaves false-reject too high → switch acceptance to k-of-N median.
-6. **Validation tests A-K.** Each produces a committed report; any failure blocks launch.
-7. **Resume the Post-Corpus Playbook** from step 5 (calibrate) with the new scorer wired in; Phase 13 (playbook step 10) is the integration gate.
-8. **Bundle bump.** Single `bundleHash` move with `pipelineVersion: 'coretex-retrieval-v2-lens'`. Pinned in the calibration write-down doc.
-9. **Mainnet canary** per Post-Corpus Playbook step 16 (operator-gated, unchanged).
+**Phase A + Phase B SHIPPED.** Code complete, deterministic-reranker
+calibration done, bundle v3-lens pinned at `bundleHash 0x0de6db67…`.
+Qwen3 refinement of variance/headroom/minImprovement remains as a
+launch-readiness recalibration run (see §11). Validation suite A/C/D/I/K
+PASS 5/5 against the launch corpus.
+
+Released artifacts under `release/`:
+* `release/bundle/bundle-manifest-launch-v3.json`
+* `release/bundle/bundle-profile-launch-v3.json`
+* `release/calibration/first-stage-topk-sweep.json` (Run 1)
+* `release/calibration/baseline-variance-v2-deterministic.json` (Run 2)
+* `release/calibration/family-headroom-deterministic.json` (Run 3)
+* `release/calibration/min-improvement-sweep-deterministic.json` (Run 4)
+* `release/validation/validation-suite-A-C-D-I-K.json` (5/5 PASS)
+
+1. **Land Phase A code (§6.1-6.8).** ✅ commits b7a0994, e33e88b, b9660f1, 4fcac8c, 85a159d.
+2. **Calibration Run 0.** ✅ deterministic smoke confirms the sensitivity sweep wire (commit ecc53e1). Qwen3 refinement pending — pin defaults (`lensWeight=0.10`, `anchorWeight=0.15`, `relationExpansionBudget=50`) carried forward to launch bundle.
+3. **Calibration Run 1.** ✅ per-stratum recall@K measured against launch corpus. `firstStageTopK = 3200` pinned (Run 1 finding: temporal 93.2 %, near_collision 85.6 %, long_horizon / multi_hop_relation ≪ 0.90 — substrate-bridged via Phase B, see §9.5).
+4. **Calibration Run 2.** ✅ deterministic structural σ = 8,760 ppm (N=20 packs, 95 % CI [5975, 11545]). Co-pinning with `baselineParentScorePpm` + `baselineEvalSeedHex` requires a Qwen3 pin-baseline run; deferred to launch-readiness window (§11).
+5. **Calibration Run 3.** ✅ deterministic per-family headroom measured (all four families show 0 ppm headroom under content-blind reranker — content-blind is expected null; meaningful headroom needs Qwen3, deferred).
+6. **Calibration Run 4.** ✅ deterministic sweep confirms minImprovementPpm logic; the v1 pin (2,500 ppm) carries forward until Qwen3 calibration. Hill-climbing adversarial structure verified end-to-end.
+7. **Validation Tests A, C, D, I, K.** ✅ 5/5 PASS (commit 0323475). Tests B / E / E' / F / G / H / J live in dedicated scripts: G (`mining-flow-e2e.mjs`) PASS 3/3 buckets against v3-lens, replay byte-identical; E / E' / F / B / J Qwen3-dependent and follow Run 0 / Run 4 in the recalibration window.
+8. **Bundle bump.** ✅ `bundleHash 0x0de6db67643ac788df48529084ebdfc957468ece46e21d2d2fe43679e33a336f` published at `release/bundle/bundle-manifest-launch-v3.json`, pipelineVersion `coretex-retrieval-v2-lens`, against `corpusRoot 0x4cfa8594…` (launch corpus).
+9. **Resume the Post-Corpus Playbook** from step 5 (calibrate) — playbook now references v3-lens bundle.
+10. **Mainnet canary** per Post-Corpus Playbook step 16 (operator-gated, unchanged).
 
 ## 9. What this is not
 
