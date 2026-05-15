@@ -121,7 +121,10 @@ const Kmax = kSweep[kSweep.length - 1];
 // smaller Ks comes from prefix slices of the same ranked list. This is
 // O(N_queries × cosine_over_index) — single pass.
 const layout = index.layout;
-const { dim, headerBytes } = layout;
+// Production wire format is 4-byte header (scale only, no offset);
+// `layout.headerBytes` is decorative. Match `bi-encoder.ts:dequantize`.
+const dim = layout.dim;
+const HEADER_BYTES = 4;
 
 // Result accumulator: per (family, K) → { truthsRecalled, truthsTotal, queries }
 const strata = new Map(); // key = family
@@ -142,12 +145,11 @@ for (const query of sample) {
   const bytes = query.embeddings.query;
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const scale = dv.getFloat32(0, false);
-  const offset = dv.getFloat32(4, false);
   const queryVec = new Float32Array(dim);
   for (let i = 0; i < dim; i++) {
-    const b = bytes[headerBytes + i];
+    const b = bytes[HEADER_BYTES + i];
     const signed = b > 127 ? b - 256 : b;
-    queryVec[i] = scale * signed + offset;
+    queryVec[i] = scale * signed;
   }
 
   const qStart = Date.now();
