@@ -61,6 +61,11 @@ function flag(name, fallback) {
   return fallback;
 }
 
+let anvil = null;
+function stopAnvil() {
+  if (anvil && !anvil.killed) { try { anvil.kill('SIGINT'); } catch {} }
+}
+
 const bundlePath   = flag('bundle-manifest');
 const fixturesPath = flag('fixtures');
 const reportPath   = flag('out', '/var/lib/coretex/reports/base-fork-rehearsal.json');
@@ -85,7 +90,6 @@ if (!stateAdvance) fail('fixtures has no state_advance entry — run mining-flow
 
 const bundleManifest = JSON.parse(readFileSync(bundlePath, 'utf8'));
 
-let anvil;
 function startAnvil() {
   const args = [
     '--fork-url', env.BASE_RPC_URL,
@@ -98,9 +102,6 @@ function startAnvil() {
   anvil = spawn('anvil', args, { stdio: ['ignore', 'pipe', 'pipe'] });
   anvil.stderr.on('data', (b) => process.stderr.write(`[anvil] ${b}`));
   anvil.stdout.on('data', () => {});
-}
-function stopAnvil() {
-  if (anvil && !anvil.killed) { try { anvil.kill('SIGINT'); } catch {} }
 }
 
 async function rpc(method, params = []) {
