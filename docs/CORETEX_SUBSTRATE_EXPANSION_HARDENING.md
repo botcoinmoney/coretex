@@ -477,6 +477,33 @@ For 100 random `(parent_substrate, patch, query_event)` triples drawn from the v
 - **Not** an "indefinite scalability" change. The 1024→2048 ladder remains a separate post-launch lever and is not in scope here.
 - **Not** a decoder-semantics rewrite. Phase A keeps the substrate decoder unchanged — RetrievalKey slots are still vectors, MemoryIndex slots still point at recordIds, Relations still encode slot-to-slot edges. The reinterpretation happens entirely in the scorer's stage-2 logic. Phase B (deferred — §10) is where decoder semantics would change if needed.
 
+## 9.5. Phase A first-stage retrieval measured on the launch corpus
+
+Calibration Run 1 (`scripts/calibrate-first-stage-topk.mjs`, 250 queries × 4 families = 1,000 eval_hidden samples, K ∈ {50…3200}) measured recall@K against the launch corpus's 3.72 M deduped doc embeddings. The result reshapes the launch-readiness picture:
+
+| Family               | population | recall@K=200 | recall@K=800 | recall@K=3200 |
+|----------------------|-----------:|-------------:|-------------:|--------------:|
+| `temporal`           |      7,808 |       66.4 % |       81.8 % |        93.2 % |
+| `near_collision`     |     57,022 |       25.2 % |       59.2 % |        85.6 % |
+| `long_horizon`       |     32,946 |        0.0 % |        0.0 % |         0.4 % |
+| `multi_hop_relation` |      3,750 |        0.0 % |        0.0 % |         0.0 % |
+
+**Read this carefully:** BGE-M3 first-stage retrieval works for `temporal` and `near_collision` queries (where the truth doc shares surface text with the query — entity names, current/stale labels). For `long_horizon` and `multi_hop_relation`, the truth doc is a generic entity profile whose surface text doesn't lexically connect to the question ("highest satisfaction → same country → largest headcount" can't lexically reach "Companies Reva Nexus: ceoName is …"). BGE-M3 fundamentally requires reasoning to bridge that gap, and BGE-M3 doesn't reason.
+
+What this means for §5 Run 1's selection rule:
+
+* The "worst-stratum recall ≥ 0.90" rule is **infeasible** for the launch corpus — no K up to 3,200 (or any K bounded by the index size) reaches that bar on `long_horizon` / `multi_hop_relation`.
+* The realistic launch policy: pin `firstStageTopK` against the families stage-1 *can* serve — `temporal` and `near_collision`. K=3,200 gets 93 % / 86 %; K=1,600 gets 90 % / 75 %. Either is defensible; K=3,200 is the safer choice given per-query latency at ~600 ms is dominated by stage-2 reranker, not the cosine sweep.
+* For `long_horizon` / `multi_hop_relation`, the substrate's anchor-BFS expansion is the **exclusive** retrieval mechanism. Stage-1 contributes nothing on these queries. This is closer to the v1 bookmark-cache regime than the auditor's framing suggested — but the v2 pipeline still helps because (a) stage-1 still serves the easier families, (b) the typed PublicCorpusIndex boundary still holds, (c) the lens-diversity + relation-domain-share guards still apply, and (d) the visible-split self-eval harness still works for miner iteration.
+
+The on-chain reward law (composite over all four families, per-family floors) means a substrate that bridges multi-hop / long-horizon via anchors+relations will substantially out-score one that doesn't. That's the v2 substrate's most expressive lever even though stage-1 alone can't serve those families. **This is exactly the regime where Phase B (§10) becomes important earlier** — without per-corpus-event anchors scaling, multi-hop is permanently bounded by the 44-anchor count.
+
+Pre-launch posture:
+
+1. Pin `firstStageTopK = 3200` with a documented note that worst-stratum-recall is family-skewed.
+2. Acknowledge that `long_horizon` + `multi_hop_relation` composite scores will be substrate-driven, not stage-1-driven.
+3. Move Phase B from "post-launch lever" to "first-epoch follow-up": after a few epochs of mainnet data, measure whether 44 anchors is enough for these families or whether `RelationEdge`-as-category-policy needs to land sooner than originally scoped.
+
 ## 10. Deferred to Phase B (post-launch substrate-reach lever)
 
 Both audits flagged that even after Phase A lands, the substrate's "reach beyond stage 1" is bounded by 44 anchors × 128 relation edges × `relationHopBudget`. At launch with `firstStageTopK` properly per-stratum-calibrated (likely 200-800), this gives the substrate a few thousand reachable candidate docs per query — sufficient for the launch corpus shape (678 k events) and the launch difficulty curve. As corpus grows past 5-10 M events, the 44-anchor cap progressively shrinks the substrate's *fractional* reach into the corpus and the substrate becomes less differentiated from a thin bias over stage 1.
