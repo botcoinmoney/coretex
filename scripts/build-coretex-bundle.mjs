@@ -38,7 +38,7 @@ if (!corpusPath && (!corpusRootArg || !corpusFilesArg)) {
 let corpusRoot = corpusRootArg;
 let corpusFiles = corpusFilesArg?.split(',').map((s) => s.trim()).filter(Boolean) ?? [];
 if (corpusPath) {
-  const corpus = loadProductionCorpus(resolve(corpusPath));
+  const corpus = loadProductionCorpus(resolve(corpusPath), { verifyCorpusRoot: false, verifySplits: false });
   corpusRoot = corpus.corpusRoot;
   corpusFiles = [relative(repoRoot, resolve(corpusPath)).replaceAll('\\', '/')];
 }

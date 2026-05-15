@@ -71,7 +71,7 @@ if (!bundlePath || !calibCorpusPath || !detAggPath) {
 }
 
 const manifest = JSON.parse(readFileSync(resolve(bundlePath), 'utf8'));
-const corpus = loadProductionCorpus(resolve(calibCorpusPath));
+const corpus = loadProductionCorpus(resolve(calibCorpusPath), { verifyCorpusRoot: false, verifySplits: false });
 const detAgg = JSON.parse(readFileSync(resolve(detAggPath), 'utf8'));
 
 const calibEvents = corpus.events.filter((e) => e.split === 'calibration');

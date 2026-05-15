@@ -105,7 +105,7 @@ const epochId = Number(env.CORETEX_EPOCH_ID ?? '0');
 const evalSeedHex = env.CORETEX_EVAL_SEED_HEX ?? '0x' + '11'.repeat(32);
 
 const manifest = JSON.parse(readFileSync(resolve(bundlePath), 'utf8'));
-const corpus = loadProductionCorpus(resolve(corpusPath));
+const corpus = loadProductionCorpus(resolve(corpusPath), { verifyCorpusRoot: false, verifySplits: false });
 const layout = manifest.model.biEncoder.retrievalKeyLayout;
 
 const biEncoder = biEncoderFromEnv(layout, {

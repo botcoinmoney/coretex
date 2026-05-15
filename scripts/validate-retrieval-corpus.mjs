@@ -7,12 +7,14 @@
  * deterministic corpus-root reproduction.
  *
  * Memory note:
- *   This script does whole-file JSON parsing (`JSON.parse(readFileSync(...))`).
- *   Large launch corpora (~2 GB) require a larger V8 heap, e.g.:
- *     node --max-old-space-size=8192 scripts/validate-retrieval-corpus.mjs ...
+ *   loadProductionCorpus auto-switches to streaming NDJSON when the sidecar
+ *   `<corpus>.events.ndjson` is present, so launch-scale corpora (~6 GB JSON,
+ *   ~6 GB NDJSON) load fine in ~8-12 GB heap. For older corpora without a
+ *   sidecar, fall back path does whole-file JSON.parse — use
+ *   `node --max-old-space-size=8192 ...` for those.
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { argv, exit } from 'node:process';
 
@@ -38,7 +40,6 @@ if (!corpusPath) {
   exit(1);
 }
 
-const raw = JSON.parse(readFileSync(resolve(corpusPath), 'utf8'));
 const corpus = loadProductionCorpus(resolve(corpusPath));
 const errors = [];
 const warnings = [];

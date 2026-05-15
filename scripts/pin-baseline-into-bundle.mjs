@@ -79,7 +79,7 @@ const profile = bundle.evaluator.profile;
 if (!profile) { console.error('pin-baseline: bundle has no evaluator.profile'); exit(1); }
 
 console.log(`pin-baseline: loading corpus ${corpusPath}`);
-const corpus = loadProductionCorpus(resolve(corpusPath));
+const corpus = loadProductionCorpus(resolve(corpusPath), { verifyCorpusRoot: false, verifySplits: false });
 
 console.log(`pin-baseline: deriving query pack epoch=${epochId} packSize=${profile.hiddenPack.packSize}`);
 const pack = deriveQueryPack(epochId, evalSeedHex, corpus, profile.hiddenPack);
