@@ -34,38 +34,42 @@ The post-corpus run is **not** a from-scratch redo. It is the **same orchestrati
 
 In execution order. Each step shows: ① **input** → ② **script** → ③ **output** → ④ **prior-run reference**.
 
-### Step 1: Merge dual-host NDJSONs into canonical launch corpus
+### Step 1: Merge per-shard NDJSONs into canonical launch corpus
 
-The corpus generation is running on two hosts with disjoint domain partition:
+The launch corpus is generated as three disjoint domain shards. The original plan partitioned four domains across two hosts; during execution host 1 took the scrna_imputation reassignment after finishing companies (host 2 had already completed comp_bio), so quantum_physics was deliberately dropped in favor of finishing companies + comp_bio + scrna within the wall-clock budget. The three-shard inventory at merge time:
 
-| Host | Domains | Output NDJSON |
-|---|---|---|
-| Host 1 (Zen 4) | `companies, quantum_physics` | `/var/lib/coretex/corpus-epoch-0-launch.json.events.ndjson` |
-| Host 2 (Zen 3, `coretex-2`) | `computational_biology, scrna_imputation` | `/var/lib/coretex/corpus-epoch-0-launch-host2.json.events.ndjson` |
+| Shard | Producer | Events | Per-shard corpusRoot | Source NDJSON |
+|---|---|---|---|---|
+| companies | host 1 (Zen 4 / AVX-512), pre-swap | 353,278 | `0x68fad2293b32abd411bebcf46dd44446f9a923e72c6118265d388a8337e2ebe6` | `/var/lib/coretex/corpus-epoch-0-launch.json.events.ndjson` |
+| computational_biology | host 2 (Zen 3 / AVX-2) | 159,744 | `0xde70ec40d97f255894d1d43a202b2a1481e6b2d2bd1854b1016526bc11ce376e` | `/var/lib/coretex/corpus-epoch-0-launch-host2.json.events.ndjson` |
+| scrna_imputation | host 1, post-swap | 165,888 | `0xa1b08775c505ddb4d0742a30c153b5eed3202ef290c1fa73373f977ea577383d` | `/var/lib/coretex/corpus-epoch-0-launch-scrna.json.events.ndjson` |
+| **total** | | **678,910** | — | — |
 
-The event IDs are domain-prefixed (`coretex_v1:<domain>:s<seed>:m<m>:c<diff>:...`), so the two NDJSONs are disjoint and concatenate cleanly.
+Event IDs are domain-prefixed (`coretex_v1:<domain>:s<seed>:m<m>:c<diff>:...`), so the three NDJSONs are disjoint and concatenate cleanly.
 
-**Procedure:**
+**Procedure (host 2 NDJSON is already archived on host 1 per `release/corpus-shards/host2-comp_bio-epoch0.manifest.json`):**
 
 ```bash
-# 1. wait for both hosts to report 'corpus-epoch-0-launch: wrote ... events' in their logs
-# 2. rsync host 2's NDJSON to host 1
-rsync -aP coretex-2:/var/lib/coretex/corpus-epoch-0-launch-host2.json.events.ndjson \
-          /var/lib/coretex/
-# 3. concatenate — order does not matter; the generator's finalize step sorts by id
-cat /var/lib/coretex/corpus-epoch-0-launch-host2.json.events.ndjson \
-    >> /var/lib/coretex/corpus-epoch-0-launch.json.events.ndjson
-# 4. validate line count and ID uniqueness BEFORE finalization
-wc -l /var/lib/coretex/corpus-epoch-0-launch.json.events.ndjson
-# expect ≈ 678,910 lines
-grep -oE '"id":"[^"]+"' /var/lib/coretex/corpus-epoch-0-launch.json.events.ndjson \
+# 1. Concatenate three shards into a single merged NDJSON. Use a new filename
+#    so the per-shard NDJSONs remain intact as audit artifacts.
+cat /var/lib/coretex/corpus-epoch-0-launch.json.events.ndjson \
+    /var/lib/coretex/corpus-epoch-0-launch-host2.json.events.ndjson \
+    /var/lib/coretex/corpus-epoch-0-launch-scrna.json.events.ndjson \
+    > /var/lib/coretex/corpus-epoch-0-launch-MERGED.json.events.ndjson
+
+# 2. Verify line count
+wc -l /var/lib/coretex/corpus-epoch-0-launch-MERGED.json.events.ndjson
+# expected: 678,910
+
+# 3. Verify ID uniqueness across shards
+grep -oE '"id":"[^"]+"' /var/lib/coretex/corpus-epoch-0-launch-MERGED.json.events.ndjson \
   | sort | uniq -d | head
-# expect EMPTY output (no duplicates)
+# expected: empty (no duplicate ids)
 ```
 
 ### Step 2: Finalize → canonical corpus JSON + corpusRoot
 
-The generator's two-pass finalize step is invoked by re-running with `--resume` and ALL four domains. With every tuple already in the touched-set, the generation loop skips entirely and the script goes straight to `writeCorpusOutputStreaming`, which reads the NDJSON, sorts/dedupes, computes the canonical `corpusRoot`, and writes the corpus JSON.
+The generator's two-pass finalize step is invoked by re-running with `--resume` against the merged NDJSON and the **three actually-generated domains** (NOT four — quantum_physics was dropped per Step 1). With every tuple already in the touched-set, the generation loop skips entirely and the script goes straight to `writeCorpusOutputStreaming`, which reads the NDJSON, sorts/dedupes, computes the canonical `corpusRoot`, and writes the corpus JSON.
 
 ```bash
 HF_HUB_CACHE=/var/lib/coretex/model-cache HF_HUB_OFFLINE=1 \
@@ -77,15 +81,18 @@ node --max-old-space-size=8192 \
   --bundle-manifest /etc/coretex/template-bundle.json \
   --challenge-lib-root /root/botcoin-coordinator/packages/challenges \
   --source challenge-library \
-  --domains companies,quantum_physics,computational_biology,scrna_imputation \
+  --domains companies,computational_biology,scrna_imputation \
   --seeds-per-domain 512 --resume \
-  --out /var/lib/coretex/corpus-epoch-0-launch.json
+  --out /var/lib/coretex/corpus-epoch-0-launch-MERGED.json
 # expected output:
-#   wrote 678910 challenge-library events to /var/lib/coretex/corpus-epoch-0-launch.json
+#   [resume] read 678910 existing events covering 24576 tuples
+#   wrote 678910 challenge-library events to /var/lib/coretex/corpus-epoch-0-launch-MERGED.json
 #   corpusRoot=0x...   (the launch corpusRoot, pin this in the bundle)
 ```
 
-**Reference:** the calibration corpusRoot (1,752 events) was `0x8879362da18d0202b3704a48253a0bc3c713cee1819d95750936ef68d5c75f19`. The launch corpus will produce a **different** root that becomes the canonical commitment.
+If the generator emits any "generating tuple" message (not "skipping"), abort — that indicates a tuple is missing from the merged NDJSON and the script would call BGE-M3 to fill it. Stop and investigate before retrying.
+
+**Reference:** the calibration corpusRoot (1,752 events) was `0x8879362da18d0202b3704a48253a0bc3c713cee1819d95750936ef68d5c75f19`. The three per-shard corpusRoots are listed in step 1; the merged launch corpus will produce a **different** root from any of them — that is the canonical launch commitment.
 
 ### Step 3: Validate the launch corpus shape
 
