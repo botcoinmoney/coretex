@@ -1,0 +1,112 @@
+{
+  "schemaVersion": "coretex.bundle-profile.v1",
+  "generatedAt": "2026-05-15T12:30:00Z",
+  "inputs": {
+    "bundleManifest": "/etc/coretex/template-bundle.json",
+    "calibrationCorpus": "/var/lib/coretex/corpus-epoch-0-launch-MERGED.json",
+    "calibEventCount": 68021,
+    "determinismAggregate": "/var/lib/coretex/reports/determinism-aggregate.json",
+    "calibrationRuns": {
+      "firstStageTopK": "release/calibration/first-stage-topk-sweep.json",
+      "baselineVariance": "release/calibration/baseline-variance-v2-deterministic.json",
+      "familyHeadroom": "release/calibration/family-headroom-deterministic.json",
+      "minImprovement": "release/calibration/min-improvement-sweep-deterministic.json",
+      "validation": "release/validation/validation-suite-A-C-D-I-K.json"
+    }
+  },
+  "profile": {
+    "name": "coretex-v4-launch",
+    "version": "v3-lens",
+    "scoreScale": "ppm",
+    "scorePpmEncoding": "uint32-0-to-1000000",
+    "patchScoreDeltaEncoding": "int64-ppm",
+    "primaryMetric": "ndcg@10",
+    "acceleratorPolicy": "cpu_only",
+    "runtimePin": {
+      "flavor": "torch-transformers",
+      "versions": {
+        "torch": "2.6.*",
+        "transformers": "4.55.*",
+        "huggingface_hub": "0.36.*",
+        "tokenizers": "0.21.*"
+      },
+      "buildFlags": [
+        "cpu-only"
+      ]
+    },
+    "replayTolerancePpm": 250,
+    "compositeWeights": {
+      "w_retrieval": 0.75,
+      "w_temporal": 0.08,
+      "w_relation_recall": 0.07,
+      "w_abstention": 0.05,
+      "w_structural_sanity": 0.05
+    },
+    "patchAcceptanceFloors": {
+      "minImprovementPpm": 2500,
+      "structuralFloor": 0.95,
+      "protectedRegressionFloor": 0.05,
+      "familyCatastrophicFloor": 0.85
+    },
+    "splitRatios": {
+      "trainVisiblePct": 70,
+      "calibrationPct": 10,
+      "evalHiddenPct": 15,
+      "canaryPct": 5
+    },
+    "hiddenPack": {
+      "packSize": 128,
+      "quotas": [
+        {
+          "stratum": "family=near_collision,bucket=medium",
+          "minCount": 35
+        },
+        {
+          "stratum": "family=long_horizon,bucket=medium",
+          "minCount": 20
+        },
+        {
+          "stratum": "family=multi_hop_relation,bucket=medium",
+          "minCount": 2
+        },
+        {
+          "stratum": "family=temporal,bucket=medium",
+          "minCount": 4
+        }
+      ]
+    },
+    "relationHopBudget": 2,
+    "abstentionThreshold": 0.001,
+    "rerankerTopK": 10,
+    "retrievalKeyTopK": 50,
+    "relationEdgeTypes": [
+      "supports",
+      "supersedes",
+      "coreference_of",
+      "causes",
+      "derived_from",
+      "co_occurs_with"
+    ],
+    "revealGracePeriodSeconds": 21600,
+    "negCategoryRelevanceMap": {
+      "near_collision_attribute": 0.4,
+      "near_collision_entity": 0.2,
+      "temporal_stale": 0.4,
+      "trap": 0,
+      "lexical_distractor": 0.2,
+      "relation_neighbor": 0.4,
+      "unrelated": 0
+    },
+    "majorDeltaThreshold": 5076,
+    "pipelineVersion": "coretex-retrieval-v2-lens",
+    "firstStageTopK": 3200,
+    "lensTopK": 36,
+    "lensWeight": 0.1,
+    "anchorWeight": 0.15,
+    "relationExpansionBudget": 50,
+    "temporalCurrentBoost": 0.1,
+    "temporalStaleSuppression": 0.1,
+    "lensDiversityFloor": 0.7,
+    "corpusDocDedupe": "canonical-doc-id"
+  }
+}
