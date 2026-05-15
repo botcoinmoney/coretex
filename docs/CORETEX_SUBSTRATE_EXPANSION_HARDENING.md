@@ -479,7 +479,7 @@ Released artifacts under `release/`:
 5. **Calibration Run 3.** ✅ deterministic per-family headroom measured (all four families show 0 ppm headroom under content-blind reranker — content-blind is expected null; meaningful headroom needs Qwen3, deferred).
 6. **Calibration Run 4.** ✅ deterministic sweep confirms minImprovementPpm logic; the v1 pin (2,500 ppm) carries forward until Qwen3 calibration. Hill-climbing adversarial structure verified end-to-end.
 7. **Validation Tests A, C, D, I, K.** ✅ 5/5 PASS (commit 0323475). Tests B / E / E' / F / G / H / J live in dedicated scripts: G (`mining-flow-e2e.mjs`) PASS 3/3 buckets against v3-lens, replay byte-identical; E / E' / F / B / J Qwen3-dependent and follow Run 0 / Run 4 in the recalibration window.
-8. **Bundle bump.** ✅ `bundleHash 0x0de6db67643ac788df48529084ebdfc957468ece46e21d2d2fe43679e33a336f` published at `release/bundle/bundle-manifest-launch-v3.json`, pipelineVersion `coretex-retrieval-v2-lens`, against `corpusRoot 0x4cfa8594…` (launch corpus).
+8. **Bundle bump.** ✅ `bundleHash 0xb3c952c86cc2a2cd0e43045b0988bf57bc0bfacca1ed1d08f3282645ad6bc4c4` published at `release/bundle/bundle-manifest-launch-v3.json`, pipelineVersion `coretex-retrieval-v2-lens`, against `corpusRoot 0x4cfa8594…` (launch corpus). Rebuild on 2026-05-15 reflects the signed `firstStageTopKSelection` attestation (was metadata-only at the earlier `0x0de6db67…` hash); the prior hash is superseded and must not be replayed.
 9. **Resume the Post-Corpus Playbook** from step 5 (calibrate) — playbook now references v3-lens bundle.
 10. **Mainnet canary** per Post-Corpus Playbook step 16 (operator-gated, unchanged).
 
@@ -557,7 +557,8 @@ the worst they can do?
 | Stage-2 cannot manufacture docs | BFS only adds docs reachable via corpus-native `event.relations` | ✅ shipped |
 | Lens-diversity floor wired live | `decodeSubstrate` receives `lensDiversityFloor` + `retrievalKeyLayout` from `ScoringOptions`; collapsed-lens substrate fails structural validity → composite × 0 | ✅ shipped (this commit) |
 | Relation-edge domain-share predicate | edges where source/target slots don't share `domainCode` are dropped at decode | ✅ shipped |
-| Pipeline-version pin enforcement | `assertPipelineVersionMatches` throws fail-closed when bundle pins a non-matching version (override env exists for emergency rollback only) | ✅ shipped (this commit) |
+| Pipeline-version pin enforcement | `assertPipelineVersionMatches` throws fail-closed when bundle pins a non-matching version — **no env-var bypass**, mismatch always fails closed | ✅ shipped (this commit) |
+| First-stage Top-K override attestation | `firstStageTopKSelection` is a required field of `EvaluatorProfile` whenever `firstStageTopK > 0`; `validateProfile` enforces `method ∈ {worst-stratum-target, operator-override}` with the corresponding evidence (calibrationReport or substrateBridgedFamilies + reason). Hashed into `bundleHash`. | ✅ shipped (this commit) |
 | Commit-reveal randomness on hidden pack | on-chain `evalSeedCommit` / `evalSeedReveal` lets miners learn the pack only after their patch is committed | ✅ on-chain (existing) |
 | Cross-host replay determinism | byte-identical Top-K + canonical stage-2 BFS + `finalReorderingScore` tie-break by docId | ✅ shipped + Test D PASS |
 
@@ -580,7 +581,8 @@ the worst they can do?
    (BFS is corpus-native only).
 4. Game the lens-diversity floor by setting all lenses colinear (now
    wired live; collapsed substrate floors composite to 0).
-5. Silently replay against a different pipeline version (assert throws).
+5. Silently replay against a different pipeline version (assert throws; no env-var bypass).
+6. Ship a bundle that pins `firstStageTopK` without leaving signed evidence — `validateProfile` rejects bundles whose `firstStageTopKSelection` is missing or whose `method=operator-override` lacks `substrateBridgedFamilies` + a non-empty `reason`.
 
 **Iteration speed is fair, oracle access is not.** The harness lets
 miners iterate against the visible/calibration split as fast as they
