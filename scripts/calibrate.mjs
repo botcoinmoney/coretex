@@ -278,8 +278,9 @@ const profile = {
   majorDeltaThreshold,
   // v2-lens pipeline (substrate-hardening §6.3). Pre-Run-0/1 calibration
   // defaults; real values land via the dedicated calibration runs.
-  pipelineVersion: 'coretex-retrieval-v2-lens',
+  pipelineVersion: 'coretex-retrieval-v2-lens-r2',
   firstStageTopK: Number(flag('first-stage-top-k', '200')),
+  rerankerInputTopK: Number(flag('reranker-input-top-k', '128')),
   lensTopK: Number(flag('lens-top-k', '36')),
   lensWeight: Number(flag('lens-weight', '0.10')),
   anchorWeight: Number(flag('anchor-weight', '0.15')),

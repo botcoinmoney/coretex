@@ -218,6 +218,7 @@ const DEFAULTS = {
   rerankerTopK: profile.rerankerTopK ?? 10,
   retrievalKeyTopK: profile.retrievalKeyTopK ?? 50,
   firstStageTopK: profile.firstStageTopK ?? 200,
+  rerankerInputTopK: profile.rerankerInputTopK ?? 128,
   lensTopK: profile.lensTopK ?? 36,
   lensWeight: profile.lensWeight ?? 0.10,
   anchorWeight: profile.anchorWeight ?? 0.15,
