@@ -541,6 +541,69 @@ Phase B trigger condition: when worst-stratum recall@K under `firstStageTopK` dr
 
 Phase A pins the epoch-0 values. Phase A also pins the recalibration commitment — without it, Phase A is a single point in time that progressively degrades as corpus grows. Treat this as a launch-blocking commitment, not "we'll figure it out later."
 
+## 11.5. Final anti-cheat sweep (open-source replay-validator threat model)
+
+Threat model: a miner clones the public CoreTex repo, loads the pinned
+bundle, runs the canonical scorer against any pack they choose. What's
+the worst they can do?
+
+**Verified enforced**:
+
+| Boundary | Mechanism | Status |
+|---|---|---|
+| Opaque rejection envelope | `sanitizeSubmitResponse` collapses every non-accepted result to `{status:'rejected', code:'rejected'}` | ✅ shipped |
+| Receipt allow-listing | `sanitizeReceiptEnvelope` keeps only `{keyId, algorithm, signature, signedFields, sig}` | ✅ shipped |
+| PublicCorpusIndex type boundary | `firstStageCandidates` signature accepts only `PublicCorpusIndex` (no qrels, no truths) | ✅ compile-time |
+| Stage-2 cannot manufacture docs | BFS only adds docs reachable via corpus-native `event.relations` | ✅ shipped |
+| Lens-diversity floor wired live | `decodeSubstrate` receives `lensDiversityFloor` + `retrievalKeyLayout` from `ScoringOptions`; collapsed-lens substrate fails structural validity → composite × 0 | ✅ shipped (this commit) |
+| Relation-edge domain-share predicate | edges where source/target slots don't share `domainCode` are dropped at decode | ✅ shipped |
+| Pipeline-version pin enforcement | `assertPipelineVersionMatches` throws fail-closed when bundle pins a non-matching version (override env exists for emergency rollback only) | ✅ shipped (this commit) |
+| Commit-reveal randomness on hidden pack | on-chain `evalSeedCommit` / `evalSeedReveal` lets miners learn the pack only after their patch is committed | ✅ on-chain (existing) |
+| Cross-host replay determinism | byte-identical Top-K + canonical stage-2 BFS + `finalReorderingScore` tie-break by docId | ✅ shipped + Test D PASS |
+
+**Acceptable info miners can derive** (open-source / public by design):
+
+* All bundle profile pins (`firstStageTopK`, `lensWeight`, …) — meant
+  to be public so replay validators can reproduce.
+* The full v2-lens scoring algorithm — open source.
+* All eval_hidden events as plain corpus content — public; only the
+  per-epoch SAMPLE seed is gated.
+* Their own scoring results via the `coretex-eval` harness, on any
+  split they choose.
+
+**What miners CANNOT do via the open-source repo**:
+
+1. Predict the coordinator's hidden-pack sample seed before it commits.
+2. Inject query truth docs into the candidate pool through the scorer
+   (compile-time blocked).
+3. Manufacture a substrate that boosts docs not already in the corpus
+   (BFS is corpus-native only).
+4. Game the lens-diversity floor by setting all lenses colinear (now
+   wired live; collapsed substrate floors composite to 0).
+5. Silently replay against a different pipeline version (assert throws).
+
+**Iteration speed is fair, oracle access is not.** The harness lets
+miners iterate against the visible/calibration split as fast as they
+want. Submitting that iteration's winner gets evaluated against the
+*coordinator's* hidden pack — different sample, same family
+distribution. A patch that genuinely improves retrieval policy lifts
+both visible and hidden composites; a patch that over-fits visible
+fails the hidden-pack score via `minImprovementPpm`. That is the
+designed economic incentive.
+
+**Remaining gameability surfaces flagged in the auditor's earlier
+review and now closed**:
+
+* Single-direction lens collapse → §6.4 lens-diversity floor, **wired
+  live this commit**.
+* Bridge-edge relation poisoning → §6.4 domain-share predicate (decode
+  drop).
+* Lens-vector gradient probing → rate-limit + structural floors (still
+  the recommended fallback; per-pack lens noise considered overcorrection
+  in the hardening doc and not adopted).
+* Pipeline-version downgrade → §6.6 `assertPipelineVersionMatches`,
+  **wired live this commit**.
+
 ## 12. References
 
 - Auditor session, 2026-05-15 — *"the substrate has currently doing the bi-encoder's job, badly, against 36 prequantized vectors that miners must inscribe one event at a time."*

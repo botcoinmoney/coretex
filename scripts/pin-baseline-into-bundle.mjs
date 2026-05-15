@@ -123,6 +123,8 @@ const scoringOpts = {
   relationExpansionBudget: profile.relationExpansionBudget ?? 50,
   temporalCurrentBoost: profile.temporalCurrentBoost ?? 0.10,
   temporalStaleSuppression: profile.temporalStaleSuppression ?? 0.10,
+  lensDiversityFloor: profile.lensDiversityFloor,
+  pipelineVersion: profile.pipelineVersion,
 };
 
 // Genesis / empty parent substrate — all-zero 1024-word state.

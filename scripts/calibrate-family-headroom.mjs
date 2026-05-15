@@ -104,6 +104,8 @@ const opts = {
   relationExpansionBudget: profile.relationExpansionBudget ?? 50,
   temporalCurrentBoost: profile.temporalCurrentBoost ?? 0.10,
   temporalStaleSuppression: profile.temporalStaleSuppression ?? 0.10,
+  lensDiversityFloor: profile.lensDiversityFloor,
+  pipelineVersion: profile.pipelineVersion,
 };
 
 const RANGES = { MEMORY_INDEX_START: 32, RETRIEVAL_KEYS_START: 384, RELATIONS_START: 672 };

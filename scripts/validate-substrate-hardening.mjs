@@ -86,6 +86,8 @@ const baseOpts = {
   relationExpansionBudget: profile.relationExpansionBudget ?? 50,
   temporalCurrentBoost: profile.temporalCurrentBoost ?? 0.10,
   temporalStaleSuppression: profile.temporalStaleSuppression ?? 0.10,
+  lensDiversityFloor: profile.lensDiversityFloor,
+  pipelineVersion: profile.pipelineVersion,
 };
 
 const ZERO_STATE = { words: new Array(1024).fill(0n) };
