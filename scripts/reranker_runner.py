@@ -54,7 +54,20 @@ import sys
 from typing import Any, List
 
 # CPU-only enforcement BEFORE any ML imports.
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+#
+# A narrow calibration-only escape hatch exists: CORETEX_RERANKER_ALLOW_CUDA=1
+# lets the runner load the model on CUDA for offline calibration sweeps where
+# CPU throughput is infeasible (e.g. Qwen3-0.6B at ~1 pair/sec on 16-core CPU
+# would take 40+ hours for a full Run 0..4 + variance pack). This is NOT a
+# production path: the bundle profile pins acceleratorPolicy='cpu_only' and
+# assertBundleBindingAtStartup still refuses to start any production binary
+# with CUDA visible. Calibration outputs produced under this flag MUST be
+# validated against the CPU path (smoke parity check) before any value is
+# pinned into a signed bundle, and the calibration report SHOULD note that
+# the values were GPU-accelerated.
+_ALLOW_CUDA = os.environ.get("CORETEX_RERANKER_ALLOW_CUDA") == "1"
+if not _ALLOW_CUDA:
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 os.environ.setdefault("ONNXRUNTIME_PROVIDERS", "CPUExecutionProvider")
 if os.environ.get("CORETEX_USE_GPU") == "1":
     print(json.dumps({"error": "CORETEX_USE_GPU=1 not allowed"}), file=sys.stdout)
@@ -110,14 +123,31 @@ def _load_model(model_id: str, revision: str):
             "missing Python dependencies for reranker: install torch and transformers; "
             + str(exc)
         )
-    if torch.cuda.is_available():
-        fail("torch detected CUDA; refuse to run on canonical scoring path")
+    use_cuda = _ALLOW_CUDA and torch.cuda.is_available()
+    if torch.cuda.is_available() and not _ALLOW_CUDA:
+        fail("torch detected CUDA; refuse to run on canonical scoring path "
+             "(set CORETEX_RERANKER_ALLOW_CUDA=1 to enable for calibration only)")
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         fail("torch detected MPS; refuse to run on canonical scoring path")
 
     num_threads = int(os.environ.get("RERANKER_NUM_THREADS", str(os.cpu_count() or 1)))
     torch.set_num_threads(num_threads)
     torch.set_num_interop_threads(1)
+
+    if use_cuda:
+        # Deterministic GPU math for calibration: matmul kept in fp32 so
+        # composite scores stay within replay tolerance vs the CPU fp32
+        # canonical path. cuDNN benchmark off for repeatability.
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+        print(json.dumps({
+            "warning": "CUDA mode (CORETEX_RERANKER_ALLOW_CUDA=1)",
+            "device": torch.cuda.get_device_name(0),
+            "dtype": "fp32",
+            "tf32": False,
+        }), file=sys.stderr)
 
     tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
@@ -126,7 +156,7 @@ def _load_model(model_id: str, revision: str):
         trust_remote_code=True,
         torch_dtype=torch.float32,
     )
-    model.to("cpu")
+    model.to("cuda" if use_cuda else "cpu")
     model.eval()
 
     yes_id = tokenizer.convert_tokens_to_ids("yes")
@@ -165,7 +195,8 @@ def _score_pairs(torch, tokenizer, model, yes_id: int, no_id: int, prompts: "Lis
                 max_length=max_seq,
                 padding=True,
             )
-            encoded = {k: v.to("cpu") for k, v in encoded.items()}
+            target_device = "cuda" if (_ALLOW_CUDA and torch.cuda.is_available()) else "cpu"
+            encoded = {k: v.to(target_device) for k, v in encoded.items()}
             logits = model(**encoded).logits  # [batch, seq, vocab]
             attn = encoded["attention_mask"]
             # Last real token index per sequence: sum of mask - 1.
