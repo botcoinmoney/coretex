@@ -250,8 +250,8 @@
         "calibrationReport": "release/calibration/first-stage-topk-sweep.json"
       },
       "baselineParentScorePpm": 50000,
-      "baselineVariancePpm": 10254,
-      "baselineSamples": 50,
+      "baselineVariancePpm": 5669,
+      "baselineSamples": 30,
       "baselineEvalSeedHex": "0xbabebabebabebabebabebabebabebabebabebabebabebabebabebabebabebabe",
       "majorDeltaThreshold": 5076
     },
@@ -617,5 +617,5 @@
     "coordinatorCacheOptional": true,
     "snapshots": []
   },
-  "bundleHash": "0xb298669888cca60c0eca1e0ec2d1cf1f570827c0b9582ab5c8a7c121cdf9b7b5"
+  "bundleHash": "0x6c5fa34e3a0c25d3d407de4d44d04531028fa275cc045a2d4a0cade30046cfb5"
 }

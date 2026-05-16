@@ -44,7 +44,10 @@ function flag(name, fb) {
 const corpusPath = flag('corpus');
 const profilePath = flag('bundle-profile');
 const numPacks = Number(flag('num-packs', '50'));
-const packSize = Number(flag('pack-size', '32'));
+// pack-size flag is an OVERRIDE; default is to use profile.hiddenPack.packSize
+// for production-faithful variance measurement against the same pack shape
+// the coordinator will use.
+const packSizeOverride = argv.indexOf('--pack-size') >= 0 ? Number(flag('pack-size', '128')) : null;
 const rerankerArg = flag('reranker', 'deterministic');
 const reportPath = flag('out', '/var/lib/coretex/reports/baseline-variance-v2.json');
 
@@ -55,11 +58,17 @@ const {
   loadProductionCorpus, evaluateRetrievalBenchmarkState,
   biEncoderModelIdHash, rerankerFromEnv, biEncoderFromEnv,
   createDeterministicReranker, createDeterministicBiEncoder,
+  deriveQueryPack,
   DEFAULT_PROFILE,
 } = await import('/root/cortex/packages/cortex/dist/index.js');
+const { buildProvenance } = await import('/root/cortex/scripts/calibration-provenance.mjs');
 
 const profile = profilePath && existsSync(profilePath)
-  ? JSON.parse(readFileSync(profilePath, 'utf8'))
+  ? (() => {
+      const raw = JSON.parse(readFileSync(profilePath, 'utf8'));
+      // Profile JSON has nested shape `{ inputs, profile: {...} }`; unwrap.
+      return raw.profile ?? raw;
+    })()
   : DEFAULT_PROFILE;
 
 console.log(`[run2-variance] loading corpus`);
@@ -102,27 +111,28 @@ const opts = {
   pipelineVersion: profile.pipelineVersion,
 };
 
-// Build N packs from the eval_hidden split, each with a different deterministic seed.
-function buildPack(seedNum, packSize) {
-  const events = corpus.events.filter((e) => e.split === 'eval_hidden');
-  // Stratified-deterministic sample
+// PRODUCTION-FAITHFUL pack derivation: use the same `deriveQueryPack` that
+// the coordinator uses to derive hidden packs from on-chain eval seeds. This
+// applies the bundle profile's strict family-stratification quotas (e.g.
+// near_collision medium ≥ 35, long_horizon medium ≥ 20). Pack size comes
+// from the profile's `hiddenPack.packSize` (production pin: 128), not from
+// the CLI flag — the flag is now an override for the override-rare case.
+// Without this fix, Run 2's variance estimate was for a non-production pack
+// shape (raw eval_hidden, no quotas, smaller packSize) and overstated σ.
+function buildPack(seedNum) {
   const seedHex = '0x' + createHash('sha256').update(`baseline-variance:${seedNum}`).digest('hex');
-  const scored = events.map((e) => ({
-    e,
-    s: parseInt(createHash('sha256').update(seedHex + ':' + e.id).digest('hex').slice(0, 8), 16) / 0xffffffff,
-  }));
-  scored.sort((a, b) => a.s - b.s);
-  return {
-    epochId: 0,
-    evalSeedCommit: seedHex,
-    events: scored.slice(0, packSize).map((x) => x.e),
-  };
+  const hiddenProfile = profile.hiddenPack ?? { packSize, quotas: [] };
+  // If user supplied a pack-size override, respect it but keep quotas.
+  const useProfile = packSizeOverride
+    ? { packSize: packSizeOverride, quotas: hiddenProfile.quotas ?? [] }
+    : hiddenProfile;
+  return deriveQueryPack(0, seedHex, corpus, useProfile);
 }
 
 const composites = [];
 const perPackReports = [];
 for (let k = 0; k < numPacks; k++) {
-  const pack = buildPack(k, packSize);
+  const pack = buildPack(k);
   const t = Date.now();
   const score = await evaluateRetrievalBenchmarkState(ZERO_STATE, corpus, pack, opts);
   const elapsed = Date.now() - t;
@@ -150,9 +160,16 @@ const ciHalfWidth = 1.96 / Math.sqrt(2 * (composites.length - 1));
 const sigmaPpmLow = Math.round(sigmaPpm * (1 - ciHalfWidth));
 const sigmaPpmHigh = Math.round(sigmaPpm * (1 + ciHalfWidth));
 
+// Re-derive a sample pack to report effective packSize (after quotas).
+const samplePack = buildPack(0);
+const effectivePackSize = samplePack.events.length;
+
 const report = {
-  schemaVersion: 'coretex.baseline-variance-v2.v1',
+  schemaVersion: 'coretex.baseline-variance-v2.v2',
   generatedAt: new Date().toISOString(),
+  provenance: buildProvenance(),
+  fidelity: 'PRODUCTION_FAITHFUL',
+  fidelityNotes: 'Uses deriveQueryPack with profile.hiddenPack.packSize + family-stratification quotas — exactly the pack shape the coordinator derives per-patch from on-chain eval seeds. Variance estimate represents production per-patch acceptance noise.',
   inputs: {
     corpus: corpusPath,
     corpusRoot: corpus.corpusRoot,
@@ -160,7 +177,11 @@ const report = {
     rerankerMode: rerankerArg,
     rerankerModel: reranker.model,
     numPacks,
-    packSize,
+    packSize: effectivePackSize,
+    packSizeFromProfile: profile.hiddenPack?.packSize ?? null,
+    packSizeOverride,
+    hiddenPackQuotas: profile.hiddenPack?.quotas ?? null,
+    pipelineVersion: profile.pipelineVersion ?? null,
   },
   meanComposite: mean,
   sigmaComposite: sigma,

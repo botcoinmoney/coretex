@@ -62,11 +62,13 @@ const {
   encodeMemoryIndexSlot, encodeRetrievalKeySlot,
   encodeRelationEdge, encodeRelationCategoryLens,
   stableRecordIdFor,
+  deriveQueryPack,
   DEFAULT_PROFILE,
 } = await import('/root/cortex/packages/cortex/dist/index.js');
+const { buildProvenance } = await import('/root/cortex/scripts/calibration-provenance.mjs');
 
 const profile = profilePath && existsSync(profilePath)
-  ? JSON.parse(readFileSync(profilePath, 'utf8'))
+  ? (() => { const r = JSON.parse(readFileSync(profilePath, 'utf8')); return r.profile ?? r; })()
   : DEFAULT_PROFILE;
 
 console.log(`[run4-minimp] loading corpus`);
@@ -109,8 +111,17 @@ const RANGES = { MEMORY_INDEX_START: 32, RETRIEVAL_KEYS_START: 384, RELATIONS_ST
 
 // Use canonical stableRecordIdFor imported below — NOT a sha256 local copy.
 
-// Build packs for visible (train_visible split) and hidden (eval_hidden) sides.
+// PRODUCTION-FAITHFUL hidden-pack derivation via `deriveQueryPack` (strict
+// stratification quotas from profile.hiddenPack). Visible-pack stays raw
+// because the miner's training-set proxy doesn't have a production analog
+// — miners can self-eval against any split they choose, so raw sampling is
+// representative of that.
 function buildSplitPack(splitName, seedNum) {
+  if (splitName === 'eval_hidden' && profile.hiddenPack) {
+    const sk = '0x' + createHash('sha256').update(`${seedHex}:hidden:${seedNum}`).digest('hex');
+    return deriveQueryPack(0, sk, corpus, profile.hiddenPack);
+  }
+  // visible side: raw split sample at packSize (miner-training proxy)
   const events = corpus.events.filter((e) => e.split === splitName);
   const seedKey = seedHex + ':' + seedNum;
   const scored = events.map((e) => ({
@@ -235,26 +246,29 @@ for (const surface of surfaces) {
   adversarialTrials.push({ surface, visibleDelta, hiddenDelta });
 }
 
-const thresholds = [500, 1000, 2500, 5000];
-function sweep(trials, label) {
+// Production-correct classification: production accepts iff hiddenΔ ≥ T.
+// `accepts` is the count of patches that would land on-chain at threshold T.
+// For RANDOM patches: accepts ≈ pack-luck noise (no real lift, just stratified-sample variance).
+// For ADVERSARIAL hill-climbed patches: accepts = patches that overfit visible enough
+//   to also leak past hidden — should be ~0 at correctly-pinned T.
+// Operators pick T such that adversarial accepts ≤ 1% AND random accepts ≤ tolerable noise rate.
+const thresholds = [500, 1000, 2500, 5000, 10000, 20000, 32000, 50000, 75000, 100000];
+function sweep(trials) {
   return thresholds.map((T) => {
-    // False-accept: visible above T but hidden below T
-    let fa = 0, fr = 0, tp = 0, tn = 0;
+    let accepts = 0, rejects = 0;
     for (const t of trials) {
-      const passVisible = t.visibleDelta >= T;
-      const passHidden = t.hiddenDelta >= T;
-      if (passVisible && passHidden) tp++;
-      else if (passVisible && !passHidden) fa++;
-      else if (!passVisible && passHidden) fr++;
-      else tn++;
+      if (t.hiddenDelta >= T) accepts++; else rejects++;
     }
-    return { threshold: T, falseAccept: fa, falseReject: fr, truePos: tp, trueNeg: tn };
+    return { threshold: T, accepts, rejects, accepts_pct: trials.length ? +(accepts*100/trials.length).toFixed(2) : 0 };
   });
 }
 
 const report = {
-  schemaVersion: 'coretex.min-improvement-sweep.v1',
+  schemaVersion: 'coretex.min-improvement-sweep.v2',
   generatedAt: new Date().toISOString(),
+  provenance: buildProvenance(),
+  fidelity: profile.hiddenPack ? 'PRODUCTION_FAITHFUL_HIDDEN' : 'DIAGNOSTIC',
+  fidelityNotes: 'Threshold sweep classifies acceptance via hiddenΔ ≥ T (production semantics). Hidden pack uses deriveQueryPack with profile.hiddenPack quotas (production-faithful). Visible pack is raw train_visible sample (miner training-set proxy, no production analog).',
   inputs: {
     corpus: corpusPath,
     corpusRoot: corpus.corpusRoot,
@@ -263,17 +277,27 @@ const report = {
     rerankerModel: reranker.model,
     numPatches,
     hillSteps,
-    packSize,
+    visiblePackSize: visiblePack.events.length,
+    hiddenPackSize: hiddenPack.events.length,
+    pipelineVersion: profile.pipelineVersion ?? null,
+    pinnedThreshold: {
+      minImprovementPpm: profile.patchAcceptanceFloors?.minImprovementPpm ?? null,
+      replayTolerancePpm: profile.replayTolerancePpm ?? null,
+      baselineVariancePpm: profile.baselineVariancePpm ?? null,
+      total: (profile.patchAcceptanceFloors?.minImprovementPpm ?? 0)
+           + (profile.replayTolerancePpm ?? 0)
+           + (profile.baselineVariancePpm ?? 0),
+    },
   },
   parent: { visibleComposite: parentVisible.composite, hiddenComposite: parentHidden.composite },
-  random: { trials: randomTrials, sweep: sweep(randomTrials, 'random') },
-  adversarial: { trials: adversarialTrials, sweep: sweep(adversarialTrials, 'adversarial') },
+  random: { trials: randomTrials, sweep: sweep(randomTrials) },
+  adversarial: { trials: adversarialTrials, sweep: sweep(adversarialTrials) },
 };
 mkdirSync(dirname(reportPath), { recursive: true });
 writeFileSync(reportPath, JSON.stringify(report, null, 2));
 console.log(`[run4-minimp] report → ${reportPath}`);
-console.log(`Random sweep:`);
-for (const r of report.random.sweep) console.log(`  T=${r.threshold} FA=${r.falseAccept} FR=${r.falseReject} TP=${r.truePos} TN=${r.trueNeg}`);
-console.log(`Adversarial (hill-climbed) sweep:`);
-for (const r of report.adversarial.sweep) console.log(`  T=${r.threshold} FA=${r.falseAccept} FR=${r.falseReject} TP=${r.truePos} TN=${r.trueNeg}`);
+console.log(`Random accept-rate at each threshold (hiddenΔ ≥ T):`);
+for (const r of report.random.sweep) console.log(`  T=${r.threshold} accepts=${r.accepts}/${randomTrials.length} (${r.accepts_pct}%)`);
+console.log(`Adversarial accept-rate (hill-climbed visible-overfit, hiddenΔ ≥ T):`);
+for (const r of report.adversarial.sweep) console.log(`  T=${r.threshold} accepts=${r.accepts}/${adversarialTrials.length} (${r.accepts_pct}%)`);
 exit(0);
