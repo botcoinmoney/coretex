@@ -360,7 +360,12 @@ async function main() {
   let fullCorpus;
   if (corpusPath) {
     try {
-      fullCorpus = loadProductionCorpus(corpusPath);
+      // Skip Merkle root + split-assignment verification on launch — that
+      // adds 30-60 min of CPU hashing for 678k events and produces no
+      // simulation signal (the corpus is already verified in CI and the
+      // signed bundle pins its root). Without this we wait ~2 min for
+      // streaming-load instead of ~45 min for full verification.
+      fullCorpus = loadProductionCorpus(corpusPath, { verifyCorpusRoot: false, verifySplits: false });
     } catch (err) {
       const msg = String(err?.message ?? err);
       if (msg.includes('Cannot create a string longer')) {
