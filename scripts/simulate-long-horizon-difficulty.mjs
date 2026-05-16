@@ -446,7 +446,14 @@ async function main() {
   let cachedBaselineCorpusRoot = null;
   let cachedBaselineEpoch = 0;
 
+  const _simStart = Date.now();
+  console.error(`[long-horizon] setup complete, starting ${epochs} epochs at ${new Date().toISOString()}`);
+  console.error(`[long-horizon] corpus: ${fullCorpus.events.length} events, pipelineVersion: ${profile.pipelineVersion}`);
+  console.error(`[long-horizon] pack profile from bundle: packSize=${profile.hiddenPack.packSize} quotas=${profile.hiddenPack.quotas?.length ?? 0}`);
+
   for (let epoch = 1; epoch <= epochs; epoch++) {
+    const _epochStart = Date.now();
+    console.error(`[long-horizon] === epoch ${epoch}/${epochs} starting (elapsed ${((Date.now()-_simStart)/60000).toFixed(1)} min) ===`);
     const fractionIndex = Math.min(
       activeFractions.length - 1,
       Math.floor((epoch - 1) / Math.max(1, epochsPerFraction)),
@@ -566,6 +573,18 @@ async function main() {
     });
 
     currentMinImprovement = difficulty.next;
+    const _epochDur = ((Date.now() - _epochStart) / 60000).toFixed(2);
+    const _accRate = randomProbe ? `acceptRate=${(randomProbe.acceptanceRate*100).toFixed(1)}%` : '';
+    console.error(`[long-horizon] epoch ${epoch}/${epochs} done in ${_epochDur} min. minImpr ${difficulty.current}→${difficulty.next} ${_accRate}`);
+    // Periodic intermediate snapshot — write partial results every 5 epochs
+    // so a mid-run crash doesn't lose all data.
+    if (epoch % 5 === 0 || epoch === epochs) {
+      try {
+        const snap = { generatedAt: new Date().toISOString(), partial: true, epochsCompleted: epoch, epochs: epochsOut.slice() };
+        writeFileSync(outPath + '.partial', JSON.stringify(snap, null, 2));
+        console.error(`[long-horizon] partial snapshot written (epoch ${epoch})`);
+      } catch (e) { console.error(`[long-horizon] partial write failed: ${e.message}`); }
+    }
   }
 
   const minVals = epochsOut.map((e) => e.minImprovementPpmAfter);

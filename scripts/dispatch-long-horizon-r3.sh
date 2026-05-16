@@ -44,7 +44,7 @@ RERANKER_INNER_BATCH=64 \
 CORETEX_BIENCODER=pinned \
 HF_HOME=/root/.cache/huggingface \
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-nohup node --max-old-space-size=20480 scripts/simulate-long-horizon-difficulty.mjs \
+nohup stdbuf -oL -eL node --max-old-space-size=20480 scripts/simulate-long-horizon-difficulty.mjs \
   --bundle-manifest /workspace/cortex/release/bundle/bundle-manifest-launch-v3.json \
   --corpus /workspace/corpus-epoch-0-launch-MERGED.json \
   --epochs 60 \
