@@ -64,6 +64,7 @@ const {
   createDeterministicReranker, createDeterministicBiEncoder,
   encodeMemoryIndexSlot, encodeRetrievalKeySlot,
   encodeRelationEdge, encodeRelationCategoryLens,
+  stableRecordIdFor,
   DEFAULT_PROFILE,
 } = await import('/root/cortex/packages/cortex/dist/index.js');
 
@@ -111,12 +112,7 @@ const opts = {
 
 const RANGES = { MEMORY_INDEX_START: 32, RETRIEVAL_KEYS_START: 384, RELATIONS_START: 672 };
 
-function stableRecordIdLow128(id) {
-  const h = createHash('sha256').update(`coretex:record:${id}`).digest();
-  let v = 0n;
-  for (let i = 0; i < 16; i++) v = (v << 8n) | BigInt(h[i]);
-  return v;
-}
+// Use canonical stableRecordIdFor imported below — NOT a sha256 local copy.
 
 // Build feasible-upper-bound substrate from a family's pack.
 function buildFeasibleUpperBound(packEvents, family) {
@@ -141,7 +137,7 @@ function buildFeasibleUpperBound(packEvents, family) {
     const ev = entityEvents[i];
     const slot = {
       slotIndex: i,
-      recordId: stableRecordIdLow128(ev.id),
+      recordId: stableRecordIdFor(ev.id),
       family: ev.family,
       domainBits: sharedDomain,
       valid: true,

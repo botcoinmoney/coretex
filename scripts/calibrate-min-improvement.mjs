@@ -61,6 +61,7 @@ const {
   createDeterministicReranker, createDeterministicBiEncoder,
   encodeMemoryIndexSlot, encodeRetrievalKeySlot,
   encodeRelationEdge, encodeRelationCategoryLens,
+  stableRecordIdFor,
   DEFAULT_PROFILE,
 } = await import('/root/cortex/packages/cortex/dist/index.js');
 
@@ -106,12 +107,7 @@ const opts = {
 
 const RANGES = { MEMORY_INDEX_START: 32, RETRIEVAL_KEYS_START: 384, RELATIONS_START: 672 };
 
-function stableRecordIdLow128(id) {
-  const h = createHash('sha256').update(`coretex:record:${id}`).digest();
-  let v = 0n;
-  for (let i = 0; i < 16; i++) v = (v << 8n) | BigInt(h[i]);
-  return v;
-}
+// Use canonical stableRecordIdFor imported below — NOT a sha256 local copy.
 
 // Build packs for visible (train_visible split) and hidden (eval_hidden) sides.
 function buildSplitPack(splitName, seedNum) {
@@ -152,7 +148,7 @@ function randomPatch(surface, parentWords, salt) {
     const randEvent = corpus.events[Math.floor(parseInt(createHash('sha256').update(`${salt}:ev`).digest('hex').slice(0, 8), 16) / 0x100000000 * corpus.events.length)];
     const slot = {
       slotIndex: i,
-      recordId: stableRecordIdLow128(randEvent.id),
+      recordId: stableRecordIdFor(randEvent.id),
       family: randEvent.family,
       domainBits: 1n,
       valid: true,

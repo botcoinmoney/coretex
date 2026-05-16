@@ -8,9 +8,14 @@
     "determinismAggregate": "/var/lib/coretex/reports/determinism-aggregate.json",
     "calibrationRuns": {
       "firstStageTopK": "release/calibration/first-stage-topk-sweep.json",
-      "baselineVariance": "release/calibration/baseline-variance-v2-deterministic.json",
-      "familyHeadroom": "release/calibration/family-headroom-deterministic.json",
-      "minImprovement": "release/calibration/min-improvement-sweep-deterministic.json",
+      "stage2Scalars": "release/calibration/a100-2026-05-16/stage2-scalar-sweep-r4.json",
+      "baselineVariance": "release/calibration/a100-2026-05-16/baseline-variance-r3.json",
+      "familyHeadroom": "release/calibration/a100-2026-05-16/family-headroom-r3.json",
+      "minImprovement": "release/calibration/a100-2026-05-16/min-improvement-r3.json",
+      "capSensitivity": "release/calibration/a100-2026-05-16/cap-sensitivity-r3.json",
+      "g1g2FunnelRecall": "release/calibration/a100-2026-05-16/gate-g1-g2-v5-funnel-recall.json",
+      "diagnoseMultihop": "release/calibration/a100-2026-05-16/diagnose-multihop.json",
+      "supersededRun0": "release/calibration/a100-2026-05-15/stage2-scalar-sweep.json (SUPERSEDED: anchors invisible due to sha256/keccak256 hash mismatch in calibrate-stage2-scalars.mjs; results invalid. Fixed in commit 96b064e and re-run as stage2-scalar-sweep-r4.json.)",
       "validation": "release/validation/validation-suite-A-C-D-I-K.json"
     }
   },
@@ -43,11 +48,15 @@
       "w_structural_sanity": 0.05
     },
     "patchAcceptanceFloors": {
-      "minImprovementPpm": 2500,
+      "minImprovementPpm": 32000,
       "structuralFloor": 0.95,
       "protectedRegressionFloor": 0.05,
       "familyCatastrophicFloor": 0.85
     },
+    "baselineParentScorePpm": 50000,
+    "baselineVariancePpm": 10254,
+    "baselineSamples": 50,
+    "baselineEvalSeedHex": "0xbabebabebabebabebabebabebabebabebabebabebabebabebabebabebabebabe",
     "splitRatios": {
       "trainVisiblePct": 70,
       "calibrationPct": 10,
@@ -102,8 +111,8 @@
     "firstStageTopK": 3200,
     "rerankerInputTopK": 128,
     "lensTopK": 36,
-    "lensWeight": 0.025,
-    "anchorWeight": 0.0375,
+    "lensWeight": 0.4,
+    "anchorWeight": 0.6,
     "relationExpansionBudget": 12,
     "temporalCurrentBoost": 0.1,
     "temporalStaleSuppression": 0.1,

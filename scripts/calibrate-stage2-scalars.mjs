@@ -76,8 +76,10 @@ const {
   encodeMemoryIndexSlot,
   encodeRetrievalKeySlot,
   encodeRelationEdge,
+  stableRecordIdFor,
   DEFAULT_PROFILE,
 } = await import('/root/cortex/packages/cortex/dist/index.js');
+const { buildProvenance } = await import('/root/cortex/scripts/calibration-provenance.mjs');
 
 console.log(`[calibrate-stage2] loading corpus ${corpusPath}`);
 const t0 = Date.now();
@@ -120,14 +122,12 @@ function buildEngineeredState() {
     RELATIONS_START: 672,
   };
 
-  // Helper: keccak256(`coretex:record:${id}`) low-128 — matches stableRecordIdFor.
-  const stableRecordIdLow128 = (id) => {
-    const enc = new TextEncoder();
-    const hashBytes = createHash('sha256').update(enc.encode(`coretex:record:${id}`)).digest();
-    let v = 0n;
-    for (let i = 0; i < 16; i++) v = (v << 8n) | BigInt(hashBytes[i]);
-    return v;
-  };
+  // Use the canonical stableRecordIdFor — NOT a local sha256 reimplementation.
+  // The scorer's corpusByRecordId index uses keccak256-derived bigints; any
+  // hash mismatch makes engineered anchors invisible to the scorer (silent
+  // architecture leak). This bug was present in this script since Run 0 and
+  // invalidates any prior calibration that depended on engineered anchor
+  // structure. See commit message of 96b064e for full context.
 
   // Pick a single domain bit for the engineered substrate so all anchors share
   // a domain (required by the §6.4 relation-edge predicate).
@@ -138,7 +138,7 @@ function buildEngineeredState() {
     // ─ Memory index slot i
     const memSlot = {
       slotIndex: i,
-      recordId: stableRecordIdLow128(ev.id),
+      recordId: stableRecordIdFor(ev.id),
       family: ev.family,
       domainBits: sharedDomain,
       valid: true,
@@ -229,9 +229,14 @@ const DEFAULTS = {
   pipelineVersion: profile.pipelineVersion,
 };
 
+// Extended sweep range — original {0, 0.025, 0.1, 0.4} pinned at the upper
+// boundary (gap was monotonically increasing), which is a *boundary*, not an
+// elbow. Sweep further to find the real saturation knee or confirm the gap
+// keeps growing (in which case the substrate dominates the reranker, which
+// is its own design concern).
 const SWEEPS = {
-  lensWeight: [0, 0.025, 0.10, 0.40],
-  anchorWeight: [0, 0.0375, 0.15, 0.60],
+  lensWeight: [0, 0.1, 0.4, 0.8, 1.5, 3.0],
+  anchorWeight: [0, 0.15, 0.6, 1.2, 2.4, 5.0],
   relationExpansionBudget: [0, 12, 50, 200],
 };
 
@@ -289,16 +294,22 @@ const pinned = {
 const anyGap = results.some((r) => Math.abs(r.gap) > 1e-4);
 
 const report = {
-  schemaVersion: 'coretex.stage2-scalar-sweep.v1',
+  schemaVersion: 'coretex.stage2-scalar-sweep.v2',
   generatedAt: new Date().toISOString(),
+  provenance: buildProvenance(),
   inputs: {
     corpus: corpusPath,
     corpusRoot: corpus.corpusRoot,
     eventCount: corpus.events.length,
     bundleProfile: profilePath ?? null,
     rerankerMode: rerankerArg,
+    rerankerModelId: BI.modelId,
+    rerankerRevision: BI.revision,
     packSeedHex: seedHex,
     packSize: pack.events.length,
+    pipelineVersion: profile.pipelineVersion,
+    rerankerInputTopK: profile.rerankerInputTopK,
+    firstStageTopK: profile.firstStageTopK,
   },
   sweeps: SWEEPS,
   results,

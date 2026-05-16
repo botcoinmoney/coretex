@@ -165,7 +165,7 @@
         "w_structural_sanity": 0.05
       },
       "patchAcceptanceFloors": {
-        "minImprovementPpm": 2500,
+        "minImprovementPpm": 32000,
         "structuralFloor": 0.95,
         "protectedRegressionFloor": 0.05,
         "familyCatastrophicFloor": 0.85
@@ -225,12 +225,13 @@
         "targetBlockOffset": 30,
         "replayBlockhashLookbackBlocks": 50000
       },
-      "pipelineVersion": "coretex-retrieval-v2-lens",
+      "pipelineVersion": "coretex-retrieval-v2-lens-r3",
       "firstStageTopK": 3200,
+      "rerankerInputTopK": 128,
       "lensTopK": 36,
-      "lensWeight": 0.1,
-      "anchorWeight": 0.15,
-      "relationExpansionBudget": 50,
+      "lensWeight": 0.4,
+      "anchorWeight": 0.6,
+      "relationExpansionBudget": 12,
       "temporalCurrentBoost": 0.1,
       "temporalStaleSuppression": 0.1,
       "lensDiversityFloor": 0.7,
@@ -248,6 +249,10 @@
         ],
         "calibrationReport": "release/calibration/first-stage-topk-sweep.json"
       },
+      "baselineParentScorePpm": 50000,
+      "baselineVariancePpm": 10254,
+      "baselineSamples": 50,
+      "baselineEvalSeedHex": "0xbabebabebabebabebabebabebabebabebabebabebabebabebabebabebabebabe",
       "majorDeltaThreshold": 5076
     },
     "files": [
@@ -260,8 +265,8 @@
       {
         "role": "evaluator",
         "path": "packages/cortex/src/eval/retrieval-benchmark.ts",
-        "sha256": "f6f6728b0ca3dc1f8944abf268a02930fe369f04667d495bcc1e00fbcde5b1e9",
-        "bytes": 39517
+        "sha256": "c02daf01ba0b99b89ffef7ed93b95c6f2c09e78f8543bbf5004840e70712fa15",
+        "bytes": 46594
       },
       {
         "role": "evaluator",
@@ -612,5 +617,5 @@
     "coordinatorCacheOptional": true,
     "snapshots": []
   },
-  "bundleHash": "0xb3c952c86cc2a2cd0e43045b0988bf57bc0bfacca1ed1d08f3282645ad6bc4c4"
+  "bundleHash": "0xb298669888cca60c0eca1e0ec2d1cf1f570827c0b9582ab5c8a7c121cdf9b7b5"
 }
