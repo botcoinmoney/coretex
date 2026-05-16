@@ -379,6 +379,17 @@ map.
 - 2.3 Anvil e2e green — substrate changes faithfully replay
 - 3 launch corpus generated — capacity gate passes against real corpus
 - 4 final bundle built, signed, replay-reproducible
+- 4.1 **substrate-as-router calibration green (2026-05-16-r3-faithful)** — bundleHash `0x6c5fa34e…`, Run 0/Run 2b/Run 4 + G1+G2 funnel-recall + cap sensitivity all pass against the v2-lens-r3 scorer. See `release/calibration/CALIBRATION_FIDELITY.md`.
+- 4.2 **long-horizon sim green on v3-r3 bundle** (gate row added 2026-05-16): `scripts/simulate-long-horizon-difficulty.mjs` run against pinned bundle `0x6c5fa34e…` PASSES iff:
+  - **No sustained plateau**: MA of scoreDeltaPpm > 0 for ≥ 90% of epochs (substrate keeps producing acceptable patches over the simulation horizon — not "miners run out of headroom after 2 epochs").
+  - **Acceptable FA rate**: random-patch false-accept rate against pinned threshold (37919 ppm = 32000 + 250 + 5669) stays ≤ 2% per epoch averaged over the run.
+  - **Expected difficulty trajectory**: `nextMinImprovementPpm` rises monotonically (or stays flat in major-delta-grace cycles) under the corpus-growth schedule — not collapsing to floor or oscillating wildly.
+  - FAIL remediation knobs (apply ONE at a time, re-run sim, re-commit):
+    1. `minImprovementPpm` (raise if FA > 2%, lower if substrate plateaus due to floor being too punitive)
+    2. `rerankerInputTopK` (raise if substrate is starved of routing choices; lower if cap-induced staleness)
+    3. `relationExpansionBudget` (raise if Phase B BFS is the bottleneck for hard families post-anchor-mandatory)
+    4. `majorDeltaThreshold` (cron/H3 mechanism — adjust grace-cycle trigger)
+  - Status: NOT YET RUN. Next session: dispatch on a fresh A100-SXM 80GB rental (~$1.088/hr, ~3-5 hr wall-clock at sim-scoped pack-size=16, ~$3-5 cost).
 - 5 coordinator smoke green
 - 6 mainnet canary green, replay watcher reproduces
 - 7 watcher fleet running, heartbeat dashboards live
