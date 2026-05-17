@@ -576,14 +576,31 @@ async function main() {
     const _epochDur = ((Date.now() - _epochStart) / 60000).toFixed(2);
     const _accRate = randomProbe ? `acceptRate=${(randomProbe.acceptanceRate*100).toFixed(1)}%` : '';
     console.error(`[long-horizon] epoch ${epoch}/${epochs} done in ${_epochDur} min. minImpr ${difficulty.current}→${difficulty.next} ${_accRate}`);
-    // Periodic intermediate snapshot — write partial results every 5 epochs
+    // Periodic intermediate snapshot — write partial results every 2 epochs
     // so a mid-run crash doesn't lose all data.
-    if (epoch % 5 === 0 || epoch === epochs) {
+    if (epoch % 2 === 0 || epoch === epochs) {
       try {
         const snap = { generatedAt: new Date().toISOString(), partial: true, epochsCompleted: epoch, epochs: epochsOut.slice() };
         writeFileSync(outPath + '.partial', JSON.stringify(snap, null, 2));
         console.error(`[long-horizon] partial snapshot written (epoch ${epoch})`);
       } catch (e) { console.error(`[long-horizon] partial write failed: ${e.message}`); }
+    }
+
+    // §Early-stop (auditor-recommended): stop when both FA rate AND
+    // difficulty trajectory have been stable for N consecutive epochs.
+    // Saves compute when the sim has reached an equilibrium.
+    const earlyStopWindow = parseInt(env.LONG_HORIZON_EARLY_STOP_WINDOW ?? '0', 10);
+    if (earlyStopWindow > 0 && epoch >= earlyStopWindow + 4) {
+      const tail = epochsOut.slice(-earlyStopWindow);
+      const accRates = tail.map((e) => e.randomProbe?.acceptanceRate ?? 0);
+      const minImprs = tail.map((e) => Number(e.minImprovementPpmAfter));
+      const accVar = Math.max(...accRates) - Math.min(...accRates);
+      const minVar = Math.max(...minImprs) - Math.min(...minImprs);
+      // Stable = FA rate spread ≤ 1% AND minImpr unchanged for window
+      if (accVar <= 0.01 && minVar === 0) {
+        console.error(`[long-horizon] EARLY STOP at epoch ${epoch}: FA rate + difficulty stable over last ${earlyStopWindow} epochs (accVar=${accVar.toFixed(3)}, minImprVar=${minVar})`);
+        break;
+      }
     }
   }
 

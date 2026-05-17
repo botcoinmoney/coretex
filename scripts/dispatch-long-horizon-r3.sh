@@ -34,6 +34,19 @@ mkdir -p /workspace/cortex/release/calibration/a100-2026-05-16/long-horizon
 # At the projected $1.088/hr that's ~$51 — higher than initial estimate.
 # If we need to ship faster, drop --probe-random-patches-per-epoch to 5 → ~28 hr.
 
+# Reduced scope per auditor-validated math (full scope was ~7 days/$183; the
+# 24-epoch / 3-probe / baseline-interval=2 scope is ~21 hr/$23 with the same
+# production-faithful packSize=128 + quotas. Two-pass design (bootstrap vs
+# steady-state) controlled by PASS env var.
+PASS="${PASS:-bootstrap}"  # bootstrap | steady
+case "$PASS" in
+  bootstrap) TARGET_ADV=10; SEED="coretex-horizon-v3-r3-bootstrap-24h" ;;
+  steady)    TARGET_ADV=5;  SEED="coretex-horizon-v3-r3-steady-24h" ;;
+  *) echo "FATAL: PASS must be 'bootstrap' or 'steady', got $PASS"; exit 2 ;;
+esac
+OUT_BASE="/workspace/cortex/release/calibration/a100-2026-05-16/long-horizon/long-horizon-r3-${PASS}"
+echo "[long-horizon] pass=$PASS targetAdvances=$TARGET_ADV seed=$SEED"
+
 CORETEX_RERANKER=qwen3 \
 CORETEX_RERANKER_PRODUCTION=1 \
 CORETEX_RERANKER_MODE=streaming \
@@ -44,22 +57,24 @@ RERANKER_INNER_BATCH=64 \
 CORETEX_BIENCODER=pinned \
 HF_HOME=/root/.cache/huggingface \
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+LONG_HORIZON_EARLY_STOP_WINDOW=8 \
 nohup stdbuf -oL -eL node --max-old-space-size=20480 scripts/simulate-long-horizon-difficulty.mjs \
   --bundle-manifest /workspace/cortex/release/bundle/bundle-manifest-launch-v3.json \
   --corpus /workspace/corpus-epoch-0-launch-MERGED.json \
-  --epochs 60 \
-  --target-advances 5 \
+  --epochs 24 \
+  --target-advances $TARGET_ADV \
   --scenario burst100 \
   --active-eval-hidden-fractions 0.25,0.5,0.75,1.0 \
-  --epochs-per-fraction 15 \
-  --probe-random-patches-per-epoch 10 \
+  --epochs-per-fraction 6 \
+  --probe-random-patches-per-epoch 3 \
   --baseline-samples 1 \
-  --seed "coretex-horizon-v3-r3-launch" \
-  --out /workspace/cortex/release/calibration/a100-2026-05-16/long-horizon/long-horizon-r3.json \
-  > /workspace/cortex/release/calibration/a100-2026-05-16/long-horizon/long-horizon-r3.log 2>&1 &
+  --baseline-recompute-interval 2 \
+  --seed "$SEED" \
+  --out ${OUT_BASE}.json \
+  > ${OUT_BASE}.log 2>&1 &
 
 echo "[long-horizon] spawned PID=$!"
 echo "[long-horizon] tail the log with:"
-echo "  tail -f /workspace/cortex/release/calibration/a100-2026-05-16/long-horizon/long-horizon-r3.log"
+echo "  tail -f ${OUT_BASE}.log"
 echo "[long-horizon] result will be at:"
-echo "  /workspace/cortex/release/calibration/a100-2026-05-16/long-horizon/long-horizon-r3.json"
+echo "  ${OUT_BASE}.json (+.partial snapshots every 2 epochs)"
