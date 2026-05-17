@@ -54,6 +54,9 @@ import {
   PATCH_TYPE,
   RANGES,
   RESERVED_MASKS,
+  encodeMemoryIndexSlot,
+  encodeRetrievalKeySlot,
+  stableRecordIdFor,
 } from '@botcoin/cortex';
 
 function flag(name, fallback = undefined) {
@@ -322,6 +325,68 @@ function randomPatch(state, rand) {
   };
 }
 
+// Positive-control patch (auditor §3): anchor a real event from the active
+// corpus into the current substrate's MemoryIndex, plus install its truth-doc
+// embedding as a lens vector. This is the kind of substrate modification a
+// genuinely-improving miner would make — it should accept at non-zero rate
+// (proves the acceptance path works), unlike random patches which should
+// never accept (proves anti-cheat).
+const MEMORY_INDEX_START = 32;
+const RETRIEVAL_KEYS_START = 384;
+function positiveControlPatch(state, activeCorpus, rand, biEncoderHash, layout) {
+  // Pick a random eval_hidden event (mirrors what a miner discovering hot
+  // entities would do — anchor on events that frequently appear in queries).
+  const hiddenEvents = activeCorpus.events.filter((e) => e.split === 'eval_hidden' && e.truthDocuments?.length);
+  if (hiddenEvents.length === 0) return null;
+  const ev = hiddenEvents[Math.floor(rand() * hiddenEvents.length)];
+  // Find first free MemoryIndex slot (zero recordId word in state).
+  let freeSlot = -1;
+  for (let i = 0; i < 44; i++) {
+    const w0 = state.words[MEMORY_INDEX_START + i * 8] ?? 0n;
+    if (w0 === 0n) { freeSlot = i; break; }
+  }
+  if (freeSlot < 0) freeSlot = Math.floor(rand() * 44); // overwrite if no free
+  // Build the MemoryIndex slot.
+  const memSlot = {
+    slotIndex: freeSlot,
+    recordId: stableRecordIdFor(ev.id),
+    family: ev.family,
+    domainBits: 1n,
+    valid: true, revoked: false, protected: ev.protected ?? false,
+    retrievalSlot: freeSlot % 36,
+    expiryEpoch: 0n,
+  };
+  const memWords = encodeMemoryIndexSlot(memSlot);
+  const truthDoc = ev.truthDocuments.find((t) => t.isCurrent) ?? ev.truthDocuments[0];
+  const truthEmb = ev.embeddings.perTruth.get(truthDoc.id);
+  const indices = [];
+  const newWords = [];
+  for (let j = 0; j < 8; j++) {
+    indices.push(MEMORY_INDEX_START + freeSlot * 8 + j);
+    newWords.push(memWords[j]);
+  }
+  if (truthEmb) {
+    const keyWords = encodeRetrievalKeySlot(
+      { slotIndex: freeSlot, modelIdHash: biEncoderHash, l2Norm: 1.0, versionTag: 1, quantizedBytes: truthEmb },
+      { retrievalKeyHeaderBytes: layout.headerBytes },
+    );
+    for (let j = 0; j < 8; j++) {
+      indices.push(RETRIEVAL_KEYS_START + freeSlot * 8 + j);
+      newWords.push(keyWords[j]);
+    }
+  }
+  return {
+    patchType: PATCH_TYPE.MIXED,
+    wordCount: indices.length,
+    scoreDelta: 0n,
+    parentStateRoot: merkleizeState(state),
+    indices,
+    newWords,
+    _kind: 'positive-control',
+    _anchoredEventId: ev.id,
+  };
+}
+
 async function main() {
   const bundlePath = resolve(required('bundle-manifest'));
   const corpusPathRaw = flag('corpus');
@@ -483,12 +548,14 @@ async function main() {
     let observedAdvances;
     let qualityAttempts;
     let randomProbe = null;
+    let positiveControl = null;
 
     if (probesPerEpoch > 0) {
       const rand = mulberry32(seededInt(`${masterSeed}:epoch:${epoch}`));
       let accepted = 0;
       let positiveButBelow = 0;
       let nonPositive = 0;
+      const randDeltaPpms = [];
       for (let i = 0; i < probesPerEpoch; i++) {
         const patch = randomPatch(currentState, rand);
         const result = await evaluateRetrievalBenchmarkPatch(
@@ -504,6 +571,7 @@ async function main() {
             familyCatastrophicFloor: profile.patchAcceptanceFloors.familyCatastrophicFloor,
           },
         );
+        randDeltaPpms.push(result.deltaPpm);
         if (result.accepted) {
           accepted++;
           const applied = applyPatch(currentState, patch);
@@ -522,6 +590,41 @@ async function main() {
         positiveButBelow,
         nonPositive,
         acceptanceRate: probesPerEpoch === 0 ? 0 : accepted / probesPerEpoch,
+        deltaPpmMin: Math.min(...randDeltaPpms),
+        deltaPpmMax: Math.max(...randDeltaPpms),
+        deltaPpmMedian: randDeltaPpms.slice().sort((a, b) => a - b)[Math.floor(randDeltaPpms.length / 2)],
+      };
+
+      // §Positive-control probes (auditor §2): same count as random, but built
+      // to be substrate-meaningful (anchor a corpus event + install its truth
+      // embedding as lens). Verifies the acceptance path admits real
+      // improvements — without this, "0% random accept" alone is one-sided.
+      const posDeltaPpms = [];
+      let posAccepted = 0;
+      const biEncoderHash = scoringOpts.biEncoderHash;
+      const layout = scoringOpts.retrievalKeyLayout;
+      for (let i = 0; i < probesPerEpoch; i++) {
+        const patch = positiveControlPatch(currentState, activeCorpus, rand, biEncoderHash, layout);
+        if (!patch) continue;
+        const result = await evaluateRetrievalBenchmarkPatch(
+          currentState, patch, activeCorpus, pack, scoringOpts,
+          {
+            minImprovementPpm: Number(currentMinImprovement),
+            structuralFloor: profile.patchAcceptanceFloors.structuralFloor,
+            protectedRegressionFloor: profile.patchAcceptanceFloors.protectedRegressionFloor,
+            familyCatastrophicFloor: profile.patchAcceptanceFloors.familyCatastrophicFloor,
+          },
+        );
+        posDeltaPpms.push(result.deltaPpm);
+        if (result.accepted) posAccepted++;
+      }
+      positiveControl = {
+        attempts: posDeltaPpms.length,
+        accepted: posAccepted,
+        acceptanceRate: posDeltaPpms.length === 0 ? 0 : posAccepted / posDeltaPpms.length,
+        deltaPpmMin: posDeltaPpms.length ? Math.min(...posDeltaPpms) : null,
+        deltaPpmMax: posDeltaPpms.length ? Math.max(...posDeltaPpms) : null,
+        deltaPpmMedian: posDeltaPpms.length ? posDeltaPpms.slice().sort((a, b) => a - b)[Math.floor(posDeltaPpms.length / 2)] : null,
       };
     } else {
       const scenarioCounts = makeScenarioCounts(scenario, epoch, targetAdvances);
@@ -570,12 +673,26 @@ async function main() {
       majorDeltaActive,
       packProfileAdjustments: epochPackProfileMeta.adjustments,
       randomProbe,
+      positiveControl,
     });
 
     currentMinImprovement = difficulty.next;
     const _epochDur = ((Date.now() - _epochStart) / 60000).toFixed(2);
-    const _accRate = randomProbe ? `acceptRate=${(randomProbe.acceptanceRate*100).toFixed(1)}%` : '';
-    console.error(`[long-horizon] epoch ${epoch}/${epochs} done in ${_epochDur} min. minImpr ${difficulty.current}→${difficulty.next} ${_accRate}`);
+    // §Per-epoch diagnostic logging (auditor §5): the ENTIRE branch context,
+    // so anyone reading the log understands WHY the threshold moved/stalled.
+    const _delta = Number(difficulty.next) - Number(difficulty.current);
+    const _branch = _delta > 0 ? 'RAMP_UP' : _delta < 0 ? 'DECAY' : (majorDeltaActive ? 'GRACE_FREEZE' : 'STABLE');
+    console.error(
+      `[long-horizon] epoch ${epoch}/${epochs} done in ${_epochDur}min` +
+      ` | activeFrac=${activeFraction} (idx ${fractionIndex})` +
+      ` | observedAdvances=${observedAdvances} qualityAttempts=${qualityAttempts}` +
+      ` | majorDeltaActive=${majorDeltaActive} (evalHidden ${prevEvalHiddenCount})` +
+      ` | minImpr ${difficulty.current}→${difficulty.next} [${_branch}${difficulty.clamped ? ' CLAMPED' : ''}]` +
+      ` | baseline=${baseline?.parentScorePpm ?? '?'}ppm` +
+      (randomProbe ? ` | randAcc=${(randomProbe.acceptanceRate*100).toFixed(1)}% randΔ[${randomProbe.deltaPpmMin}..${randomProbe.deltaPpmMax}]` : '') +
+      (positiveControl ? ` | posCtlAcc=${(positiveControl.acceptanceRate*100).toFixed(1)}% posCtlΔ[${positiveControl.deltaPpmMin}..${positiveControl.deltaPpmMax}]` : '')
+    );
+
     // Periodic intermediate snapshot — write partial results every 2 epochs
     // so a mid-run crash doesn't lose all data.
     if (epoch % 2 === 0 || epoch === epochs) {
@@ -586,19 +703,21 @@ async function main() {
       } catch (e) { console.error(`[long-horizon] partial write failed: ${e.message}`); }
     }
 
-    // §Early-stop (auditor-recommended): stop when both FA rate AND
-    // difficulty trajectory have been stable for N consecutive epochs.
-    // Saves compute when the sim has reached an equilibrium.
+    // §Early-stop GUARD (auditor §3): only allow once ALL configured corpus-
+    // growth fractions have been visited. Otherwise we may stop before the
+    // difficulty ramp under late-stage corpus growth, defeating the purpose.
+    const allFractionsVisited = fractionIndex >= activeFractions.length - 1;
     const earlyStopWindow = parseInt(env.LONG_HORIZON_EARLY_STOP_WINDOW ?? '0', 10);
-    if (earlyStopWindow > 0 && epoch >= earlyStopWindow + 4) {
+    if (earlyStopWindow > 0 && allFractionsVisited && epoch >= earlyStopWindow + 4) {
       const tail = epochsOut.slice(-earlyStopWindow);
       const accRates = tail.map((e) => e.randomProbe?.acceptanceRate ?? 0);
+      const posRates = tail.map((e) => e.positiveControl?.acceptanceRate ?? null).filter((x) => x !== null);
       const minImprs = tail.map((e) => Number(e.minImprovementPpmAfter));
       const accVar = Math.max(...accRates) - Math.min(...accRates);
+      const posVar = posRates.length ? (Math.max(...posRates) - Math.min(...posRates)) : 0;
       const minVar = Math.max(...minImprs) - Math.min(...minImprs);
-      // Stable = FA rate spread ≤ 1% AND minImpr unchanged for window
-      if (accVar <= 0.01 && minVar === 0) {
-        console.error(`[long-horizon] EARLY STOP at epoch ${epoch}: FA rate + difficulty stable over last ${earlyStopWindow} epochs (accVar=${accVar.toFixed(3)}, minImprVar=${minVar})`);
+      if (accVar <= 0.01 && posVar <= 0.05 && minVar === 0) {
+        console.error(`[long-horizon] EARLY STOP at epoch ${epoch} (all fractions visited, ${earlyStopWindow}-epoch stability: accVar=${accVar.toFixed(3)}, posVar=${posVar.toFixed(3)}, minImprVar=${minVar})`);
         break;
       }
     }
