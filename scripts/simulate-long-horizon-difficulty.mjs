@@ -325,20 +325,24 @@ function randomPatch(state, rand) {
   };
 }
 
-// Positive-control patch (auditor §3): anchor a real event from the active
-// corpus into the current substrate's MemoryIndex, plus install its truth-doc
-// embedding as a lens vector. This is the kind of substrate modification a
-// genuinely-improving miner would make — it should accept at non-zero rate
-// (proves the acceptance path works), unlike random patches which should
-// never accept (proves anti-cheat).
+// Positive-control patch (auditor §3): anchor on a CURRENT-PACK query event,
+// which (via the anchor-own-truth fix in scorer §6.5+) injects that event's
+// truth doc directly into the candidate pool — bypassing the bi-encoder miss
+// for hard-family queries. This is the canonical "real improvement" pattern:
+// a miner who has identified which events the hidden pack will query, then
+// anchors those events. A naive anchor on a random eval_hidden event almost
+// never relates to a pack query and produces delta=0 (not informative).
+//
+// In production miners obviously don't see the hidden pack pre-commit, but
+// the simulation here measures whether the SCORING PATH admits substrate-
+// improving patches — that's the test, not whether the SAMPLING is realistic
+// (commit-reveal handles the realism).
 const MEMORY_INDEX_START = 32;
 const RETRIEVAL_KEYS_START = 384;
-function positiveControlPatch(state, activeCorpus, rand, biEncoderHash, layout) {
-  // Pick a random eval_hidden event (mirrors what a miner discovering hot
-  // entities would do — anchor on events that frequently appear in queries).
-  const hiddenEvents = activeCorpus.events.filter((e) => e.split === 'eval_hidden' && e.truthDocuments?.length);
-  if (hiddenEvents.length === 0) return null;
-  const ev = hiddenEvents[Math.floor(rand() * hiddenEvents.length)];
+function positiveControlPatch(state, pack, rand, biEncoderHash, layout) {
+  if (!pack.events?.length) return null;
+  const ev = pack.events[Math.floor(rand() * pack.events.length)];
+  if (!ev.truthDocuments?.length) return null;
   // Find first free MemoryIndex slot (zero recordId word in state).
   let freeSlot = -1;
   for (let i = 0; i < 44; i++) {
@@ -604,7 +608,7 @@ async function main() {
       const biEncoderHash = scoringOpts.biEncoderHash;
       const layout = scoringOpts.retrievalKeyLayout;
       for (let i = 0; i < probesPerEpoch; i++) {
-        const patch = positiveControlPatch(currentState, activeCorpus, rand, biEncoderHash, layout);
+        const patch = positiveControlPatch(currentState, pack, rand, biEncoderHash, layout);
         if (!patch) continue;
         const result = await evaluateRetrievalBenchmarkPatch(
           currentState, patch, activeCorpus, pack, scoringOpts,
