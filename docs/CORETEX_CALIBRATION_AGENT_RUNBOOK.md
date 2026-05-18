@@ -231,3 +231,174 @@ node scripts/generate-coretex-retrieval-corpus.mjs \
 - Phase 13 accepts real retrieval improvements and rejects the adversarial
   `no_retrieval_improvement` patch.
 - Epoch-1 delta preserves `previousRoot -> nextRoot` continuity.
+
+## Orchestrator Operating Contract
+
+Pre-launch system. Treat live code as the source of truth; docs may be stale
+unless verified against current implementation, bundle profile, scripts, and
+generated artifacts. **Never** call CoreTex V0 or legacy — there is no public
+legacy path. Evaluate as the current launch candidate.
+
+### Primary Objectives
+
+Optimize for: maximum long-term substrate runway · minimal plateau risk ·
+correct dynamic difficulty · robust corpus scaling · low random-patch false
+acceptance · resistance to pretesting/gaming/scorer exploitation · faithful
+alignment between calibration findings, signed bundle pins, and runtime
+evaluator behavior.
+
+### Non-Negotiable Method
+
+- Do **not** infer health from tail logs or "still running." Compute the gate
+  metric.
+- If a run/script/dep/model/artifact is missing or broken, **fix the correct
+  path.** Do not bypass, downshift silently, or substitute easier approximations
+  unless explicitly labeled non-gating diagnostic.
+- On error: inspect the specific code path, inputs, profile values, bundle
+  pins, and generated output **before** changing approach.
+
+### Calibration → Runtime Contract
+
+Every finding must have a clear path into live behavior:
+
+- Scorer parameter → pinned in signed bundle profile.
+- Patch acceptance → flows through `computeAcceptanceThresholdPpm` or the
+  explicit production threshold.
+- Per-patch eval → verified through the real evaluator path.
+- Difficulty → reflected in `nextMinImprovementPpm`.
+- Corpus growth → interacts correctly with `isMajorDelta` + grace-cycle
+  behavior.
+- Anti-gaming → tested against random probes, dual-pack scoring, blockhash-bound
+  evaluation where applicable.
+
+**Required provenance on every accepted artifact**: git SHA · dist hash · git
+cleanliness · bundle hash · corpus root · profile values actually used ·
+model IDs + revisions · relevant env vars · output artifact path.
+
+### Bundle/Profile Discipline
+
+Scripts must unwrap correctly:
+
+```js
+const raw = JSON.parse(...);
+const profile = raw.profile ?? raw;
+```
+
+Silent fallback to `DEFAULT_PROFILE` when a wrapped launch profile is supplied
+is a blocking bug.
+
+Critical pins to verify: `pipelineVersion`, `firstStageTopK`,
+`rerankerInputTopK`, `rerankerTopK`, `retrievalKeyTopK`, `lensWeight`,
+`anchorWeight`, `relationExpansionBudget`, `lensTopK`, `lensDiversityFloor`,
+`minImprovementPpm`, `baselineVariancePpm`, `majorDeltaThreshold`, hidden-pack
+profile + quotas.
+
+### Scorer Correctness
+
+- Reranker scores map to candidates by **docId**, not array index
+  (anchor-mandatory candidates reorder the reranker pool).
+- Patch acceptance uses the **full** threshold in production:
+  `acceptanceThresholdPpm = minImprovementPpm + replayTolerancePpm + baselineVariancePpm`.
+- Controller-only stress sims using `currentMinImprovement` alone are
+  acceptable **only if explicitly documented** as a stricter anti-cheat stress
+  condition — never confused with production acceptance.
+
+### Long-Horizon Simulation Regimes
+
+Test all three separately:
+
+1. **Bootstrap / no-advance pressure** — random patches fail; difficulty
+   decays gracefully when no valid advances occur; corpus-growth grace
+   handled. (Random probes drive `observedAdvances`.)
+2. **Steady-state target pressure** — realistic target advancement counts.
+3. **Early high-throughput stress** (required before launch) — aggressive
+   early miner activity, `targetAdvances=50` or burst schedule; verify
+   difficulty ramps without overshoot / oscillation / choking.
+
+`--scenario` does **not** affect observed advances when
+`--probe-random-patches-per-epoch > 0` — in that mode, `observedAdvances` is
+set from accepted random probes.
+
+Recommended stress matrix:
+
+| Regime | `targetAdvances` | Probes | Purpose |
+| --- | --- | --- | --- |
+| Bootstrap random-probe | 10 | on | anti-cheat, no-advance decay, corpus grace |
+| Steady-state | 5 (or launch target) | off | normal pressure |
+| Early high-throughput | 50 | retained for false-accept evidence | difficulty ramp + scaling under frequent early advances |
+
+### Watcher Gates
+
+Watcher must compute and report:
+
+- Random-patch false accept rate.
+- Growth transitions and whether `majorDeltaActive` triggered grace.
+- Difficulty trajectory + oscillation.
+- Controller stuck windows.
+- Plateau risk via `|medianDeltaPpm|`:
+  - Near-zero deltas over consecutive epochs = loss of discrimination.
+  - Large negative deltas ≠ plateau; random patches still materially affect
+    score, just harmfully.
+
+Do not call a run healthy unless the watcher reports gates green.
+
+### Plateau Interpretation
+
+Plateau is **not** "random patches are rejected" — that is expected.
+
+Plateau risk means patches stop producing meaningful score movement,
+especially when median `|delta|` collapses toward zero, score-delta range
+narrows, valid improvements disappear, difficulty falls toward floor, or the
+controller cannot maintain target advances despite corpus growth.
+
+A growing corpus should create fresh routing surface. If corpus grows but
+score deltas collapse, investigate substrate capacity, anchor coverage,
+relation expansion, reranker cap, and baseline staleness.
+
+### Corpus Scaling
+
+Verify on transitions: active corpus root changes are intentional ·
+`activeEvalHiddenFraction` transitions recorded · `majorDeltaActive=true` on
+transition epochs · difficulty freezes / behaves as expected during grace ·
+baseline recomputation cadence documented.
+
+**Missing pre-launch automation**: daily or epoch-based baseline recomputation
++ safe bundle/profile update flow.
+
+### Anti-Gaming
+
+Maintain and verify: hidden-pack derivation from pinned profile · dual-pack
+evaluation path · blockhash-bound or future-seed evaluation for live
+submissions · random-patch false accept threshold · lens-diversity floor ·
+structural / protected / family-catastrophic floors · no reuse of visible-only
+calibration as acceptance proof.
+
+Every anti-gaming claim is backed by a run artifact, not intuition.
+
+### Artifact Hygiene
+
+Never mix invalidated artifacts with current gating artifacts. On
+scorer/profile-loading/path/bundle-pin bug discovery: mark prior artifacts
+invalidated, preserve them for provenance, move them out of accidental reuse
+paths, rerun affected calibration gates.
+
+### Launch Bias
+
+Prefer conservative launch parameters when uncertainty remains. Higher early
+target-advance stress tests are good. Full production reranker/profile
+fidelity is required for gating. Static scorer constants change only through
+a new signed bundle. Dynamic difficulty handles routine adjustment
+automatically. Operator monitoring is expected early; the system should not
+require manual constant tuning to remain healthy.
+
+### Reporting Standard
+
+Every status update distinguishes:
+
+- What was actually **verified**.
+- What is still **running**.
+- What is **inferred but not yet proven**.
+- Which **artifact** proves the claim.
+- Whether the result is **launch-gating or diagnostic only**.
+
+Avoid "looks good." Report measured gate values.
