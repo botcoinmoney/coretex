@@ -1,16 +1,16 @@
-# Cortex V0 Non-Goals
+# CoreTex Non-Goals
 
 > Phase 0 deliverable. Verified and tightened by Research subagent, 2026-05-05.
-> The list of things V0 explicitly does NOT ship, so the design does not sprawl.
+> The list of things CoreTex explicitly does NOT ship, so the design does not sprawl.
 
-V0 is a **memory-codec improvement lane that pays through the existing receipt path**. Not a
+CoreTex is a pre-launch retrieval-substrate improvement lane that pays through the existing receipt path**. Not a
 model-training lane.
 
 ---
 
-## Hard Rejected for V0
+## Hard Rejected for CoreTex
 
-The following items are explicitly out of scope for V0. Each entry includes the rejection rationale
+The following items are explicitly out of scope for CoreTex. Each entry includes the rejection rationale
 and, where applicable, the V1 tracked path.
 
 ### 1. Weights on-chain
@@ -43,7 +43,7 @@ externally to *propose* patches; the canonical *verifier* is fully deterministic
 
 ### 6. Constantly mutable Botcoin Core (ambiguous upgrade semantics)
 **Rejected because:** Core upgrades without a defined migration path create a moving-target that
-rewards tracking Core versions rather than improving the codec. V0 requires that every Core upgrade
+rewards tracking Core versions rather than improving the codec. CoreTex requires that every Core upgrade
 either (a) publishes a `state_translation_patch` mapping V_n → V_{n+1}, or (b) explicitly resets
 the organism with documented rationale. Ambiguity is a hard non-goal.
 
@@ -56,21 +56,21 @@ normal state-advance receipts. No new token, no new claim flow.
 **Rejected because:** A new signing domain requires new contract audit surface and new miner SDK
 changes. Cortex receipts ride the existing `BotcoinMining` EIP-712 domain with the §6 receipt
 field mapping (`rulesVersion = 0xC0` as the Cortex discriminator). Auditors and explorers
-disambiguate via `rulesVersion`. Soft-coupling is explicitly acknowledged and is acceptable for V0
+disambiguate via `rulesVersion`. Soft-coupling is explicitly acknowledged and is acceptable for CoreTex
 because the contract does not introspect field semantics — only the signature.
 **V1 path:** `BotcoinMining.submitCortexReceipt(...)` sister function with explicit Cortex field
 names, tracked in Phase 9 release notes.
 
 ### 9. Editing BotcoinMiningV3
 **Rejected because:** `BotcoinMiningV3` is deployed and unchanged. All Cortex mechanics are
-additive (the live-state anchor is `CortexRegistry`; `CortexMergeBonus` remains only as a legacy
+additive (the live-state anchor is `CortexRegistry`; `CortexMergeBonus` remains only as a previous
 compatibility rail). The existing `claim()` math reads `epochReward × minerCredits / totalCredits`
-directly from on-chain state, so V0 pays useful Cortex improvements as normal credits instead of a
+directly from on-chain state, so CoreTex pays useful Cortex improvements as normal credits instead of a
 separate multiplier.
 
-### 10. On-chain fraud proofs for the audit window (V0)
+### 10. On-chain fraud proofs for the audit window (CoreTex)
 **Rejected because:** The EVM cannot re-run Botcoin Core. A full ZK or bond-based fraud proof
-system requires substantial additional engineering and is out of scope for V0. The V0 audit window
+system requires substantial additional engineering and is out of scope for CoreTex. The CoreTex audit window
 is a 6-hour delay with a 2-of-N operator multisig override (`revertEpoch`); this trust assumption
 is documented honestly in miner-facing docs.
 **V1 path:** Bond-based or ZK fraud proofs replacing the multisig audit-window override, tracked
@@ -79,7 +79,7 @@ in Phase 9 release notes.
 ### 11. `?lane=cortex` query-string routing
 **Rejected because:** Query-string lane selection creates a misroute risk where a deliberately or
 accidentally malformed query string could silently fall through to the SWCP handler. Cortex routing
-is path-prefix only: `/v1/cortex/*` → `cortex-server` upstream (nginx path-prefix routing). No
+is path-prefix only: `/coretex/*` → coordinator upstream (nginx path-prefix routing). No
 `?lane=` parameter exists anywhere in the system.
 
 ### 12. Score-threshold-free screener (any patch earns credits)
@@ -89,32 +89,32 @@ non-protected-regression, within-budget. This is the core anti-gaming mechanism.
 
 ---
 
-## Tracked V1 Paths (Not Blocking V0)
+## Tracked V1 Paths (Not Blocking CoreTex)
 
-These are not rejections — they are deferred improvements that are explicitly out of V0 scope and
+These are not rejections — they are deferred improvements that are explicitly out of CoreTex scope and
 tracked for V1.
 
-| V1 Path | Rationale for V0 deferral | Where tracked |
+| V1 Path | Rationale for CoreTex deferral | Where tracked |
 |---------|--------------------------|---------------|
-| `BotcoinMining.submitCortexReceipt(...)` sister function with explicit Cortex field names | V0 field-alias approach is acceptable because the contract only checks the signature; V1 adds clarity for explorers and removes the soft-coupling. | §9 Phase 9 release notes |
-| Bond-based or ZK fraud proofs for the audit window | Requires significant additional engineering; V0 multisig override is adequate for the trust assumptions of the launch window. | §9 Phase 9 release notes |
-| Adaptive compression across ECS levels (memory ↔ skills ↔ rules) | The ECS "missing diagonal" is the research frontier; V0 encodes all three levels in the state layout but does not implement adaptive cross-level compression. | Research brief §2.8 |
-| Per-subset BEIR license verification and automated per-subset loader | V0 loader uses manually verified subsets; V1 automates the per-subset license check in CI. | `specs/license_audit.md` Phase 4 note |
+| `BotcoinMining.submitCortexReceipt(...)` sister function with explicit Cortex field names | current field-alias approach is acceptable because the contract only checks the signature; V1 adds clarity for explorers and removes the soft-coupling. | §9 Phase 9 release notes |
+| Bond-based or ZK fraud proofs for the audit window | Requires significant additional engineering; CoreTex multisig override is adequate for the trust assumptions of the launch window. | §9 Phase 9 release notes |
+| Adaptive compression across ECS levels (memory ↔ skills ↔ rules) | The ECS "missing diagonal" is the research frontier; CoreTex encodes all three levels in the state layout but does not implement adaptive cross-level compression. | Research brief §2.8 |
+| Per-subset BEIR license verification and automated per-subset loader | current loader uses manually verified subsets; V1 automates the per-subset license check in CI. | `specs/license_audit.md` Phase 4 note |
 
 ---
 
-## What V0 IS
+## What CoreTex IS
 
 To make the non-goals concrete, here is the positive definition:
 
-V0 Botcoin Cortex is:
+CoreTex Botcoin Cortex is:
 - A **compact on-chain-rooted memory codec** (1024 uint256 words = 32 KB active state)
 - A **deterministic proof-of-improvement verifier** (Botcoin Core, pinned version, no API model)
 - A **credit-unified mining lane** (state-advance receipts via existing `BotcoinMining.submitReceipt`)
 - An **anchored benchmark** (LIMIT + MTEB/BEIR for near-collision; LoCoMo + MemoryAgentBench for
   temporal; MemoryArena for long-horizon)
-- A **parallel lane** (separate `cortex-server` process, separate SQLite, separate worker pool;
+- A **parallel lane** (coordinator-mounted CoreTex route handler with shared coordinator lifecycle;
   SWCP unchanged and unaffected)
 
-Done when: all subagents agree V0 is a memory-codec improvement lane that pays through the existing
+Done when: all subagents agree CoreTex is a memory-codec improvement lane that pays through the existing
 receipt path, not a model-training lane.

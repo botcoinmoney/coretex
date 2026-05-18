@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Phase 8 synthetic miner traffic.
-// Runs N synthetic miners against /v1/cortex/{challenge,submit} to drive
+// Runs N synthetic miners against /coretex/{challenge,submit} to drive
 // epochs forward. The §9 Phase 8 ≥1k-patch gate.
 
 import { exit, env } from 'node:process';
@@ -19,7 +19,7 @@ let submitted = 0, accepted = 0, rejected = 0;
 while (submitted < TOTAL) {
   const miner = miners[submitted % N];
   try {
-    const challenge = await fetch(`${COORD}/v1/cortex/challenge`, {
+    const challenge = await fetch(`${COORD}/coretex/challenge`, {
       headers: { 'x-miner': miner },
     }).then((r) => r.ok ? r.json() : null);
 
@@ -34,7 +34,7 @@ while (submitted < TOTAL) {
       scoreDelta: String(50 + (submitted % 100)),
     };
 
-    const r = await fetch(`${COORD}/v1/cortex/submit`, {
+    const r = await fetch(`${COORD}/coretex/submit`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-miner': miner },
       body: JSON.stringify({ challenge, patch }),

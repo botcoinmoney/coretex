@@ -1,7 +1,7 @@
 """
 patch.py — Patch wire format encode/decode and apply algorithm.
 
-Spec: specs/patch_format_v0.md
+Spec: specs/patch_format.md
 
 Wire format:
   [PATCH_TYPE: 1 byte]
@@ -74,7 +74,7 @@ def decode_leb128(data: bytes, offset: int = 0) -> tuple[int, int]:
 
 def encode_patch(patch: Patch) -> bytes:
     """
-    Serialise a Patch to the V0 wire format.
+    Serialise a Patch to the current wire format.
 
     Wire = PATCH_TYPE(1) + WORD_COUNT(1) + SCORE_DELTA_HI(4) + SCORE_DELTA_LO(4)
          + PARENT_STATE_ROOT(32) + [INDEX(leb128) + NEW_WORD(32)] × word_count
@@ -110,7 +110,7 @@ def encode_patch(patch: Patch) -> bytes:
 
 def decode_patch(data: bytes) -> Patch:
     """
-    Deserialise a Patch from the V0 wire format.
+    Deserialise a Patch from the current wire format.
 
     Raises ValueError on malformed input.
     """
@@ -159,7 +159,7 @@ def decode_patch(data: bytes) -> Patch:
 
 def apply_patch(state: CortexState, patch: Patch) -> PatchResult:
     """
-    Apply *patch* to *state* following the V0 algorithm from specs/patch_format_v0.md.
+    Apply *patch* to *state* following the current algorithm from specs/patch_format.md.
 
     Returns PatchSuccess(ok=True, state=new_state) or PatchError(ok=False, code=EXX).
     """

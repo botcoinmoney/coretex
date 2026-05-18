@@ -5,11 +5,11 @@ import {Script, console2} from "forge-std/Script.sol";
 import {CortexRegistry} from "../src/CortexRegistry.sol";
 import {CortexMergeBonus} from "../src/CortexMergeBonus.sol";
 
-/// @notice Mainnet deploy for Botcoin Cortex (V0).
+/// @notice Mainnet deploy for Botcoin Cortex (CoreTex).
 ///
-///   V0 launch decision: multisig audit-window override is DEFERRED. The
+///   pre-launch readiness decision: multisig audit-window override is DEFERRED. The
 ///   contract still has multisig wiring (voteRevertEpoch) for V1 reactivation,
-///   but V0 uses ownerRevertEpoch (single-owner). MERGE_MULTIPLIER_BPS is
+///   but Current CoreTex uses ownerRevertEpoch (single-owner). MERGE_MULTIPLIER_BPS is
 ///   hardcoded at 10000 (1.0x / no separate uplift). State-advance credits
 ///   are paid through the normal Botcoin receipt path.
 ///
@@ -18,7 +18,7 @@ import {CortexMergeBonus} from "../src/CortexMergeBonus.sol";
 ///
 /// Usage:
 ///   MAINNET_CONFIRM=I-UNDERSTAND \
-///   OWNER_ADDRESS=0xaaa...                  -- the V0 owner / single revert authority
+///   OWNER_ADDRESS=0xaaa...                  -- the owner / single revert authority
 ///   COORDINATOR_ADDRESS=0xbbb...            -- existing SWCP coordinator EOA
 ///   BOTCOIN_TOKEN_ADDRESS=0xccc...          -- already-deployed BOTCOIN ERC-20
 ///   forge script contracts/script/DeployMainnet.s.sol \
@@ -43,7 +43,7 @@ contract DeployMainnet is Script {
 
         CortexRegistry registry = new CortexRegistry(owner_, coordinator_);
         // Constructor signature: (_botcoin, _registry, _operator). This is a
-        // legacy no-uplift rail retained for compatibility.
+        // previous no-uplift rail retained for compatibility.
         CortexMergeBonus mergeBonus = new CortexMergeBonus(
             botcoinToken,
             address(registry),
@@ -61,7 +61,7 @@ contract DeployMainnet is Script {
         console2.log("CHALLENGE_WINDOW_SECONDS:",                     registry.CHALLENGE_WINDOW_SECONDS());
         console2.log("SNAPSHOT_EPOCH_INTERVAL:",                      registry.SNAPSHOT_EPOCH_INTERVAL());
         console2.log("");
-        console2.log("V0 NOTE: multisig audit-window revert is deferred.");
+        console2.log("CoreTex NOTE: multisig audit-window revert is deferred.");
         console2.log("         The owner alone may call ownerRevertEpoch() within");
         console2.log("         CHALLENGE_WINDOW_SECONDS. V1 reactivates voteRevertEpoch.");
     }

@@ -1,7 +1,7 @@
 """
 codec.py — Pack/unpack (1024 × 32-byte big-endian) and sub-word bit helpers.
 
-Spec: specs/packing_spec_v0.md
+Spec: specs/packing_spec.md
 
 Pack:
   Each word i (uint256) serialises as 32 big-endian bytes at offset 32*i.

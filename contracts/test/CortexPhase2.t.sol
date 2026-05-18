@@ -316,7 +316,7 @@ contract CortexPhase2Test is Test {
         registry.voteRevertEpoch(EPOCH);
     }
 
-    // ── V0 owner-revert path (multisig deferred to V1) ────────────────────
+    // ── owner-revert path (multisig deferred to V1) ────────────────────
 
     function test_ownerRevert_succeeds() public {
         _finalizeEpoch(EPOCH);

@@ -523,7 +523,7 @@ Push to `origin/main` after each commit so the public CoreTex repo reflects post
 - Live coordinator integration (separate wiring sequence — task #10 backlog)
 - Mainnet contract upgrade epoch (per `CORETEX_PRODUCTION_RUNBOOK.md` operator procedure)
 - Third physical CPU host for determinism (intentionally deferred — auditable-trust framing)
-- 1024 → 2048 substrate ladder execution (post-launch lever, triggers pinned in `specs/cortex_state_v0.md`)
+- 1024 → 2048 substrate ladder execution (post-launch lever, triggers pinned in `specs/cortex_state.md`)
 - Future typed/weighted Relations scorer activation (post-launch difficulty lever, task #12)
 
 ## Operator quick reference

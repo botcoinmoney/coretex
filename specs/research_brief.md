@@ -1,4 +1,4 @@
-# Cortex Research Brief V0
+# CoreTex Research Brief
 
 > Phase 0 deliverable — Research subagent. All weights and pass-rate targets are LOCKED per §9 Phase 0
 > of ORGANISM_CORTEX_STATE_PLAN.md. Do not change them; record concerns in-line instead.
@@ -19,11 +19,11 @@ only when miners prove improvements under the deterministic Botcoin Core verifie
 ### What "proof-of-improvement" means
 
 A miner submits a candidate patch — a small set of word-level mutations to the CortexState. The
-canonical verifier (Botcoin Core, pinned version) runs the patch against a deterministic CortexBench
+canonical verifier (Botcoin Core, pinned version) runs the patch against a deterministic CoreTex benchmark
 suite anchored to public benchmark families. The patch is accepted iff:
 - `candidateScore > baselineScore + threshold`
 - No protected-regression anchor drops
-- Patch is within budget (V0: 1–4 words)
+- Patch is within budget (CoreTex: 1–4 words)
 - Evaluation is byte-reproducible on a clean machine
 
 This is "proof-of-Cortex": a verifiable, on-chain-rooted certificate that the shared memory
@@ -34,8 +34,8 @@ substrate improved.
 State-advance Cortex receipts flow through the same `BotcoinMining.submitReceipt` EIP-712 path that
 SWCP already uses. No new reward currency, no new tier table. The miner's current on-chain tier
 (from `BotcoinMiningV3.getTier()`) determines the base credit value. A candidate must advance the
-live state to earn credits; screener-only candidates do not get paid. The legacy merge-bonus rail is
-set to 1.0× / no uplift in V0 production.
+live state to earn credits; screener-only candidates do not get paid. The merge-bonus rail is
+set to 1.0× / no uplift in production launch.
 
 ### Why this state shape is research-backed
 
@@ -82,10 +82,10 @@ available in both full and small-sample variants.
 
 **Why it anchors Family 1:** LIMIT directly proves that near-collision failure is structural and
 dimension-limited — exactly the failure mode the binary/multi-vector key design of CortexState
-addresses. Using LIMIT as the near-collision benchmark family means CortexBench is testing a
+addresses. Using LIMIT as the near-collision benchmark family means CoreTex benchmark is testing a
 property that has formal grounding, not an ad hoc perturbation.
 
-**Configuration for CortexBench:** Public query/passage pairs from the LIMIT dataset, standard
+**Configuration for CoreTex benchmark:** Public query/passage pairs from the LIMIT dataset, standard
 Recall@K and MRR@10 metrics, with perturbation operators: bit-flip distance d ∈ {1, 2, 4} on
 derived binary keys, and controlled cosine-distance ε on dense-key variants. Supplemented by
 selected MTEB Retrieval / BEIR subsets (see §2.2).
@@ -112,11 +112,11 @@ retrieval.
 
 **Why it supplements Family 1:** MTEB/BEIR provides the broadest coverage of retrieval task
 diversity and is the de-facto standard for embedding evaluation. Anchoring to specific BEIR subsets
-(NQ, HotpotQA, TREC-COVID recommended for V0) gives CortexBench near-collision tasks with known
+(NQ, HotpotQA, TREC-COVID recommended for CoreTex) gives CoreTex benchmark near-collision tasks with known
 difficulty calibration.
 
 **License:** BEIR code Apache-2.0; MTEB code Apache-2.0. Individual BEIR dataset subsets carry
-their upstream dataset licenses (varying; cc-by-sa-4.0 for HF-hosted preprocessed versions). V0
+their upstream dataset licenses (varying; cc-by-sa-4.0 for HF-hosted preprocessed versions). CoreTex
 must verify and use only subsets with redistribution-compatible licenses — see `specs/license_audit.md`.
 
 **Repositories:** https://github.com/embeddings-benchmark/mteb | https://github.com/beir-cellar/beir
@@ -137,7 +137,7 @@ while preserving retrieval quality.
 **Why it is research context, not a data source:** WARP informs the multi-vector slot design in
 CortexState. The existence of efficient late-interaction retrieval (WARP, ColBERTv2) justifies
 representing state as many tiny interaction points (binary keys, multi-vector slots) rather than
-one dense vector. CortexBench does not directly load WARP task data — WARP is the architectural
+one dense vector. CoreTex benchmark does not directly load WARP task data — WARP is the architectural
 motivation for the state layout.
 
 **Implementation reference:** https://github.com/jlscheerer/xtr-warp (MIT license, code only).
@@ -244,7 +244,7 @@ Experience-Following Behavior," arXiv:2505.16067; A-MEM, arXiv:2502.12110). The 
 indiscriminate memory updates propagate errors; correctness-gating (adding/updating only when
 confidence in correctness is high) yields up to 10% performance gains in long-horizon tasks.
 
-**CortexBench implication:** The protected-regression set (≥50 anchored items per family) operationalizes
+**CoreTex benchmark implication:** The protected-regression set (≥50 anchored items per family) operationalizes
 correctness-gating: a patch that causes any protected-anchor retrieval to drop is vetoed regardless
 of weighted score. This is the on-chain enforcement of correctness-gating — a miner cannot improve
 the codec on new items by degrading it on known-correct ones.
@@ -271,7 +271,7 @@ keys (skill-level), and codebook/operator table (rule-level). The Cortex organis
 of whether a miner can improve across all three levels — not just one — under a fixed budget.
 
 **License:** CC-BY-NC-SA-4.0 (per arXiv paper page). This applies to the arXiv preprint text.
-CortexBench does not use ECS as a data source — only as theoretical framing. No dataset
+CoreTex benchmark does not use ECS as a data source — only as theoretical framing. No dataset
 redistribution issue. Attribution required in research materials.
 
 **arXiv:** https://arxiv.org/abs/2604.15877
@@ -309,9 +309,9 @@ shard-quirk exploitation rather than genuine improvement.
 
 ---
 
-## 3. V0 Non-Goals
+## 3. CoreTex Non-Goals
 
-See `specs/non_goals_v0.md` — verified and tightened in this Phase 0 pass.
+See `specs/non_goals.md` — verified and tightened in this Phase 0 pass.
 
 ---
 
@@ -347,7 +347,7 @@ documented here; do not change the weights without a new Phase 0 pass.
 substrate. The 0/5–10/20–30 staircase creates a meaningful skill gradient where improvement
 requires understanding the codec's semantics, not just randomized search.
 
-**Note on calibration:** These targets are set for the 1024-word CortexState under V0 benchmark
+**Note on calibration:** These targets are set for the 1024-word CortexState under CoreTex benchmark
 configuration. Phase 7 local iteration will verify the bands on internal miner simulations before
 Phase 4 lock. If simulation shows strong miners consistently below 15% or above 35%, a difficulty
 adjustment (score threshold, patch budget, or family mix) is needed — not a change to the target
@@ -382,7 +382,7 @@ The formula is owned by the Benchmark subagent (Phase 4) and is not changed here
 
 ## 7. Failure Modes (Research Perspective)
 
-The following are research-identified failure modes that CortexBench must guard against. The
+The following are research-identified failure modes that CoreTex benchmark must guard against. The
 Adversarial subagent owns the full adversarial battery; this section provides the research basis.
 
 **7.1 Benchmark overfit via hidden shard enumeration**
@@ -409,7 +409,7 @@ and protected-regression patches explicitly.
 **7.4 Merge gaming / withholding**
 Risk: a miner submits weak screener passes for rewards, or withholds a stronger patch to preserve a
 future merge multiplier.
-Mitigation: V0 pays only state advances and sets the legacy multiplier rail to 1.0× / no uplift.
+Mitigation: CoreTex pays only state advances and sets the previous multiplier rail to 1.0× / no uplift.
 Useful patches are best submitted immediately because another miner can advance the live root first.
 
 **7.5 Core version instability**
@@ -459,6 +459,6 @@ ends here; the resolution is a Phase 4 decision.
 
 BEIR is a meta-benchmark aggregating many upstream datasets. Each subset has its own license. The
 HuggingFace-hosted preprocessed versions carry `cc-by-sa-4.0` as the stated umbrella license.
-V0 must verify and use only subsets compatible with the Cortex commercial use context. Recommended
+CoreTex must verify and use only subsets compatible with the Cortex commercial use context. Recommended
 subsets for Phase 4 evaluation: MSMARCO (custom Microsoft license, research OK), NQ (Apache-2.0),
 HotpotQA (CC-BY-SA-4.0). Manual per-subset check required.

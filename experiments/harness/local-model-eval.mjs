@@ -1,6 +1,6 @@
 // Local model-assisted memory evaluator for elevated Cortex proposals.
 //
-// Consensus still uses the deterministic structural CortexBench scorer. This
+// Consensus still uses the deterministic structural CoreTex benchmark scorer. This
 // sidecar adds the missing empirical layer: after CortexState says "these
 // memory handles are available", a small local embedding model ranks the
 // actual memory texts for each benchmark query. This answers the practical

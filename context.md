@@ -11,11 +11,11 @@ Current production planning authority:
 Current substrate authority remains in this repo's specs and reference implementations:
 
 - `docs/state-spec.md`
-- `specs/cortex_state_v0.md`
-- `specs/cortex_schema_v0.json`
-- `specs/packing_spec_v0.md`
-- `specs/merkleization_spec_v0.md`
-- `specs/patch_format_v0.md`
+- `specs/cortex_state.md`
+- `specs/cortex_schema.json`
+- `specs/packing_spec.md`
+- `specs/merkleization_spec.md`
+- `specs/patch_format.md`
 - `packages/cortex/src/state/`
 - `packages/cortex-py/cortex_py/`
 
@@ -42,7 +42,7 @@ Current execution posture:
 - Added unit coverage for bundle manifests, replay tamper failures, and multi-transition replay.
 - Fixed the package unit-test script glob so `npm run test:unit --workspace @botcoin/cortex` executes the full unit suite.
 - Added `ProductionCorpusLoader` in `packages/cortex/src/eval/corpus.ts` for deterministic raw-state scoring against the pinned Season 1 corpus shape.
-- `botcoin-cortex eval` can now use `--corpus-file` and `--eval-items-per-family`; the legacy stub loader remains available for compatibility.
+- `botcoin-cortex eval` can now use `--corpus-file` and `--eval-items-per-family`; the previous stub loader remains available for compatibility.
 - Season 1 corpus loading verifies the embedded SHA-256 and `experience_corpus_root`, then scores shard-selected near-collision, temporal, long-horizon, and routing signals.
 - Added `packages/cortex/src/coordinator/endpoints.ts`, a small raw-HTTP-friendly contract for additive `/coretex/*` coordinator routes.
 - The coordinator endpoint contract covers screen/evaluate, substrate, patch, eval-report, challenge-book, corpus-delta, client-bundle, and health routes while explicitly ignoring `/v1/challenge`.

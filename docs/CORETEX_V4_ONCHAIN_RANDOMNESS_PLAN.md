@@ -8,7 +8,7 @@ Audience: calibration / coordinator implementation agent.
 
 ## Executive Decision
 
-The auditor's diagnosis stands: **a live evaluator oracle is unsafe if the coordinator can pre-test patches**. (At the time this plan was drafted, the public write-path used a separate per-patch evaluate endpoint; the per-patch evaluator described below is now folded into the `submit` callback behind `POST /coretex/submit`. Endpoint name aside, the architectural threat model and mitigations below stand.) Two architectural responses were viable:
+The auditor's diagnosis stands: **a live evaluator oracle is unsafe if the coordinator can pre-test patches**. (At the time this plan was drafted, the public write-path used a separate per-patch evaluate endpoint; the per-patch evaluator described below is now folded into the coordinator `submit` callback behind `POST /coretex/submit`. Endpoint name aside, the architectural threat model and mitigations below stand.) Two architectural responses were viable:
 
 1. **Sealed evaluation** (S0–S6): kill the live oracle; commit/reveal flow; per-epoch sealed pack scored after commit close.
 2. **Per-patch on-chain randomness**: keep the live oracle; bind each patch's eval seed to a future Base blockhash the coordinator can't observe at receive time.
@@ -218,7 +218,7 @@ Re-exports `screenerAdmissionDecision` adapted: replaces `commitmentHash` with `
 - `evaluateRetrievalBenchmarkPatch` signature unchanged.
 - Callers now build a per-patch `QueryPack` per `evaluateRetrievalBenchmarkPatch` invocation instead of sharing one pack across patches.
 
-**`packages/cortex-server/src/real-evaluator.ts`**
+**`coordinator submit callback`**
 
 Per-patch flow (the `submit` callback invoked by `POST /coretex/submit`):
 ```
@@ -358,9 +358,9 @@ After all above:
 ## Specs to Rewrite
 
 After implementation lands, update:
-- `specs/hidden_query_pack_v0.md` §Sampling rule — per-patch seed formula; drop coordinator-trust window.
-- `specs/determinism_v0.md` — add `blockhash(targetBlock)` to canonical input chain.
-- `specs/retrieval_benchmark_v0.md` — clarify per-patch pack lifecycle (sampled once, cached forever by dedup-key).
+- `specs/hidden_query_pack.md` §Sampling rule — per-patch seed formula; drop coordinator-trust window.
+- `specs/determinism.md` — add `blockhash(targetBlock)` to canonical input chain.
+- `specs/retrieval_benchmark.md` — clarify per-patch pack lifecycle (sampled once, cached forever by dedup-key).
 
 ## Docs to Update (in this PR, alongside the rip)
 
@@ -432,7 +432,7 @@ pure-code phase. Grouped by readiness.
 ### Post-corpus, model-dependent (task #38 + subtasks)
 
 - **HTTP wiring** for the unified `POST /coretex/submit` write-path in
-  cortex-server (folds the per-patch evaluator and the dedup-cache lookup
+  coordinator route shim (folds the per-patch evaluator and the dedup-cache lookup into the coordinator submit callback
   into one endpoint; the sync + async + result-poll triplet from this
   plan's draft is superseded by the single submit envelope). Per-patch
   orchestrator (`runPerPatchEvaluation`) and
@@ -542,7 +542,7 @@ delta or regeneration to take effect, so they don't block launch:
 
 ### Substrate ladder observability (post-launch, governance-data path)
 
-- **Dead-slot count metric** — per `specs/cortex_state_v0.md` §"Future
+- **Dead-slot count metric** — per `specs/cortex_state.md` §"Future
   ladder step: 1024 → 2048". After substrate decode each epoch, count
   slots whose bytes are structurally zero across MemoryIndex,
   RetrievalKey, Relations, Temporal, and Codebook ranges. Publish as
@@ -564,9 +564,9 @@ delta or regeneration to take effect, so they don't block launch:
   subprocess envs now propagate `OMP_NUM_THREADS`, `MKL_NUM_THREADS`,
   `OPENBLAS_NUM_THREADS`, `NUMEXPR_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS`
   from the canonical worker thread-count var BEFORE torch import.
-  Documented in `specs/determinism_v0.md` §"BLAS thread pinning".
+  Documented in `specs/determinism.md` §"BLAS thread pinning".
 - ✅ **Patch hash duality naming clarity** (`4566371`) —
-  `specs/patch_format_v0.md` documents `patchBytesHash` (chain
+  `specs/patch_format.md` documents `patchBytesHash` (chain
   domain, raw keccak) vs `evalPatchHash` (eval domain,
   `coretex-patch-hash-v1` prefix). Full code rename queued for a
   follow-up touch when the post-corpus integration lands.

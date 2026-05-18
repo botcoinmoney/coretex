@@ -8,61 +8,61 @@
     "specs": [
       {
         "role": "substrate-spec",
-        "path": "specs/cortex_state_v0.md",
+        "path": "specs/cortex_state.md",
         "sha256": "1db965490a2cfddc59ef129d5df1794a3155cef6619235a817c5763b75c93fc1",
         "bytes": 16677
       },
       {
         "role": "substrate-spec",
-        "path": "specs/cortex_schema_v0.json",
+        "path": "specs/cortex_schema.json",
         "sha256": "7b990ad8c25f5dfe50262295996a43c3a5b12bb84fc864ac4725c8c3028dc8d6",
         "bytes": 9340
       },
       {
         "role": "substrate-spec",
-        "path": "specs/packing_spec_v0.md",
+        "path": "specs/packing_spec.md",
         "sha256": "436308a90748418c45796e08006d3dc252d6623e955bd48e7f89280b694968e7",
         "bytes": 3293
       },
       {
         "role": "substrate-spec",
-        "path": "specs/merkleization_spec_v0.md",
+        "path": "specs/merkleization_spec.md",
         "sha256": "911f371d2b2aa4848af0649ab50b0aec2707f9e3b7cd4952d05842f60bbecfcc",
         "bytes": 4538
       },
       {
         "role": "substrate-spec",
-        "path": "specs/patch_format_v0.md",
+        "path": "specs/patch_format.md",
         "sha256": "0ea25a9251df1af5d1dc9837634c9a15396ae7baf738f8048eeb55ce15cbde00",
         "bytes": 7455
       },
       {
         "role": "substrate-spec",
-        "path": "specs/retrieval_benchmark_v0.md",
+        "path": "specs/retrieval_benchmark.md",
         "sha256": "a3b71ce0af409941f34bc66d7ca51c0728853f4382c8b3722f55fc511e4e127b",
         "bytes": 5659
       },
       {
         "role": "substrate-spec",
-        "path": "specs/substrate_retrieval_semantics_v0.md",
+        "path": "specs/substrate_retrieval_semantics.md",
         "sha256": "52231638c53804e49348cae699701d2ec6105d72cc0a7eaef01b9bc4c0952302",
         "bytes": 7274
       },
       {
         "role": "substrate-spec",
-        "path": "specs/corpus_retrieval_v0.md",
+        "path": "specs/corpus_retrieval.md",
         "sha256": "d41b9e0edac38c23c1a31f6531d39f012f9ac58397db679a30e53e562b93ef9d",
         "bytes": 6755
       },
       {
         "role": "substrate-spec",
-        "path": "specs/hidden_query_pack_v0.md",
+        "path": "specs/hidden_query_pack.md",
         "sha256": "f015858fb2068da0021710ad109915ba56f745595cb13a8f817801ca559e7ecf",
         "bytes": 6749
       },
       {
         "role": "substrate-spec",
-        "path": "specs/determinism_v0.md",
+        "path": "specs/determinism.md",
         "sha256": "24bfb5c9b39d64e02a05351bedcfe0b2f2084992e9ec9dffb369b15ee86d18cb",
         "bytes": 6668
       }

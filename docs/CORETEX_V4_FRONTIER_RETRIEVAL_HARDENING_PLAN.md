@@ -56,11 +56,11 @@ Removed before launch (these are stale code paths, not features):
 
 - `eval/corpus.ts:scoreProductionState` and `eval/corpus.ts:eventIdToKey128` / `eventIdToMem128`. The structural-commitment scorer in any form. Salting it with an epoch seed does not redeem it; the entire scorer is replaced.
 - `eval/reranker-eval.ts:evaluateStateWithReranker` and `evaluatePatchWithReranker` in their current shape. They scored "is the reranker confident on documents whose ids the substrate already structurally selected" — that's the wrong loop. They are replaced by a retrieval scorer that scores "given a hidden query, what does the substrate retrieve, and is it answer-bearing."
-- `bundle/index.ts:DEFAULT_PROFILE` with legacy structural family weights. Replaced by `primaryMetric: 'ndcg@10'` and a retrieval-dominant composite (specific weights calibrated; see below).
+- `bundle/index.ts:DEFAULT_PROFILE` with previous structural family weights. Replaced by `primaryMetric: 'ndcg@10'` and a retrieval-dominant composite (specific weights calibrated; see below).
 - `eval/corpus.ts:ProductionCorpusEvent` field set, where it carries fields that only made sense for the structural scorer (`expectedStateRegions`, `noveltyBucket`-as-decoration, `hardnessSignal` as currently computed). Replaced by graded-qrel record fields tied to the retrieval task.
 - The `substrate/slot-policy.ts` "active count" semantics. Slot occupancy is not a metric in production; it is a substrate state.
 
-Documentation artifacts that describe the legacy slot-fill scorer are deleted or rewritten before launch. They describe a design that is not shipping.
+Documentation artifacts that describe the previous slot-fill scorer are deleted or rewritten before launch. They describe a design that is not shipping.
 
 ## Pinned Models
 
@@ -388,11 +388,11 @@ Phases run roughly sequentially. Each phase has explicit acceptance gates; the n
 ### Phase A — Spec Lock
 
 Add:
-- `specs/retrieval_benchmark_v0.md` — the IR-metric definitions (nDCG@10, MRR@10, recall@k, sub-metrics).
-- `specs/substrate_retrieval_semantics_v0.md` — packed-state decoder spec for MemoryIndex / RetrievalKeys / Relations / Temporal / Codebook regions.
-- `specs/corpus_retrieval_v0.md` — record schema, qrel grading, splits, embeddings-in-deltas.
-- `specs/hidden_query_pack_v0.md` — seeded sampling rule, hardness stratification, escrow.
-- `specs/determinism_v0.md` — CPU-only inference contract, runtime pins, quantization choices.
+- `specs/retrieval_benchmark.md` — the IR-metric definitions (nDCG@10, MRR@10, recall@k, sub-metrics).
+- `specs/substrate_retrieval_semantics.md` — packed-state decoder spec for MemoryIndex / RetrievalKeys / Relations / Temporal / Codebook regions.
+- `specs/corpus_retrieval.md` — record schema, qrel grading, splits, embeddings-in-deltas.
+- `specs/hidden_query_pack.md` — seeded sampling rule, hardness stratification, escrow.
+- `specs/determinism.md` — CPU-only inference contract, runtime pins, quantization choices.
 
 Remove from the repo:
 - `eval/corpus.ts:scoreProductionState` and the `eventIdToKey128`/`eventIdToMem128` helpers.
@@ -400,7 +400,7 @@ Remove from the repo:
 - `bundle/index.ts:DEFAULT_PROFILE`'s `composite`/structural family weights.
 - `substrate/slot-policy.ts` slot-fill semantics; the file is rewritten as a structural-validity helper or deleted.
 - All unit tests that test the removed scorer (`f1-f2-f3-r1-r2.test.mjs`'s F1/F2 sections, etc.). Failing tests for code being removed are not "regressions"; they are intended deletions.
-- All docs sections that describe the removed legacy slot-fill scorer.
+- All docs sections that describe the removed previous slot-fill scorer.
 
 Acceptance gate: the test suite passes after the deletion (smaller suite is fine; the unit-test count goes down, not up). The repository contains no reward-law path that scores active slot count, structural occupancy, or corpus-id commitment as retrieval quality.
 

@@ -2,7 +2,7 @@
 
 > **Status:** authoritative experimental proof (2026-05-13).
 > **Audience:** auditors and replay-watcher operators who flagged cross-machine reproducibility as a launch concern.
-> **Companion specs:** `specs/determinism_v0.md`, `docs/CORETEX_V4_FRONTIER_RETRIEVAL_HARDENING_PLAN.md §"Multi-host determinism"`, `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md §"Post-corpus, gameability + multi-host hardening"`.
+> **Companion specs:** `specs/determinism.md`, `docs/CORETEX_V4_FRONTIER_RETRIEVAL_HARDENING_PLAN.md §"Multi-host determinism"`, `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md §"Post-corpus, gameability + multi-host hardening"`.
 > **Implementation references** (file:line):
 >   - encoder: `packages/cortex/src/eval/retrieval-corpus.ts`
 >   - decoder: `packages/cortex/src/substrate/retrieval-decoder.ts`

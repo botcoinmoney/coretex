@@ -503,11 +503,11 @@ anti-abuse rules at patch admission, before the costly blockhash wait:
   in an epoch, further admissions don't earn credit (the patch still
   flows into eval, but no additional screener credit).
 
-The legacy `POST /v1/cortex/submit` interactive screener is disabled by
+The previous `POST /coretex/submit` interactive screener is disabled by
 default. Hosts that intentionally want the pre-V4 flow (local dev,
 staging without an active hidden pack) opt in by setting
 `CORETEX_LEGACY_SUBMIT_ENABLED=1` in the coordinator env. Default (env
-unset) returns `410 coretex-legacy-submit-disabled` so a stale
+unset) returns `410 coretex-previous-submit-disabled` so a stale
 deployment cannot accidentally accept active hidden-pack screener
 submissions.
 

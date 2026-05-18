@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Phase 4 E2E gate — CortexBench V0.
+ * Phase 4 E2E gate — CoreTex pre-launch.
  *
  * Tests (in order):
  *  1. Anchored-source loader parity (including LoCoMo LICENSE_BLOCKED path)
@@ -293,7 +293,7 @@ console.log('\n[1] Anchored-source loader parity');
 
 // 1b: temporal fixture loads and has ≥50 protected items
 {
-  const temporalPath = join(REPO_ROOT, 'benchmark/fixtures/temporal/memoryagentbench_v0.json');
+  const temporalPath = join(REPO_ROOT, 'benchmark/fixtures/temporal/memoryagentbench.json');
   let ok = false;
   let reason = '';
   try {
@@ -310,7 +310,7 @@ console.log('\n[1] Anchored-source loader parity');
 
 // 1c: near-collision fixture loads and has ≥50 protected items
 {
-  const ncPath = join(REPO_ROOT, 'benchmark/fixtures/near_collision/limit_nq_hotpotqa_v0.json');
+  const ncPath = join(REPO_ROOT, 'benchmark/fixtures/near_collision/limit_nq_hotpotqa.json');
   let ok = false, reason = '';
   try {
     const raw = JSON.parse(readFileSync(ncPath, 'utf8'));
@@ -323,7 +323,7 @@ console.log('\n[1] Anchored-source loader parity');
 
 // 1d: long-horizon fixture loads and has ≥50 protected items
 {
-  const lhPath = join(REPO_ROOT, 'benchmark/fixtures/long_horizon/memoryarena_v0.json');
+  const lhPath = join(REPO_ROOT, 'benchmark/fixtures/long_horizon/memoryarena.json');
   let ok = false, reason = '';
   try {
     const raw = JSON.parse(readFileSync(lhPath, 'utf8'));
@@ -481,7 +481,7 @@ console.log('\n[5] Protected-regression coverage');
 
 {
   // Load the protected set
-  const temporalPath = join(REPO_ROOT, 'benchmark/fixtures/temporal/memoryagentbench_v0.json');
+  const temporalPath = join(REPO_ROOT, 'benchmark/fixtures/temporal/memoryagentbench.json');
   const raw = JSON.parse(readFileSync(temporalPath, 'utf8'));
   const protectedSet = raw.items.filter(i => i.protected);
 
@@ -593,7 +593,7 @@ console.log('\n[7] Pass-rate target gate');
   // Each miner produces candidateScore vs baselineScore.
   // A patch passes iff candidateScore > baselineScore + SCORE_THRESHOLD.
   //
-  // Targets (from research_brief_v0.md §5, locked):
+  // Targets (from research_brief.md §5, locked):
   //   random/no-op:  ~0%  (we use 0% ± 3% → 0–3%)
   //   weak:          5–10% ± 3% → 2–13%
   //   strong:        20–30% ± 3% → 17–33%

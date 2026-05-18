@@ -1,4 +1,4 @@
-# Phase 7 — Adversarial report (CortexBench V0)
+# Phase 7 — Adversarial report (CoreTex pre-launch)
 
 Generated 2026-05-06.
 
@@ -15,7 +15,7 @@ Generated 2026-05-06.
 | Replay of historical patch | parent-root rebase requirement: an old patch's parent root no longer equals `liveStateRoot` ⇒ rejected | live-epoch.ts `R03_WRONG_PARENT_ROOT` + Phase 7 T7 + e2e step 3 |
 | Target-overlap conflict | reducer overlaps tracked, `R01_TARGET_OVERLAP` | Phase 6 reducer tests |
 | Reserved-bit set in result | `applyPatchOntoCurrent` validates after writes (E04) | Phase 1 unit tests |
-| Non-monotone economics ("save bonus for later") | merge bonus disabled in V0; epoch credits paid the moment a verified improvement lands | live-epoch.ts (creditUnits = marginalGain) |
+| Non-monotone economics ("save bonus for later") | merge bonus disabled in CoreTex; epoch credits paid the moment a verified improvement lands | live-epoch.ts (creditUnits = marginalGain) |
 | Patch-size budget abuse | `wordCount ∈ [1, 4]` enforced at decode + apply (E03) | Phase 1 unit tests + 1M fuzz |
 | Protected regression | hard-veto on protected-anchor regression in score formula | benchmark/score.ts assessVeto + Phase 4 E2E |
 
@@ -36,7 +36,7 @@ When two miners propose non-overlapping improvements during the same
 A miner who submits a "screener-passes-but-doesn't-improve" patch earns
 nothing: the live evaluator returns 0, the patch never reaches
 `submitStateAdvance`, and credits never accrue. There is no separate
-merge-bonus rail to game (V0 disabled).
+merge-bonus rail to game (CoreTex disabled).
 
 ## End-to-end verification
 

@@ -1,8 +1,8 @@
 /**
  * SyntheticTemporalLoader — Apache-2.0, deterministic.
  *
- * Per-V0 decision (LoCoMo Path B): LoCoMo is CC-BY-NC-4.0 and removed from
- * V0; MemoryAgentBench (MIT) covers EventQA / FactConsolidation; this
+ * Per-CoreTex decision (LoCoMo Path B): LoCoMo is CC-BY-NC-4.0 and removed from
+ * CoreTex; MemoryAgentBench (MIT) covers EventQA / FactConsolidation; this
  * synthetic loader fills the LoCoMo-shaped gap (long-conversational stale-
  * vs-current pairs) without licensing risk.
  *
@@ -80,7 +80,7 @@ export class SyntheticTemporalLoader implements FamilyLoader {
         family:         'temporal',
         taskType,
         isProtected:    i < this.protectedCount,
-        sourceRef:      `synthetic-temporal:Apache-2.0:v0:${epoch}:${i}`,
+        sourceRef:      `synthetic-temporal:Apache-2.0:current:${epoch}:${i}`,
         payload:        new TextEncoder().encode(`${queryText}|${truthText}|${isStaleTruth ? 'STALE' : 'CURRENT'}`),
         queryText,
         truthText,

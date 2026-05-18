@@ -1,5 +1,5 @@
 /**
- * Shared types for CortexBench V0 generators.
+ * Shared types for CoreTex pre-launch generators.
  * Each family loader produces CortexEvent[] and an experienceCorpusRoot.
  */
 

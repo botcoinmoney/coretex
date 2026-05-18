@@ -1,7 +1,7 @@
 # CoreTex Miner Quickstart
 
 This is the current miner-facing flow for the retrieval-native CoreTex lane.
-It replaces the archived CortexBench V0 miner guide.
+It replaces the archived CoreTex pre-launch miner guide.
 
 Miners do not need private coordinator state or local model inference. The
 minimum miner uses Base reads, the published CoreTex bundle, the per-miner

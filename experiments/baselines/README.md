@@ -4,26 +4,26 @@ Per `ORGANISM_CORTEX_STATE_PLAN.md §9 Phase 7`.
 
 ## Overview
 
-Five Cortex state seeds ("baselines") compete on CortexBench V0 to inform the
-selection of Core V0. Each baseline defines:
+Five Cortex state seeds ("baselines") compete on CoreTex pre-launch to inform the
+selection of Core CoreTex. Each baseline defines:
 
 - `genesisState()` — a deterministic state-seed factory that returns a
   `CortexState` with 1024 uint256 words.
 - `mineCandidatePatch(state, shardDescriptor, opts?)` — a corpus-aware miner
   that proposes a 1–4-word candidate patch. When `opts.corpus` is provided
   (default for the harness) the miner targets the next uncovered event in
-  its specialty family; without a corpus the legacy heuristic is used.
+  its specialty family; without a corpus the previous heuristic is used.
 
 The harness (`experiments/harness/`) runs all five over the same seeds and
 the real Phase 4 fixture corpus, scores via
 `experiments/harness/cortex-bench-eval.mjs`, and emits a comparison report.
 
-**V0 winner**: **Baseline A (empty)** — selected on 2026-05-06 by running
-the real CortexBench V0 evaluator over seeds 1, 7, 42, 99, 1234. Final
+**CoreTex winner**: **Baseline A (empty)** — selected on 2026-05-06 by running
+the real CoreTex pre-launch evaluator over seeds 1, 7, 42, 99, 1234. Final
 composite 0.2588 (long-horizon compression saturates the 60% family
 weight). See `experiments/results/phase7-real-30/comparison.md` and the
 per-seed stability runs under `experiments/results/phase7-stability/`.
-Frozen `genesisStateRoot` + `coreVersionHash` live in `ops/v0-frozen.json`
+Frozen `genesisStateRoot` + `coreVersionHash` live in `ops/coretex-frozen.json`
 and are mirrored into `docs/contract-addresses.md`.
 
 ## Baselines
@@ -51,7 +51,7 @@ For each baseline, per epoch:
 
 ## Scoring
 
-Real CortexBench V0 evaluator (`cortex-bench-eval.mjs`):
+Real CoreTex pre-launch evaluator (`cortex-bench-eval.mjs`):
 
 - **Exact retrieval (0.30)** — relevant near-collision events whose `keyId =
   keccak('cortex-key128:'+id)[lo128]` matches an active retrieval-key slot.
@@ -85,7 +85,7 @@ node experiments/harness/compareBaselines.mjs --epochs 30 --seed 42 --label phas
 # Phase 7 CI gate (5-epoch dry run + golden vectors + 10k fuzz + live-epoch)
 node test/e2e/phase-7/run.mjs
 
-# Extended 1M-patch fuzz for the V0 release
+# Extended 1M-patch fuzz for the pre-launch release
 EXTENDED_FUZZ=1 node test/e2e/phase-7/run.mjs
 
 # Freeze coreVersionHash + genesisStateRoot for a chosen baseline

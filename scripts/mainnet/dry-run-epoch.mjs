@@ -10,7 +10,7 @@
 //   BASE_RPC_URL                    mainnet RPC
 //   CORTEX_REGISTRY_ADDRESS         deployed registry
 //   CORTEX_MERGE_BONUS_ADDRESS      deployed merge-bonus
-//   COORDINATOR_BASE                cortex-server origin (e.g. https://coordinator.agentmoney.net)
+//   COORDINATOR_BASE                coordinator origin (e.g. https://coordinator.agentmoney.net)
 //   DRY_RUN_MINER_ADDRESS           a funded mining address (for 1 synthetic challenge)
 
 import { exit, env } from 'node:process';
@@ -52,12 +52,12 @@ if (!mbCode  || mbCode === '0x')  { console.error('CortexMergeBonus has no bytec
 console.log('[dry-run] contracts verified');
 
 // 2. Probe coordinator /healthz.
-const health = await fetch(`${COORD}/v1/cortex/_healthz`).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
+const health = await fetch(`${COORD}/coretex/_healthz`).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
 if (!health.ok) { console.error('coordinator /healthz failed:', health); exit(3); }
 console.log('[dry-run] coordinator healthy');
 
 // 3. Request a challenge.
-const challenge = await fetch(`${COORD}/v1/cortex/challenge`, {
+const challenge = await fetch(`${COORD}/coretex/challenge`, {
   headers: { 'x-miner': MINER },
 }).then((r) => r.json());
 console.log(`[dry-run] challenge: epoch=${challenge.epoch} parentStateRoot=${challenge.parentStateRoot.slice(0, 18)}...`);
@@ -73,7 +73,7 @@ const patch = {
   patchType: 'KEY_UPDATE',
   scoreDelta: '0',
 };
-const submitRes = await fetch(`${COORD}/v1/cortex/submit`, {
+const submitRes = await fetch(`${COORD}/coretex/submit`, {
   method: 'POST',
   headers: { 'content-type': 'application/json', 'x-miner': MINER },
   body: JSON.stringify({ challenge, patch }),
@@ -111,5 +111,5 @@ console.log(`[dry-run] EpochFunded: 0 logs (correct — bonus pool is unfunded)`
 console.log('[dry-run] OK');
 console.log('');
 console.log('[dry-run] Disable the lane to keep it unfunded:');
-console.log('[dry-run]   sudo systemctl stop cortex-server');
+console.log('[dry-run]   pause CoreTex in the coordinator or set CORETEX_ENABLED=false');
 console.log('[dry-run]   sudo nginx -t && sudo systemctl reload nginx');

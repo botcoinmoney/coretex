@@ -1,10 +1,10 @@
-# Corpus Retrieval v0 — Record Schema, Qrels, Splits, Embeddings
+# Corpus Retrieval — Record Schema, Qrels, Splits, Embeddings
 
 Status: launch-blocking spec. Pinned by bundle hash.
 
 ## Scope
 
-This spec replaces the legacy `ProductionCorpusEvent` (event-ledger) shape.
+This spec replaces the previous `ProductionCorpusEvent` (event-ledger) shape.
 The CoreTex production corpus is a graded-relevance retrieval benchmark.
 
 ## ProductionCorpusEvent (retrieval shape)
@@ -88,7 +88,7 @@ RelationAnnotation {
 ```
 
 Edge types are bound into the bundle's `relationEdgeTypes` and are aligned
-with the substrate decoder's enum (see `substrate_retrieval_semantics_v0.md`).
+with the substrate decoder's enum (see `substrate_retrieval_semantics.md`).
 
 ### Provenance
 
@@ -108,7 +108,7 @@ Provenance {
 
 ### EmbeddingPayload
 
-Bytes are produced by the pinned bi-encoder (see `determinism_v0.md`) and
+Bytes are produced by the pinned bi-encoder (see `determinism.md`) and
 copied verbatim into the substrate's `RetrievalKeys` slot when a miner
 pins this record.
 

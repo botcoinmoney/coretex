@@ -1,4 +1,4 @@
-# Cortex Patch Wire Format V0
+# CoreTex Patch Wire Format
 
 ## Purpose
 
@@ -95,7 +95,7 @@ The `patchType` in the wire encoding is advisory/descriptive for index routing. 
 |-------|-------------------|-----------------------------------------------------------------------------|
 | `E01` | WRONG_PARENT_ROOT | `patch.parentStateRoot` does not match `merkleizeState(currentState)`      |
 | `E02` | WRONG_TYPE_FIELD  | A target word index falls in the Reserved range (992–1023) or in a range incompatible with the declared `patchType` (strict: MIXED overrides) |
-| `E03` | OVER_BUDGET       | `patch.wordCount > 4` (V0 max budget)                                      |
+| `E03` | OVER_BUDGET       | `patch.wordCount > 4` (current max budget)                                      |
 | `E04` | RESERVED_BIT_SET  | Applying the patch would produce a state with a non-zero reserved bit      |
 | `E05` | NOOP_PATCH        | Every `newWord[i] === currentState.words[index[i]]` — no actual change     |
 
@@ -180,7 +180,7 @@ the source of truth.
 
 ## See also
 
-- `cortex_state_v0.md` — field definitions and rejection error codes
-- `merkleization_spec_v0.md` — computing `parentStateRoot`
-- `packing_spec_v0.md` — word serialization
+- `cortex_state.md` — field definitions and rejection error codes
+- `merkleization_spec.md` — computing `parentStateRoot`
+- `packing_spec.md` — word serialization
 - `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md` — per-patch eval-seed derivation, dual-pack confirmation

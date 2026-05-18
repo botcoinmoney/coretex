@@ -1,5 +1,5 @@
 /**
- * CortexBench V0 — Saturation detector.
+ * CoreTex pre-launch — Saturation detector.
  *
  * Per §9 Phase 4 completion checklist and §8 ORGANISM_CORTEX_STATE_PLAN.md:
  *   "Saturation alarm: alert when median score-delta < 1% for K=10 consecutive epochs."

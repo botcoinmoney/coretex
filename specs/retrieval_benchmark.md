@@ -1,4 +1,4 @@
-# CoreTex Retrieval Benchmark v0 — IR Metric Definitions
+# CoreTex Retrieval Benchmark — IR Metric Definitions
 
 Status: launch-blocking spec. Pinned by bundle hash.
 
@@ -6,9 +6,9 @@ Status: launch-blocking spec. Pinned by bundle hash.
 
 This spec defines the IR-style metrics evaluated by the production CoreTex
 reward law. They are computed by the coordinator over a hidden query pack
-derived from the corpus and a revealed seed (see `hidden_query_pack_v0.md`).
+derived from the corpus and a revealed seed (see `hidden_query_pack.md`).
 They are reproducible deterministically from the pinned bundle (see
-`determinism_v0.md`).
+`determinism.md`).
 
 **Dual-pack acceptance** (per `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md`):
 production scores every live patch on TWO domain-separated packs derived

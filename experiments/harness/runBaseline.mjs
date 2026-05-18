@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Phase 7 harness — run a single baseline over N epochs, mining candidate
 // patches against the real Phase 4 corpus and scoring with the real
-// CortexBench V0 evaluator (no synthetic SEED-XOR).
+// CoreTex pre-launch evaluator (no synthetic SEED-XOR).
 //
 // Per-epoch outputs: real composite + per-component scores, marginalGain,
 // stable family deltas, latency, accept/reject reasons. Per-baseline output
@@ -153,7 +153,7 @@ const result = {
   },
   generatedAt: new Date().toISOString(),
   corpusSources: corpus.sources,
-  scoring: 'real-cortexbench-v0',
+  scoring: 'coretex-retrieval-current',
 };
 
 const outDir = resolve(REPO, OUTDIR);

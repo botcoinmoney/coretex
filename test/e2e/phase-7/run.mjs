@@ -14,7 +14,7 @@ function check(name, ok, reason) {
   fail++;          console.error(`  FAIL  ${name}: ${reason ?? ''}`);
 }
 
-// T1. Run all 5 baselines over 5 epochs each with the real CortexBench scorer.
+// T1. Run all 5 baselines over 5 epochs each with the real CoreTex benchmark scorer.
 {
   const r = spawnSync('node', ['experiments/harness/compareBaselines.mjs', '--epochs', '5', '--seed', '42'], { stdio: 'inherit' });
   check('compare-baselines-dry-run', r.status === 0);
@@ -216,7 +216,7 @@ if (process.env.CORTEX_E2E_LIVE === '1') {
 }
 
 // T9. Season 1 corpus scale smoke. The committed 10k-record corpus should be
-// mineable at the V0 1-4 word patch scale when evaluated through a deterministic
+// mineable at the CoreTex 1-4 word patch scale when evaluated through a deterministic
 // hidden shard instead of diluting each patch over the entire corpus.
 {
   const r = spawnSync('node', ['scripts/season1-shard-smoke.mjs'], {

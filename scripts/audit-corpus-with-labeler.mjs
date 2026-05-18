@@ -18,7 +18,7 @@
  *   - sample N% of events (default 1%, override --sample-pct)
  *   - for each sampled event, score every (query, hard_neg) pair via
  *     the labeling reranker
- *   - bucket the score using the same thresholds the legacy
+ *   - bucket the score using the same thresholds the previous
  *     `labelHardNegative()` used: ≥0.55 → 0.4, ≥0.25 → 0.2, else 0.0
  *   - compare to the synthesizer's category-derived bucket
  *   - report per-category and per-bucket disagreement rates plus a
@@ -123,7 +123,7 @@ console.log(`[audit] scored ${auditPairs.length} pairs in ${elapsed.toFixed(1)}s
   `(${(auditPairs.length / elapsed).toFixed(2)} pairs/s)`);
 
 // Bucket the labeling reranker's score to the same {0.0, 0.2, 0.4} range
-// the legacy per-event labelHardNegative() used.
+// the previous per-event labelHardNegative() used.
 function bucketScore(score) {
   if (score >= 0.55) return 0.4;
   if (score >= 0.25) return 0.2;

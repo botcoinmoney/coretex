@@ -1,4 +1,4 @@
-// Real CortexBench V0 scoring engine for Phase 7 baseline iteration.
+// Real CoreTex pre-launch scoring engine for Phase 7 baseline iteration.
 //
 // Pure JS, deterministic, no I/O beyond reading the committed fixture files.
 // Replaces the synthetic SEED-XOR scoring in the old harness with a real
@@ -61,9 +61,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '../..');
 
 const FIXTURE_PATHS = {
-  near_collision: 'benchmark/fixtures/near_collision/limit_nq_hotpotqa_v0.json',
-  temporal:       'benchmark/fixtures/temporal/memoryagentbench_v0.json',
-  long_horizon:   'benchmark/fixtures/long_horizon/memoryarena_v0.json',
+  near_collision: 'benchmark/fixtures/near_collision/limit_nq_hotpotqa.json',
+  temporal:       'benchmark/fixtures/temporal/memoryagentbench.json',
+  long_horizon:   'benchmark/fixtures/long_horizon/memoryarena.json',
 };
 
 const SEASON1_PATH = 'benchmark/fixtures/season1/coretex_season1_10000.json';
@@ -183,7 +183,7 @@ const RELATIONS_END = 799;
 
 /**
  * Score a raw CortexState against the corpus. Reads word-level fields
- * directly per cortex_state_v0.md so the scorer is independent of the typed
+ * directly per cortex_state.md so the scorer is independent of the typed
  * decoder. Stale rejection / temporal update correctness are signalled by
  * the memory_index slot's REVOKED bit (per the spec, REVOKED is bit 65 of
  * the slot's word 0, encoded as bit 1 of VALIDITY_FLAGS at 79:64).

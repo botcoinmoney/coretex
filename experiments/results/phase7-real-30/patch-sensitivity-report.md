@@ -1,4 +1,4 @@
-# Phase 7 — Patch sensitivity report (CortexBench V0, real corpus)
+# Phase 7 — Patch sensitivity report (CoreTex pre-launch, real corpus)
 
 Generated 2026-05-06 from `experiments/results/phase7-real-30/{A..E}.json`
 (seed 42, 30 epochs, real corpus from `benchmark/fixtures/*` plus the
@@ -42,7 +42,7 @@ the overfit resistance section below.
 
 A miner that exclusively writes one family of patches caps out at:
 
-| Family-only miner | Saturated composite (under V0 weights) |
+| Family-only miner | Saturated composite (under current weights) |
 |-------------------|---------------------------------------:|
 | Compression-only (44/51 ≈ 0.86 × 0.30) | **0.259** |
 | Near-collision-only (36/51 ≈ 0.71 × 0.30) | 0.212 |
@@ -52,10 +52,10 @@ A miner that exclusively writes one family of patches caps out at:
 A composite-aware "strong" miner that mixes families across patches can
 combine: `0.30 × 0.86 (compression) + 0.30 × 0.71 (exact) + 0.15 × 0.39
 (stale) + 0.15 × 0.39 (current) ≈ 0.59`, well above the saturated band of
-any single-family miner. This is the V0 overfit-resistance signal: no
+any single-family miner. This is the CoreTex overfit-resistance signal: no
 single-family pattern dominates the composite alone.
 
-## Notes for the V0 launch
+## Notes for the pre-launch readiness
 
 - Winner is **Baseline A (empty)** because long-horizon compression
   carries the heaviest weight (60% of family weighting once routing's 0.05

@@ -5,7 +5,7 @@
 // gap sizes.
 //
 // Synthetic — no RPC. Uses an in-memory chain with explicit snapshots every
-// SNAPSHOT_EPOCH_INTERVAL=10 (smaller than V0's 100 to keep the test fast).
+// SNAPSHOT_EPOCH_INTERVAL=10 (smaller than CoreTex's 100 to keep the test fast).
 
 import { strict as assert } from 'node:assert';
 

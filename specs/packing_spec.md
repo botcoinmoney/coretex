@@ -1,8 +1,8 @@
-# Cortex Packing Spec V0
+# CoreTex Packing Spec
 
 ## Purpose
 
-Defines the byte-level pack/unpack rules for CortexState V0. Round-trip invariant: `pack(unpack(state)) === state` byte-for-byte. Both reference implementations MUST produce identical packings.
+Defines the byte-level pack/unpack rules for CoreTex state. Round-trip invariant: `pack(unpack(state)) === state` byte-for-byte. Both reference implementations MUST produce identical packings.
 
 ---
 
@@ -68,7 +68,7 @@ words[word] = cleared | ((value & mask) << BigInt(bitsLo))
 
 ## Reserved-bit enforcement
 
-After unpack and before any use, a validator MUST check that every reserved bit (any bit position in any word that is not covered by a named field in `cortex_schema_v0.json`) is zero.
+After unpack and before any use, a validator MUST check that every reserved bit (any bit position in any word that is not covered by a named field in `cortex_schema.json`) is zero.
 
 Reserved range (words 992–1023): every bit in all 32 words must be zero.
 
@@ -100,6 +100,6 @@ The Phase 1 E2E gate runs 10 000 randomized states through `pack → unpack` and
 
 ## See also
 
-- `cortex_state_v0.md` — field definitions
-- `cortex_schema_v0.json` — machine-readable field registry
-- `merkleization_spec_v0.md` — Merkle root derivation (builds on packed bytes)
+- `cortex_state.md` — field definitions
+- `cortex_schema.json` — machine-readable field registry
+- `merkleization_spec.md` — Merkle root derivation (builds on packed bytes)

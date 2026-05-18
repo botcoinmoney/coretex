@@ -5,7 +5,7 @@
 //   - owner is who we expect
 //   - multisig operator set is published
 //   - SNAPSHOT_EPOCH_INTERVAL, CHALLENGE_WINDOW_SECONDS, MERGE_MULTIPLIER_BPS
-//     match expected V0 defaults (or whatever the env says)
+//     match expected current defaults (or whatever the env says)
 //   - both contracts respond to pause()/unpause() simulation (eth_call only)
 //
 // Network reads only — no transactions. Exits non-zero on any check fail.

@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-// Freeze coreVersionHash + genesisStateRoot for the V0 launch.
+// Freeze coreVersionHash + genesisStateRoot for the pre-launch readiness.
 //
 // Inputs:
 //   --baseline <id>   — winning baseline id (default: A, per Phase 7 iteration)
-//   --out <path>      — output JSON path (default: ops/v0-frozen.json)
+//   --out <path>      — output JSON path (default: ops/coretex-frozen.json)
 //
 // Outputs:
 //   {
 //     winner: "A",
-//     coreVersionHash: "0x…",   // keccak256 of the pinned Core V0 dist tarball-equivalent
+//     coreVersionHash: "0x…",   // keccak256 of the pinned Core CoreTex dist tarball-equivalent
 //     genesisStateRoot: "0x…",  // merkleizeState(baseline.genesisState())
 //     packedGenesisStateLen: 32768,
 //     dist: "packages/cortex/dist",
@@ -30,7 +30,7 @@ function arg(name, dflt) {
 }
 
 const baselineId = (arg('--baseline', 'A')).toUpperCase();
-const outPath = arg('--out', 'ops/v0-frozen.json');
+const outPath = arg('--out', 'ops/coretex-frozen.json');
 
 const baselineDir = {
   A: 'baseline_a_empty',
@@ -51,7 +51,7 @@ const genesisStateRoot = bytesToHex(merkleizeState(state));
 
 // coreVersionHash: keccak256 over the canonical concatenation of all .js files
 // under packages/cortex/dist (sorted by relative path). This is reproducible
-// from the same source build and serves as the V0 pinned "Core" identity.
+// from the same source build and serves as the CoreTex pinned "Core" identity.
 function listFiles(root) {
   const out = [];
   for (const entry of readdirSync(root)) {
@@ -88,7 +88,7 @@ const out = {
   packedGenesisStateLen: packed.length,
   dist: 'packages/cortex/dist',
   versionConstant: `${cortexPkg.name}@${cortexPkg.version}`,
-  scoring: 'real-cortexbench-v0',
+  scoring: 'coretex-retrieval-current',
   frozenAt: new Date().toISOString(),
   distFileCount: distFiles.length,
 };

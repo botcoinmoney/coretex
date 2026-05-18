@@ -612,6 +612,6 @@ review and now closed**:
 - `packages/cortex/src/eval/retrieval-benchmark.ts:140-219` — current `scoreSubstrateAgainstQuery` (the function being replaced).
 - `packages/cortex/src/eval/retrieval-benchmark.ts:186-189` — the over-correction comment that motivated this gap.
 - `docs/CORETEX_V4_FRONTIER_RETRIEVAL_HARDENING_PLAN.md:69` — the pin to MemReranker semantics (BGE-M3 Top-50/100 first-stage), which is the design this hardening restores.
-- `specs/cortex_state_v0.md` — the substrate layout (unchanged by this plan).
+- `specs/cortex_state.md` — the substrate layout (unchanged by this plan).
 - `docs/CORETEX_CROSS_SYSTEM_REPRODUCIBILITY_PROOF.md` — cross-CPU determinism guarantees that stage 1 inherits.
 - MemReranker paper (`https://arxiv.org/html/2605.06132v1`) — the architectural prior this hardening aligns the scorer with.

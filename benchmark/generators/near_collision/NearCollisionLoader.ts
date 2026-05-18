@@ -6,11 +6,11 @@
  *                 License: Apache-2.0 (code) / CC-BY-4.0 (data)
  *                 Pinned: 90c5dd3a7c3c0d68bc6cc7a0c5b0f4ca124dfdcb
  *
- *   Supplementary: BEIR subsets — V0 uses NQ (Apache-2.0) and HotpotQA (CC-BY-SA-4.0).
+ *   Supplementary: BEIR subsets — Current CoreTex uses NQ (Apache-2.0) and HotpotQA (CC-BY-SA-4.0).
  *                 MSMARCO and TREC-COVID are DEFERRED (commercial-use review pending).
  *                 Pinned: ef83d29307061c65d04b035b4f4e7c18bd8374af
  *
- * V0 fixture: benchmark/fixtures/near_collision/limit_nq_hotpotqa_v0.json
+ * current fixture: benchmark/fixtures/near_collision/limit_nq_hotpotqa.json
  *
  * Attribution:
  *   LIMIT: Weller et al. arXiv:2508.21038. © Google DeepMind. CC-BY-4.0 (data).
@@ -40,10 +40,10 @@ import { computeCorpusRoot } from '../corpus_root.js';
 const PINNED_CORPUS_HASH = 'FIXTURE_HASH_PLACEHOLDER';
 
 const FIXTURE_PATH_SEGMENTS = [
-  'benchmark', 'fixtures', 'near_collision', 'limit_nq_hotpotqa_v0.json',
+  'benchmark', 'fixtures', 'near_collision', 'limit_nq_hotpotqa.json',
 ];
 
-// Perturbation operators per specs/research_brief_v0.md §4:
+// Perturbation operators per specs/research_brief.md §4:
 // bit-flip distance d ∈ {1, 2, 4} on derived binary keys.
 export const BIT_FLIP_DISTANCES = [1, 2, 4] as const;
 

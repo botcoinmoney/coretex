@@ -10,7 +10,7 @@
       "firstStageTopK": "release/calibration/first-stage-topk-sweep.json",
       "stage2Scalars": "release/calibration/a100-2026-05-16/stage2-scalar-sweep-r4.json",
       "baselineVariance": "release/calibration/a100-2026-05-16/baseline-variance-r4-faithful.json",
-      "baselineVarianceLegacy": "release/calibration/a100-2026-05-16/baseline-variance-r3.json (SUPERSEDED: used local buildPack() with packSize=16 + no quotas; not production-faithful. Overestimated σ by ~45% vs the r4-faithful run that uses deriveQueryPack + profile.hiddenPack quotas + packSize=128.)",
+      "baselineVarianceStale": "release/calibration/a100-2026-05-16/baseline-variance-r3.json (SUPERSEDED: used local buildPack() with packSize=16 + no quotas; not production-faithful. Overestimated σ by ~45% vs the r4-faithful run that uses deriveQueryPack + profile.hiddenPack quotas + packSize=128.)",
       "familyHeadroom": "release/calibration/a100-2026-05-16/family-headroom-r3.json",
       "minImprovement": "release/calibration/a100-2026-05-16/min-improvement-r3.json",
       "capSensitivity": "release/calibration/a100-2026-05-16/cap-sensitivity-r3.json",

@@ -18,7 +18,7 @@ from .types import (
     PATCH_TYPE,
     ERROR_CODES,
     MAGIC,
-    SCHEMA_VERSION_V0,
+    SCHEMA_VERSION_CURRENT,
     WORD_COUNT_VALUE,
 )
 from .codec import pack, unpack, get_field, set_field, PACKED_SIZE
@@ -42,7 +42,7 @@ __all__ = [
     "PATCH_TYPE",
     "ERROR_CODES",
     "MAGIC",
-    "SCHEMA_VERSION_V0",
+    "SCHEMA_VERSION_CURRENT",
     "WORD_COUNT_VALUE",
     "pack",
     "unpack",

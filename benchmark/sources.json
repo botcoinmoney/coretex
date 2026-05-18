@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$comment": "CortexBench V0 benchmark source manifest. Machine-readable source of truth for the Phase 4 loader. Verify license_spdx and redistribution_ok before fetching any dataset. See specs/license_audit.md for full detail.",
+  "$comment": "CoreTex pre-launch benchmark source manifest. Machine-readable source of truth for the Phase 4 loader. Verify license_spdx and redistribution_ok before fetching any dataset. See specs/license_audit.md for full detail.",
   "generated": "2026-05-05",
   "phase": 0,
   "family_weights": {
@@ -70,7 +70,7 @@
       "redistribution_ok": "varies",
       "commercial_use_ok": "varies",
       "attribution": "Thakur et al. BEIR paper + per-subset original paper citation required.",
-      "subset": "Recommended V0 subsets: NQ (Apache-2.0), HotpotQA (CC-BY-SA-4.0). Avoid MSMARCO and TREC-COVID until commercial-use review completed.",
+      "subset": "Recommended CoreTex subsets: NQ (Apache-2.0), HotpotQA (CC-BY-SA-4.0). Avoid MSMARCO and TREC-COVID until commercial-use review completed.",
       "phase4_status": "REVIEW_REQUIRED",
       "notes": "BEIR README: 'It remains the user's responsibility to determine whether you have permission to use the dataset under the dataset's license.' Phase 4 must verify each subset before loading. NQ and HotpotQA are safe defaults."
     },
@@ -78,7 +78,7 @@
       "name": "SyntheticTemporal",
       "family": "temporal",
       "role": "primary",
-      "description": "Apache-2.0 deterministic stale-vs-current generator (LoCoMo Path B). Templated grammar over names + predicates, seeded by SHA-256(epoch, idx). Replaces LoCoMo in V0; covers ~30% of LoCoMo breadth.",
+      "description": "Apache-2.0 deterministic stale-vs-current generator (LoCoMo Path B). Templated grammar over names + predicates, seeded by SHA-256(epoch, idx). Replaces LoCoMo in CoreTex; covers ~30% of LoCoMo breadth.",
       "url": "in-tree: benchmark/generators/temporal/SyntheticTemporalLoader.ts",
       "huggingface": null,
       "paper_arxiv": null,
@@ -92,7 +92,7 @@
       "attribution": "Botcoin Cortex contributors. Apache-2.0.",
       "subset": "Stale-vs-current pairs for temporal update / revocation family",
       "phase4_status": "OK",
-      "notes": "Replaced LoCoMo in V0 (Path B). LoCoMo CC-BY-NC-4.0 incompatible with commercial mining. This synthetic generator + MemoryAgentBench cover the temporal family at ~90% of original §5 design intent. Multi-session conversational cadence gap tracked as V1 in docs/v1-roadmap.md."
+      "notes": "Replaced LoCoMo in CoreTex (Path B). LoCoMo CC-BY-NC-4.0 incompatible with commercial mining. This synthetic generator + MemoryAgentBench cover the temporal family at ~90% of original §5 design intent. Multi-session conversational cadence gap tracked as V1 in docs/v1-roadmap.md."
     },
     {
       "name": "MemoryAgentBench",
@@ -152,7 +152,7 @@
       "attribution": "Scheerer et al., arXiv:2501.17788, SIGIR 2025. MIT License.",
       "subset": "N/A — architectural reference only",
       "phase4_status": "NOT_A_DATA_SOURCE",
-      "notes": "WARP is design motivation, not a data source. CortexBench does not load WARP task data. XTR upstream: google-deepmind/xtr, Apache-2.0 / CC-BY-4.0, commit 52d5b5ec796f51a8eb76aa727873545a58ce8b80 (2024-06-20)."
+      "notes": "WARP is design motivation, not a data source. CoreTex benchmark does not load WARP task data. XTR upstream: google-deepmind/xtr, Apache-2.0 / CC-BY-4.0, commit 52d5b5ec796f51a8eb76aa727873545a58ce8b80 (2024-06-20)."
     }
   ]
 }

@@ -7,16 +7,16 @@
  * Pinned hash: 569241d877899d5c36d7d3b789de6c2489ea6cba (2026-01-27).
  * Attribution: Hu, Wang, McAuley. arXiv:2507.05257. MIT License.
  *
- * V0 uses the EventQA and FactConsolidation tasks from the temporal subset.
+ * Current CoreTex uses the EventQA and FactConsolidation tasks from the temporal subset.
  *
  * Because LoCoMo is LICENSE_BLOCKED, this loader is the sole operative
- * source for the temporal family in CortexBench V0.
+ * source for the temporal family in CoreTex pre-launch.
  *
  * Hash verification: loadCorpus() validates the corpus hash against
  * PINNED_CORPUS_HASH (SHA-256 of the canonical fixture JSON).
  * If the hash mismatches, it throws LoaderError('CORPUS_HASH_MISMATCH').
  *
- * In CI: the fixture is read from benchmark/fixtures/temporal/memoryagentbench_v0.json.
+ * In CI: the fixture is read from benchmark/fixtures/temporal/memoryagentbench.json.
  * That file is a frozen subset (~50 protected + additional items) derived
  * from the HuggingFace dataset at the pinned commit.
  *
@@ -40,7 +40,7 @@ import { computeCorpusRoot } from '../corpus_root.js';
  */
 const PINNED_CORPUS_HASH = 'FIXTURE_HASH_PLACEHOLDER';
 
-const FIXTURE_PATH_SEGMENTS = ['benchmark', 'fixtures', 'temporal', 'memoryagentbench_v0.json'];
+const FIXTURE_PATH_SEGMENTS = ['benchmark', 'fixtures', 'temporal', 'memoryagentbench.json'];
 
 // Number of protected-regression items per fixture.
 const PROTECTED_COUNT = 50;

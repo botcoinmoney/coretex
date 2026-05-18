@@ -21,24 +21,24 @@ Current launch authority lives in this repo:
 
 Use this repo for:
 
-- `/root/cortex/specs/cortex_state_v0.md`
-- `/root/cortex/specs/cortex_schema_v0.json`
-- `/root/cortex/specs/packing_spec_v0.md`
-- `/root/cortex/specs/merkleization_spec_v0.md`
-- `/root/cortex/specs/patch_format_v0.md`
-- `/root/cortex/specs/substrate_retrieval_semantics_v0.md`
-- `/root/cortex/specs/retrieval_benchmark_v0.md`
-- `/root/cortex/specs/corpus_retrieval_v0.md`
-- `/root/cortex/specs/hidden_query_pack_v0.md`
-- `/root/cortex/specs/determinism_v0.md`
+- `/root/cortex/specs/cortex_state.md`
+- `/root/cortex/specs/cortex_schema.json`
+- `/root/cortex/specs/packing_spec.md`
+- `/root/cortex/specs/merkleization_spec.md`
+- `/root/cortex/specs/patch_format.md`
+- `/root/cortex/specs/substrate_retrieval_semantics.md`
+- `/root/cortex/specs/retrieval_benchmark.md`
+- `/root/cortex/specs/corpus_retrieval.md`
+- `/root/cortex/specs/hidden_query_pack.md`
+- `/root/cortex/specs/determinism.md`
 - `/root/cortex/packages/cortex/src/state/`
 - `/root/cortex/packages/cortex-py/cortex_py/`
 - the bundle, corpus, evaluator, replay, and coordinator route-shim packages
   referenced by the current launch plan
 
-Do not use archived CortexBench V0 planning/runbook docs as production
-authority. They live under `docs/archive/legacy-cortex-v0/` and
-`ops/archive/legacy-cortex-v0/` only for historical audit traceability.
+Do not use archived CoreTex pre-launch planning/runbook docs as production
+authority. They live under `docs/archive/stale-coretex/` and
+`ops/archive/stale-coretex/` only for historical audit traceability.
 
 The production architecture is intentionally small:
 

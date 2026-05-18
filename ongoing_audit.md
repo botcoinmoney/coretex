@@ -26,9 +26,9 @@ packages/
   cortex/            (TS substrate impl + simulate.ts regression harness)
   cortex-py/         (Python parity)
   cortex-handler/
-  cortex-server/
-specs/               (cortex_state_v0, cortex_schema_v0.json, packing_spec_v0,
-                      merkleization_spec_v0, patch_format_v0)
+  coordinator route shim/
+specs/               (cortex_state, cortex_schema.json, packing_spec,
+                      merkleization_spec, patch_format)
 docs/                (state-spec.md and supporting docs)
 benchmark/fixtures/season1/coretex_season1_10000.json   (10k synthetic, scale-only)
 scripts/             (generate-season1-corpus.mjs, season1-shard-smoke.mjs)
@@ -66,7 +66,7 @@ For each wake the auditor:
      `ORGANISM_CORTEX_STATE_PLAN.md`).
    - Naming uses CoreTex for product/docs; lowercase `cortex` only for
      real paths/identifiers (`/root/cortex`, `packages/cortex`,
-     `cortex_schema_v0.json`, `coretex-replay`, `CortexState`).
+     `cortex_schema.json`, `coretex-replay`, `CortexState`).
    - No secrets in commits: `.env`, private keys, seed phrases, API
      tokens, authenticated RPC URLs, signing keys, private logs,
      unlicensed datasets/model weights.
@@ -475,7 +475,7 @@ substrate regions:
   (line 100-102). Matches plan §11 "tampered corpus/model/substrate
   data fails hash checks."
 - `corpus.ts:48-73` `ProductionCorpusLoader` integrates as a
-  `CorpusLoader` (existing shape), so the legacy eval pipeline can
+  `CorpusLoader` (existing shape), so the previous eval pipeline can
   consume the new scorer.
 
 🔴 **NEW FINDING — composite-weight inconsistency**:
@@ -1235,7 +1235,7 @@ Gates re-run on this host:
 
 - `npm ci` — 57 packages, 0 vulnerabilities.
 - `npm run build --workspaces --if-present` — `@botcoin/cortex`,
-  `@botcoin/cortex-handler`, `@botcoin/cortex-server` all compile clean.
+  `@botcoin/cortex-handler`, `coordinator route shim` all compile clean.
 - `npm run typecheck --workspaces --if-present` — clean across all
   workspaces.
 - `npm run test:unit --workspace @botcoin/cortex` — **233/233 passed**,
@@ -1270,13 +1270,13 @@ all six coordinator wire-up symbols are importable: `VERSION` is
 Source-level audit findings this round (no new blockers):
 
 - All four remaining `TODO` markers in `packages/cortex/src` are in
-  `reducer/reducer.ts` and refer to the V0 marginal-evaluator stub
+  `reducer/reducer.ts` and refer to the CoreTex marginal-evaluator stub
   (`stubMarginalEvaluator`). The V4 production reward path uses
   `evaluateRetrievalBenchmarkPatch` (real reranker scorer) and never
-  enters the V0 reducer — confirmed by tracing all call sites of
+  enters the CoreTex reducer — confirmed by tracing all call sites of
   `evalPatch` (CLI + workers/worker.ts only) and all call sites of
   `marginalEvaluator` (reducer.ts, live-epoch.ts only). The TODOs are
-  V0-fallback breadcrumbs and do not leak into the production
+  CoreTex-fallback breadcrumbs and do not leak into the production
   `/coretex/evaluate` flow.
 - `coordinator/retrieval-data-source.ts:91-108` `getCoverageHints`
   returns `measured: null` for each `train_visible` record by default;
@@ -1344,7 +1344,7 @@ SHA-256 + byte-length hashes pinned in `packages/cortex/src/bundle/index.ts`.
 Architectural pre-work that was required before the calibration was
 runnable on a CPU host:
 
-- The legacy bi-encoder + reranker factories spawned a fresh Python
+- The previous bi-encoder + reranker factories spawned a fresh Python
   child per `encode()` / `score()` call. Each spawn re-loaded the
   pinned model from scratch (BGE-M3 ~2.3 GB, MemReranker-4B ~8.8 GB);
   launch-scale corpus generation calls these millions of times. New

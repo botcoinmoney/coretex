@@ -254,7 +254,7 @@ resolved from the synthesizer's structural negative category through the
 bundle's `negCategoryRelevanceMap`; the launch corpus does not require a
 4B labeler call per event. The script spawns a persistent Python BGE-M3 child
 (loaded exactly once) and services NDJSON requests over stdin/stdout — the
-legacy per-call spawn variant pays the model-load cost on every encode and is
+previous per-call spawn variant pays the model-load cost on every encode and is
 unusable past a few hundred events on a CPU host.
 
 For multi-shard parallel generation, the parallel driver dispatches

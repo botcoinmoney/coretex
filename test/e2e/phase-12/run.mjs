@@ -74,8 +74,8 @@ const HIGH_SCORE_THRESHOLD = 3_000; // scoreDeltaPpm threshold for 80% assertion
 const HIGH_SCORE_FRACTION_MIN = 0.80;
 const LATENCY_P95_MAX_MS = 5_000;
 
-// Corpus: prefer DACR v0 if present, fall back to season1.
-const DACR_CORPUS_PATH = join(CORTEX_ROOT, 'benchmark/fixtures/dacr-v0/coretex_dacr.json');
+// Corpus: prefer DACR corpus if present, fall back to season1.
+const DACR_CORPUS_PATH = join(CORTEX_ROOT, 'benchmark/fixtures/dacr/coretex_dacr.json');
 const SEASON1_CORPUS_PATH = join(CORTEX_ROOT, 'benchmark/fixtures/season1/coretex_season1_10000.json');
 const PRIMARY_CORPUS_PATH = process.env.CORETEX_CORPUS ?? (
   existsSync(DACR_CORPUS_PATH) ? DACR_CORPUS_PATH : SEASON1_CORPUS_PATH

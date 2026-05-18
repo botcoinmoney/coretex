@@ -1,4 +1,4 @@
-# Cortex State V0
+# CoreTex State
 
 ## Overview
 
@@ -31,7 +31,7 @@ Each word in this range has dedicated semantics. Unused bit positions within eac
 | Word | Field name            | Bits       | Type              | Description                                          |
 |------|-----------------------|------------|-------------------|------------------------------------------------------|
 | 0    | MAGIC                 | 255:240    | uint16            | Fixed value `0xC07E` — "cortex" sentinel             |
-| 0    | SCHEMA_VERSION        | 239:224    | uint16            | Schema version; V0 = `0x0000`                        |
+| 0    | SCHEMA_VERSION        | 239:224    | uint16            | Schema version; CoreTex = `0x0000`                        |
 | 0    | WORD_COUNT            | 223:208    | uint16            | Must equal `1024`                                    |
 | 0    | FLAGS                 | 207:192    | uint16            | Bit 0: genesis state. Bits 1–15: reserved            |
 | 0    | reserved_0            | 191:0      | —                 | Reserved; MUST be zero                               |
@@ -127,13 +127,13 @@ edgeType enum:
   0x5 derived_from
   0x6 co_occurs_with
 
-> Note (decoder authority). The canonical decoder lives at `packages/cortex/src/substrate/retrieval-decoder.ts:decodeRelations`. The bit layout above mirrors `specs/substrate_retrieval_semantics_v0.md §Relations entries`, which is authoritative. The earlier RELATES_TO / SUPERSEDES (only) / ROUTES_TO and SRC_IDX-top framing was a planning sketch and is superseded — miners who follow it will produce patches the decoder drops.
+> Note (decoder authority). The canonical decoder lives at `packages/cortex/src/substrate/retrieval-decoder.ts:decodeRelations`. The bit layout above mirrors `specs/substrate_retrieval_semantics.md §Relations entries`, which is authoritative. The earlier RELATES_TO / SUPERSEDES (only) / ROUTES_TO and SRC_IDX-top framing was a planning sketch and is superseded — miners who follow it will produce patches the decoder drops.
 
 ### Range E: Temporal (words 800–895)
 
 96 words = 12 temporal records × 8 words each. The canonical decoder
 (`packages/cortex/src/substrate/retrieval-decoder.ts:decodeTemporal`)
-and `substrate_retrieval_semantics_v0.md §Temporal records` are
+and `substrate_retrieval_semantics.md §Temporal records` are
 authoritative for the per-record layout; the earlier "96 entries × 1
 word" framing was a planning sketch and is superseded — miners who
 follow it will produce patches the decoder drops.
@@ -266,7 +266,7 @@ flow rotates cleanly without lost in-flight patches.
 
 ## See also
 
-- `cortex_schema_v0.json` — machine-readable field registry
-- `packing_spec_v0.md` — byte-level pack/unpack rules
-- `merkleization_spec_v0.md` — Merkle tree shape and leaf encoding
-- `patch_format_v0.md` — wire format for patches
+- `cortex_schema.json` — machine-readable field registry
+- `packing_spec.md` — byte-level pack/unpack rules
+- `merkleization_spec.md` — Merkle tree shape and leaf encoding
+- `patch_format.md` — wire format for patches

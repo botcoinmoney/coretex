@@ -244,7 +244,7 @@ contract CortexRegistry is Ownable, Pausable, ReentrancyGuard {
     }
 
     /// @notice Record a verified improvement and advance the live state root
-    ///         during the still-open 24-hour epoch. This emits the legacy
+    ///         during the still-open 24-hour epoch. This emits the previous
     ///         CortexPatchAccepted event for data availability, then emits a
     ///         CortexStateAdvanced checkpoint that auditors replay in order.
     ///         Credits are normal epoch credits, not a separate merge bonus.
@@ -356,8 +356,8 @@ contract CortexRegistry is Ownable, Pausable, ReentrancyGuard {
 
     // ── Audit-window revert (multisig, 2-of-N) ───────────────────────────
 
-    /// @notice [V0] Owner-only revert within the audit window.
-    ///         Per the V0 launch decision the multisig lever is deferred — the
+    /// @notice [CoreTex] Owner-only revert within the audit window.
+    ///         Per the pre-launch readiness decision the multisig lever is deferred — the
     ///         owner alone may revert a divergent epoch within
     ///         CHALLENGE_WINDOW_SECONDS. The 2-of-N multisig path
     ///         (`voteRevertEpoch`) below is retained as dead V1 wiring; once
@@ -374,7 +374,7 @@ contract CortexRegistry is Ownable, Pausable, ReentrancyGuard {
 
     /// @notice [V1] Multisig revert vote. Requires MULTISIG_THRESHOLD votes to
     ///         unwind the epoch. Must be called within CHALLENGE_WINDOW_SECONDS.
-    ///         Wiring retained for V1 reactivation; not relied on at V0 launch.
+    ///         Wiring retained for V1 reactivation; not relied on at pre-launch readiness.
     function voteRevertEpoch(uint64 epoch) external onlyOperatorOrOwner {
         if (!epochFinalized[epoch]) revert NotFinalized();
         if (epochReverted[epoch])   revert EpochAlreadyReverted();

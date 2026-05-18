@@ -1,7 +1,7 @@
 {
-  "version": "v0.phase-7",
+  "version": "prelaunch.phase-7",
   "baseline": "A",
-  "scoring": "real-cortexbench-v0",
+  "scoring": "coretex-retrieval-current",
   "triples": [
     {
       "index": 0,

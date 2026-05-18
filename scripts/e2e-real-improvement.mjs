@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// End-to-end real-improvement test for V0 mining.
+// End-to-end real-improvement test for CoreTex mining.
 //
 // Lifecycle:
 //   1. Start an Anvil chain.
-//   2. Deploy CortexRegistry (+ legacy CortexMergeBonus for compatibility).
+//   2. Deploy CortexRegistry (+ stale CoreTexMergeBonus for compatibility).
 //   3. Build the chosen baseline genesis state.
 //   4. Mine a real-corpus improvement patch from the baseline miner; verify
 //      the marginal evaluator returns a strictly positive marginalGain.

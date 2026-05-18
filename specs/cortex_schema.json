@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://botcoinmoney.github.io/cortex/specs/cortex_schema_v0.json",
-  "title": "CortexState V0 — typed slot schema",
-  "description": "Full typed slot registry for all 1024 words of CortexState V0. Each slot is described by its word index, bit range (hi:lo, both inclusive), field name, type, and description. Reserved bits are all fields not listed; they MUST be zero. All values are big-endian.",
+  "$id": "https://botcoinmoney.github.io/cortex/specs/cortex_schema.json",
+  "title": "CoreTex state — typed slot schema",
+  "description": "Full typed slot registry for all 1024 words of CoreTex state. Each slot is described by its word index, bit range (hi:lo, both inclusive), field name, type, and description. Reserved bits are all fields not listed; they MUST be zero. All values are big-endian.",
   "type": "object",
   "required": ["version", "wordCount", "ranges", "slots"],
   "additionalProperties": false,
   "properties": {
-    "version": { "const": "v0" },
+    "version": { "const": "current" },
     "wordCount": { "const": 1024 },
     "ranges": {
       "type": "object",
@@ -96,7 +96,7 @@
 
   "x-slots": [
     { "word": 0, "bitsHi": 255, "bitsLo": 240, "name": "MAGIC",                 "fieldType": "uint16",  "range": "header",        "description": "Fixed sentinel 0xC07E", "fixedValue": 49278 },
-    { "word": 0, "bitsHi": 239, "bitsLo": 224, "name": "SCHEMA_VERSION",        "fieldType": "uint16",  "range": "header",        "description": "Schema version; V0 = 0x0000", "fixedValue": 0 },
+    { "word": 0, "bitsHi": 239, "bitsLo": 224, "name": "SCHEMA_VERSION",        "fieldType": "uint16",  "range": "header",        "description": "Schema version; CoreTex = 0x0000", "fixedValue": 0 },
     { "word": 0, "bitsHi": 223, "bitsLo": 208, "name": "WORD_COUNT",             "fieldType": "uint16",  "range": "header",        "description": "Must equal 1024", "fixedValue": 1024 },
     { "word": 0, "bitsHi": 207, "bitsLo": 192, "name": "FLAGS",                  "fieldType": "uint16",  "range": "header",        "description": "Bit 0: genesis_state. Bits 1-15: reserved MUST zero" },
     { "word": 1, "bitsHi": 255, "bitsLo": 192, "name": "EPOCH",                  "fieldType": "uint64",  "range": "header",        "description": "Current epoch number" },
@@ -120,7 +120,7 @@
   "x-errorCodes": {
     "WRONG_PARENT_ROOT":  "E01 — patch.parentStateRoot does not match the current state root",
     "WRONG_TYPE_FIELD":   "E02 — patch targets a word whose range type is incompatible with the patch type",
-    "OVER_BUDGET":        "E03 — patch.wordCount exceeds the allowed patch budget (V0 max: 4 words)",
+    "OVER_BUDGET":        "E03 — patch.wordCount exceeds the allowed patch budget (current max: 4 words)",
     "RESERVED_BIT_SET":   "E04 — one or more reserved bits in the resulting state are non-zero",
     "NOOP_PATCH":         "E05 — every target word in the patch is identical to the current state word (no change)"
   },

@@ -36,7 +36,7 @@ export function genesisState() {
 export function mineCandidatePatch(state, shardDescriptor, opts = {}) {
   const corpus = opts.corpus;
   if (!corpus) {
-    // Legacy heuristic: bit-flip is_revoked in TEMPORAL_FLAGS (47:32) on a
+    // Stale heuristic: bit-flip is_revoked in TEMPORAL_FLAGS (47:32) on a
     // temporal entry. This stays inside the spec layout (bits 31:0 reserved)
     // so reserved-bit validation passes.
     const seed = BigInt(shardDescriptor?.solveIndex ?? 0);

@@ -1,8 +1,8 @@
-# Baselines comparison — CortexBench V0 (phase7-stability/seed-99)
+# Baselines comparison — CoreTex pre-launch (phase7-stability/seed-99)
 
 Seed: 99  Epochs per baseline: 60  Generated: 2026-05-07T00:27:48.744Z
 
-> Scorer: real CortexBench V0 (`experiments/harness/cortex-bench-eval.mjs`)
+> Scorer: real CoreTex pre-launch (`experiments/harness/cortex-bench-eval.mjs`)
 > driven by Phase 4 fixtures + the Apache-2.0 SyntheticTemporalLoader.
 > See `experiments/PHASE_7_USER_ACTIONS.md` for the freeze procedure.
 

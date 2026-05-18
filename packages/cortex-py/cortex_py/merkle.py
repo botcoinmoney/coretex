@@ -1,7 +1,7 @@
 """
 merkle.py — Keccak-256 binary Merkle tree over the 1024-word CortexState.
 
-Spec: specs/merkleization_spec_v0.md
+Spec: specs/merkleization_spec.md
 
 Algorithm:
   1. Compute 1024 leaves: leaf[i] = keccak256(bigEndian32(words[i]))

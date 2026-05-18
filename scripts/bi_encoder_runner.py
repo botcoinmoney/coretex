@@ -3,7 +3,7 @@
 
 Two modes, selected by --stream flag:
 
-ONE-SHOT (legacy default): reads a single JSON request from stdin and emits
+ONE-SHOT (single-request default): reads a single JSON request from stdin and emits
 { "embeddings": [...] } on stdout, then exits. Used by the original
 spawnSync call site. Preserved for backward compatibility.
 

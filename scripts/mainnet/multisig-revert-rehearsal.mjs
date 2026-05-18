@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// V0 owner-revert rehearsal (was multisig — multisig deferred to V1).
+// owner-revert rehearsal (was multisig — multisig deferred to V1).
 //
-// Per ORGANISM_CORTEX_STATE_PLAN.md §9 Phase 9 (post-V0-policy update):
+// Per ORGANISM_CORTEX_STATE_PLAN.md §9 Phase 9 (post-CoreTex-policy update):
 //   Dry-run divergent-epoch revert against a deployed CortexRegistry by
-//   calling ownerRevertEpoch(uint64) within the audit window. The legacy
+//   calling ownerRevertEpoch(uint64) within the audit window. The previous
 //   multisig path (voteRevertEpoch 2-of-N) is retained in the contract for
-//   V1 reactivation; V0 ships with single-owner revert.
+//   V1 reactivation; CoreTex ships with single-owner revert.
 //
 // Modes:
 //   - synthetic (default): spins up a local anvil fork of Base mainnet via

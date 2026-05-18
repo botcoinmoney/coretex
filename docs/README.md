@@ -120,12 +120,12 @@ CoreTex hash recorded in its `.env.example`.
 
 ## Archived Historical Docs
 
-Historical CortexBench V0, merge-bonus, testnet, multisig-override, and
+Historical CoreTex pre-launch, merge-bonus, testnet, multisig-override, and
 slot-fill/structural-commitment docs were moved to:
 
-- [`archive/legacy-cortex-v0/`](./archive/legacy-cortex-v0/)
-- [`../ops/archive/legacy-cortex-v0/`](../ops/archive/legacy-cortex-v0/)
-- [`../ops/testnet/archive/legacy-cortex-v0/`](../ops/testnet/archive/legacy-cortex-v0/)
+- [`archive/stale-coretex/`](./archive/stale-coretex/)
+- [`../ops/archive/stale-coretex/`](../ops/archive/stale-coretex/)
+- [`../ops/testnet/archive/stale-coretex/`](../ops/testnet/archive/stale-coretex/)
 
 They are useful for provenance only. New runbooks must link to the current
 authority files above.

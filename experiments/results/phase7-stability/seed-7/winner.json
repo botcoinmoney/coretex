@@ -4,7 +4,7 @@
   "finalStateRoot": "0xc5ea19d40fdd6d2241c9b10c5ef7a170d3e3ed213e78189c6db2b77f7509f8e7",
   "genesisStateRoot": "0x7e704f76d6156405800141206cec1e6d7804daa8bf4e7da1542a1e431958504e",
   "selectedAt": "2026-05-07T00:26:07.317Z",
-  "scoring": "real-cortexbench-v0",
+  "scoring": "coretex-retrieval-current",
   "seed": "7",
   "epochs": "60",
   "label": "phase7-stability/seed-7"

@@ -22,7 +22,7 @@
 // ── Constants (mirrors packages/cortex/src/state/types.ts) ──────────────────
 
 export const MAGIC = 0xC07En;
-export const SCHEMA_VERSION_V0 = 0x0000n;
+export const SCHEMA_VERSION_CoreTex = 0x0000n;
 export const WORD_COUNT = 1024;
 
 export const RANGES = {
@@ -82,7 +82,7 @@ export function getField(word, bitsHi, bitsLo) {
 export function buildHeaderWord0(flags = 1) {
   let w = 0n;
   w = setField(w, 255, 240, MAGIC);
-  w = setField(w, 239, 224, SCHEMA_VERSION_V0);
+  w = setField(w, 239, 224, SCHEMA_VERSION_CoreTex);
   w = setField(w, 223, 208, BigInt(WORD_COUNT));
   w = setField(w, 207, 192, BigInt(flags));
   return w;

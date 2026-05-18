@@ -14,7 +14,7 @@
  *   4. Public-replay equivalence: replay script produces same output.
  *   5. No double-credit: same (epoch, miner, patchHash) never double-issues.
  *   6. Multiplier cap (off-chain & on-chain parity): single uplift capped at
- *      Default V0 setting is 1.0x, so separate merge-bonus uplift is zero.
+ *      Default CoreTex setting is 1.0x, so separate merge-bonus uplift is zero.
  *   7. 100-miner adversarial sim: weak/medium/strong mix over 50 epochs;
  *      Gini < 0.35; no single miner > 25% combined-lane credits in any epoch.
  *   8. Filler-rejection battery: no-op, random-mutation, public-test-overfit,
@@ -424,7 +424,7 @@ function buildEpochBonusLeaves(eligibility, claimBases, multiplierBps = MERGE_MU
 }
 
 // ── 0.12 Screener stubs (filler battery) ──────────────────────────────────────
-// TODO(phase-4): Replace with real CortexBench evaluator
+// TODO(phase-4): Replace with real CoreTex benchmark evaluator
 
 const SCREENER_CODES = {
   S01_NOOP: 'S01_NOOP',
@@ -818,14 +818,14 @@ console.log('\n=== Gate 6: No separate merge multiplier (off-chain parity) ===')
   test('computeMinerBonus default bonusBotcoin = 0', () => {
     assert.equal(computeMinerBonus(miner, claimBase).bonusBotcoin, expectedBonus);
   });
-  test('computeMinerBonus cap equals bonusBotcoin (V0)', () => {
+  test('computeMinerBonus cap equals bonusBotcoin (CoreTex)', () => {
     const leaf = computeMinerBonus(miner, claimBase);
     assert.equal(leaf.capBotcoin, leaf.bonusBotcoin);
   });
   test('1 merge and 2 merges → identical no-uplift funding set', () => {
     assert.equal(leavesOne.length, leavesTwo.length);
   });
-  test('legacy explicit bonus leaf cap check remains valid', () => {
+  test('previous explicit bonus leaf cap check remains valid', () => {
     const leaf = { miner, bonusBotcoin: 1n, capBotcoin: 1n };
     assert.ok(leaf.bonusBotcoin <= leaf.capBotcoin);
   });

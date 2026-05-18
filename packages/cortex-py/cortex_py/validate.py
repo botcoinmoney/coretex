@@ -1,8 +1,8 @@
 """
-validate.py — Reserved-bit enforcement for CortexState V0.
+validate.py — Reserved-bit enforcement for CoreTex state.
 
-Spec: specs/packing_spec_v0.md §Reserved-bit enforcement
-      specs/cortex_state_v0.md (per-range reserved-bit definitions)
+Spec: specs/packing_spec.md §Reserved-bit enforcement
+      specs/cortex_state.md (per-range reserved-bit definitions)
 
 Rule: Any word with a non-zero reserved bit causes rejection with E04.
 
@@ -181,7 +181,7 @@ def has_non_zero_reserved_bits(state: CortexState) -> bool:
     """
     Return True if any reserved bit in the state is non-zero.
 
-    Per spec packing_spec_v0.md: any violation → reject with E04.
+    Per spec packing_spec.md: any violation → reject with E04.
     """
     for word_idx, mask in RESERVED_MASKS.items():
         if state.words[word_idx] & mask:

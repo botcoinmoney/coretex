@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Phase 7 harness — run all 5 baselines over the same seed + corpus and emit
-// a comparison report (markdown + CSV). Defaults to the real CortexBench V0
+// a comparison report (markdown + CSV). Defaults to the real CoreTex pre-launch
 // scorer wired in cortex-bench-eval.mjs; pass --label synthetic-dryrun to
-// reproduce the legacy synthetic dry-run for backwards compatibility (still
-// uses the real scorer now — but writes to the legacy directory).
+// reproduce the previous synthetic dry-run for backwards compatibility (still
+// uses the real scorer now — but writes to the previous-results directory).
 //
 // Usage: node experiments/harness/compareBaselines.mjs [--epochs N] [--seed N] [--label tag]
 
@@ -47,11 +47,11 @@ for (const id of BASELINES) {
   if (results[id].summary.finalComposite > results[winner].summary.finalComposite) winner = id;
 }
 
-let md = `# Baselines comparison — CortexBench V0 (${LABEL})
+let md = `# Baselines comparison — CoreTex pre-launch (${LABEL})
 
 Seed: ${SEED}  Epochs per baseline: ${EPOCHS}  Generated: ${new Date().toISOString()}
 
-> Scorer: real CortexBench V0 (\`experiments/harness/cortex-bench-eval.mjs\`)
+> Scorer: real CoreTex pre-launch (\`experiments/harness/cortex-bench-eval.mjs\`)
 > driven by Phase 4 fixtures + the Apache-2.0 SyntheticTemporalLoader.
 > See \`experiments/PHASE_7_USER_ACTIONS.md\` for the freeze procedure.
 
@@ -103,7 +103,7 @@ writeFileSync(resolve(REPO, `experiments/results/${LABEL}/winner.json`), JSON.st
   finalStateRoot: results[winner].summary.finalStateRoot,
   genesisStateRoot: results[winner].summary.genesisStateRoot,
   selectedAt: new Date().toISOString(),
-  scoring: 'real-cortexbench-v0',
+  scoring: 'coretex-retrieval-current',
   seed: SEED,
   epochs: EPOCHS,
   label: LABEL,

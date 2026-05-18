@@ -3,7 +3,7 @@
  * Audit a coordinator clone's dataset/v2 layout against the CoreTex retrieval
  * benchmark requirements.
  *
- * Spec: specs/corpus_retrieval_v0.md, plan §Phase E0.
+ * Spec: specs/corpus_retrieval.md, plan §Phase E0.
  *
  * Inspects:
  *   - dataset/v2/domains/<domain>/seeds/<seed>/context/{challenge,trap_metadata}.json

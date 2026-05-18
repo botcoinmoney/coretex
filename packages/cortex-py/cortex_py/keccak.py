@@ -10,7 +10,7 @@ Rationale for pycryptodome:
   Verified against the canonical test vector:
     keccak256(b"") == c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
 
-Spec: specs/merkleization_spec_v0.md §Hash function
+Spec: specs/merkleization_spec.md §Hash function
 """
 from __future__ import annotations
 from Crypto.Hash import keccak as _keccak_mod  # type: ignore[import]

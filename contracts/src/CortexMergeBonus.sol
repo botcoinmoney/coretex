@@ -18,8 +18,8 @@ interface ICortexRegistry {
 }
 
 /// @title CortexMergeBonus
-/// @notice Legacy bonus rail for miners whose Cortex patches are merged.
-///         V0 production sets MERGE_MULTIPLIER_BPS to 10000 (1.0x), so normal
+/// @notice Stale bonus rail for miners whose Cortex patches are merged.
+///         production launch sets MERGE_MULTIPLIER_BPS to 10000 (1.0x), so normal
 ///         state-advance credits replace the separate merge-uplift incentive.
 ///
 ///         Funding model:
@@ -37,7 +37,7 @@ contract CortexMergeBonus is Ownable, Pausable, ReentrancyGuard {
     // ── Constants ─────────────────────────────────────────────────────────
 
     uint256 public constant MAX_CLAIM_EPOCHS    = 64;
-    uint256 public constant MERGE_MULTIPLIER_BPS = 10000; // 1.0× / no separate uplift (V0 setting)
+    uint256 public constant MERGE_MULTIPLIER_BPS = 10000; // 1.0× / no separate uplift (CoreTex setting)
 
     // ── Immutables ────────────────────────────────────────────────────────
 

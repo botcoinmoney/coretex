@@ -1,4 +1,4 @@
-# Substrate Retrieval Semantics v0 — Packed-State Decoder
+# Substrate Retrieval Semantics — Packed-State Decoder
 
 Status: launch-blocking spec. Pinned by bundle hash.
 
@@ -24,7 +24,7 @@ Word-range constants are pinned in `packages/cortex/src/state/types.ts`
 | Codebook        | 896..991    | 48 × 2 words   |
 | Reserved        | 992..1023   | 32 words       |
 
-Header layout is unchanged from `cortex_state_v0.md`.
+Header layout is unchanged from `cortex_state.md`.
 Reserved-word writes are forbidden by the contract (`E04 RESERVED_BIT_SET`).
 
 ## MemoryIndex slots

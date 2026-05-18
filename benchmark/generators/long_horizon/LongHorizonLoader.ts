@@ -10,12 +10,12 @@
  *   Synthetic stream-and-evict generator: parameterized to force capacity
  *            pressure on 1024 words (no external dataset required; generated inline).
  *
- * V0 fixture: benchmark/fixtures/long_horizon/memoryarena_v0.json
+ * current fixture: benchmark/fixtures/long_horizon/memoryarena.json
  *
  * Deferred: MemoryArena code repository URL — confirm with zexueh@stanford.edu.
  *           Until confirmed, only HF dataset subset is used (CC-BY-4.0, confirmed).
  *
- * Family weight: 60% of composite score (locked in research_brief_v0.md §4).
+ * Family weight: 60% of composite score (locked in research_brief.md §4).
  */
 
 import { createHash } from 'node:crypto';
@@ -31,10 +31,10 @@ import { computeCorpusRoot } from '../corpus_root.js';
 const PINNED_CORPUS_HASH = 'FIXTURE_HASH_PLACEHOLDER';
 
 const FIXTURE_PATH_SEGMENTS = [
-  'benchmark', 'fixtures', 'long_horizon', 'memoryarena_v0.json',
+  'benchmark', 'fixtures', 'long_horizon', 'memoryarena.json',
 ];
 
-/** MemoryArena task configurations used in V0. */
+/** MemoryArena task configurations used in CoreTex. */
 export const MEMORYARENA_CONFIGS = [
   'bundled_shopping',
   'progressive_search',

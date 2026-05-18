@@ -1,4 +1,4 @@
-# Hidden Query Pack v0 — Seeded Sampling, Stratification, Escrow
+# Hidden Query Pack — Seeded Sampling, Stratification, Escrow
 
 Status: launch-blocking spec. Pinned by bundle hash.
 
@@ -7,7 +7,7 @@ Status: launch-blocking spec. Pinned by bundle hash.
 > `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md`. Same sampling +
 > stratification rules apply; the seed input is broader (includes
 > `blockhash(targetBlock)`, `patchHash`, `parentRoot`, `minerAddress`
-> in addition to `epochSecret` + `epochId`). The legacy per-epoch seed
+> in addition to `epochSecret` + `epochId`). The previous per-epoch seed
 > below remains the source for the baseline pack
 > (`baselineEvalSeedHex` pinned in the bundle profile), so pre-patch
 > baseline scoring stays reproducible from `(bundle, corpus)` alone.

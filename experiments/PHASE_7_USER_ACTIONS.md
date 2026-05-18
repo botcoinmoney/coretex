@@ -10,7 +10,7 @@ checklist for the user; the steps have been completed in-repo on
 - **`coreVersionHash`**: `0xe1a957805f855828338a2a9d1f90c46eb78c378d85f10c8d8c83a1ce6eb388d3`
 - **`genesisStateRoot`**: `0x7e704f76d6156405800141206cec1e6d7804daa8bf4e7da1542a1e431958504e`
 
-Source of truth: `ops/v0-frozen.json`. Both values are mirrored into
+Source of truth: `ops/coretex-frozen.json`. Both values are mirrored into
 `docs/contract-addresses.md`.
 
 ## How the iteration ran

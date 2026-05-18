@@ -3,7 +3,7 @@
  * Determinism harness — runs both pinned models on a 1k-pair sample and
  * emits CSV of |score_a - score_b| per pair across configured runtimes.
  *
- * Spec: specs/determinism_v0.md.
+ * Spec: specs/determinism.md.
  *
  * Usage:
  *   node scripts/determinism-check.mjs \

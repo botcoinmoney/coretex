@@ -1,4 +1,4 @@
-// Unit tests for the real CortexBench V0 scoring engine.
+// Unit tests for the real CoreTex pre-launch scoring engine.
 // These guard the score function against silent regressions.
 
 import test from 'node:test';
@@ -56,7 +56,7 @@ test('mining baseline E patch increases temporal stale rejection or current upda
   assert.ok(totalDelta > 0, `temporal score did not move: ${totalDelta}`);
 });
 
-test('composite weights match the V0 spec', () => {
+test('composite weights match the current spec', () => {
   const c = {
     exactRetrieval:            1,
     staleMemoryRejection:      1,

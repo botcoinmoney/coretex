@@ -1196,7 +1196,7 @@
   "generatedAt": "2026-05-07T00:28:07.572Z",
   "corpusSources": {
     "near_collision": {
-      "path": "benchmark/fixtures/near_collision/limit_nq_hotpotqa_v0.json",
+      "path": "benchmark/fixtures/near_collision/limit_nq_hotpotqa.json",
       "count": 51,
       "license": "CC-BY-4.0 (LIMIT); Apache-2.0 (NQ); CC-BY-SA-4.0 (HotpotQA)",
       "source": [
@@ -1206,13 +1206,13 @@
       ]
     },
     "temporal": {
-      "path": "benchmark/fixtures/temporal/memoryagentbench_v0.json",
+      "path": "benchmark/fixtures/temporal/memoryagentbench.json",
       "count": 52,
       "license": "MIT",
       "source": "MemoryAgentBench"
     },
     "long_horizon": {
-      "path": "benchmark/fixtures/long_horizon/memoryarena_v0.json",
+      "path": "benchmark/fixtures/long_horizon/memoryarena.json",
       "count": 51,
       "license": "CC-BY-4.0",
       "source": "MemoryArena"
@@ -1222,5 +1222,5 @@
       "license": "Apache-2.0"
     }
   },
-  "scoring": "real-cortexbench-v0"
+  "scoring": "coretex-retrieval-current"
 }

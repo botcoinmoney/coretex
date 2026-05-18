@@ -40,7 +40,7 @@ def test_output_length():
 
 def test_deterministic():
     """Same input always produces the same output."""
-    data = b"cortex-state-v0"
+    data = b"coretex-state-current"
     r1 = keccak256(data)
     r2 = keccak256(data)
     assert r1 == r2

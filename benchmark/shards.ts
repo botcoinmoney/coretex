@@ -1,5 +1,5 @@
 /**
- * CortexBench V0 — Hidden shard derivation.
+ * CoreTex pre-launch — Hidden shard derivation.
  *
  * Mirrors deriveWorldSeedU128 from:
  *   /root/botcoin-coordinator/packages/coordinator/src/epoch.ts:257

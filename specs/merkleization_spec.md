@@ -1,4 +1,4 @@
-# Cortex Merkleization Spec V0
+# CoreTex Merkleization Spec
 
 ## Purpose
 
@@ -14,7 +14,7 @@ Specifically: `keccak256(data: Uint8Array): Uint8Array` producing 32 bytes, matc
 
 **Implementation note**: Node.js `crypto.createHash('sha3-256')` uses the NIST SHA-3 standard which differs in padding from Keccak-256. The correct Keccak-256 implementation for on-chain parity can be obtained via:
 - `ethereum-cryptography` npm package (`import { keccak256 } from 'ethereum-cryptography/keccak.js'`), which is a pure-JS implementation with no native deps.
-- Or a manual implementation using the `node:crypto` `createHash` with the `legacy` keccak variant if available.
+- Or a manual implementation using the `node:crypto` `createHash` with the `previous` keccak variant if available.
 
 For this Phase 1 implementation, we use the `ethereum-cryptography` package's keccak256. It is listed as a devDependency or direct dependency only in `@botcoin/cortex`.
 
@@ -113,5 +113,5 @@ The E2E test suite generates 1 000 randomised states and verifies that the root 
 
 ## See also
 
-- `packing_spec_v0.md` — byte layout (pack input to each leaf)
-- `patch_format_v0.md` — patch carries `parentStateRoot` (a root from this spec)
+- `packing_spec.md` — byte layout (pack input to each leaf)
+- `patch_format.md` — patch carries `parentStateRoot` (a root from this spec)

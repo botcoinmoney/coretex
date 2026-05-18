@@ -1,6 +1,6 @@
-# Cortex Receipt Field Mapping (V0)
+# Cortex Receipt Field Mapping (CoreTex)
 
-> Phase 5 deliverable. The §6 published mapping that lets Cortex receipts ride the existing `BotcoinMining` EIP-712 domain in V0 without a new contract domain.
+> Phase 5 deliverable. The §6 published mapping that lets Cortex receipts ride the existing `BotcoinMining` EIP-712 domain in CoreTex without a new contract domain.
 
 | `BotcoinMining` field   | Cortex meaning                                                                |
 |-------------------------|-------------------------------------------------------------------------------|
@@ -17,4 +17,4 @@ Auditors and explorers disambiguate via `rulesVersion`. The contract does not in
 
 ## Trust assumption
 
-The on-chain schema labels say "doc/questions/constraints/answers" and explorers will see them as such. This is documented in miner-facing docs as a soft-coupling that V1 removes. Acceptable for V0 because credit issuance is identical to SWCP, and the `rulesVersion = 0xC0` byte makes Cortex receipts machine-distinguishable from SWCP receipts.
+The on-chain schema labels say "doc/questions/constraints/answers" and explorers will see them as such. This is documented in miner-facing docs as a soft-coupling that V1 removes. Acceptable for CoreTex because credit issuance is identical to SWCP, and the `rulesVersion = 0xC0` byte makes Cortex receipts machine-distinguishable from SWCP receipts.

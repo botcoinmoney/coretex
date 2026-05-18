@@ -1,7 +1,7 @@
-# CortexBench V0
+# CoreTex pre-launch
 
 > Phase 4 deliverable. Benchmark subagent — 2026-05-05.
-> This document is the specification for CortexBench V0 and the authoritative
+> This document is the specification for CoreTex pre-launch and the authoritative
 > reference for all benchmark loaders, score computation, and E2E gates.
 
 ---
@@ -17,7 +17,7 @@
 ### License Enforcement
 
 - **LoCoMo Path B (chosen 2026-05-05)**: LoCoMo (CC-BY-NC-4.0) was incompatible with
-  commercial mining and has been REMOVED from V0. The temporal family ships with
+  commercial mining and has been REMOVED from CoreTex. The temporal family ships with
   `MemoryAgentBenchLoader` (MIT, EventQA + FactConsolidation tasks) plus
   `SyntheticTemporalLoader` (Apache-2.0, deterministic stale-vs-current pairs from a
   templated grammar) covering the LoCoMo-shaped gap (~30% of LoCoMo breadth). Combined
@@ -25,9 +25,9 @@
   cadence) tracked as V1 follow-up in `docs/v1-roadmap.md`.
 
 - **BEIR/MSMARCO** and **BEIR/TREC-COVID**: deferred. Commercial-use review pending (see
-  `specs/license_audit.md §3`). V0 uses NQ and HotpotQA only.
+  `specs/license_audit.md §3`). Current CoreTex uses NQ and HotpotQA only.
 
-- **MemoryArena code repo**: code repository URL unresolved as of 2026-05-05. V0 uses the
+- **MemoryArena code repo**: code repository URL unresolved as of 2026-05-05. Current CoreTex uses the
   HuggingFace dataset only (CC-BY-4.0, confirmed). Contact: zexueh@stanford.edu.
 
 Each loader validates a pinned corpus hash (SHA-256 of the fixture JSON, excluding the
@@ -133,9 +133,9 @@ Implementation: `benchmark/shards.ts`.
 > exploitation: the screener subset is not known to the miner before evaluation.
 
 Protected-regression items are frozen in:
-- `benchmark/fixtures/temporal/memoryagentbench_v0.json` — items with `"protected": true`
-- `benchmark/fixtures/near_collision/limit_nq_hotpotqa_v0.json` — items with `"protected": true`
-- `benchmark/fixtures/long_horizon/memoryarena_v0.json` — items with `"protected": true`
+- `benchmark/fixtures/temporal/memoryagentbench.json` — items with `"protected": true`
+- `benchmark/fixtures/near_collision/limit_nq_hotpotqa.json` — items with `"protected": true`
+- `benchmark/fixtures/long_horizon/memoryarena.json` — items with `"protected": true`
 
 ---
 
@@ -191,7 +191,7 @@ Identical `(corpus, state, seed)` → byte-identical score reports across machin
 - For byte-identity of components, the score formula is deterministic on
   `(components, patchWordCount, stateSizeWords, protectedRegressionCount)`.
 
-**CI matrix:** linux/x64 only for V0. linux/arm64 and macOS/arm64 deferred
+**CI matrix:** linux/x64 only for CoreTex. linux/arm64 and macOS/arm64 deferred
 (documented: different IEEE-754 rounding behavior is possible but not expected
 given all operations are integer-bounded).
 
@@ -216,7 +216,7 @@ Implementation: `benchmark/generators/corpus_root.ts`.
 
 ### Corpus Seasons
 
-V0 keeps the small Phase 4 fixture corpus as `season0` for calibration and
+CoreTex keeps the small Phase 4 fixture corpus as `season0` for calibration and
 regression tests. Production dry-runs use `season1`, a committed 10,000-record
 corpus at `benchmark/fixtures/season1/coretex_season1_10000.json`.
 
@@ -250,9 +250,9 @@ validator consistency.
 | `benchmark/score.ts` | Score formula, buildScoreReport |
 | `benchmark/shards.ts` | Hidden shard derivation, epoch commit/reveal simulation |
 | `benchmark/saturation.ts` | Saturation detector (SaturationTracker) |
-| `benchmark/fixtures/temporal/memoryagentbench_v0.json` | Frozen temporal corpus (≥50 protected) |
-| `benchmark/fixtures/near_collision/limit_nq_hotpotqa_v0.json` | Frozen near-collision corpus (≥50 protected) |
-| `benchmark/fixtures/long_horizon/memoryarena_v0.json` | Frozen long-horizon corpus (≥50 protected) |
+| `benchmark/fixtures/temporal/memoryagentbench.json` | Frozen temporal corpus (≥50 protected) |
+| `benchmark/fixtures/near_collision/limit_nq_hotpotqa.json` | Frozen near-collision corpus (≥50 protected) |
+| `benchmark/fixtures/long_horizon/memoryarena.json` | Frozen long-horizon corpus (≥50 protected) |
 | `benchmark/fixtures/season1/coretex_season1_10000.json` | Season 1 production dry-run corpus (10k records) |
 | `test/e2e/phase-4/run.mjs` | Full Phase 4 E2E gate |
 
@@ -264,15 +264,15 @@ validator consistency.
    `specs/license_audit.md §4`). Until resolved, temporal family uses MemoryAgentBench only.
 
 2. **MemoryArena code repo URL** — unresolved as of 2026-05-05. Contact: zexueh@stanford.edu.
-   V0 uses HF dataset only (CC-BY-4.0, confirmed). This is NOT a blocker.
+   Current CoreTex uses HF dataset only (CC-BY-4.0, confirmed). This is NOT a blocker.
 
-3. **MSMARCO / TREC-COVID commercial-use review** — deferred. V0 uses NQ + HotpotQA only.
+3. **MSMARCO / TREC-COVID commercial-use review** — deferred. Current CoreTex uses NQ + HotpotQA only.
 
 4. **Fixture SHA-256 hashes** — `PINNED_CORPUS_HASH` constants in loaders are set to
    `FIXTURE_HASH_PLACEHOLDER`. Run `scripts/fetch-fixtures.mjs` to generate real fixtures and
    replace the placeholders. This is a CI setup task, not a spec blocker.
 
-5. **Cross-architecture reproducibility** — linux/x64 only in V0. ARM and macOS deferred
+5. **Cross-architecture reproducibility** — linux/x64 only in CoreTex. ARM and macOS deferred
    (unlikely to differ given integer-only arithmetic, but not CI-verified).
 
 6. **Phase 3 interaction** — score.ts calls `hashFn` (keccak256) injected by caller; the

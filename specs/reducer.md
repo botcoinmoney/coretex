@@ -1,4 +1,4 @@
-# Cortex Epoch Reducer V0
+# Cortex Epoch Reducer CoreTex
 
 **Phase**: 6 — Credit + Reducer Mechanics
 **Owner**: Economics + Protocol subagents
@@ -97,7 +97,7 @@ which is also deterministic because submission order is indexed by the on-chain
 `threshold` is the **minimum marginal score-delta required** for a patch to be
 accepted by the reducer. It is posted on-chain at epoch start via
 `CortexRegistry.setEpochThreshold(epoch, threshold)` and is included in the
-public reducer input set. The default V0 value is `0` — any non-negative
+public reducer input set. The default CoreTex value is `0` — any non-negative
 marginal gain is accepted. The screener already enforces a positive delta; the
 reducer threshold guards against patches whose marginal contribution drops to
 zero or negative when combined with already-accepted state.
@@ -111,7 +111,7 @@ leaves[i] = keccak256(compactPatchBytes[i])   // i = acceptance index
 root      = keccak256(concat(leaves))         // flat concat, not Merkle tree
 ```
 
-In V0 the `patchSetRoot` is `keccak256(concat(keccak256(bytes_0) ‖ ... ‖ keccak256(bytes_n)))`.
+In CoreTex the `patchSetRoot` is `keccak256(concat(keccak256(bytes_0) ‖ ... ‖ keccak256(bytes_n)))`.
 The leaves are ordered by acceptance index (the order patches were accepted, not
 submission order). Any replayer recomputes this from the `CortexPatchAccepted`
 events, sorted by log index (= submission order used as input; acceptance order
@@ -157,16 +157,16 @@ The epoch remains 24 hours. The state may advance many times inside that epoch;
 epoch end seals the ordered checkpoint list into `patchSetRoot` and
 `newStateRoot`.
 
-### Layer B — Legacy merge bonus disabled
+### Layer B — Stale merge bonus disabled
 
-The separate merge multiplier is disabled for V0 production:
+The separate merge multiplier is disabled for production launch:
 
 ```
 MERGE_MULTIPLIER_BPS = 10000
 bonusBOTCOIN = 0
 ```
 
-`CortexMergeBonus` remains in-tree for compatibility and legacy proof testing,
+`CortexMergeBonus` remains in-tree for compatibility and previous proof testing,
 but coordinators should not fund zero-uplift epochs. This removes the incentive
 to skim weak screener passes, withhold a better patch for a future multiplier,
 or optimize for an end-of-epoch jackpot instead of advancing the organism now.

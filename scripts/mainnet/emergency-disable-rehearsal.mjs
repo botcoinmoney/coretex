@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// V0 emergency-disable rehearsal.
+// CoreTex emergency-disable rehearsal.
 //
 // Per §9 Phase 9: pause CortexRegistry mid-epoch on mainnet; SWCP claim
 // parity preserved end-to-end through a real claim transaction.

@@ -756,8 +756,8 @@ if (process.env['BASE_RPC_URL']) {
 
 console.log('\n[T7] Core upgrade transition');
 
-await runTest('state_translation_patch: V0→V1 produces matching root on both sides', async () => {
-  const stateV0 = makeBlankState();
+await runTest('state_translation_patch: CoreTex→V1 produces matching root on both sides', async () => {
+  const stateCoreTex = makeBlankState();
 
   // Translation patch on a payload word (RetrievalKeys slot k word 3 has no
   // reserved-bit constraints). idx = 384 + 8*1 + 3 = 395.
@@ -765,7 +765,7 @@ await runTest('state_translation_patch: V0→V1 produces matching root on both s
     patchType: PATCH_TYPE.KEY_UPDATE,
     wordCount: 1,
     scoreDelta: 0n,
-    parentStateRoot: merkleizeState(stateV0),
+    parentStateRoot: merkleizeState(stateCoreTex),
     indices: [395],
     newWords: [0xABCDn],
   };
@@ -785,11 +785,11 @@ await runTest('state_translation_patch: V0→V1 produces matching root on both s
   const parseResult = parseStatTranslationPatch(encoded);
   if (!parseResult.ok) throw new Error(`Parse error: ${parseResult.code}`);
 
-  const applyResult = applyStatTranslationPatch(stateV0, parseResult.translation, fromCvh);
+  const applyResult = applyStatTranslationPatch(stateCoreTex, parseResult.translation, fromCvh);
   if (!applyResult.ok) throw new Error(`Apply error: ${applyResult.code}`);
 
   // "Both Core versions agree" means the reference impl (direct applyPatch) matches
-  const refResult = applyPatch(stateV0, patchForTranslation);
+  const refResult = applyPatch(stateCoreTex, patchForTranslation);
   if (!refResult.ok) throw new Error('Reference patch failed');
   const refRoot = bytesToHex(merkleizeState(refResult.state));
 
@@ -864,7 +864,7 @@ function buildInlineState() {
   };
 
   const MAGIC = 0xC07En;
-  const SCHEMA_VERSION_V0 = 0x0000n;
+  const SCHEMA_VERSION_CoreTex = 0x0000n;
   const WORD_COUNT_VALUE = 1024n;
 
   // ── Codec ─────────────────────────────────────────────────────────────────
@@ -1061,7 +1061,7 @@ function buildInlineState() {
     return{ok:true,state:rs};
   }
 
-  return { pack, unpack, merkleizeState, bytesToHex, hexToBytes, encodePatch, decodePatch, applyPatch, applyPatchOntoCurrent, RANGES, PATCH_TYPE, MAGIC, SCHEMA_VERSION_V0, WORD_COUNT_VALUE, keccak256, getField };
+  return { pack, unpack, merkleizeState, bytesToHex, hexToBytes, encodePatch, decodePatch, applyPatch, applyPatchOntoCurrent, RANGES, PATCH_TYPE, MAGIC, SCHEMA_VERSION_CoreTex, WORD_COUNT_VALUE, keccak256, getField };
 }
 
 function buildInlineEval({ merkleizeState, bytesToHex, applyPatch, keccak256 }) {
@@ -1120,7 +1120,7 @@ function buildInlineEval({ merkleizeState, bytesToHex, applyPatch, keccak256 }) 
     const evalTimestampMs = String(Date.now());
 
     const reportWithoutHash = {
-      version: 'cortex-eval-v0',
+      version: 'coretex-eval-current',
       parentStateRoot, newStateRoot, patchHash, accepted,
       errorCode, errorMessage, baselineScore, candidateScore, scoreDelta,
       corpusRoot: loader.corpusRoot, shardId: bytesToHex(shardId),

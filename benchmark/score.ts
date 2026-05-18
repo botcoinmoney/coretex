@@ -1,7 +1,7 @@
 /**
- * CortexBench V0 — Score formula.
+ * CoreTex pre-launch — Score formula.
  *
- * Weights (locked in research_brief_v0.md §4 and ORGANISM_CORTEX_STATE_PLAN.md §5):
+ * Weights (locked in research_brief.md §4 and ORGANISM_CORTEX_STATE_PLAN.md §5):
  *
  *   + exact retrieval                w = 0.30
  *   + stale-memory rejection         w = 0.15

@@ -24,7 +24,7 @@ try {
 }
 const { merkleizeState, applyPatch, encodePatch, decodePatch, keccak256, bytesToHex } = mod;
 
-// Use the frozen V0 winner (Baseline A) as the base state.
+// Use the frozen CoreTex winner (Baseline A) as the base state.
 const baseline = await import(`${REPO}/experiments/baselines/baseline_a_empty/index.mjs`);
 const { loadRealCorpus } = await import(`${REPO}/experiments/harness/cortex-bench-eval.mjs`);
 const corpus = loadRealCorpus({ repoRoot: REPO });
@@ -62,9 +62,9 @@ for (let i = 0; i < 10; i++) {
 }
 
 const bundle = {
-  version: 'v0.phase-7',
+  version: 'prelaunch.phase-7',
   baseline: 'A',
-  scoring: 'real-cortexbench-v0',
+  scoring: 'coretex-retrieval-current',
   triples,
   generatedAt: new Date().toISOString(),
   notes: 'Replay any triple: decode the patch wire, applyPatch to the parent, ' +

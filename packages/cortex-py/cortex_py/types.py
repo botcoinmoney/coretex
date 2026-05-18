@@ -1,7 +1,7 @@
 """
 types.py — CortexState and Patch dataclasses, range constants, error codes.
 
-All values derived from specs/cortex_state_v0.md and specs/cortex_schema_v0.json.
+All values derived from specs/cortex_state.md and specs/cortex_schema.json.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -12,12 +12,12 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 MAGIC: int = 0xC07E          # sentinel — "cortex"
-SCHEMA_VERSION_V0: int = 0x0000
+SCHEMA_VERSION_CURRENT: int = 0x0000
 WORD_COUNT_VALUE: int = 1024
 
 
 class RANGES:
-    """Word-range boundaries (inclusive), from cortex_state_v0.md."""
+    """Word-range boundaries (inclusive), from cortex_state.md."""
     WORD_COUNT: int = 1024
 
     HEADER_START: int = 0
@@ -43,7 +43,7 @@ class RANGES:
 
 
 class PATCH_TYPE:
-    """Patch type codes from specs/patch_format_v0.md."""
+    """Patch type codes from specs/patch_format.md."""
     KEY_UPDATE: int = 0x01
     SLOT_REPLACE: int = 0x02
     TEMPORAL_UPDATE: int = 0x03
@@ -54,7 +54,7 @@ class PATCH_TYPE:
 
 
 class ERROR_CODES:
-    """Stable rejection error codes from specs/patch_format_v0.md."""
+    """Stable rejection error codes from specs/patch_format.md."""
     E01 = "E01"  # WRONG_PARENT_ROOT
     E02 = "E02"  # WRONG_TYPE_FIELD
     E03 = "E03"  # OVER_BUDGET
@@ -91,7 +91,7 @@ class CortexState:
 @dataclass
 class Patch:
     """
-    A CortexState patch in the V0 wire format (deserialized).
+    A CortexState patch in the current wire format (deserialized).
 
     Fields:
       patch_type       — advisory routing byte (PATCH_TYPE.*)

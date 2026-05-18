@@ -17,11 +17,11 @@
  *   GET  /internal/epoch
  *   GET  /internal/rate-limit-budget?miner=0x...&lane=cortex
  *   GET  /internal/outstanding-challenge?miner=0x...
- *   POST /internal/outstanding-challenge/set        (cortex-server calls after issuing a challenge)
- *   POST /internal/outstanding-challenge/clear      (cortex-server calls to clear after submit)
+ *   POST /internal/outstanding-challenge/set        (coordinator route shim calls after issuing a challenge)
+ *   POST /internal/outstanding-challenge/clear      (coordinator route shim calls to clear after submit)
  *
  * Never modifies /v1/challenge or /v1/submit.
- * The signing key lives exclusively in receiptSigner — never in cortex-server.
+ * The signing key lives exclusively in receiptSigner — never in coordinator route shim.
  *
  * Express-compatible: app is typed as a minimal Express.Application interface so this
  * works with express@4 / express@5 without importing express types here.
@@ -97,7 +97,7 @@ export interface ReceiptChainAccessor {
  */
 export interface RateLimitBudgetAccessor {
   getBudget(miner: string, lane: string): Promise<{ remaining: number; windowResetAt: number }>;
-  /** Called by cortex-server on each successful screener pass */
+  /** Called by coordinator route shim on each successful screener pass */
   consumeBudget(miner: string, lane: string): Promise<void>;
   /**
    * Returns the current on-chain tier credits for a miner.
@@ -498,7 +498,7 @@ export function mountCortexHandler(app: MinimalApp, deps: CortexHandlerDeps): vo
   });
 
   // ── POST /internal/outstanding-challenge/clear ──────────────────────────────
-  // Called by cortex-server after a successful submit (clears the cortex-side entry)
+  // Called by coordinator route shim after a successful submit (clears the cortex-side entry)
   app.post('/internal/outstanding-challenge/set', (req, res) => {
     void (async () => {
       if (!checkAuth(req, res)) return;

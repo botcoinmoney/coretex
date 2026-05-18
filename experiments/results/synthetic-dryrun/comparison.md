@@ -1,8 +1,8 @@
-# Baselines comparison — CortexBench V0 (synthetic-dryrun)
+# Baselines comparison — CoreTex pre-launch (synthetic-dryrun)
 
 Seed: 42  Epochs per baseline: 5  Generated: 2026-05-07T09:45:55.867Z
 
-> Scorer: real CortexBench V0 (`experiments/harness/cortex-bench-eval.mjs`)
+> Scorer: real CoreTex pre-launch (`experiments/harness/cortex-bench-eval.mjs`)
 > driven by Phase 4 fixtures + the Apache-2.0 SyntheticTemporalLoader.
 > See `experiments/PHASE_7_USER_ACTIONS.md` for the freeze procedure.
 

@@ -3,7 +3,7 @@
  * Generate a CoreTex retrieval-benchmark corpus from challenge-library
  * synthesis primitives.
  *
- * Spec: specs/corpus_retrieval_v0.md, plan §Phase E (reject_current_data branch).
+ * Spec: specs/corpus_retrieval.md, plan §Phase E (reject_current_data branch).
  *
  * This is the corpus generator selected by Phase E0 when the coordinator's
  * dataset_v2 does not carry retrieval-shaped records.
@@ -31,7 +31,7 @@
  *     --modifier-counts 0,1,2,3
  *     --constraint-difficulties easy,medium,hard
  *     --corpus-epoch 0
- *     --out corpus/coretex_retrieval_v0.json
+ *     --out corpus/coretex_retrieval.json
  *
  * Env:
  *   CORETEX_BIENCODER=deterministic|pinned    # default deterministic for offline gen
@@ -75,7 +75,7 @@ const seedsPerDomain = Number(flag('seeds-per-domain', '32'));
 const seedOffset = Number(flag('seed-offset', '0'));
 const corpusEpoch = Number(flag('corpus-epoch', '0'));
 const epoch = Number(flag('epoch', String(corpusEpoch)));
-const outPath = resolve(flag('out', 'corpus/coretex_retrieval_v0.json'));
+const outPath = resolve(flag('out', 'corpus/coretex_retrieval.json'));
 const previousCorpusPath = flag('previous-corpus');
 const deltaOutPath = flag('delta-out');
 const source = flag('source', 'challenge-library');
@@ -122,7 +122,7 @@ const layout = manifest.model.biEncoder.retrievalKeyLayout;
 // Production corpus generation always uses the persistent-subprocess encoder
 // (model loaded once, NDJSON stdin/stdout) — the per-call spawn variant pays
 // the full BGE-M3 model-load cost on every text and is unusable past a few
-// hundred events on a CPU host. Non-production paths keep the legacy factory.
+// hundred events on a CPU host. Non-production paths keep the previous factory.
 const biEncoder = productionCorpusMode
   ? createStreamingBiEncoder({
       modelId: manifest.model.biEncoder.modelId,
@@ -1107,7 +1107,7 @@ async function writeCorpusOutputStreaming({ ndjsonPath, eventCount, sourceName }
     new Promise((res) => (out.write(s) ? res() : out.once('drain', res)));
 
   // Header — write fields one at a time so the result is human-readable
-  // and stable for diffing against the legacy in-memory path.
+  // and stable for diffing against the in-memory path.
   await writeChunk('{\n');
   await writeChunk(`  "schemaVersion": "coretex.production-corpus.v1",\n`);
   await writeChunk(`  "corpusEpoch": ${JSON.stringify(corpusEpoch)},\n`);
@@ -1131,14 +1131,14 @@ async function writeCorpusOutputStreaming({ ndjsonPath, eventCount, sourceName }
 
   // Stream NDJSON lines into the events array. The on-disk JSON is not
   // sorted (computeCorpusRoot sorts internally for hashing). Order is
-  // generation order, which matches the legacy non-streaming path
+  // generation order, which matches the non-streaming path
   // since it also wrote `events: outputEvents` without re-sorting.
   {
     const rl = createInterface({ input: createReadStream(ndjsonPath), crlfDelay: Infinity });
     let first = true;
     for await (const line of rl) {
       if (!line) continue;
-      // Re-encode with the 2-space indent the legacy path used. Re-
+      // Re-encode with the 2-space indent the previous path used. Re-
       // parsing + re-stringifying preserves canonical key order
       // (insertion-order on this Node version) and avoids carrying
       // any whitespace artifacts from the NDJSON line.

@@ -1,4 +1,4 @@
-# Determinism v0 — CPU-Only Inference Contract
+# Determinism — CPU-Only Inference Contract
 
 Status: launch-blocking spec. Pinned by bundle hash.
 

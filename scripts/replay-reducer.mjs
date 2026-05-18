@@ -45,7 +45,7 @@
  *   skipping target-overlap (R01) and marginal-gain-below-threshold (R02).
  *
  * Phase 4 dependency: the marginal evaluator (real score formula) is STUBBED.
- * TODO(phase-4): Replace stubMarginalEvaluator with CortexBench V0 evaluator.
+ * TODO(phase-4): Replace stubMarginalEvaluator with CoreTex pre-launch evaluator.
  * Until then, marginal gain = declared scoreDelta (conservative: no semantic
  * conflict detection beyond explicit threshold).
  */
@@ -135,7 +135,7 @@ function computePatchSetRoot(acceptedBytes) {
 
 // ── Marginal evaluator stub ───────────────────────────────────────────────────
 /**
- * TODO(phase-4): Replace with the real CortexBench V0 evaluator.
+ * TODO(phase-4): Replace with the real CoreTex pre-launch evaluator.
  * Currently returns the patch's declared scoreDelta unchanged.
  * This is conservative: no semantic-conflict detection beyond threshold checks.
  */

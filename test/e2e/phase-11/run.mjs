@@ -28,7 +28,7 @@
 //     cumulative state at that step
 //
 // Run with:
-//   CORETEX_CORPUS=/root/cortex/benchmark/fixtures/dacr-v0/coretex_dacr.json \
+//   CORETEX_CORPUS=/root/cortex/benchmark/fixtures/dacr/coretex_dacr.json \
 //     node test/e2e/phase-11/run.mjs
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -61,8 +61,8 @@ const RPC_URL = `http://127.0.0.1:${RPC_PORT}`;
 const ITERATIONS = Number(process.env.E2E_ITERATIONS ?? 5);
 const RERANKER_MIN_SCORE = Number(process.env.CORETEX_RERANKER_MIN_SCORE ?? 0.5);
 const CORPUS_PATH = process.env.CORETEX_CORPUS ?? (
-  existsSync(join(CORTEX_ROOT, 'benchmark/fixtures/dacr-v0/coretex_dacr.json'))
-    ? join(CORTEX_ROOT, 'benchmark/fixtures/dacr-v0/coretex_dacr.json')
+  existsSync(join(CORTEX_ROOT, 'benchmark/fixtures/dacr/coretex_dacr.json'))
+    ? join(CORTEX_ROOT, 'benchmark/fixtures/dacr/coretex_dacr.json')
     : join(CORTEX_ROOT, 'benchmark/fixtures/season1/coretex_season1_10000.json')
 );
 
