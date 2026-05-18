@@ -70,7 +70,7 @@ const {
 } = await import(distIndex);
 
 const profile = profilePath && existsSync(profilePath)
-  ? JSON.parse(readFileSync(profilePath, 'utf8'))
+  ? (() => { const r = JSON.parse(readFileSync(profilePath, 'utf8')); return r.profile ?? r; })()
   : DEFAULT_PROFILE;
 
 console.log(`[run3-headroom] loading corpus`);

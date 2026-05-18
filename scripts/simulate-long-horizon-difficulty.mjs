@@ -493,6 +493,10 @@ async function main() {
     retrievalKeyTopK: profile.retrievalKeyTopK,
     // v2-lens pipeline params — fall back to defaults pre-calibration.
     firstStageTopK: profile.firstStageTopK ?? 200,
+    // §6.5 reranker-input cap — production-faithful only if this matches
+    // the profile pin. Omitting it silently produced NaN inside the
+    // evaluator's `Math.max(1, undefined)` and broke the cap entirely.
+    rerankerInputTopK: profile.rerankerInputTopK ?? 128,
     lensTopK: profile.lensTopK ?? 36,
     lensWeight: profile.lensWeight ?? 0.10,
     anchorWeight: profile.anchorWeight ?? 0.15,

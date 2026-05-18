@@ -87,9 +87,13 @@ const t0 = Date.now();
 const corpus = loadProductionCorpus(corpusPath, { verifyCorpusRoot: false, verifySplits: false });
 console.log(`  loaded ${corpus.events.length} events in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 
-// Bundle profile (or DEFAULT_PROFILE)
+// Bundle profile (or DEFAULT_PROFILE). Bundle artifacts wrap the profile
+// inside a top-level { schemaVersion, inputs, profile } envelope; raw
+// profile files are flat. Unwrap if wrapped, otherwise use as-is —
+// reading a wrapped file without unwrapping silently dropped every
+// substrate-routing pin and made the script fall back to DEFAULT_PROFILE.
 const profile = profilePath && existsSync(profilePath)
-  ? JSON.parse(readFileSync(profilePath, 'utf8'))
+  ? (() => { const r = JSON.parse(readFileSync(profilePath, 'utf8')); return r.profile ?? r; })()
   : DEFAULT_PROFILE;
 
 const BI = {
