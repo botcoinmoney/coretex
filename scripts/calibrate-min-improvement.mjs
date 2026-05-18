@@ -32,6 +32,7 @@
  *       --out /var/lib/coretex/reports/min-improvement-sweep.json
  */
 
+import { distIndex } from './_repo-root.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { argv, exit } from 'node:process';
@@ -64,8 +65,8 @@ const {
   stableRecordIdFor,
   deriveQueryPack,
   DEFAULT_PROFILE,
-} = await import('/root/cortex/packages/cortex/dist/index.js');
-const { buildProvenance } = await import('/root/cortex/scripts/calibration-provenance.mjs');
+} = await import(distIndex);
+const { buildProvenance } = await import('./calibration-provenance.mjs');
 
 const profile = profilePath && existsSync(profilePath)
   ? (() => { const r = JSON.parse(readFileSync(profilePath, 'utf8')); return r.profile ?? r; })()
@@ -196,7 +197,7 @@ async function scoreSubstrate(words, pack) {
   return await evaluateRetrievalBenchmarkState({ words }, corpus, pack, opts);
 }
 
-// Score parent substrate once (empty for v0; bigger configs follow).
+// Score parent substrate once (empty for genesis; bigger configs follow).
 const EMPTY_WORDS = new Array(1024).fill(0n);
 console.error(`[run4-minimp] scoring empty parent on visible + hidden`);
 const tParent = Date.now();

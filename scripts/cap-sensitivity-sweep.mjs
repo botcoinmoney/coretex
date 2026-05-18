@@ -8,6 +8,7 @@
  * pack of 16 queries (calibration split), compute composite + measure
  * approximate reranker pair count from cappedDocIds length.
  */
+import { distIndex } from './_repo-root.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { argv, exit } from 'node:process';
@@ -40,8 +41,8 @@ const {
   encodeRelationCategoryLens,
   stableRecordIdFor,
   DEFAULT_PROFILE,
-} = await import('/root/cortex/packages/cortex/dist/index.js');
-const { buildProvenance } = await import('/root/cortex/scripts/calibration-provenance.mjs');
+} = await import(distIndex);
+const { buildProvenance } = await import('./calibration-provenance.mjs');
 
 const corpus = loadProductionCorpus(corpusPath, { verifyCorpusRoot: false, verifySplits: false });
 const profile = profilePath ? JSON.parse(readFileSync(profilePath, 'utf8')).profile : DEFAULT_PROFILE;

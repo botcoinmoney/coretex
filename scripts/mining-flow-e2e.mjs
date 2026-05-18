@@ -3,8 +3,8 @@
  * Mining-flow e2e — outside-perspective miner client exercising the production
  * CoreTex HTTP shim through createCoreTexCoordinatorRouteHandler.
  *
- * Replaces the legacy scripts/scripted-miner.mjs which targeted the removed
- * /v1/cortex/* surface. This script speaks the current /coretex/* surface,
+ * Replaces the previous scripts/scripted-miner.mjs which targeted the removed
+ * /coretex/* surface. This script speaks the current /coretex/* surface,
  * uses the canonical opaque rejection envelope semantics, and explicitly
  * partitions miner submissions into three outcome buckets:
  *
@@ -53,6 +53,7 @@
  *   3 = replay mode: observed envelope does not match annotated outcome
  */
 
+import { distIndex } from './_repo-root.mjs';
 import { createServer } from 'node:http';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -89,7 +90,7 @@ if (mode !== 'live' && mode !== 'replay') fail(`--mode must be 'live' or 'replay
 if (mode === 'replay' && !fixturesPath) fail('replay mode requires --fixtures');
 if (mode === 'replay' && !existsSync(fixturesPath)) fail(`fixtures not found: ${fixturesPath}`);
 
-const distEntry = '/root/cortex/packages/cortex/dist/index.js';
+const distEntry = distIndex;
 if (!existsSync(distEntry)) {
   fail(`@botcoin/cortex dist not built — run 'npm run build --workspace @botcoin/cortex' first`);
 }

@@ -33,6 +33,7 @@
  *     --inner-batch-biencoder 16 \
  *     --inner-batch-reranker 8
  */
+import { scriptsRoot, repoRoot } from './_repo-root.mjs';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -69,7 +70,7 @@ const innerBatchBiEncoder = Number(flag('inner-batch-biencoder', '16'));
 const innerBatchReranker = Number(flag('inner-batch-reranker', '8'));
 const labelerBatchSize = Number(flag('labeler-batch-size', '8'));
 const cacheDir = resolve(flag('cache-dir', env.CORTEX_LOCAL_MODEL_CACHE ?? '/var/lib/coretex/model-cache'));
-const pythonBin = flag('python', env.CORETEX_BIENCODER_PYTHON ?? '/root/cortex/.venv/bin/python');
+const pythonBin = flag('python', env.CORETEX_BIENCODER_PYTHON ?? resolve(repoRoot, '.venv/bin/python'));
 
 mkdirSync(shardDir, { recursive: true });
 mkdirSync(dirname(outPath), { recursive: true });
@@ -100,7 +101,7 @@ for (const s of shards) {
 function runShard(shard) {
   return new Promise((resolveShard, rejectShard) => {
     const args = [
-      resolve('/root/cortex/scripts/generate-coretex-retrieval-corpus.mjs'),
+      resolve(scriptsRoot, 'generate-coretex-retrieval-corpus.mjs'),
       '--bundle-manifest', resolve(bundlePath),
       '--source', 'challenge-library',
       '--challenge-lib-root', challengeLibRoot,

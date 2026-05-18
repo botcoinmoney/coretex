@@ -46,6 +46,7 @@
  *   3 = patch decode failed (would reject at applyPatch)
  */
 
+import { distIndex } from './_repo-root.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { argv, exit, env } from 'node:process';
@@ -77,7 +78,7 @@ if (!existsSync(parentStateArg)) fail(`--parent-state not found: ${parentStateAr
 if (!scoreOnly && !patchPath) fail('--patch is required (or pass --score-only)');
 if (patchPath && !existsSync(patchPath)) fail(`--patch not found: ${patchPath}`);
 
-const dist = '/root/cortex/packages/cortex/dist/index.js';
+const dist = distIndex;
 if (!existsSync(dist)) fail(`@botcoin/cortex dist not built: ${dist}`);
 
 const {

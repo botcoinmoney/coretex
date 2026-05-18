@@ -15,6 +15,7 @@
  *
  * No reranker, no substrate. Pure graph traversal over the corpus.
  */
+import { distIndex, distBiEncoder } from './_repo-root.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { argv, exit } from 'node:process';
@@ -39,9 +40,9 @@ const {
   loadProductionCorpus,
   buildPublicCorpusIndex,
   firstStageCandidates,
-} = await import('/root/cortex/packages/cortex/dist/index.js');
+} = await import(distIndex);
 
-const { dequantize } = await import('/root/cortex/packages/cortex/dist/eval/bi-encoder.js');
+const { dequantize } = await import(distBiEncoder);
 
 console.error(`[diag-mh] loading corpus`);
 const corpus = loadProductionCorpus(corpusPath, { verifyCorpusRoot: false, verifySplits: false });

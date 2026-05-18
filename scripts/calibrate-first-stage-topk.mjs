@@ -40,6 +40,7 @@
  *   2 = no K in the sweep meets the worst-stratum recall target
  */
 
+import { distIndex } from './_repo-root.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { argv, exit } from 'node:process';
@@ -73,7 +74,7 @@ const {
   loadProductionCorpus,
   buildPublicCorpusIndex,
   firstStageCandidates,
-} = await import('/root/cortex/packages/cortex/dist/index.js');
+} = await import(distIndex);
 
 console.log(`[calibrate-first-stage-topk] loading corpus ${corpusPath}`);
 const t0 = Date.now();

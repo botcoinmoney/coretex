@@ -43,6 +43,7 @@
  *       to operator)
  */
 
+import { distIndex } from './_repo-root.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { argv, exit, env } from 'node:process';
@@ -78,8 +79,8 @@ const {
   encodeRelationEdge,
   stableRecordIdFor,
   DEFAULT_PROFILE,
-} = await import('/root/cortex/packages/cortex/dist/index.js');
-const { buildProvenance } = await import('/root/cortex/scripts/calibration-provenance.mjs');
+} = await import(distIndex);
+const { buildProvenance } = await import('./calibration-provenance.mjs');
 
 console.log(`[calibrate-stage2] loading corpus ${corpusPath}`);
 const t0 = Date.now();

@@ -22,8 +22,9 @@
  *     --out /var/lib/coretex/reports/validation-suite.json
  */
 
+import { distIndex, distPublicCorpusIndexDts, scriptsRoot } from './_repo-root.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { argv, exit } from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -48,7 +49,7 @@ const {
   biEncoderModelIdHash, rerankerFromEnv, biEncoderFromEnv,
   createDeterministicReranker, createDeterministicBiEncoder,
   DEFAULT_PROFILE,
-} = await import('/root/cortex/packages/cortex/dist/index.js');
+} = await import(distIndex);
 
 const profile = profilePath && existsSync(profilePath)
   ? JSON.parse(readFileSync(profilePath, 'utf8'))
@@ -137,7 +138,7 @@ await runTest('A: empty substrate composite equals zeroed-stage-2 composite', as
 
 // ─── Test C: compile-time qrel boundary ───────────────────────────────────
 await runTest('C: firstStageCandidates type signature accepts only PublicCorpusIndex', async () => {
-  const dtsPath = '/root/cortex/packages/cortex/dist/eval/public-corpus-index.d.ts';
+  const dtsPath = distPublicCorpusIndexDts;
   if (!existsSync(dtsPath)) return { passed: false, summary: `dist .d.ts missing: ${dtsPath}` };
   const dts = readFileSync(dtsPath, 'utf8');
   // Match the firstStageCandidates declaration ONLY (up to the closing `)`),
@@ -199,7 +200,7 @@ await runTest('K: coretex-eval harness produces CompositeScore via same pipeline
   const direct = await evaluateRetrievalBenchmarkState(ZERO_STATE, corpus, pack, baseOpts);
   const result = spawnSync('node', [
     '--max-old-space-size=16384',
-    '/root/cortex/scripts/coretex-eval.mjs',
+    join(scriptsRoot, 'coretex-eval.mjs'),
     '--corpus', corpusPath,
     '--parent-state', '/tmp/k-parent.bin',
     '--score-only',

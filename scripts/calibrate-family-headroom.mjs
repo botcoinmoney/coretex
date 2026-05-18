@@ -37,6 +37,7 @@
  *       --out /var/lib/coretex/reports/family-headroom.json
  */
 
+import { distIndex } from './_repo-root.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { argv, exit } from 'node:process';
@@ -66,7 +67,7 @@ const {
   encodeRelationEdge, encodeRelationCategoryLens,
   stableRecordIdFor,
   DEFAULT_PROFILE,
-} = await import('/root/cortex/packages/cortex/dist/index.js');
+} = await import(distIndex);
 
 const profile = profilePath && existsSync(profilePath)
   ? JSON.parse(readFileSync(profilePath, 'utf8'))

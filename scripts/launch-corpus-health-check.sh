@@ -6,6 +6,9 @@
 # tail at any wake-up shows the recent history.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${CORETEX_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
 LOG=/var/lib/coretex/corpus-epoch-0-launch.log
 HEALTH=/var/lib/coretex/launch-corpus-health.log
 SMOKE=/var/lib/coretex/corpus-cat-v2.json
@@ -39,7 +42,7 @@ echo "  mem(used/total MB): $(free -m | awk '/^Mem:/ {print $3"/"$2}')" >> "$HEA
 
 # 5. Smoke corpus regression — same code path, zero model work
 if [ -f "$SMOKE" ]; then
-  if node /root/cortex/scripts/validate-retrieval-corpus.mjs \
+  if node "$REPO_ROOT"/scripts/validate-retrieval-corpus.mjs \
       --corpus "$SMOKE" \
       --min-events 100 --min-per-family 1 --min-hard-negatives 3 \
       --out /var/lib/coretex/reports/health-smoke-validate.json >/dev/null 2>&1; then

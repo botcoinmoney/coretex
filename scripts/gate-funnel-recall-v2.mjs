@@ -34,6 +34,7 @@
  *   long_horizon / multi_hop_relation:  engineered_recall@cap >= 0.50
  *   near_collision / temporal:          engineered_recall@cap >= max(empty, 0.80)
  */
+import { distIndex } from './_repo-root.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { argv, exit, env } from 'node:process';
@@ -66,7 +67,7 @@ const {
   encodeRelationCategoryLens,
   stableRecordIdFor,
   DEFAULT_PROFILE,
-} = await import('/root/cortex/packages/cortex/dist/index.js');
+} = await import(distIndex);
 
 console.error(`[gate-v2] loading corpus ${corpusPath}`);
 const t0 = Date.now();

@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
+import { repoRoot as defaultRepoRoot, distRoot as defaultDistRoot } from './_repo-root.mjs';
 
 function safeExec(cmd) {
   try { return execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); }
@@ -36,10 +37,12 @@ function hashDir(dir) {
 }
 
 export function buildProvenance(opts = {}) {
-  const repoRoot = opts.repoRoot ?? '/root/cortex';
-  const distRoot = opts.distRoot ?? '/root/cortex/packages/cortex/dist';
+  const repoRoot = opts.repoRoot ?? defaultRepoRoot;
+  const distRoot = opts.distRoot ?? defaultDistRoot;
   return {
     capturedAt: new Date().toISOString(),
+    repoRoot,
+    distRoot,
     gitSha: safeExec(`git -C ${repoRoot} rev-parse HEAD`),
     gitBranch: safeExec(`git -C ${repoRoot} rev-parse --abbrev-ref HEAD`),
     gitClean: safeExec(`git -C ${repoRoot} status --porcelain`) === '',

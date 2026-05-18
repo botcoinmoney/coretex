@@ -9,6 +9,9 @@
 # .service via EnvironmentFile=). Defaults match the May 2026 launch.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${CORETEX_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
 DOMAINS="${CORETEX_CORPUS_DOMAINS:-companies,quantum_physics,computational_biology,scrna_imputation}"
 SEEDS="${CORETEX_CORPUS_SEEDS_PER_DOMAIN:-512}"
 OUT="${CORETEX_CORPUS_OUT:-/var/lib/coretex/corpus-epoch-0-launch.json}"
@@ -16,7 +19,7 @@ BUNDLE="${CORETEX_CORPUS_BUNDLE:-/etc/coretex/template-bundle.json}"
 CHALLENGE_LIB="${CORETEX_CORPUS_CHALLENGE_LIB:-/root/botcoin-coordinator/packages/challenges}"
 
 exec node --max-old-space-size=8192 \
-  /root/cortex/scripts/generate-coretex-retrieval-corpus.mjs \
+  "$REPO_ROOT"/scripts/generate-coretex-retrieval-corpus.mjs \
   --bundle-manifest "$BUNDLE" \
   --challenge-lib-root "$CHALLENGE_LIB" \
   --source challenge-library \
