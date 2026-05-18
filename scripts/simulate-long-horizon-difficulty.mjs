@@ -569,7 +569,16 @@ async function main() {
           pack,
           scoringOpts,
           {
+            // Controller-only test: gate on `currentMinImprovement` only,
+            // NOT minImprovement + replayTolerance + baselineVariance. The
+            // sim is studying nextMinImprovementPpm dynamics under
+            // adversarial random probes; using the looser threshold makes
+            // the controller's job HARDER (higher FA rate), so passing
+            // anti-cheat here is a strictly safer-side guarantee than
+            // production. Explicit `acceptanceThresholdPpm` makes the
+            // single-floor intent unambiguous to readers.
             minImprovementPpm: Number(currentMinImprovement),
+            acceptanceThresholdPpm: Number(currentMinImprovement),
             structuralFloor: profile.patchAcceptanceFloors.structuralFloor,
             protectedRegressionFloor: profile.patchAcceptanceFloors.protectedRegressionFloor,
             familyCatastrophicFloor: profile.patchAcceptanceFloors.familyCatastrophicFloor,

@@ -56,6 +56,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import {
   loadProductionCorpus,
   evaluateRetrievalBenchmarkPatch,
+  computeAcceptanceThresholdPpm,
   deriveQueryPack,
   biEncoderFromEnv,
   biEncoderModelIdHash,
@@ -115,6 +116,11 @@ const biEncoder = biEncoderFromEnv(layout, {
 const reranker = await rerankerFromEnv();
 
 const profile = manifest.evaluator.profile;
+// Use the canonical production acceptance threshold so phase-13's
+// `result.accepted` reflects the same gate the coordinator applies
+// (minImprovement + replayTolerance + baselineVariance).
+const acceptanceThresholdPpm = computeAcceptanceThresholdPpm(profile);
+const patchAcceptanceFloors = { ...profile.patchAcceptanceFloors, acceptanceThresholdPpm };
 const scoringOpts = {
   weights: profile.compositeWeights,
   biEncoder,
@@ -188,7 +194,7 @@ for (let iter = 0; iter < iterations; iter++) {
   console.log(`phase-13[${iter}]: candidate=${candidate.id} memSlot=${memSlot.slotIndex} retSlot=${memSlot.retrievalSlot} patchHash=${patchHash}`);
 
   const result = await evaluateRetrievalBenchmarkPatch(
-    state, patch, corpus, pack, scoringOpts, profile.patchAcceptanceFloors,
+    state, patch, corpus, pack, scoringOpts, patchAcceptanceFloors,
   );
   console.log(`phase-13[${iter}]: accepted=${result.accepted} deltaPpm=${result.deltaPpm} reason=${result.reason ?? '-'}`);
   if (!result.accepted) continue;
@@ -239,7 +245,7 @@ if (iterations > 0 && advances === 0) {
     newWords: [memWords[0]],
   };
   const advResult = await evaluateRetrievalBenchmarkPatch(
-    state, patch, corpus, pack, scoringOpts, profile.patchAcceptanceFloors,
+    state, patch, corpus, pack, scoringOpts, patchAcceptanceFloors,
   );
   if (advResult.accepted) {
     console.error(`phase-13: adversarial sub-test FAILED — patch accepted with bad vectors (deltaPpm=${advResult.deltaPpm})`);
