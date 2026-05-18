@@ -127,7 +127,32 @@ const passes = [];
 // controller isn't responding to signal — that's plateau-FAIL.
 // Already covered by Gate 3.
 
-// Gate 5 — Difficulty trajectory sanity: in bootstrap (targetAdvances high,
+// Gate 5 — Plateau risk: are patches still producing meaningful score deltas,
+// or has the system converged to "all patches no-op"? Plateau = MA of
+// |medianDeltaPpm| collapses to near-zero AND minImpr decay accelerating
+// toward floor. Below ~500 ppm absolute median delta for 5+ consecutive
+// epochs = system has lost discrimination, patches stop having any effect.
+{
+  const medians = epochs.map((e) => Math.abs(e.randomProbe?.deltaPpmMedian ?? 0));
+  const ranges = epochs.map((e) => (e.randomProbe?.deltaPpmMax ?? 0) - (e.randomProbe?.deltaPpmMin ?? 0));
+  const window = 5;
+  if (medians.length >= window) {
+    let maxNearZeroStreak = 0, cur = 0;
+    for (const m of medians) {
+      if (m < 500) { cur++; maxNearZeroStreak = Math.max(maxNearZeroStreak, cur); }
+      else cur = 0;
+    }
+    const medianMA = rollingMean(medians.slice(-window));
+    const rangeMA = rollingMean(ranges.slice(-window));
+    if (maxNearZeroStreak >= 5) {
+      fails.push(`Plateau-risk FAIL: |medianDeltaPpm| < 500 ppm for ${maxNearZeroStreak}+ consecutive epochs (random patches lost discrimination — system has plateaued)`);
+    } else {
+      passes.push(`Plateau-risk OK: |medianDeltaPpm| MA(${window}) = ${medianMA.toFixed(0)} ppm, range MA = ${rangeMA.toFixed(0)} ppm, max near-zero streak = ${maxNearZeroStreak}`);
+    }
+  }
+}
+
+// Gate 6 — Difficulty trajectory sanity: in bootstrap (targetAdvances high,
 // no advances), expect monotonic decay between grace cycles. Count any
 // up-then-down-then-up oscillation as instability.
 {
