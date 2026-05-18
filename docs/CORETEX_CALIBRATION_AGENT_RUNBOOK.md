@@ -483,3 +483,62 @@ off relations: relations may hurt aggregate MRR while helping
 `multi_hop_relation` or `long_horizon` specifically. The sparsity script
 captures composite + nDCG + MRR + Recall; a follow-up that splits these
 by family is the next diagnostic to add when launch evidence demands it.
+
+## Substrate Size Forward Note
+
+The current substrate is 1024 words (`RANGES.WORD_COUNT=1024`). MemoryIndex
+gets 44 anchor slots (32→383 inclusive ÷ 8 words/slot). If relation /
+category-lens routing is ultimately dropped or pinned at zero, early-launch
+runway depends primarily on those 44 anchors + RetrievalKeys lens vectors.
+That may be sufficient for launch, but the architectural redesign options
+should remain explicit:
+
+- **1024 → 2048 word substrate** — straightforward header-version bump,
+  doubles every region. More anchor slots, more lens slots, more relation
+  capacity. Pinpointed by `SCHEMA_VERSION_CoreTex` so a clean migration is
+  possible. Cost: every CortexState in flight at migration needs reduction
+  through a delta-bridge or coordinator-driven rollover.
+- **Category-lens redesign** — keep 1024 but rework how Phase B BFS
+  consumes category-lens entries so it injects helpful candidates without
+  the current MRR penalty. Lower-risk migration; same substrate format.
+- **Hybrid: keep 1024, sharpen anchor expressiveness** — e.g., per-anchor
+  bias weight in the slot header so reranker bonus is anchor-specific
+  rather than global `anchorWeight`. Smaller surgery; preserves substrate
+  format.
+
+Pick the path based on what the launch evidence demands. Don't commit to
+2048 unless the sparsity ablation shows anchor capacity is the binding
+constraint at the corpus scale we expect six months in.
+
+## Pre-launch Blockers Checklist
+
+The hammer-down list before recommending a launch profile re-pin and
+mainnet activation:
+
+- [ ] **Pack=128 cache probe completes** with COLD/WARM/CHILD speedup
+      consistent with pack=8 result (>1000× WARM, >1000× CHILD).
+- [ ] **Run 4 with cache active** at reduced N=5: accept rate at exact
+      `productionThresholdPpm=37,919` on RANDOM patches ≤ tolerable
+      noise floor; accept rate on HILL-CLIMBED adversarial ≤ 1%.
+      Cache hit-rate alongside.
+- [ ] **Substrate sparsity ablation** on launch corpus + Qwen3:
+      anchor-only dominance is robust to anchor coverage ∈ {0.25, 0.5,
+      0.75, 1.0} at the launch-v3 baseline scalars, OR a re-pin is
+      empirically justified by the matrix.
+- [ ] **Relation pin decision** — keep `relationExpansionBudget=12`
+      only if per-family decomposition shows a family that benefits;
+      otherwise pin to 0 or a very conservative value backed by data.
+- [ ] **Long-horizon stress matrix** with post-fix scorer, three
+      regimes: bootstrap (targetAdvances=10 + probes), steady-state
+      (targetAdvances=5 + probes off), early high-throughput
+      (targetAdvances=50). Watcher gates green per the contract above.
+- [ ] **Coordinator throughput benchmark** — unique-seed patches/min
+      sustainable on the intended coordinator host. Drives the
+      screener-first + worker-queue sizing decisions before mainnet.
+- [ ] **Baseline recalibration skeleton** — at minimum the cron-driven
+      script that recomputes `baselineParentScorePpm` from a rolling
+      sample, even if the full bundle/profile update flow lands
+      post-launch.
+
+When all checkboxes carry an artifact path + measured value, propose a
+launch re-pin against the current evidence. Not before.

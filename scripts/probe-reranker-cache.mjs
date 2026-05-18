@@ -25,6 +25,7 @@
 import { distIndex } from './_repo-root.mjs';
 import { readFileSync, existsSync } from 'node:fs';
 import { argv, exit, env } from 'node:process';
+import { createHash } from 'node:crypto';
 
 function flag(name, fb) {
   const i = argv.indexOf(`--${name}`);
@@ -35,12 +36,18 @@ const corpusPath = flag('corpus');
 const profilePath = flag('bundle-profile');
 const seedHex = flag('seed', '0x' + 'cc'.repeat(32));
 const packSizeOverride = Number(flag('pack-size', '0')) || null;
+// Optional production-faithful throughput simulation: N patches each with a
+// unique synthetic gateSeed (mimics live submit where every patch's seed
+// includes patchHash). Reports per-patch ms and cache hit-rate so the
+// production cache-benefit ceiling is measurable.
+const uniqueSeedPatches = Number(flag('unique-seed-patches', '0')) || 0;
 if (!corpusPath || !existsSync(corpusPath)) { console.error('missing --corpus'); exit(1); }
 
 const {
   loadProductionCorpus, evaluateRetrievalBenchmarkState, deriveQueryPack,
   biEncoderModelIdHash, rerankerFromEnv, biEncoderFromEnv,
   DEFAULT_PROFILE, RANGES,
+  getRerankerCacheStats,
 } = await import(distIndex);
 
 console.log(`[probe] CORETEX_RERANKER_CACHE_SIZE=${env.CORETEX_RERANKER_CACHE_SIZE ?? '(default)'}`);
@@ -113,6 +120,45 @@ async function timed(label, state) {
 const cold  = await timed('COLD',  EMPTY);
 const warm  = await timed('WARM',  EMPTY);
 const child = await timed('CHILD', CHILD);
+
+// Optional production-faithful throughput probe.
+let uniqueSeedReport = null;
+if (uniqueSeedPatches > 0 && profile.hiddenPack) {
+  console.log(`[probe] unique-seed patches: ${uniqueSeedPatches} (each patch has its own gateSeed → its own hiddenPack)`);
+  const stats0 = getRerankerCacheStats?.(reranker);
+  const baseHits = stats0?.hits ?? 0;
+  const baseMisses = stats0?.misses ?? 0;
+  const perPatch = [];
+  for (let i = 0; i < uniqueSeedPatches; i++) {
+    // Synthetic patchHash → unique gateSeed; deterministic across reruns.
+    const patchHash = '0x' + createHash('sha256').update(`probe-patch-${i}`).digest('hex');
+    const gateSeed = '0x' + createHash('sha256').update(patchHash + ':gate').digest('hex');
+    const packI = deriveQueryPack(0, gateSeed, corpus, profile.hiddenPack);
+    const tParent = Date.now();
+    await evaluateRetrievalBenchmarkState(EMPTY, corpus, packI, opts);
+    const parentMs = Date.now() - tParent;
+    const tChild = Date.now();
+    await evaluateRetrievalBenchmarkState(CHILD, corpus, packI, opts);
+    const childMs = Date.now() - tChild;
+    perPatch.push({ idx: i, parentMs, childMs, totalMs: parentMs + childMs });
+    console.log(`  patch[${i}] parent=${(parentMs / 1000).toFixed(1)}s child=${(childMs / 1000).toFixed(1)}s total=${((parentMs + childMs) / 1000).toFixed(1)}s`);
+  }
+  const stats1 = getRerankerCacheStats?.(reranker);
+  const newHits = (stats1?.hits ?? 0) - baseHits;
+  const newMisses = (stats1?.misses ?? 0) - baseMisses;
+  const hitRate = newHits / Math.max(1, newHits + newMisses);
+  const totalSec = perPatch.reduce((s, p) => s + p.totalMs, 0) / 1000;
+  uniqueSeedReport = {
+    patches: uniqueSeedPatches,
+    perPatch,
+    rerankerCacheDuringPhase: { hits: newHits, misses: newMisses, hitRate, evictions: (stats1?.evictions ?? 0) },
+    totalSeconds: totalSec,
+    msPerPatch: (totalSec * 1000) / uniqueSeedPatches,
+    patchesPerMinute: (60 * uniqueSeedPatches) / totalSec,
+  };
+  console.log(`[probe] unique-seed throughput: ${uniqueSeedReport.patchesPerMinute.toFixed(3)} patches/min (${uniqueSeedReport.msPerPatch.toFixed(0)} ms/patch)`);
+  console.log(`[probe] cache hit rate during unique-seed phase: ${(hitRate * 100).toFixed(1)}% (${newHits} hits / ${newMisses} misses, ${(stats1?.evictions ?? 0)} evictions)`);
+}
 
 const warmSpeedup  = cold / Math.max(1, warm);
 const childSpeedup = cold / Math.max(1, child);
