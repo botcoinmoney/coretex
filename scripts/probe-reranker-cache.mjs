@@ -166,6 +166,13 @@ console.log(`[probe] WARM speedup vs COLD: ${warmSpeedup.toFixed(1)}× (${warm}m
 console.log(`[probe] CHILD speedup vs COLD: ${childSpeedup.toFixed(1)}× (${child}ms vs ${cold}ms)`);
 if (warmSpeedup < 3) {
   console.error(`[probe] FAIL: WARM should be ≫ COLD if the reranker cache is active. Got ${warmSpeedup.toFixed(1)}×.`);
+  await reranker.close?.();
   exit(2);
 }
 console.log('[probe] OK — reranker cache is active.');
+
+// Streaming Qwen3 holds a persistent Python subprocess open via stdin/stdout
+// pipes. Without an explicit close() the Node process stays alive after the
+// final console.log, waiting on the pipe. Always close.
+await reranker.close?.();
+exit(0);
