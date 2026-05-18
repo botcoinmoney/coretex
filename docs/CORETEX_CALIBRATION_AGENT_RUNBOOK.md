@@ -402,3 +402,84 @@ Every status update distinguishes:
 - Whether the result is **launch-gating or diagnostic only**.
 
 Avoid "looks good." Report measured gate values.
+
+## Production Throughput Levers (separate from per-eval correctness)
+
+Per-patch evaluation correctness and coordinator throughput are independent
+problems. A correctness-passing evaluator can still be production-infeasible
+if it can't keep up with realistic miner submit cadence. The throughput
+levers, in order of leverage:
+
+1. **Screener-first admission.** Cheap structural / dedup / per-miner-cap
+   gates run before any full hidden eval. Most non-screener-passing patches
+   never enter the Qwen3 path. Audit any new gate against the screener
+   layer first.
+2. **Bounded full-eval worker queue at the coordinator.** Many parallel
+   screeners feed a smaller fixed pool of full-eval workers. Coordinator
+   absorbs bursts; full-eval pool runs at a sustainable rate.
+3. **Reranker score cache.** `withRerankerCache` (LRU keyed by
+   `(query, document)`, sized via `CORETEX_RERANKER_CACHE_SIZE`,
+   default 100k entries ≈ 20MB). Within a single per-patch eval, the
+   parent and child scores share a hidden pack — reuse is high. Across
+   patches the gain is bounded by `(query, doc)` overlap because the live
+   per-patch seed includes `patchHash`, so every patch's hidden pack is
+   distinct. Cache is necessary, not the silver bullet.
+4. **Replay-validator separation.** Replay validators only replay accepted
+   patches and run asynchronously. They do not need to keep up with the
+   live submit firehose; a lower-tier host is acceptable for them.
+5. **Stage-1 caching by (corpus, query, K).** Already in place
+   (`packages/cortex/src/eval/retrieval-benchmark.ts` §6.7). Survives
+   across epochs in the same process; coordinator invalidates on epoch
+   transitions.
+
+The CPU-only Run 4 dead-end documented in `release/calibration/CALIBRATION_FIDELITY.md`
+under "Operational limit surfaced" is a symptom of lever (3) being the
+only one applied. Coordinator launch requires (1)+(2)+(3); a CPU host
+without (1)+(2) cannot service the production submit path even with
+the cache in place.
+
+## Cache Scoping Invariant
+
+`withRerankerCache` lives inside each reranker factory (`createQwen3Reranker`,
+`createStreamingQwen3Reranker`, `createMiniLMReranker`). Each
+`rerankerFromEnv()` call produces an instance with its OWN cache —
+different `(model, revision, prompt template, max-seq)` configurations
+are physically isolated. Cache keys encode only `(query, document)`
+because the isolation invariant already prevents cross-model collision.
+
+Hit/miss telemetry exposed via `getRerankerCacheStats(reranker)`. Report
+hit rate alongside calibration artifacts; a hit rate below ~50% on a
+fixed-seed calibration run signals either oversized eviction or a wrap
+regression.
+
+## Substrate Pin Discipline
+
+Two distinct decisions are routinely conflated; they must be separated
+before any bundle re-pin:
+
+1. **Is the channel load-bearing?** Determined by the dense ablation
+   matrix (`substrate-ablation-launchcorp-v3.json`). Anchor-only is
+   currently strongest, lens adds zero on top of anchor, relation is
+   net-harmful at `relationExpansionBudget=12` under the all-on
+   engineered substrate.
+2. **Is the dense-substrate result robust to typical miner sparsity?**
+   Determined by the substrate-sparsity ablation
+   (`scripts/calibrate-substrate-sparsity.mjs`). If anchor-only
+   degrades smoothly with sparsity, the pin is robust. If it collapses
+   or reverses ordering vs lens at low anchor coverage, the dense
+   finding is an artifact.
+
+A bundle re-pin should only happen after BOTH have been measured on the
+launch corpus with the production reranker. The current launch-v3 pins
+(`lensWeight=0.4`, `anchorWeight=0.6`, `relationExpansionBudget=12`)
+are pre-fix and survive into the new evidence set only because they are
+"not harmful" at the dense substrate — not because they are
+empirically optimal. `relationExpansionBudget=0` is a serious candidate
+pending the sparsity matrix; do not assume the existing pin is correct
+forward.
+
+Per-family relation diagnostics are also required before fully writing
+off relations: relations may hurt aggregate MRR while helping
+`multi_hop_relation` or `long_horizon` specifically. The sparsity script
+captures composite + nDCG + MRR + Recall; a follow-up that splits these
+by family is the next diagnostic to add when launch evidence demands it.
