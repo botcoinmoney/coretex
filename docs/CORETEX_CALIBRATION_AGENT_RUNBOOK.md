@@ -510,6 +510,53 @@ Pick the path based on what the launch evidence demands. Don't commit to
 2048 unless the sparsity ablation shows anchor capacity is the binding
 constraint at the corpus scale we expect six months in.
 
+## Evidence-Driven Calibration Loop
+
+The pre-launch sequence is **not a linear queue**. Each completed run feeds
+back into harness/profile/controller tuning before the next run is chosen.
+The orchestrator's job is to look at the result, decide what it changes,
+and only then dispatch the next run. The decision table below is the
+default policy; deviate when the evidence demands.
+
+| Finding from a run | Immediate action (before queuing the next run) |
+|---|---|
+| Run 4 random patches accept at `productionThresholdPpm` | Raise `minImprovementPpm` and re-run Run 4 reduced; if still positive, full Run 4 on GPU |
+| Run 4 hill-climbed adversarial accepts at `productionThresholdPpm` | Tighten threshold/floors; inspect which surface won; consider a targeted adversarial generator on that surface |
+| Sparsity ablation shows relation still net-harmful | Test a `relationExpansionBudget=0` profile; re-run dense ablation + Run 4 + long-horizon on that profile |
+| Per-family ablation shows relation helps one family only | Propose per-family/per-mode relation budget, not global `12` |
+| Anchor-only dominant but degrades sharply at low anchor coverage | Open the substrate-size redesign discussion (1024→2048 or category-lens) — anchor capacity is the binding constraint |
+| Cache hit rate poor under unique-seed (probe `--unique-seed-patches`) | Coordinator cannot rely on cross-patch reuse; size queue + screener pass-rate accordingly; document GPU fallback option |
+| Long-horizon `targetAdvances=50` overshoots / oscillates | Tune `nextMinImprovementPpm` ramp/decay ratios, not just initial threshold |
+| Plateau median `|delta|` collapses | Investigate corpus-growth freshness, substrate capacity / expansion budget, baseline staleness, relation/category routing |
+| Baseline drift visible between recalibration runs | Implement / enable baseline-recalibration cron (skeleton in `scripts/recalibrate-baseline.mjs`) |
+
+The seed regime per run type:
+
+- **Run 4 (`calibrate-min-improvement.mjs`)** — fixed seed across all
+  patches. This is intentional: Run 4's threshold signal is meaningful
+  only under a stable hidden pack. Adding `--seed-mode per-patch` to Run
+  4 would conflate threshold-evidence with throughput-measurement.
+- **Coordinator-throughput probe (`probe-reranker-cache.mjs
+  --unique-seed-patches N`)** — each synthetic patch derives its own
+  gateSeed and hiddenPack, matching the live submit path. This is the
+  only run that produces production-faithful cache hit-rate under
+  patch-bound seeds.
+
+## Things that are dynamic vs. things that are static
+
+| Field | Lever | Authority |
+|---|---|---|
+| `nextMinImprovementPpm` | adaptive controller (observedAdvances vs qualityAttempts) | runtime — must self-adjust |
+| Screener threshold | baseline + noise statistics | runtime — must self-adjust |
+| `majorDeltaActive` grace | corpus-growth trigger | runtime — must self-adjust |
+| Coordinator queue backpressure | full-eval capacity sensor | runtime — must self-adjust |
+| `baselineParentScorePpm` | cron/epoch recalibration via `recalibrate-baseline.mjs` | infra cron — auto-adjust |
+| `lensWeight`, `anchorWeight`, `relationExpansionBudget`, `lensTopK`, `rerankerInputTopK`, hidden-pack `packSize`/quotas | bundle re-pin only | governance — manual, evidence-backed |
+
+Static bundle pins must NOT auto-wiggle mid-epoch. They change only
+through a new signed bundle accompanied by an artifact path + measured
+value justifying each move.
+
 ## Pre-launch Blockers Checklist
 
 The hammer-down list before recommending a launch profile re-pin and
