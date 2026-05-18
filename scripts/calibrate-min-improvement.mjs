@@ -253,14 +253,32 @@ for (const surface of surfaces) {
 // For ADVERSARIAL hill-climbed patches: accepts = patches that overfit visible enough
 //   to also leak past hidden — should be ~0 at correctly-pinned T.
 // Operators pick T such that adversarial accepts ≤ 1% AND random accepts ≤ tolerable noise rate.
-const thresholds = [500, 1000, 2500, 5000, 10000, 20000, 32000, 50000, 75000, 100000];
+// Production threshold (computeAcceptanceThresholdPpm): the sum of
+// minImprovement + replayTolerance + baselineVariance. This is the only
+// number whose accept rate has operational meaning. Bucketed thresholds
+// around it are for shape; interpolation between adjacent buckets is
+// not a substitute for measuring at the exact pinned point.
+const productionThresholdPpm =
+  (profile.patchAcceptanceFloors?.minImprovementPpm ?? 0)
+  + (profile.replayTolerancePpm ?? 0)
+  + (profile.baselineVariancePpm ?? 0);
+const baseGrid = [500, 1000, 2500, 5000, 10000, 20000, 32000, 50000, 75000, 100000];
+const thresholds = Array.from(
+  new Set([...baseGrid, productionThresholdPpm].filter((t) => Number.isFinite(t) && t > 0)),
+).sort((a, b) => a - b);
 function sweep(trials) {
   return thresholds.map((T) => {
     let accepts = 0, rejects = 0;
     for (const t of trials) {
       if (t.hiddenDelta >= T) accepts++; else rejects++;
     }
-    return { threshold: T, accepts, rejects, accepts_pct: trials.length ? +(accepts*100/trials.length).toFixed(2) : 0 };
+    return {
+      threshold: T,
+      isProductionPinned: T === productionThresholdPpm,
+      accepts,
+      rejects,
+      accepts_pct: trials.length ? +(accepts*100/trials.length).toFixed(2) : 0,
+    };
   });
 }
 
