@@ -51,6 +51,7 @@ const packSize = Number(flag('pack-size', '8'));
 const rerankerArg = flag('reranker', 'deterministic');
 const reportPath = flag('out', '/var/lib/coretex/reports/substrate-sparsity.json');
 const seedHex = flag('seed', '0x' + 'b3'.repeat(32));
+const anchorHeldOut = argv.includes('--anchor-held-out');
 
 function fail(msg, code = 1) { console.error(`[sparsity] ${msg}`); exit(code); }
 if (!corpusPath || !existsSync(corpusPath)) fail(`--corpus missing or not found: ${corpusPath}`);
@@ -98,7 +99,12 @@ if (rerankerArg === 'env') {
 console.log(`[sparsity] reranker: ${reranker.model}`);
 
 const pack = deriveQueryPack(0, seedHex, corpus, { packSize, quotas: [] });
-console.log(`[sparsity] pack size=${pack.events.length}`);
+console.log(`[sparsity] pack size=${pack.events.length}${anchorHeldOut ? ' [ANCHOR-HELD-OUT]' : ''}`);
+
+const packEventIds = new Set(pack.events.map((e) => e.id));
+const heldOutAnchorEvents = anchorHeldOut
+  ? corpus.events.filter((e) => !packEventIds.has(e.id)).slice(0, pack.events.length)
+  : null;
 
 const RANGES = { MEMORY_INDEX_START: 32, RETRIEVAL_KEYS_START: 384, RELATIONS_START: 672 };
 const EMPTY = new Array(1024).fill(0n);
@@ -107,14 +113,15 @@ function buildState({ anchorN, lensN, relations }) {
   const words = [...EMPTY];
   const sharedDomain = 1n;
   for (let i = 0; i < pack.events.length; i++) {
-    const ev = pack.events[i];
-    if (i < anchorN) {
+    const evForLens = pack.events[i];
+    const evForAnchor = anchorHeldOut ? heldOutAnchorEvents[i] : evForLens;
+    if (i < anchorN && evForAnchor) {
       const memSlot = {
         slotIndex: i,
-        recordId: stableRecordIdFor(ev.id),
-        family: ev.family,
+        recordId: stableRecordIdFor(evForAnchor.id),
+        family: evForAnchor.family,
         domainBits: sharedDomain,
-        valid: true, revoked: false, protected: ev.protected ?? false,
+        valid: true, revoked: false, protected: evForAnchor.protected ?? false,
         retrievalSlot: i, expiryEpoch: 0n,
       };
       const memWords = encodeMemoryIndexSlot(memSlot);
@@ -122,8 +129,8 @@ function buildState({ anchorN, lensN, relations }) {
       for (let j = 0; j < 8; j++) words[base + j] = memWords[j];
     }
     if (i < lensN) {
-      const truth = ev.truthDocuments.find((t) => t.isCurrent) ?? ev.truthDocuments[0];
-      const emb = ev.embeddings.perTruth.get(truth.id);
+      const truth = evForLens.truthDocuments.find((t) => t.isCurrent) ?? evForLens.truthDocuments[0];
+      const emb = evForLens.embeddings.perTruth.get(truth.id);
       if (emb) {
         const keySlot = { slotIndex: i, modelIdHash: biEncoderHash, l2Norm: 1.0, versionTag: 1, quantizedBytes: emb };
         const keyWords = encodeRetrievalKeySlot(keySlot, { retrievalKeyHeaderBytes: LAYOUT.headerBytes });
