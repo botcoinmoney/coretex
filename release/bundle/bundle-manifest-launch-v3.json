@@ -253,7 +253,8 @@
       "baselineVariancePpm": 5669,
       "baselineSamples": 30,
       "baselineEvalSeedHex": "0xbabebabebabebabebabebabebabebabebabebabebabebabebabebabebabebabe",
-      "majorDeltaThreshold": 5076
+      "majorDeltaThreshold": 5076,
+      "categoryLensExpansionBudget": 0
     },
     "files": [
       {
