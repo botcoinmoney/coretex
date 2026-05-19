@@ -39,7 +39,10 @@ import { distIndex } from './_repo-root.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { argv, exit, env } from 'node:process';
-import { createHash } from 'node:crypto';
+import {
+  deriveBaselineSampleSeed,
+  summarizeBaselineComposites,
+} from './lib/baseline-recalibration.mjs';
 
 function flag(name, fb) {
   const i = argv.indexOf(`--${name}`);
@@ -52,6 +55,11 @@ const samples = Number(flag('samples', '5'));
 const evalSeedHex = flag('eval-seed-hex', '0x' + 'babe'.repeat(16));
 const reportPath = flag('out', '/var/lib/coretex/reports/baseline-recalibration.json');
 const epochId = Number(flag('epoch-id', '0'));
+const sampleSeedMode = flag('sample-seed-mode', 'fixed');
+if (sampleSeedMode !== 'fixed' && sampleSeedMode !== 'rotating') {
+  console.error("--sample-seed-mode must be 'fixed' or 'rotating'");
+  exit(1);
+}
 
 if (!corpusPath || !existsSync(corpusPath)) { console.error('--corpus missing'); exit(1); }
 
@@ -96,6 +104,7 @@ const opts = {
   lensWeight: profile.lensWeight ?? 0.4,
   anchorWeight: profile.anchorWeight ?? 0.6,
   relationExpansionBudget: profile.relationExpansionBudget ?? 12,
+  categoryLensExpansionBudget: profile.categoryLensExpansionBudget ?? profile.relationExpansionBudget ?? 50,
   temporalCurrentBoost: profile.temporalCurrentBoost ?? 0.1,
   temporalStaleSuppression: profile.temporalStaleSuppression ?? 0.1,
   lensDiversityFloor: profile.lensDiversityFloor,
@@ -106,9 +115,11 @@ const EMPTY = { words: new Array(RANGES.WORD_COUNT).fill(0n) };
 const composites = [];
 const tStart = Date.now();
 for (let i = 0; i < samples; i++) {
-  // Each sample uses a per-sample seed derived from the operator-provided
-  // base seed. This rotates the pack across the rolling sample.
-  const seedI = '0x' + createHash('sha256').update(`${evalSeedHex}:baseline-sample:${i}`).digest('hex');
+  // Default `fixed` mode intentionally evaluates one hidden pack repeatedly
+  // inside a cron tick: it measures runtime/noise without burning N cold
+  // packs. Operators who explicitly want cross-pack sampling can pass
+  // `--sample-seed-mode rotating`.
+  const seedI = deriveBaselineSampleSeed(evalSeedHex, i, sampleSeedMode);
   const pack = deriveQueryPack(epochId, seedI, corpus, profile.hiddenPack);
   const t = Date.now();
   const score = await evaluateRetrievalBenchmarkState(EMPTY, corpus, pack, opts);
@@ -117,11 +128,7 @@ for (let i = 0; i < samples; i++) {
   console.log(`  sample[${i}] composite=${score.composite.toFixed(6)} elapsed=${(elapsedMs / 1000).toFixed(1)}s`);
 }
 
-const mean = composites.reduce((s, x) => s + x, 0) / composites.length;
-const variance = composites.reduce((s, x) => s + (x - mean) ** 2, 0) / Math.max(1, composites.length - 1);
-const stddev = Math.sqrt(variance);
-const baselineParentScorePpm = Math.round(mean * 1_000_000);
-const stddevPpm = Math.round(stddev * 1_000_000);
+const { mean, stddev, baselineParentScorePpm, stddevPpm } = summarizeBaselineComposites(composites);
 
 const cacheStats = getRerankerCacheStats?.(reranker);
 const report = {
@@ -136,6 +143,7 @@ const report = {
     bundleProfile: profilePath,
     rerankerModel: reranker.model,
     samples,
+    sampleSeedMode,
     epochId,
     evalSeedHex,
     pipelineVersion: profile.pipelineVersion,

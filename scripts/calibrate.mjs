@@ -285,6 +285,7 @@ const profile = {
   lensWeight: Number(flag('lens-weight', '0.10')),
   anchorWeight: Number(flag('anchor-weight', '0.15')),
   relationExpansionBudget: Number(flag('relation-expansion-budget', '50')),
+  categoryLensExpansionBudget: Number(flag('category-lens-expansion-budget', flag('relation-expansion-budget', '50'))),
   temporalCurrentBoost: Number(flag('temporal-current-boost', '0.10')),
   temporalStaleSuppression: Number(flag('temporal-stale-suppression', '0.10')),
   lensDiversityFloor: Number(flag('lens-diversity-floor', '0.70')),

@@ -86,6 +86,7 @@ const baseOpts = {
   lensWeight: profile.lensWeight ?? 0.10,
   anchorWeight: profile.anchorWeight ?? 0.15,
   relationExpansionBudget: profile.relationExpansionBudget ?? 50,
+  categoryLensExpansionBudget: profile.categoryLensExpansionBudget ?? profile.relationExpansionBudget ?? 50,
   temporalCurrentBoost: profile.temporalCurrentBoost ?? 0.10,
   temporalStaleSuppression: profile.temporalStaleSuppression ?? 0.10,
   lensDiversityFloor: profile.lensDiversityFloor,
