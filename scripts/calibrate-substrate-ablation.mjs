@@ -203,32 +203,89 @@ function perFamilyMeans(perQuery) {
   return out;
 }
 
-// Aggregate candidate-source attribution across all queries' capped pools.
-// Returns counts per source tag plus the average number of distinct sources
-// per doc — a doc reached by ≥2 mechanisms is more robustly routed than one
-// reached by exactly one. Diagnostic only.
+// Aggregate candidate-source attribution across all queries' capped pools
+// AND the final ranked top-K. Returns counts per source tag plus
+// diagnostics that distinguish:
+//   - "in cap" (candidate-pool membership)
+//   - "in final top-10 with relevance>0" (mechanism delivering relevant docs)
+//   - "in final top-20 with relevance==0" (mechanism injecting hard negatives)
+//   - "lens-promoted into cap" (docs whose preRankScore − lensBonus would
+//     place them BELOW the K-th-place threshold — i.e., lens flipped them
+//     into the reranker pool)
 function aggregateSources(perQuery) {
-  const total = { stage1: 0, anchorMandatory: 0, anchorBFS: 0, categoryLensBFS: 0 };
-  let docs = 0;
-  let multiSourceDocs = 0;
+  const blank = () => ({ stage1: 0, anchorMandatory: 0, anchorBFS: 0, categoryLensBFS: 0 });
+  const inCap = blank();
+  const relevantTop10 = blank();
+  const hardNegativeTop20 = blank();
+  let docs = 0, multi = 0;
+  let lensPromotedIntoCap = 0, lensConsidered = 0;
+  let relevantTop10Total = 0, hardNegativeTop20Total = 0;
   for (const q of perQuery) {
-    const sources = q.cappedDocSources ?? [];
-    for (const tags of sources) {
+    const tagsArr = q.cappedDocSources ?? [];
+    const comps = q.cappedDocComponents ?? [];
+    // Cap-pool aggregates.
+    for (let i = 0; i < tagsArr.length; i++) {
       docs++;
-      if (tags.length > 1) multiSourceDocs++;
-      for (const t of tags) {
-        if (t in total) total[t]++;
+      if (tagsArr[i].length > 1) multi++;
+      for (const t of tagsArr[i]) if (t in inCap) inCap[t]++;
+    }
+    // Lens-promotion-into-cap (COARSE proxy): a doc is in the cap by
+    // preRankScore; would it still be in the cap by
+    // (preRankScore − lensBonus)? Threshold here is min preRankScore in
+    // the current cap. Two caveats:
+    //   1. When cap >= pool size (small packs / small corpora), every
+    //      doc trivially passes; promotion rate inflates to ~1.
+    //   2. Threshold doesn't re-rank after demotion; for proper
+    //      counterfactual cap, downstream should re-sort
+    //      (preRankScore − lensBonus) desc and take top-K. The raw
+    //      cappedDocComponents are written to the artifact for that.
+    if (comps.length > 0) {
+      let capThreshold = Infinity;
+      for (const c of comps) if (c.preRankScore < capThreshold) capThreshold = c.preRankScore;
+      for (const c of comps) {
+        if (c.lensBonus > 0) {
+          lensConsidered++;
+          if ((c.preRankScore - c.lensBonus) < capThreshold) lensPromotedIntoCap++;
+        }
+      }
+    }
+    // Final ranking aggregates.
+    const top = q.finalRankingTop20 ?? [];
+    for (const r of top) {
+      if (r.rank <= 10 && r.relevance > 0) {
+        relevantTop10Total++;
+        for (const t of r.sources) if (t in relevantTop10) relevantTop10[t]++;
+      }
+      if (r.rank <= 20 && r.relevance === 0) {
+        hardNegativeTop20Total++;
+        for (const t of r.sources) if (t in hardNegativeTop20) hardNegativeTop20[t]++;
       }
     }
   }
+  const fracOf = (counts, denom) => denom > 0
+    ? Object.fromEntries(Object.entries(counts).map(([k, v]) => [k, v / denom])) : null;
   return {
-    perTagCount: total,
-    perTagFraction: docs > 0
-      ? Object.fromEntries(Object.entries(total).map(([k, v]) => [k, v / docs]))
-      : null,
-    totalCappedDocs: docs,
-    multiSourceDocs,
-    multiSourceFraction: docs > 0 ? multiSourceDocs / docs : null,
+    cap: {
+      perTagCount: inCap,
+      perTagFraction: fracOf(inCap, docs),
+      totalDocs: docs,
+      multiSourceFraction: docs > 0 ? multi / docs : null,
+    },
+    relevantTop10: {
+      perTagCount: relevantTop10,
+      perTagFraction: fracOf(relevantTop10, relevantTop10Total),
+      totalDocs: relevantTop10Total,
+    },
+    hardNegativeTop20: {
+      perTagCount: hardNegativeTop20,
+      perTagFraction: fracOf(hardNegativeTop20, hardNegativeTop20Total),
+      totalDocs: hardNegativeTop20Total,
+    },
+    lensPromotion: {
+      lensConsidered,
+      lensPromotedIntoCap,
+      promotionRate: lensConsidered > 0 ? lensPromotedIntoCap / lensConsidered : null,
+    },
   };
 }
 
