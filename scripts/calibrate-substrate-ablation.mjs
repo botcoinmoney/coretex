@@ -58,6 +58,15 @@ const packSize = Number(flag('pack-size', '8'));
 const rerankerArg = flag('reranker', 'deterministic');
 const reportPath = flag('out', '/var/lib/coretex/reports/substrate-ablation.json');
 const seedHex = flag('seed', '0x' + 'a7'.repeat(32));
+// Anchor-held-out mode: the engineered substrate anchors point at events
+// NOT in the pack. Lens vectors still use pack truth embeddings. This
+// isolates the "anchor cannot directly route truth" regime — if lens
+// and relation primitives recover here, they're load-bearing
+// independent of anchor's direct-bookmark shortcut. If they collapse,
+// anchor-mandatory IS the only routing mechanism that works under
+// realistic miner conditions where the exact pack queries weren't
+// pre-anchored.
+const anchorHeldOut = argv.includes('--anchor-held-out');
 
 function fail(msg, code = 1) { console.error(`[ablation] ${msg}`); exit(code); }
 if (!corpusPath || !existsSync(corpusPath)) fail(`--corpus missing or not found: ${corpusPath}`);
@@ -106,7 +115,14 @@ console.log(`[ablation] reranker: ${reranker.model}`);
 // Same pack derivation as stage-2 sweep so cells are directly
 // comparable to that report.
 const pack = deriveQueryPack(0, seedHex, corpus, { packSize, quotas: [] });
-console.log(`[ablation] pack size=${pack.events.length} from ${seedHex}`);
+console.log(`[ablation] pack size=${pack.events.length} from ${seedHex}${anchorHeldOut ? ' [ANCHOR-HELD-OUT]' : ''}`);
+
+// In anchor-held-out mode, anchors point at events distinct from the
+// pack. Pick deterministic off-pack events sorted by id for repeatability.
+const packEventIds = new Set(pack.events.map((e) => e.id));
+const heldOutAnchorEvents = anchorHeldOut
+  ? corpus.events.filter((e) => !packEventIds.has(e.id)).slice(0, pack.events.length)
+  : null;
 
 const RANGES = { MEMORY_INDEX_START: 32, RETRIEVAL_KEYS_START: 384, RELATIONS_START: 672 };
 const EMPTY_WORDS = new Array(1024).fill(0n);
@@ -115,8 +131,12 @@ function buildState({ anchors, lenses, relations }) {
   const words = [...EMPTY_WORDS];
   const sharedDomain = 1n;
   for (let i = 0; i < pack.events.length; i++) {
-    const ev = pack.events[i];
-    if (anchors) {
+    const evForLens = pack.events[i];
+    // Anchor event: pack event in normal mode, OFF-PACK event in
+    // anchor-held-out mode. This is the key knob — if the substrate's
+    // anchors aren't the answer set, only lens/relations can route.
+    const ev = anchorHeldOut ? heldOutAnchorEvents[i] : evForLens;
+    if (anchors && ev) {
       const memSlot = {
         slotIndex: i,
         recordId: stableRecordIdFor(ev.id),
@@ -130,8 +150,12 @@ function buildState({ anchors, lenses, relations }) {
       for (let j = 0; j < 8; j++) words[base + j] = memWords[j];
     }
     if (lenses) {
-      const truth = ev.truthDocuments.find((t) => t.isCurrent) ?? ev.truthDocuments[0];
-      const emb = ev.embeddings.perTruth.get(truth.id);
+      // Lens vectors ALWAYS use the pack truth embeddings — they're the
+      // miner's claim about which docs are relevant. Anchor-held-out only
+      // affects which events get a MemoryIndex slot; lens placement is
+      // independent.
+      const truth = evForLens.truthDocuments.find((t) => t.isCurrent) ?? evForLens.truthDocuments[0];
+      const emb = evForLens.embeddings.perTruth.get(truth.id);
       if (emb) {
         const keySlot = { slotIndex: i, modelIdHash: biEncoderHash, l2Norm: 1.0, versionTag: 1, quantizedBytes: emb };
         const keyWords = encodeRetrievalKeySlot(keySlot, { retrievalKeyHeaderBytes: LAYOUT.headerBytes });
