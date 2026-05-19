@@ -121,16 +121,14 @@
     "corpusDocDedupe": "canonical-doc-id",
     "firstStageTopKSelection": {
       "method": "operator-override",
-      "reason": "Run 1 worst-stratum recall@K target (>=0.90) was infeasible on the launch corpus: long_horizon @ 0.4% and multi_hop_relation @ 0.0% even at K=3200 because reasoning-shape queries on entity-profile truth docs cannot be bridged by BGE-M3 first-stage. K=3200 is pinned against the FAMILIES stage-1 actually serves: temporal @ 93.2%, near_collision @ 85.6% recall@K=3200. The hard families are substrate-bridged via Phase B category-lens BFS (CORETEX_SUBSTRATE_EXPANSION_HARDENING.md \u00a79.5).",
+      "reason": "Run 1 worst-stratum recall@K target (>=0.90) was infeasible on the launch corpus: long_horizon @ 0.4% and multi_hop_relation @ 0.0% even at K=3200 because reasoning-shape queries on entity-profile truth docs cannot be bridged by BGE-M3 first-stage. K=3200 is pinned against the FAMILIES stage-1 actually serves: temporal @ 93.2%, near_collision @ 85.6% recall@K=3200. For multi_hop_relation, the corpus repair (relation-target alias qrels) makes anchor-mandatory routing credit-bearing — Phase A anchor-to-anchor BFS via substrate.relations is the load-bearing channel; Phase B category-lens BFS is currently pinned OFF (categoryLensExpansionBudget=0) per launch-corpus evidence that Phase B floods the candidate pool with hard negatives at production scale. See release/calibration/cpu-2026-05-19-repaired-qrels/RELATION_CATLENS_DECISION.md.",
       "servedFamilyRecallAtPinnedK": {
         "temporal": 0.932,
         "near_collision": 0.856
       },
-      "substrateBridgedFamilies": [
-        "long_horizon",
-        "multi_hop_relation"
-      ],
+      "substrateBridgedFamilies": [],
       "calibrationReport": "release/calibration/first-stage-topk-sweep.json"
-    }
+    },
+    "categoryLensExpansionBudget": 0
   }
 }
