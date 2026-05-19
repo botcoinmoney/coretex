@@ -372,10 +372,17 @@ const cells = [
   { name: 'anchor-on-answer-alias+rels',    anchorOnTruth: false, anchorOnAnswerAlias: true,  anchorOnIrrelevant: false, anchorBoth: false, relations: true,  categoryLenses: false },
   { name: 'anchor-on-answer-alias+catLens', anchorOnTruth: false, anchorOnAnswerAlias: true,  anchorOnIrrelevant: false, anchorBoth: false, relations: false, categoryLenses: true },
   { name: 'anchor-on-answer-alias+full',    anchorOnTruth: false, anchorOnAnswerAlias: true,  anchorOnIrrelevant: false, anchorBoth: false, relations: true,  categoryLenses: true },
-  // anchor-both: anchor pack event AND its answer-alias in distinct
-  // slots with corpus-attested edges. Diagnostic — if this collapses to
-  // anchor-on-truth or worse, anchor-graph traversal contributes
-  // nothing beyond what anchor-mandatory does directly.
+  // anchor-both (no relations): anchor both pack event AND answer-alias
+  // in distinct slots, NO substrate edges. Isolates the "endpoint
+  // coverage" effect — what does anchoring two endpoints add over
+  // anchoring just one? Compared with anchor-both+rels, the delta gives
+  // the actual anchor-graph relation-edge contribution, separated from
+  // the second-anchor effect.
+  { name: 'anchor-both',                    anchorOnTruth: false, anchorOnAnswerAlias: true,  anchorOnIrrelevant: false, anchorBoth: true,  relations: false, categoryLenses: false },
+  // anchor-both+rels: same anchoring as anchor-both, plus corpus-attested
+  // edges between the two anchored slots. Auditor's clean decomposition:
+  //   anchor-both          - anchor-on-answer-alias  = endpoint-coverage effect
+  //   anchor-both+rels     - anchor-both             = anchor-graph relation-edge effect
   { name: 'anchor-both+rels',               anchorOnTruth: false, anchorOnAnswerAlias: true,  anchorOnIrrelevant: false, anchorBoth: true,  relations: true,  categoryLenses: false },
 ];
 
@@ -507,17 +514,32 @@ const report = {
   results,
   interpretation: (() => {
     const c = (n) => results.find((r) => r.cell === n)?.composite ?? null;
+    const m = (n) => results.find((r) => r.cell === n)?.mrr10 ?? null;
     const baseline = c('anchor-on-answer-alias');
+    // Clean decomposition (auditor):
+    //   endpoint-coverage effect  = anchor-both - anchor-on-answer-alias
+    //   anchor-graph relation-edge = anchor-both+rels - anchor-both
+    //   catLens contribution       = answer-alias+catLens - answer-alias
+    //   catLens noise floor        = irrelevant+catLens - irrelevant
     return {
       anchorBookmarkLift: c('anchor-on-truth') - c('empty'),
       anchorOnAnswerAliasLift: c('anchor-on-answer-alias') - c('empty'),
       anchorOnIrrelevantLift: c('anchor-on-irrelevant') - c('empty'),
-      anchorOnIrrelevantCatLensContribution: c('anchor-on-irrelevant+catLens') - c('anchor-on-irrelevant'),
-      // Contributions vs the answer-alias-anchored baseline.
-      relationContribution: c('anchor-on-answer-alias+rels') - baseline,
-      categoryLensContribution: c('anchor-on-answer-alias+catLens') - baseline,
+      catLensNoiseFloor: c('anchor-on-irrelevant+catLens') - c('anchor-on-irrelevant'),
+      catLensContribution: c('anchor-on-answer-alias+catLens') - baseline,
+      // (No edges yet) — relations cell collapses to baseline when
+      // anchored events have no corpus relations to each other.
+      relationContribution_aliasOnly: c('anchor-on-answer-alias+rels') - baseline,
       fullExpansionContribution: c('anchor-on-answer-alias+full') - baseline,
-      anchorBothLift: c('anchor-both+rels') - baseline,
+      // Auditor's clean two-step:
+      endpointCoverageEffect: c('anchor-both') - baseline,
+      anchorGraphEdgeContribution: c('anchor-both+rels') - c('anchor-both'),
+      // Per-metric for completeness.
+      mrr: {
+        empty: m('empty'), anchorOnTruth: m('anchor-on-truth'),
+        answerAlias: m('anchor-on-answer-alias'),
+        anchorBoth: m('anchor-both'), anchorBothRels: m('anchor-both+rels'),
+      },
     };
   })(),
 };
@@ -525,10 +547,12 @@ const report = {
 mkdirSync(dirname(reportPath), { recursive: true });
 writeFileSync(reportPath, JSON.stringify(report, null, 2));
 console.log(`[relhard] report → ${reportPath}`);
+const ip = report.interpretation;
 console.log(`[relhard] anchor-on-answer-alias baseline composite=${results.find((r) => r.cell === 'anchor-on-answer-alias').composite.toFixed(4)}`);
-console.log(`[relhard] relation lift over answer-alias: ${report.interpretation.relationContribution.toFixed(4)}`);
-console.log(`[relhard] category-lens lift over answer-alias: ${report.interpretation.categoryLensContribution.toFixed(4)}`);
-console.log(`[relhard] full expansion lift over answer-alias: ${report.interpretation.fullExpansionContribution.toFixed(4)}`);
-console.log(`[relhard] anchor-on-irrelevant lift over empty (sanity floor; should be small): ${report.interpretation.anchorOnIrrelevantLift.toFixed(4)}`);
+console.log(`[relhard] endpoint-coverage effect (anchor-both − answer-alias): ${ip.endpointCoverageEffect.toFixed(4)}`);
+console.log(`[relhard] anchor-graph relation-edge contribution (anchor-both+rels − anchor-both): ${ip.anchorGraphEdgeContribution.toFixed(4)}`);
+console.log(`[relhard] catLens contribution (alias+catLens − answer-alias): ${ip.catLensContribution.toFixed(4)}`);
+console.log(`[relhard] catLens noise floor (irrelevant+catLens − irrelevant): ${ip.catLensNoiseFloor.toFixed(4)}`);
+console.log(`[relhard] sanity (anchor-on-irrelevant − empty): ${ip.anchorOnIrrelevantLift.toFixed(4)}`);
 await reranker.close?.();
 exit(0);
