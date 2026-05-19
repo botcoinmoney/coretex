@@ -458,10 +458,10 @@ Two distinct decisions are routinely conflated; they must be separated
 before any bundle re-pin:
 
 1. **Is the channel load-bearing?** Determined by the dense ablation
-   matrix (`substrate-ablation-launchcorp-v3.json`). Anchor-only is
-   currently strongest, lens adds zero on top of anchor, relation is
-   net-harmful at `relationExpansionBudget=12` under the all-on
-   engineered substrate.
+   matrix plus the relation hard-family probe. Anchor/lens conclusions from
+   the latest sparsity probes remain useful, but relation conclusions from
+   pre-2026-05-19 artifacts are superseded for pin decisions: the old corpus
+   qrels did not reward answer-bearing relation target truth docs.
 2. **Is the dense-substrate result robust to typical miner sparsity?**
    Determined by the substrate-sparsity ablation
    (`scripts/calibrate-substrate-sparsity.mjs`). If anchor-only
@@ -478,11 +478,13 @@ empirically optimal. `relationExpansionBudget=0` is a serious candidate
 pending the sparsity matrix; do not assume the existing pin is correct
 forward.
 
-Per-family relation diagnostics are also required before fully writing
-off relations: relations may hurt aggregate MRR while helping
-`multi_hop_relation` or `long_horizon` specifically. The sparsity script
-captures composite + nDCG + MRR + Recall; a follow-up that splits these
-by family is the next diagnostic to add when launch evidence demands it.
+Per-family relation diagnostics are required before fully writing off
+relations. First repair the corpus qrels with
+`scripts/repair-relation-qrel-aliases.mjs` (no embedding/model regeneration),
+then run `scripts/calibrate-relation-hard-family.mjs`; it fails closed when
+relation target alias qrels are absent and reports `categoryLensRelationHit10`
+plus category-lens hard-negative injection. See
+`docs/HANDOFFS/HANDOFF_2026-05-19_RELATION_BENCHMARK_HARDENING.md`.
 
 ## Substrate Size Forward Note
 

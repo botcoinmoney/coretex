@@ -19,6 +19,7 @@ import { resolve, dirname } from 'node:path';
 import { argv, exit } from 'node:process';
 
 import {
+  canonicalAnswerText,
   loadProductionCorpus,
   splitForRecord,
 } from '@botcoin/cortex';
@@ -49,6 +50,20 @@ const families = new Map();
 const splits = new Map();
 const qrelHistogram = new Map();
 const domains = new Map();
+const globalDocIds = new Set();
+const globalTruthDocById = new Map();
+
+for (const event of corpus.events) {
+  for (const truth of event.truthDocuments) {
+    globalDocIds.add(truth.id);
+    globalTruthDocById.set(truth.id, truth);
+  }
+  for (const neg of event.hardNegatives) globalDocIds.add(neg.id);
+}
+
+let relationAliasCandidateCount = 0;
+let relationAliasQrelCount = 0;
+let relationAliasFullCreditCount = 0;
 
 if (corpus.events.length < minEvents) {
   errors.push(`event count ${corpus.events.length} < min-events ${minEvents}`);
@@ -80,12 +95,42 @@ for (const event of corpus.events) {
 
   const docIds = new Set(allDocs.map((d) => d.id));
   const qrelsById = new Map(event.qrels.map((q) => [q.documentId, q.relevance]));
+  const relationTargetTruthIds = new Set();
+  const currentTruthTexts = new Set(
+    event.truthDocuments
+      .filter((doc) => doc.isCurrent)
+      .map((doc) => canonicalAnswerText(doc.text))
+      .filter(Boolean),
+  );
+  if (event.family === 'multi_hop_relation' && event.relations) {
+    for (const rel of event.relations) {
+      const target = corpus.byId.get(rel.other_id);
+      if (!target) continue;
+      for (const targetTruth of target.truthDocuments) {
+        if (!targetTruth.isCurrent) continue;
+        relationTargetTruthIds.add(targetTruth.id);
+        relationAliasCandidateCount++;
+        const relevance = qrelsById.get(targetTruth.id) ?? 0;
+        if (relevance > 0) relationAliasQrelCount++;
+        if (relevance === 1) relationAliasFullCreditCount++;
+        if (currentTruthTexts.has(canonicalAnswerText(targetTruth.text)) && relevance !== 1) {
+          errors.push(`${event.id}: missing full-credit relation answer alias qrel for ${targetTruth.id}`);
+        }
+      }
+    }
+  }
   for (const docId of docIds) {
     if (!qrelsById.has(docId)) errors.push(`${event.id}: missing qrel for ${docId}`);
   }
   for (const qrel of event.qrels) {
     qrelHistogram.set(qrel.relevance, (qrelHistogram.get(qrel.relevance) ?? 0) + 1);
-    if (!docIds.has(qrel.documentId)) errors.push(`${event.id}: qrel references unknown document ${qrel.documentId}`);
+    if (!docIds.has(qrel.documentId) && !relationTargetTruthIds.has(qrel.documentId)) {
+      const scope = globalDocIds.has(qrel.documentId) ? 'non-target corpus document' : 'unknown document';
+      errors.push(`${event.id}: qrel references ${scope} ${qrel.documentId}`);
+    }
+    if (relationTargetTruthIds.has(qrel.documentId) && !globalTruthDocById.has(qrel.documentId)) {
+      errors.push(`${event.id}: relation alias qrel does not point at a truth document ${qrel.documentId}`);
+    }
     if (!allowedRelevance.has(qrel.relevance)) errors.push(`${event.id}: invalid relevance ${qrel.relevance}`);
   }
   for (const truth of event.truthDocuments) {
@@ -154,6 +199,11 @@ const report = {
   splitCounts: Object.fromEntries(splits),
   domainCounts: Object.fromEntries(domains),
   qrelHistogram: Object.fromEntries(Array.from(qrelHistogram).sort((a, b) => Number(a[0]) - Number(b[0]))),
+  relationAliasQrels: {
+    candidateTargetTruthDocs: relationAliasCandidateCount,
+    relevantAliasQrels: relationAliasQrelCount,
+    fullCreditAliasQrels: relationAliasFullCreditCount,
+  },
   errors,
   warnings,
 };

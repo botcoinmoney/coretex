@@ -117,6 +117,8 @@ CoreTex hash recorded in its `.env.example`.
   - `HANDOFF_2026-05-13_PARALLEL_WORK.md` — work for the next agent to do
     in parallel with the in-flight launch corpus generation (tasks #6,
     #16, #17).
+  - `HANDOFF_2026-05-19_RELATION_BENCHMARK_HARDENING.md` — relation qrel
+    alias fix, invalidated relation artifacts, and rerun order.
 
 ## Archived Historical Docs
 

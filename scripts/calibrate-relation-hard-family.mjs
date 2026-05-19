@@ -145,6 +145,48 @@ for (const rels of relatedByPackIndex) {
 }
 console.log(`[relhard] edgeTypes spanning pack relations: ${[...relatedEdgeTypes].join(',')}`);
 
+function relationAliasStatsFor(events) {
+  const stats = {
+    relationBearingEvents: 0,
+    relationEdges: 0,
+    targetTruthDocs: 0,
+    relevantAliasQrels: 0,
+    fullCreditAliasQrels: 0,
+    missingAliasQrels: [],
+  };
+  for (const ev of events) {
+    if (!ev.relations || ev.relations.length === 0) continue;
+    stats.relationBearingEvents++;
+    const qrelsById = new Map(ev.qrels.map((q) => [q.documentId, q.relevance]));
+    for (const rel of ev.relations) {
+      stats.relationEdges++;
+      const target = eventById.get(rel.other_id);
+      if (!target) continue;
+      for (const truth of target.truthDocuments) {
+        if (!truth.isCurrent) continue;
+        stats.targetTruthDocs++;
+        const relevance = qrelsById.get(truth.id) ?? 0;
+        if (relevance > 0) stats.relevantAliasQrels++;
+        if (relevance === 1) stats.fullCreditAliasQrels++;
+        if (relevance <= 0) {
+          stats.missingAliasQrels.push({ eventId: ev.id, targetEventId: target.id, targetTruthDocId: truth.id });
+        }
+      }
+    }
+  }
+  return stats;
+}
+
+const relationAliasStats = relationAliasStatsFor(pack.events);
+console.log(
+  `[relhard] relation target qrel aliases: relevant=${relationAliasStats.relevantAliasQrels}/` +
+  `${relationAliasStats.targetTruthDocs} full=${relationAliasStats.fullCreditAliasQrels}`,
+);
+if (relationAliasStats.targetTruthDocs === 0 || relationAliasStats.relevantAliasQrels === 0) {
+  console.error('[relhard] relation-bearing pack has no relevant target-truth alias qrels; corpus is invalid for relation conclusions');
+  exit(3);
+}
+
 const RANGES = { MEMORY_INDEX_START: 32, RETRIEVAL_KEYS_START: 384, RELATIONS_START: 672 };
 const EMPTY = new Array(1024).fill(0n);
 
@@ -227,8 +269,8 @@ const cells = [
 
 function aggregateSources(perQuery) {
   const blank = () => ({ stage1: 0, anchorMandatory: 0, anchorBFS: 0, categoryLensBFS: 0 });
-  const cap = blank(), rel = blank();
-  let docs = 0, relTotal = 0;
+  const cap = blank(), rel = blank(), hardNeg = blank();
+  let docs = 0, relTotal = 0, hardNegTotal = 0;
   for (const q of perQuery) {
     for (const tags of q.cappedDocSources ?? []) {
       docs++;
@@ -239,6 +281,10 @@ function aggregateSources(perQuery) {
         relTotal++;
         for (const t of r.sources) if (t in rel) rel[t]++;
       }
+      if (r.rank <= 20 && r.relevance === 0) {
+        hardNegTotal++;
+        for (const t of r.sources) if (t in hardNeg) hardNeg[t]++;
+      }
     }
   }
   const frac = (counts, denom) => denom > 0
@@ -246,6 +292,7 @@ function aggregateSources(perQuery) {
   return {
     cap: { count: cap, fraction: frac(cap, docs), totalDocs: docs },
     relevantTop10: { count: rel, fraction: frac(rel, relTotal), totalDocs: relTotal },
+    hardNegativeTop20: { count: hardNeg, fraction: frac(hardNeg, hardNegTotal), totalDocs: hardNegTotal },
   };
 }
 
@@ -259,20 +306,24 @@ for (const cell of cells) {
   console.log(
     `  ${cell.name.padEnd(28)} composite=${score.composite.toFixed(4)} ` +
     `nDCG=${score.nDCG10.toFixed(3)} MRR=${score.mrr10.toFixed(3)} R=${score.recall10.toFixed(3)} ` +
+    `multiHop=${score.multiHopRecall10.toFixed(3)} catHit=${score.categoryLensRelationHit10.toFixed(3)} ` +
     `relTop10[anchorMandatory=${sources.relevantTop10.count.anchorMandatory}, categoryLensBFS=${sources.relevantTop10.count.categoryLensBFS}] ` +
+    `hardNegTop20[categoryLensBFS=${sources.hardNegativeTop20.count.categoryLensBFS}] ` +
     `(${(elapsedMs / 1000).toFixed(1)}s)`,
   );
   results.push({
     cell: cell.name, cellConfig: cell,
     composite: score.composite,
     nDCG10: score.nDCG10, mrr10: score.mrr10, recall10: score.recall10,
+    multiHopRecall10: score.multiHopRecall10,
+    categoryLensRelationHit10: score.categoryLensRelationHit10,
     candidateSources: sources,
     elapsedMs,
   });
 }
 
 const report = {
-  schemaVersion: 'coretex.relation-hard-family.v1',
+  schemaVersion: 'coretex.relation-hard-family.v2',
   generatedAt: new Date().toISOString(),
   provenance: buildProvenance(),
   fidelity: rerankerArg === 'env' ? 'PRODUCTION_RERANKER' : 'DETERMINISTIC_SMOKE',
@@ -285,6 +336,7 @@ const report = {
     rerankerInputTopK: opts.rerankerInputTopK, firstStageTopK: opts.firstStageTopK,
     lensWeight: opts.lensWeight, anchorWeight: opts.anchorWeight,
     relationExpansionBudget: opts.relationExpansionBudget,
+    relationAliasStats,
   },
   results,
   interpretation: {

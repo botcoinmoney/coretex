@@ -57,6 +57,7 @@ import {
   serializeCorpusDelta,
   keccak256,
   canonicalJsonForCorpus,
+  addRelationAnswerAliasQrels,
 } from '@botcoin/cortex';
 
 function flag(name, fallback) {
@@ -810,6 +811,9 @@ async function recordsFromChallenge({
         ? { validFromEpoch: corpusEpoch, validUntilEpoch: 1 << 30, currentStaleFlag: true }
         : undefined,
       relations: relations.length > 0 ? relations : undefined,
+      relationTruthDocumentsByEventId: family === 'multi_hop_relation' && targetId && entityDocs.has(answerName)
+        ? new Map([[targetId, [{ id: `${targetId}::truth`, text: entityDocs.get(answerName), isCurrent: true }]]])
+        : undefined,
       provenance: provenanceFor(challenge, challengeKey, sourceSeed, {
         questionId: q.id,
         sourcePayload: q,
@@ -830,6 +834,7 @@ async function buildEvent({
   protectedRecord,
   temporal,
   relations,
+  relationTruthDocumentsByEventId,
   provenance,
 }) {
   // De-dup on text, drop any neg that matches a truth doc verbatim,
@@ -868,9 +873,15 @@ async function buildEvent({
     ? await labelHardNegativesBatched(queryText, hardNegatives)
     : resolveNegRelevancesFromCategories(hardNegatives);
 
-  const qrels = [];
+  let qrels = [];
   for (const td of truthDocuments) qrels.push({ documentId: td.id, relevance: td.isCurrent ? 1.0 : 0.4 });
   for (let ni = 0; ni < hardNegatives.length; ni++) qrels.push({ documentId: hardNegatives[ni].id, relevance: negRelevances[ni] });
+  qrels = addRelationAnswerAliasQrels(qrels, {
+    family,
+    truthDocuments,
+    relations,
+    relationTruthDocumentsByEventId,
+  }).qrels;
 
   return {
     id,
