@@ -203,6 +203,35 @@ function perFamilyMeans(perQuery) {
   return out;
 }
 
+// Aggregate candidate-source attribution across all queries' capped pools.
+// Returns counts per source tag plus the average number of distinct sources
+// per doc — a doc reached by ≥2 mechanisms is more robustly routed than one
+// reached by exactly one. Diagnostic only.
+function aggregateSources(perQuery) {
+  const total = { stage1: 0, anchorMandatory: 0, anchorBFS: 0, categoryLensBFS: 0 };
+  let docs = 0;
+  let multiSourceDocs = 0;
+  for (const q of perQuery) {
+    const sources = q.cappedDocSources ?? [];
+    for (const tags of sources) {
+      docs++;
+      if (tags.length > 1) multiSourceDocs++;
+      for (const t of tags) {
+        if (t in total) total[t]++;
+      }
+    }
+  }
+  return {
+    perTagCount: total,
+    perTagFraction: docs > 0
+      ? Object.fromEntries(Object.entries(total).map(([k, v]) => [k, v / docs]))
+      : null,
+    totalCappedDocs: docs,
+    multiSourceDocs,
+    multiSourceFraction: docs > 0 ? multiSourceDocs / docs : null,
+  };
+}
+
 const results = [];
 let emptyComposite = null;
 for (const cell of cells) {
@@ -227,6 +256,7 @@ for (const cell of cells) {
     recall10: score.recall10,
     structuralValidity: score.structuralValidity,
     perFamily: perFamilyMeans(score.perQuery ?? []),
+    candidateSources: aggregateSources(score.perQuery ?? []),
     elapsedMs,
   });
 }

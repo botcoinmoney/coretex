@@ -184,15 +184,35 @@ for (const a of fracs) {
 // Plus the dense + relation cells for direct comparison to the previous ablation.
 cells.push({ name: 'anchor1.00_lens1.00_relations', anchorN: N, lensN: N, relations: true });
 
+function aggregateSources(perQuery) {
+  const total = { stage1: 0, anchorMandatory: 0, anchorBFS: 0, categoryLensBFS: 0 };
+  let docs = 0, multi = 0;
+  for (const q of perQuery) {
+    for (const tags of (q.cappedDocSources ?? [])) {
+      docs++;
+      if (tags.length > 1) multi++;
+      for (const t of tags) if (t in total) total[t]++;
+    }
+  }
+  return {
+    perTagCount: total,
+    perTagFraction: docs > 0 ? Object.fromEntries(Object.entries(total).map(([k, v]) => [k, v / docs])) : null,
+    totalCappedDocs: docs,
+    multiSourceFraction: docs > 0 ? multi / docs : null,
+  };
+}
+
 const results = [];
 for (const cell of cells) {
   const tStart = Date.now();
   const state = buildState(cell);
   const score = await evaluateRetrievalBenchmarkState(state, corpus, pack, opts);
   const elapsedMs = Date.now() - tStart;
+  const sources = aggregateSources(score.perQuery ?? []);
   console.log(
     `  ${cell.name.padEnd(38)} anchorN=${cell.anchorN} lensN=${cell.lensN} rel=${cell.relations ? 'on' : 'off'} ` +
     `composite=${score.composite.toFixed(4)} nDCG=${score.nDCG10.toFixed(3)} MRR=${score.mrr10.toFixed(3)} R=${score.recall10.toFixed(3)} ` +
+    `srcAnchorM=${(sources.perTagFraction?.anchorMandatory ?? 0).toFixed(2)} srcAnchorBFS=${(sources.perTagFraction?.anchorBFS ?? 0).toFixed(2)} ` +
     `(${(elapsedMs / 1000).toFixed(1)}s)`,
   );
   results.push({
@@ -205,6 +225,7 @@ for (const cell of cells) {
     mrr10: score.mrr10,
     recall10: score.recall10,
     structuralValidity: score.structuralValidity,
+    candidateSources: sources,
     elapsedMs,
   });
 }
