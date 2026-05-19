@@ -31,6 +31,7 @@
  */
 
 import { distIndex } from './_repo-root.mjs';
+import { profileAttestation } from './lib/profile-attestation.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { argv, exit } from 'node:process';
@@ -176,6 +177,7 @@ const report = {
     corpus: corpusPath,
     corpusRoot: corpus.corpusRoot,
     bundleProfile: profilePath ?? null,
+    profileAttestation: profileAttestation(profile, profilePath),
     rerankerMode: rerankerArg,
     rerankerModel: reranker.model,
     numPacks,

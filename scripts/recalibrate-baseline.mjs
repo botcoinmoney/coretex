@@ -36,6 +36,7 @@
  *   and is intentionally NOT performed here.
  */
 import { distIndex } from './_repo-root.mjs';
+import { profileAttestation } from './lib/profile-attestation.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { argv, exit, env } from 'node:process';
@@ -141,6 +142,7 @@ const report = {
     corpusRoot: corpus.corpusRoot,
     eventCount: corpus.events.length,
     bundleProfile: profilePath,
+    profileAttestation: profileAttestation(profile, profilePath),
     rerankerModel: reranker.model,
     samples,
     sampleSeedMode,

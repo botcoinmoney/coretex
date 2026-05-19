@@ -41,6 +41,7 @@
  *   2 = no cell produced a measurable gap (substrate has no lever)
  */
 import { distIndex } from './_repo-root.mjs';
+import { profileAttestation } from './lib/profile-attestation.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { argv, exit, env } from 'node:process';
@@ -354,6 +355,7 @@ const report = {
     corpusRoot: corpus.corpusRoot,
     eventCount: corpus.events.length,
     bundleProfile: profilePath ?? null,
+    profileAttestation: profileAttestation(profile, profilePath),
     rerankerMode: rerankerArg,
     rerankerModel: reranker.model,
     packSeedHex: seedHex,

@@ -48,6 +48,7 @@
  *     --out /var/lib/coretex/reports/relation-hard-family.json
  */
 import { distIndex } from './_repo-root.mjs';
+import { profileAttestation } from './lib/profile-attestation.mjs';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { argv, exit } from 'node:process';
@@ -503,7 +504,8 @@ const report = {
   fidelity: rerankerArg === 'env' ? 'PRODUCTION_RERANKER' : 'DETERMINISTIC_SMOKE',
   inputs: {
     corpus: corpusPath, corpusRoot: corpus.corpusRoot, eventCount: corpus.events.length,
-    bundleProfile: profilePath, rerankerMode: rerankerArg, rerankerModel: reranker.model,
+    bundleProfile: profilePath,
+    profileAttestation: profileAttestation(profile, profilePath), rerankerMode: rerankerArg, rerankerModel: reranker.model,
     packSize: pack.events.length, packSeedHex: seedHex, targetFamily,
     edgeTypesSpanningPack: [...relatedEdgeTypes],
     pipelineVersion: profile.pipelineVersion,
