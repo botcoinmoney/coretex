@@ -52,6 +52,19 @@ const packSize = Number(flag('pack-size', '8'));
 const rerankerArg = flag('reranker', 'deterministic');
 const reportPath = flag('out', '/var/lib/coretex/reports/min-improvement-sweep.json');
 const seedHex = flag('seed', '0x' + 'dd'.repeat(32));
+// seed-mode controls hidden-pack derivation:
+//   fixed     — one hidden pack from `seedHex` reused for every patch.
+//               Threshold-evidence regime; cache benefit is maximized.
+//   per-patch — each random/hill patch derives its own synthetic patchHash
+//               and gateSeed; each gets its OWN hiddenPack. Production-
+//               faithful (matches the live submit path's patch-bound seed)
+//               and surfaces realistic cache hit-rate.
+const seedMode = flag('seed-mode', 'fixed');
+if (seedMode !== 'fixed' && seedMode !== 'per-patch') fail(`--seed-mode must be 'fixed' or 'per-patch', got '${seedMode}'`);
+// Early-kill walltime cap (seconds). 0 = no cap. Use this to bound long
+// runs so a misconfigured sweep cannot burn an entire CPU-day.
+const maxWallSeconds = Number(flag('max-wall-seconds', '0')) || 0;
+const tWallStart = Date.now();
 
 function fail(msg, code = 1) { console.error(`[run4-minimp] ${msg}`); exit(code); }
 if (!corpusPath || !existsSync(corpusPath)) fail(`--corpus missing or not found: ${corpusPath}`);
@@ -65,6 +78,7 @@ const {
   stableRecordIdFor,
   deriveQueryPack,
   DEFAULT_PROFILE,
+  getRerankerCacheStats,
 } = await import(distIndex);
 const { buildProvenance } = await import('./calibration-provenance.mjs');
 
@@ -199,26 +213,80 @@ async function scoreSubstrate(words, pack) {
 
 // Score parent substrate once (empty for genesis; bigger configs follow).
 const EMPTY_WORDS = new Array(1024).fill(0n);
-console.error(`[run4-minimp] scoring empty parent on visible + hidden`);
+
+// Per-patch hidden-pack derivation when seed-mode=per-patch.
+// Mirrors the live submit path: a synthetic patchHash drives gateSeed,
+// which derives a distinct hidden pack via deriveQueryPack.
+function hiddenPackForPatch(salt) {
+  if (seedMode === 'fixed') return hiddenPack;
+  if (!profile.hiddenPack) throw new Error('per-patch seed-mode requires profile.hiddenPack');
+  const patchHash = '0x' + createHash('sha256').update(`${seedHex}:${salt}:patchHash`).digest('hex');
+  const gateSeed = '0x' + createHash('sha256').update(patchHash + ':gate').digest('hex');
+  return deriveQueryPack(0, gateSeed, corpus, profile.hiddenPack);
+}
+
+// Incremental artifact write — every patch's data lands on disk before
+// the next patch starts, so an early-kill or crash never throws away
+// hours of work.
+function writePartial(stage, randoms, adversarials, parentSnapshot) {
+  const partialPath = reportPath.replace(/\.json$/, '') + '.partial.json';
+  mkdirSync(dirname(partialPath), { recursive: true });
+  const cs = getRerankerCacheStats?.(reranker);
+  writeFileSync(partialPath, JSON.stringify({
+    schemaVersion: 'coretex.min-improvement-sweep.v2-partial',
+    stage,
+    seedMode,
+    elapsedSeconds: (Date.now() - tWallStart) / 1000,
+    parent: parentSnapshot,
+    randomTrials: randoms,
+    adversarialTrials: adversarials,
+    rerankerCache: cs ? { hits: cs.hits, misses: cs.misses, evictions: cs.evictions, size: cs.size(),
+      hitRate: cs.hits / Math.max(1, cs.hits + cs.misses) } : null,
+  }, null, 2));
+}
+
+function walltimeExceeded() {
+  return maxWallSeconds > 0 && (Date.now() - tWallStart) / 1000 > maxWallSeconds;
+}
+
+console.error(`[run4-minimp] seed-mode=${seedMode}; scoring empty parent on visible + ${seedMode === 'fixed' ? 'shared-hidden' : 'placeholder-hidden'}`);
 const tParent = Date.now();
 const parentVisible = await scoreSubstrate(EMPTY_WORDS, visiblePack);
-const parentHidden = await scoreSubstrate(EMPTY_WORDS, hiddenPack);
-console.log(`  empty visible composite=${parentVisible.composite.toFixed(4)}  hidden composite=${parentHidden.composite.toFixed(4)}  (${Date.now()-tParent} ms)`);
+// In fixed mode parentHidden is a single shared baseline. In per-patch
+// mode each patch derives a new pack, so parent is re-scored per patch
+// inline below (no useful shared baseline exists).
+const parentHidden = seedMode === 'fixed' ? await scoreSubstrate(EMPTY_WORDS, hiddenPack) : null;
+console.log(`  empty visible composite=${parentVisible.composite.toFixed(4)}  ` +
+  (parentHidden ? `hidden composite=${parentHidden.composite.toFixed(4)}` : `hidden=per-patch`) +
+  `  (${Date.now()-tParent} ms)`);
 
 const surfaces = ['lens', 'anchor', 'relation', 'mixed'];
+const perSurfaceTime = Object.fromEntries(surfaces.map((s) => [s, { ms: 0, count: 0 }]));
 const randomTrials = [];
 console.error(`[run4-minimp] scoring ${numPatches} random patches across surfaces...`);
 for (let i = 0; i < numPatches; i++) {
+  if (walltimeExceeded()) { console.error(`[run4-minimp] EARLY-KILL: --max-wall-seconds reached at random ${i}`); break; }
   const surface = surfaces[i % surfaces.length];
   const salt = `random:${i}`;
   const patch = randomPatch(surface, EMPTY_WORDS, salt);
   const childWords = applyPatchToWords(EMPTY_WORDS, patch);
+  const tStart = Date.now();
+  const cs0 = getRerankerCacheStats?.(reranker);
+  const baseHits = cs0?.hits ?? 0, baseMisses = cs0?.misses ?? 0;
   const childVisible = await scoreSubstrate(childWords, visiblePack);
-  const childHidden = await scoreSubstrate(childWords, hiddenPack);
+  const packForThis = hiddenPackForPatch(salt);
+  const parentForThis = seedMode === 'fixed' ? parentHidden : await scoreSubstrate(EMPTY_WORDS, packForThis);
+  const childHidden = await scoreSubstrate(childWords, packForThis);
+  const elapsedMs = Date.now() - tStart;
+  perSurfaceTime[surface].ms += elapsedMs;
+  perSurfaceTime[surface].count += 1;
   const visibleDelta = Math.round((childVisible.composite - parentVisible.composite) * 1e6);
-  const hiddenDelta = Math.round((childHidden.composite - parentHidden.composite) * 1e6);
-  randomTrials.push({ idx: i, surface, visibleDelta, hiddenDelta });
-  if ((i + 1) % 25 === 0) console.error(`  random ${i+1}/${numPatches}`);
+  const hiddenDelta = Math.round((childHidden.composite - parentForThis.composite) * 1e6);
+  const cs1 = getRerankerCacheStats?.(reranker);
+  const dh = (cs1?.hits ?? 0) - baseHits, dm = (cs1?.misses ?? 0) - baseMisses;
+  randomTrials.push({ idx: i, surface, visibleDelta, hiddenDelta, elapsedMs, cacheHits: dh, cacheMisses: dm });
+  console.error(`  random[${i}/${numPatches} surface=${surface}] visibleΔ=${visibleDelta} hiddenΔ=${hiddenDelta} elapsed=${(elapsedMs/1000).toFixed(1)}s cache_hits=${dh} cache_misses=${dm}`);
+  writePartial('random', randomTrials, [], { visibleComposite: parentVisible.composite, hiddenComposite: parentHidden?.composite ?? null });
 }
 
 // Adversarial hill-climbing: pick a starting random patch, mutate it for N steps,
@@ -226,10 +294,15 @@ for (let i = 0; i < numPatches; i++) {
 const adversarialTrials = [];
 console.error(`[run4-minimp] running ${hillSteps}-step hill-climbing × ${surfaces.length} surfaces...`);
 for (const surface of surfaces) {
+  if (walltimeExceeded()) { console.error(`[run4-minimp] EARLY-KILL: --max-wall-seconds reached before hill[${surface}]`); break; }
+  const tStart = Date.now();
+  const cs0 = getRerankerCacheStats?.(reranker);
+  const baseHits = cs0?.hits ?? 0, baseMisses = cs0?.misses ?? 0;
   let bestPatch = randomPatch(surface, EMPTY_WORDS, `adv:${surface}:0`);
   let bestWords = applyPatchToWords(EMPTY_WORDS, bestPatch);
   let bestVisible = (await scoreSubstrate(bestWords, visiblePack)).composite;
   for (let step = 1; step <= hillSteps; step++) {
+    if (walltimeExceeded()) { console.error(`[run4-minimp] EARLY-KILL: inside hill[${surface}] step ${step}`); break; }
     const candidate = randomPatch(surface, bestWords, `adv:${surface}:${step}`);
     const candidateWords = applyPatchToWords(bestWords, candidate);
     const c = (await scoreSubstrate(candidateWords, visiblePack)).composite;
@@ -240,11 +313,20 @@ for (const surface of surfaces) {
     }
   }
   // Final hidden score for the best visible patch.
-  const hidden = (await scoreSubstrate(bestWords, hiddenPack)).composite;
+  const advSalt = `adv:${surface}:final`;
+  const packForThis = hiddenPackForPatch(advSalt);
+  const parentForThis = seedMode === 'fixed' ? parentHidden : await scoreSubstrate(EMPTY_WORDS, packForThis);
+  const hidden = (await scoreSubstrate(bestWords, packForThis)).composite;
+  const elapsedMs = Date.now() - tStart;
+  perSurfaceTime[surface].ms += elapsedMs;
+  perSurfaceTime[surface].count += 1;
   const visibleDelta = Math.round((bestVisible - parentVisible.composite) * 1e6);
-  const hiddenDelta = Math.round((hidden - parentHidden.composite) * 1e6);
-  console.error(`  hill[${surface}] visibleΔ=${visibleDelta} hiddenΔ=${hiddenDelta}`);
-  adversarialTrials.push({ surface, visibleDelta, hiddenDelta });
+  const hiddenDelta = Math.round((hidden - parentForThis.composite) * 1e6);
+  const cs1 = getRerankerCacheStats?.(reranker);
+  const dh = (cs1?.hits ?? 0) - baseHits, dm = (cs1?.misses ?? 0) - baseMisses;
+  adversarialTrials.push({ surface, visibleDelta, hiddenDelta, elapsedMs, cacheHits: dh, cacheMisses: dm });
+  console.error(`  hill[${surface}] visibleΔ=${visibleDelta} hiddenΔ=${hiddenDelta} elapsed=${(elapsedMs/1000).toFixed(1)}s cache_hits=${dh} cache_misses=${dm}`);
+  writePartial('adversarial', randomTrials, adversarialTrials, { visibleComposite: parentVisible.composite, hiddenComposite: parentHidden?.composite ?? null });
 }
 
 // Production-correct classification: production accepts iff hiddenΔ ≥ T.
@@ -308,9 +390,21 @@ const report = {
            + (profile.baselineVariancePpm ?? 0),
     },
   },
-  parent: { visibleComposite: parentVisible.composite, hiddenComposite: parentHidden.composite },
+  parent: {
+    visibleComposite: parentVisible.composite,
+    hiddenComposite: parentHidden?.composite ?? null,
+    hiddenIsPerPatch: seedMode === 'per-patch',
+  },
   random: { trials: randomTrials, sweep: sweep(randomTrials) },
   adversarial: { trials: adversarialTrials, sweep: sweep(adversarialTrials) },
+  seedMode,
+  perSurfaceTime,
+  wallSeconds: (Date.now() - tWallStart) / 1000,
+  rerankerCache: (() => {
+    const cs = getRerankerCacheStats?.(reranker);
+    return cs ? { hits: cs.hits, misses: cs.misses, evictions: cs.evictions, finalSize: cs.size(),
+      hitRate: cs.hits / Math.max(1, cs.hits + cs.misses) } : null;
+  })(),
 };
 mkdirSync(dirname(reportPath), { recursive: true });
 writeFileSync(reportPath, JSON.stringify(report, null, 2));
