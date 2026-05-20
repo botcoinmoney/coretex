@@ -210,11 +210,14 @@ console.log(`[genroute] reranker: ${reranker.model} (bi-encoder: deterministic; 
 
 const eventById = new Map(corpus.events.map((e) => [e.id, e]));
 
+// Relation-bearing required only for the relation family; temporal/near_collision/
+// long_horizon are retrieval/disambiguation families judged without that gate.
+const needsRelations = targetFamily === 'multi_hop_relation';
 const candidates = corpus.events.filter((e) =>
-  e.family === targetFamily && Array.isArray(e.relations) && e.relations.length > 0 &&
+  e.family === targetFamily && (!needsRelations || (Array.isArray(e.relations) && e.relations.length > 0)) &&
   (!packSplit || e.split === packSplit),
 );
-console.log(`[genroute] target family=${targetFamily}${packSplit ? ` split=${packSplit}` : ''}; ${candidates.length} events with non-empty relations`);
+console.log(`[genroute] target family=${targetFamily}${packSplit ? ` split=${packSplit}` : ''}; ${candidates.length} candidate events`);
 if (candidates.length === 0) { console.error(`[genroute] no relation-bearing ${targetFamily} events${packSplit ? ` in split ${packSplit}` : ''}`); exit(2); }
 
 function shaIdx(s) {
