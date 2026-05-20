@@ -61,6 +61,11 @@ const targetFamily = flag('family', 'multi_hop_relation');
 // Optional comma-separated cell-name allowlist (for timing probes / subsets).
 const cellsFilter = flag('cells', '');
 const cellsAllow = cellsFilter ? new Set(cellsFilter.split(',').map((s) => s.trim())) : null;
+// Cap override (rerankerInputTopK) for the cap/lens interaction sweep.
+const capOverride = flag('cap', '') ? Number(flag('cap')) : null;
+// Split purity: restrict the query pack to one split (eval_hidden / train_visible
+// / calibration / canary). Decision claims require non-mixed packs.
+const packSplit = flag('split', '');
 
 if (!corpusPath || !existsSync(corpusPath)) { console.error('--corpus missing'); exit(1); }
 
@@ -206,10 +211,11 @@ console.log(`[genroute] reranker: ${reranker.model} (bi-encoder: deterministic; 
 const eventById = new Map(corpus.events.map((e) => [e.id, e]));
 
 const candidates = corpus.events.filter((e) =>
-  e.family === targetFamily && Array.isArray(e.relations) && e.relations.length > 0,
+  e.family === targetFamily && Array.isArray(e.relations) && e.relations.length > 0 &&
+  (!packSplit || e.split === packSplit),
 );
-console.log(`[genroute] target family=${targetFamily}; ${candidates.length} events with non-empty relations`);
-if (candidates.length === 0) { console.error(`[genroute] no relation-bearing ${targetFamily} events`); exit(2); }
+console.log(`[genroute] target family=${targetFamily}${packSplit ? ` split=${packSplit}` : ''}; ${candidates.length} events with non-empty relations`);
+if (candidates.length === 0) { console.error(`[genroute] no relation-bearing ${targetFamily} events${packSplit ? ` in split ${packSplit}` : ''}`); exit(2); }
 
 function shaIdx(s) {
   let h = 0;
@@ -414,7 +420,7 @@ const baseOpts = {
   rerankerTopK: profile.rerankerTopK ?? 10,
   retrievalKeyTopK: profile.retrievalKeyTopK ?? 50,
   firstStageTopK: profile.firstStageTopK ?? 3200,
-  rerankerInputTopK: profile.rerankerInputTopK ?? 128,
+  rerankerInputTopK: capOverride ?? profile.rerankerInputTopK ?? 128,
   lensTopK: profile.lensTopK ?? 36,
   lensWeight: profile.lensWeight ?? 0.4,
   anchorWeight: profile.anchorWeight ?? 0.6,
@@ -517,26 +523,55 @@ function aggregateSources(perQuery) {
   };
 }
 
+// ── Lens-derivation provenance (oracle vs proposer-visible) ───────────────────
+// Boundary: "proposer-visible" = data a patch proposer can know BEFORE the hidden
+// pack is selected. Using a hidden eval event's own relations/truths/qrels is
+// leakage even if those events are part of the public corpus.
+function lensDerivationFor(cell) {
+  const lv = cell.lensVectors;
+  const base = {
+    usesHiddenQueryRelations: false, usesHiddenQrels: false, usesHiddenTruthDocs: false,
+    usesProposerVisibleOnly: true, constructionInputs: [], lensDerivation: 'none',
+  };
+  if (lv === 'truth') return { ...base, lensDerivation: 'oracle:answer-region', usesHiddenTruthDocs: true, usesProposerVisibleOnly: false, constructionInputs: ['hidden pack-event truth embeddings'] };
+  if (lv === 'relation-centroid') return { ...base, lensDerivation: 'oracle:hidden-query-relations', usesHiddenQueryRelations: true, usesProposerVisibleOnly: false, constructionInputs: ['hidden pack-event derived_from relation targets', 'related-entity truth embeddings'] };
+  if (lv === 'corpus-regions') return { ...base, lensDerivation: 'proposer-visible:corpus-region-kmeans', constructionInputs: ['k-means(36) over non-hidden (train_visible+calibration+canary) truth embeddings'] };
+  if (lv === 'visible-query-targets') return { ...base, lensDerivation: 'proposer-visible:visible-query-target-kmeans', constructionInputs: ['k-means(36) over entities referenced by non-hidden queries\' relations'] };
+  if (lv === 'visible-bank') return { ...base, lensDerivation: 'proposer-visible:mixed-bank', constructionInputs: ['domain/entity-region centroids + visible-query-target clusters over non-hidden data'] };
+  if (cell.anchors && cell.anchors !== 'none') return { ...base, lensDerivation: `anchor:${cell.anchors}`, usesHiddenTruthDocs: cell.anchors === 'truth' || cell.anchors === 'answerAlias' || cell.anchors === 'both', usesProposerVisibleOnly: false, constructionInputs: [`anchor placement: ${cell.anchors}`] };
+  if (cell.categoryLenses) return { ...base, lensDerivation: 'edgeType-marker', constructionInputs: ['category-lens edgeType markers (no semantic vector)'] };
+  return base;
+}
+
 const activeCells = cellsAllow ? cells.filter((c) => cellsAllow.has(c.name)) : cells;
 if (cellsAllow) console.log(`[genroute] cell filter active: running ${activeCells.length}/${cells.length} cells`);
 
+// Cap/lens interaction sweep: --caps 128,256,512,1024 runs the cell set at each
+// cap IN ONE PROCESS so the reranker LRU cache is shared (the largest cap's pairs
+// subsume the smaller caps -> only ~maxCap×queries unique scorings total).
+const capList = flag('caps', '') ? flag('caps').split(',').map((s) => Number(s.trim())) : [null];
 const results = [];
-for (const cell of activeCells) {
+for (const capForRun of capList) {
+ if (capForRun) console.log(`[genroute] ── cap=${capForRun} ──`);
+ for (const cell of activeCells) {
   const tStart = Date.now();
   const state = buildState(cell);
   const opts = optsFor(cell);
+  if (capForRun) opts.rerankerInputTopK = capForRun;
   const score = await evaluateRetrievalBenchmarkState(state, corpus, pack, opts);
   const elapsedMs = Date.now() - tStart;
   const sources = aggregateSources(score.perQuery ?? []);
   console.log(
-    `  [${cell.family}] ${cell.name.padEnd(34)} composite=${score.composite.toFixed(4)} ` +
-    `nDCG=${score.nDCG10.toFixed(3)} R=${score.recall10.toFixed(3)} multiHop=${score.multiHopRecall10.toFixed(3)} ` +
-    `anchors=${state.anchorsPlaced} lenses=${state.lensesWritten} edges=${state.edgesWritten} ` +
+    `  [cap=${String(opts.rerankerInputTopK).padStart(4)}] [${cell.family}] ${cell.name.padEnd(30)} composite=${score.composite.toFixed(4)} ` +
+    `nDCG=${score.nDCG10.toFixed(3)} R=${score.recall10.toFixed(3)} ` +
     `relViaPhaseBOnly=${sources.relevantTop10ViaPhaseBOnly} ` +
     `hardNegCatLens=${sources.hardNegativeTop20.count.categoryLensBFS} (${(elapsedMs / 1000).toFixed(1)}s)`,
   );
   results.push({
     family: cell.family, cell: cell.name, cellConfig: cell,
+    cap: opts.rerankerInputTopK,
+    lensDerivation: lensDerivationFor(cell),
+    rerankerInputTopK: opts.rerankerInputTopK,
     opts: {
       relationExpansionBudget: opts.relationExpansionBudget,
       categoryLensExpansionBudget: opts.categoryLensExpansionBudget,
@@ -552,9 +587,13 @@ for (const cell of activeCells) {
     substrate: { anchorsPlaced: state.anchorsPlaced, edgesWritten: state.edgesWritten, lensesWritten: state.lensesWritten },
     elapsedMs,
   });
+ }
 }
 
-const c = (n) => results.find((r) => r.cell === n)?.composite ?? null;
+// Decision helpers resolve against the FIRST cap in the list (default cap) so the
+// legacy decision block stays well-defined under a multi-cap sweep.
+const firstCap = results[0]?.cap;
+const c = (n) => results.find((r) => r.cell === n && r.cap === firstCap)?.composite ?? null;
 const viaPhaseB = (n) => results.find((r) => r.cell === n)?.candidateSources.relevantTop10ViaPhaseBOnly ?? null;
 const hardNegCatLens = (n) => results.find((r) => r.cell === n)?.candidateSources.hardNegativeTop20.count.categoryLensBFS ?? null;
 
@@ -640,9 +679,12 @@ const report = {
     profileAttestation: profileAttestation(profile, profilePath),
     rerankerMode: rerankerArg, rerankerModel: reranker.model,
     packSize: pack.events.length, packSeedHex: seedHex, targetFamily,
+    packSplitFilter: packSplit || 'mixed',
+    packSplitComposition: pack.events.reduce((m, e) => { m[e.split] = (m[e.split] ?? 0) + 1; return m; }, {}),
     edgeTypesSpanningPack: [...relatedEdgeTypes],
     pipelineVersion: profile.pipelineVersion,
     rerankerInputTopK: baseOpts.rerankerInputTopK, firstStageTopK: baseOpts.firstStageTopK,
+    capOverride: capOverride ?? null,
     lensWeight: baseOpts.lensWeight, anchorWeight: baseOpts.anchorWeight,
   },
   results,
