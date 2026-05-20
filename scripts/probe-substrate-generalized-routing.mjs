@@ -466,6 +466,7 @@ const cells = [
   // ── baseline ───────────────────────────────────────────────────────────
   { family: 'baseline', name: 'empty',                  anchors: 'none' },
   { family: 'baseline', name: 'stage1-only',            anchors: 'none' }, // alias of empty; explicit reference point
+  { family: 'baseline', name: 'stage1-no-temporal',     anchors: 'none', noTemporal: true }, // same pool, temporal OFF (vs stage1-only=ON for temporal queries)
   { family: 'baseline', name: 'anchor-on-truth',        anchors: 'truth' },
   { family: 'baseline', name: 'anchor-on-truth-no-temporal', anchors: 'truth', noTemporal: true },
   { family: 'baseline', name: 'anchor-on-answer-alias', anchors: 'answerAlias' },
@@ -476,6 +477,7 @@ const cells = [
   { family: 'anchor-scarcity', name: 'anchor-budget-8',  anchors: 'truth', anchorBudget: 8 },
   { family: 'anchor-scarcity', name: 'anchor-budget-full', anchors: 'truth' },
   { family: 'anchor-scarcity', name: 'anchor-both',      anchors: 'both' },
+  { family: 'anchor-scarcity', name: 'anchor-both-no-temporal', anchors: 'both', noTemporal: true },
   { family: 'anchor-scarcity', name: 'anchor-both+rels', anchors: 'both', relations: true },
   // ── generalized-routing ────────────────────────────────────────────────
   // The cells below can ONLY beat stage1-only via non-anchor routing.
