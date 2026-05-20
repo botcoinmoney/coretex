@@ -48,6 +48,19 @@ for (const ev of corpus.events) {
 const docIndexById = new Map(docs.map((d, i) => [d.id, i]));
 console.log(`[teacher] doc table: ${docs.length} docs`);
 
+// ── Corpus relation graph (proposer-visible) + per-event truth docs ───────────
+// forward: eventId -> [related eventIds]; inverse: eventId -> [events pointing here]
+const eventById = new Map(corpus.events.map((e) => [e.id, e]));
+const fwdAdj = new Map(), invAdj = new Map();
+for (const ev of corpus.events) {
+  for (const rel of ev.relations ?? []) {
+    if (!fwdAdj.has(ev.id)) fwdAdj.set(ev.id, []); fwdAdj.get(ev.id).push(rel.other_id);
+    if (!invAdj.has(rel.other_id)) invAdj.set(rel.other_id, []); invAdj.get(rel.other_id).push(ev.id);
+  }
+}
+function eventTruthDocIds(eid) { const ev = eventById.get(eid); if (!ev) return []; return ev.truthDocuments.map((t) => t.id); }
+const layerArg = flag('layer', 'fusion');
+
 // ── BM25 index over doc texts (proposer-visible) ──────────────────────────────
 function tokenize(s) { return String(s).toLowerCase().match(/[a-z0-9$]+/g) ?? []; }
 const N = docs.length;
@@ -116,11 +129,46 @@ for (const q of pack) {
     row.recall[K] = { dense: +rd.toFixed(3), bm25: +rb.toFixed(3), rrf: +rr.toFixed(3) };
     agg.dense[K] += rd; agg.bm25[K] += rb; agg.rrf[K] += rr;
   }
+  // LAYER 2 — relation-graph expansion (proposer-visible). Seed from the top-M
+  // fused docs; follow the corpus relation graph (fwd+inv, EXCLUDING the query
+  // event's own relations = forbidden) to gather related events' truth docs.
+  // Does traversal from RETRIEVED seeds reach the answer that retrieval missed?
+  if (layerArg === 'graph') {
+    const SEED_M = 64, HOPS = Number(flag('hops', '2'));
+    const fused128 = new Set(rrfOrder.slice(0, 128));
+    const seedEvents = [...new Set(rrfOrder.slice(0, SEED_M).map((id) => docs[docIndexById.get(id)].eventId))].filter((eid) => eid !== q.id);
+    const visited = new Set(seedEvents);
+    let frontier = [...seedEvents];
+    const graphDocs = new Set();
+    for (let h = 0; h < HOPS; h++) {
+      const next = [];
+      for (const eid of frontier) {
+        for (const nbr of [...(fwdAdj.get(eid) ?? []), ...(invAdj.get(eid) ?? [])]) {
+          if (visited.has(nbr) || nbr === q.id) continue; // never traverse INTO the query event
+          visited.add(nbr); next.push(nbr);
+          for (const did of eventTruthDocIds(nbr)) graphDocs.add(did);
+        }
+      }
+      frontier = next;
+    }
+    const augUnion = new Set([...fused128, ...graphDocs]);
+    let hitFused = 0, hitAug = 0, hitGraphOnly = 0;
+    for (const rid of relevant) { if (fused128.has(rid)) hitFused++; if (augUnion.has(rid)) hitAug++; if (graphDocs.has(rid) && !fused128.has(rid)) hitGraphOnly++; }
+    const denom = relevant.size || 1;
+    row.graph = { seedEvents: seedEvents.length, graphDocs: graphDocs.size, recallFused128: +(hitFused/denom).toFixed(3), recallGraphAug: +(hitAug/denom).toFixed(3), graphOnlyHits: hitGraphOnly };
+    agg.graphFused = (agg.graphFused ?? 0) + hitFused/denom;
+    agg.graphAug = (agg.graphAug ?? 0) + hitAug/denom;
+    agg.graphOnly = (agg.graphOnly ?? 0) + hitGraphOnly;
+  }
   perQuery.push(row);
 }
 const np = pack.length;
 console.log(`[teacher] LAYER 1 (dense / bm25 / RRF) — recall@K averaged over ${np} queries:`);
 for (const K of Ks) console.log(`  @${String(K).padStart(4)}  dense=${(agg.dense[K]/np).toFixed(3)}  bm25=${(agg.bm25[K]/np).toFixed(3)}  rrf=${(agg.rrf[K]/np).toFixed(3)}`);
+if (layerArg === 'graph') {
+  console.log(`[teacher] LAYER 2 (relation-graph expansion from top-64 fused seeds, ${flag('hops','2')} hops, query-event excluded):`);
+  console.log(`  recall@128 fused-only=${(agg.graphFused/np).toFixed(3)}  fused+graph=${(agg.graphAug/np).toFixed(3)}  graph-only marginal hits=${(agg.graphOnly/np).toFixed(2)}/query`);
+}
 
 const report = {
   schemaVersion: 'coretex.teacher-retriever.v1', generatedAt: new Date().toISOString(),
