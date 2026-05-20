@@ -111,6 +111,87 @@ function quantizeVec(vec) {
   return out;
 }
 
+// MINER-FEASIBLE lens construction: cosine k-means region centroids over the
+// NON-HIDDEN corpus (train_visible + calibration + canary). Uses ONLY data a
+// patch proposer can know — no eval_hidden events, no per-query relations, no
+// qrels, no hidden truths. Fixed ≤k centroids cover the corpus's answer regions;
+// whichever hidden query arrives, its answer is surfaced iff it falls in a
+// covered region. Cached (deterministic init + fixed iters).
+function kmeansCentroids(vecs, k, iters = 12) {
+  const norm = (v) => { let s = 0; for (const x of v) s += x * x; s = Math.sqrt(s) || 1; for (let i = 0; i < v.length; i++) v[i] /= s; return v; };
+  const n = vecs.length;
+  if (n === 0) return [];
+  const kk = Math.min(k, n);
+  const step = Math.max(1, Math.floor(n / kk));
+  let cent = [];
+  for (let i = 0; i < kk; i++) cent.push(norm(Float64Array.from(vecs[Math.min(i * step, n - 1)])));
+  for (let iter = 0; iter < iters; iter++) {
+    const sums = cent.map(() => new Float64Array(LAYOUT.dim));
+    const cnt = new Array(cent.length).fill(0);
+    for (const v of vecs) {
+      let bi = 0, bc = -2;
+      for (let c = 0; c < cent.length; c++) { let d = 0; const cc = cent[c]; for (let i = 0; i < v.length; i++) d += v[i] * cc[i]; if (d > bc) { bc = d; bi = c; } }
+      const s = sums[bi]; for (let i = 0; i < v.length; i++) s[i] += v[i]; cnt[bi]++;
+    }
+    for (let c = 0; c < cent.length; c++) if (cnt[c] > 0) cent[c] = norm(sums[c]);
+  }
+  return cent;
+}
+// MINER-FEASIBLE variant 2: lens the entity regions that NON-HIDDEN queries
+// reference via their relations (visible query -> derived_from -> entity is
+// allowed). Tests whether visible query patterns predict eval-query targets.
+let _visTargetCentroids = null;
+function getVisibleQueryTargetCentroids(k = 36) {
+  if (_visTargetCentroids) return _visTargetCentroids;
+  const seen = new Set();
+  const vecs = [];
+  for (const ev of corpus.events) {
+    if (ev.split === 'eval_hidden') continue; // miner cannot see hidden queries
+    for (const rel of ev.relations ?? []) {
+      const tgt = eventById.get(rel.other_id);
+      if (!tgt || seen.has(tgt.id)) continue;
+      seen.add(tgt.id);
+      const t = tgt.truthDocuments.find((x) => x.isCurrent) ?? tgt.truthDocuments[0];
+      const b = t && tgt.embeddings.perTruth.get(t.id);
+      if (b) vecs.push(dequantize(b, LAYOUT));
+    }
+  }
+  const cents = kmeansCentroids(vecs, k);
+  console.log(`[genroute] miner-feasible visible-query-target lens: ${cents.length} centroids over ${vecs.length} visible-referenced entities`);
+  _visTargetCentroids = cents;
+  return cents;
+}
+let _regionCentroids = null;
+function getRegionCentroids(k = 36) {
+  if (_regionCentroids) return _regionCentroids;
+  const vecs = [];
+  for (const ev of corpus.events) {
+    if (ev.split === 'eval_hidden') continue; // forbidden to the miner
+    const t = ev.truthDocuments.find((x) => x.isCurrent) ?? ev.truthDocuments[0];
+    const b = t && ev.embeddings.perTruth.get(t.id);
+    if (b) vecs.push(dequantize(b, LAYOUT));
+  }
+  const norm = (v) => { let s = 0; for (const x of v) s += x * x; s = Math.sqrt(s) || 1; for (let i = 0; i < v.length; i++) v[i] /= s; return v; };
+  const n = vecs.length;
+  const kk = Math.min(k, n);
+  const step = Math.max(1, Math.floor(n / kk));
+  let cent = [];
+  for (let i = 0; i < kk; i++) cent.push(norm(Float64Array.from(vecs[Math.min(i * step, n - 1)])));
+  for (let iter = 0; iter < 12; iter++) {
+    const sums = cent.map(() => new Float64Array(LAYOUT.dim));
+    const cnt = new Array(cent.length).fill(0);
+    for (const v of vecs) {
+      let bi = 0, bc = -2;
+      for (let c = 0; c < cent.length; c++) { let d = 0; const cc = cent[c]; for (let i = 0; i < v.length; i++) d += v[i] * cc[i]; if (d > bc) { bc = d; bi = c; } }
+      const s = sums[bi]; for (let i = 0; i < v.length; i++) s[i] += v[i]; cnt[bi]++;
+    }
+    for (let c = 0; c < cent.length; c++) if (cnt[c] > 0) cent[c] = norm(sums[c]);
+  }
+  console.log(`[genroute] miner-feasible region lens: k-means ${cent.length} centroids over ${n} non-hidden docs`);
+  _regionCentroids = cent;
+  return cent;
+}
+
 // The scorer reads the query vector from the corpus's stored embedding
 // (query.embeddings.query) and runs stage-1 over the corpus's pre-baked real
 // BGE-M3 doc embeddings — opts.biEncoder.encode() is never called. So the
@@ -268,7 +349,19 @@ function buildState(cell) {
   // legitimate lens CONSTRUCTION (deriving such vectors without truth bookmark)
   // is the follow-on once the mechanism is shown corpus-viable.
   let lensVectorsWritten = 0;
-  if (cell.lensVectors) {
+  if (cell.lensVectors === 'corpus-regions' || cell.lensVectors === 'visible-query-targets') {
+    // MINER-FEASIBLE: fixed centroids from non-hidden data; no pack info.
+    const cents = cell.lensVectors === 'visible-query-targets' ? getVisibleQueryTargetCentroids(36) : getRegionCentroids(36);
+    for (let i = 0; i < cents.length && i < 36; i++) {
+      const kw = encodeRetrievalKeySlot(
+        { slotIndex: i, modelIdHash: biEncoderHash, l2Norm: 1.0, versionTag: 1, quantizedBytes: quantizeVec(cents[i]) },
+        { retrievalKeyHeaderBytes: LAYOUT.headerBytes },
+      );
+      const base = RANGES.RETRIEVAL_KEYS_START + i * 8;
+      for (let j = 0; j < 8; j++) words[base + j] = kw[j];
+      lensVectorsWritten++;
+    }
+  } else if (cell.lensVectors) {
     const n = Math.min(pack.events.length, 36);
     for (let i = 0; i < n; i++) {
       const ev = pack.events[i];
@@ -375,6 +468,8 @@ const cells = [
   { family: 'generalized-routing', name: 'lens-only',                anchors: 'none',       categoryLenses: true },
   { family: 'generalized-routing', name: 'lens-answer-region',       anchors: 'none',       lensVectors: 'truth' },
   { family: 'generalized-routing', name: 'lens-relation-centroid',   anchors: 'none',       lensVectors: 'relation-centroid' },
+  { family: 'generalized-routing', name: 'lens-corpus-regions',      anchors: 'none',       lensVectors: 'corpus-regions' },
+  { family: 'generalized-routing', name: 'lens-visible-query-targets', anchors: 'none',     lensVectors: 'visible-query-targets' },
   { family: 'generalized-routing', name: 'lens+non-answer-anchors',  anchors: 'irrelevant', categoryLenses: true },
   { family: 'generalized-routing', name: 'phaseA-rels-no-answer-anchor', anchors: 'irrelevant', relations: true },
   { family: 'generalized-routing', name: 'selective-phaseB-fwd-budget-1', anchors: 'none', categoryLenses: true, traversalDirection: 'forward', categoryLensExpansionBudget: 1 },
