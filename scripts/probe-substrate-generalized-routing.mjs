@@ -233,7 +233,7 @@ console.log(`[genroute] pack size=${pack.events.length}`);
 // Per-pack-event related ("answer-alias") set + spanning edgeTypes.
 const relatedByPackIndex = pack.events.map((ev) => {
   const related = [];
-  for (const rel of ev.relations) {
+  for (const rel of ev.relations ?? []) {
     const tgt = eventById.get(rel.other_id);
     if (tgt && tgt.id !== ev.id) related.push({ event: tgt, edgeType: rel.edgeType });
   }
@@ -452,6 +452,10 @@ function optsFor(cell) {
   if (cell.traversalDirection !== undefined) o.categoryLensTraversalDirection = cell.traversalDirection;
   if (cell.bonusEnabled !== undefined) o.categoryLensBonusEnabled = cell.bonusEnabled;
   if (cell.bonusWeight !== undefined) o.categoryLensBonusWeight = cell.bonusWeight;
+  // Temporal-boost A/B isolation: noTemporal zeroes the current-boost / stale-
+  // suppression so anchor-on-truth-no-temporal vs anchor-on-truth isolates how
+  // much of the lift is the TEMPORAL component vs raw anchoring (rule 2).
+  if (cell.noTemporal) { o.temporalCurrentBoost = 0; o.temporalStaleSuppression = 0; }
   return o;
 }
 
@@ -463,6 +467,7 @@ const cells = [
   { family: 'baseline', name: 'empty',                  anchors: 'none' },
   { family: 'baseline', name: 'stage1-only',            anchors: 'none' }, // alias of empty; explicit reference point
   { family: 'baseline', name: 'anchor-on-truth',        anchors: 'truth' },
+  { family: 'baseline', name: 'anchor-on-truth-no-temporal', anchors: 'truth', noTemporal: true },
   { family: 'baseline', name: 'anchor-on-answer-alias', anchors: 'answerAlias' },
   { family: 'baseline', name: 'anchor-on-irrelevant',   anchors: 'irrelevant' },
   // ── anchor-scarcity ────────────────────────────────────────────────────
