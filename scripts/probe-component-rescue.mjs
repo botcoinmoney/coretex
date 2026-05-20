@@ -436,7 +436,66 @@ async function probeSelectivePhaseB() {
   };
 }
 
-const PROBES = { lens: probeLens, temporal: probeTemporal, phaseA: probePhaseA, 'selective-phaseB': probeSelectivePhaseB };
+// ════════════════════════════════════════════════════════════════════════════
+// COMPONENT: lens REGION generalization (the anti-bookmark test)
+// ONE lens vector at a cluster CENTROID (not equal to any exact truth) must
+// surface MANY clustered truths. If one substrate slot promotes N>1 truths, the
+// substrate generalizes past the 44-anchor bookmark cap — the core thesis.
+// Build: N truths near a centroid C (cos(truth,C)~0.99) but each query-orthogonal
+// (stage-1 buries them); M distractors with modest query-cosine fill the small
+// cap. Write a SINGLE lens vector = C (no anchors). Success: >=2 truths reach
+// top-10 via non-anchor lensBonus that were NOT there without the lens.
+// ════════════════════════════════════════════════════════════════════════════
+async function probeLensRegion() {
+  const qDir = dir('lensregion:query');
+  const C = dir('lensregion:centroid'); // ~orthogonal to query; NOT any exact truth
+  const N = 4;
+  const truths = [];
+  for (let i = 0; i < N; i++) {
+    const tv = combine([{ v: C, w: 0.95 }, { v: dir('lensregion:t' + i), w: 0.16 }]); // near C, distinct, query-far
+    truths.push({ id: `rescue:lensregion:t${i}::truth`, text: `Member ${i} of the target topic cluster: a relevant fact about subentity ${i}.`, vec: tv, relevance: 1 });
+  }
+  const negs = [];
+  for (let i = 0; i < 20; i++) {
+    // 20 distractors with higher query-cosine than the truths -> without a lens
+    // they fill the cap AND outrank the (query-orthogonal) truths, burying them
+    // well below top-10. The single centroid lens must rescue all N truths.
+    const v = combine([{ v: qDir, w: 0.3 }, { v: dir('lensregion:neg' + i), w: 0.95 }]);
+    negs.push({ id: `rescue:lensregion:neg${i}`, text: `Off-topic distractor ${i}.`, vec: v, relevance: 0 });
+  }
+  const ev = mkEvent({ id: 'rescue:lensregion:q', queryText: 'List the members of the target topic cluster.', queryVec: qDir, truths, negs });
+  const corpus = mkCorpus([ev]);
+  await getReranker();
+  const geom = { 'cos(query,centroid)': +cos(qDir, C).toFixed(3), 'cos(truth0,centroid)': +cos(truths[0].vec, C).toFixed(3), 'cos(truth0,truth1)': +cos(truths[0].vec, truths[1].vec).toFixed(3) };
+  // cap small so distractors would fill it; ONE lens at the centroid.
+  const opts = baseOpts({ rerankerInputTopK: 5 });
+  const off = await score(emptyWords(), corpus, ev, opts);
+  const wOn = emptyWords(); writeRetrievalKey(wOn, 0, C); // single lens vector = centroid
+  const on = await score(wOn, corpus, ev, opts);
+  const truthsInTop10 = (pq) => (pq?.finalRankingTop20 ?? []).filter((r) => r.rank <= 10 && r.relevance > 0 && !(r.sources ?? []).includes('anchorMandatory'));
+  const offT = truthsInTop10(off.perQuery), onT = truthsInTop10(on.perQuery);
+  const onWithLensBonus = onT.filter((r) => r.lensBonus > 0);
+  const promotedCount = onT.length - offT.length;
+  const pass = onWithLensBonus.length >= 2 && promotedCount >= 1 && on.composite > off.composite + 1e-9;
+  return {
+    component: 'lens-region', pass, mechanismPass: pass, geom,
+    layerCheck: {
+      corpusPathExists: true,
+      decoderEmitsLens: onWithLensBonus.length > 0,
+      poolIncludesAnswerViaSource: onT.length > offT.length,
+      rerankerRanksIt: onT.length >= 2,
+      metricCredits: on.composite > off.composite + 1e-9,
+    },
+    detail: {
+      singleLensVectors: 1, clusterTruths: N,
+      off_truthsInTop10: offT.length, on_truthsInTop10: onT.length, on_truthsViaLensBonus: onWithLensBonus.length,
+      composite_off: +off.composite.toFixed(4), composite_on: +on.composite.toFixed(4),
+      note: 'one centroid lens surfacing >=2 distinct truths = generalization past per-anchor bookmarking',
+    },
+  };
+}
+
+const PROBES = { lens: probeLens, temporal: probeTemporal, phaseA: probePhaseA, 'selective-phaseB': probeSelectivePhaseB, 'lens-region': probeLensRegion };
 
 const components = componentArg === 'all' ? Object.keys(PROBES) : [componentArg];
 const results = [];
