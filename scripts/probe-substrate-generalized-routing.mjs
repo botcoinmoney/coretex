@@ -68,6 +68,7 @@ const {
   loadProductionCorpus,
   evaluateRetrievalBenchmarkState,
   biEncoderModelIdHash,
+  dequantize,
   createDeterministicBiEncoder,
   createDeterministicReranker,
   rerankerFromEnv,
@@ -91,6 +92,24 @@ const profile = profilePath && existsSync(profilePath)
 const BI = { modelId: corpus.biEncoderModelId, revision: corpus.biEncoderRevision, mode: 'dense' };
 const LAYOUT = corpus.biEncoderRetrievalKeyLayout;
 const biEncoderHash = biEncoderModelIdHash(BI.modelId, BI.revision, BI.mode);
+
+// Quantize a float vector to the corpus int8 byte format: [f32 BE scale][codes].
+// Used to write DERIVED lens vectors (e.g. relation-cluster centroids) into the
+// substrate RetrievalKeys region for lens-construction experiments.
+function quantizeVec(vec) {
+  const dim = LAYOUT.dim;
+  let maxAbs = 0;
+  for (const x of vec) maxAbs = Math.max(maxAbs, Math.abs(x));
+  const scale = maxAbs > 0 ? maxAbs / 127 : 1;
+  const out = new Uint8Array(4 + dim);
+  new DataView(out.buffer).setFloat32(0, scale, false);
+  for (let i = 0; i < dim; i++) {
+    let c = Math.round((vec[i] ?? 0) / scale);
+    c = Math.max(-127, Math.min(127, c));
+    out[4 + i] = c & 0xff;
+  }
+  return out;
+}
 
 // The scorer reads the query vector from the corpus's stored embedding
 // (query.embeddings.query) and runs stage-1 over the corpus's pre-baked real
@@ -249,15 +268,41 @@ function buildState(cell) {
   // legitimate lens CONSTRUCTION (deriving such vectors without truth bookmark)
   // is the follow-on once the mechanism is shown corpus-viable.
   let lensVectorsWritten = 0;
-  if (cell.lensVectors === 'truth') {
+  if (cell.lensVectors) {
     const n = Math.min(pack.events.length, 36);
     for (let i = 0; i < n; i++) {
       const ev = pack.events[i];
-      const truth = ev.truthDocuments.find((t) => t.isCurrent) ?? ev.truthDocuments[0];
-      const emb = truth && ev.embeddings.perTruth.get(truth.id);
-      if (!emb) continue;
+      let embBytes = null;
+      if (cell.lensVectors === 'truth') {
+        // Idealized answer-region lens = the event's own truth embedding
+        // (bookmark-equivalent; tests the mechanism + cap bottleneck).
+        const truth = ev.truthDocuments.find((t) => t.isCurrent) ?? ev.truthDocuments[0];
+        embBytes = (truth && ev.embeddings.perTruth.get(truth.id)) || null;
+      } else if (cell.lensVectors === 'relation-centroid') {
+        // GRAPH-DERIVED lens = renormalized centroid of the event's related
+        // (derived_from) entities' truth embeddings — NOT the event's own truth.
+        // Tests whether a legitimately-derivable lens (no exact-truth bookmark)
+        // surfaces the answer. relatedByPackIndex[i] = [{event, edgeType}].
+        const related = relatedByPackIndex[i] ?? [];
+        const acc = new Float64Array(LAYOUT.dim);
+        let cnt = 0;
+        for (const r of related) {
+          const rt = r.event.truthDocuments.find((t) => t.isCurrent) ?? r.event.truthDocuments[0];
+          const rb = rt && r.event.embeddings.perTruth.get(rt.id);
+          if (!rb) continue;
+          const fv = dequantize(rb, LAYOUT);
+          for (let k = 0; k < LAYOUT.dim; k++) acc[k] += fv[k];
+          cnt++;
+        }
+        if (cnt > 0) {
+          let nrm = 0; for (const x of acc) nrm += x * x; nrm = Math.sqrt(nrm) || 1;
+          for (let k = 0; k < acc.length; k++) acc[k] /= nrm;
+          embBytes = quantizeVec(acc);
+        }
+      }
+      if (!embBytes) continue;
       const kw = encodeRetrievalKeySlot(
-        { slotIndex: i, modelIdHash: biEncoderHash, l2Norm: 1.0, versionTag: 1, quantizedBytes: emb },
+        { slotIndex: i, modelIdHash: biEncoderHash, l2Norm: 1.0, versionTag: 1, quantizedBytes: embBytes },
         { retrievalKeyHeaderBytes: LAYOUT.headerBytes },
       );
       const base = RANGES.RETRIEVAL_KEYS_START + i * 8;
@@ -329,6 +374,7 @@ const cells = [
   // The cells below can ONLY beat stage1-only via non-anchor routing.
   { family: 'generalized-routing', name: 'lens-only',                anchors: 'none',       categoryLenses: true },
   { family: 'generalized-routing', name: 'lens-answer-region',       anchors: 'none',       lensVectors: 'truth' },
+  { family: 'generalized-routing', name: 'lens-relation-centroid',   anchors: 'none',       lensVectors: 'relation-centroid' },
   { family: 'generalized-routing', name: 'lens+non-answer-anchors',  anchors: 'irrelevant', categoryLenses: true },
   { family: 'generalized-routing', name: 'phaseA-rels-no-answer-anchor', anchors: 'irrelevant', relations: true },
   { family: 'generalized-routing', name: 'selective-phaseB-fwd-budget-1', anchors: 'none', categoryLenses: true, traversalDirection: 'forward', categoryLensExpansionBudget: 1 },
