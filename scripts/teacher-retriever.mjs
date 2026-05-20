@@ -88,7 +88,9 @@ function bm25Scores(queryTerms) {
 
 // ── Query pack (split-pure) ───────────────────────────────────────────────────
 function shaIdx(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffffffff; return h >>> 0; }
-const cands = corpus.events.filter((e) => e.family === targetFamily && Array.isArray(e.relations) && e.relations.length > 0 && (!packSplit || e.split === packSplit));
+// Require relations only for the relation family; other families are judged on retrieval alone.
+const needsRel = targetFamily === 'multi_hop_relation';
+const cands = corpus.events.filter((e) => e.family === targetFamily && (!needsRel || (Array.isArray(e.relations) && e.relations.length > 0)) && (!packSplit || e.split === packSplit));
 const pack = cands.map((e) => ({ e, s: shaIdx(seedHex + ':' + e.id) })).sort((a, b) => a.s - b.s).slice(0, packSize).map((x) => x.e);
 console.log(`[teacher] pack=${pack.length} (split=${packSplit || 'mixed'} family=${targetFamily})`);
 if (pack.length === 0) { console.error('empty pack'); exit(2); }
