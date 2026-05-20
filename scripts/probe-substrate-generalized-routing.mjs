@@ -72,6 +72,7 @@ const {
   createDeterministicReranker,
   rerankerFromEnv,
   encodeMemoryIndexSlot,
+  encodeRetrievalKeySlot,
   encodeRelationEdge,
   encodeRelationCategoryLens,
   stableRecordIdFor,
@@ -237,7 +238,34 @@ function buildState(cell) {
       if (entry < 8) break;
     }
   }
-  return { words, slotAssignments: assignments, anchorsPlaced, edgesWritten, lensesWritten };
+  // Semantic lens VECTORS (RetrievalKeys) — distinct from category-lens edgeType
+  // markers above. cell.lensVectors='truth' writes the pack events' answer-region
+  // (truth) embeddings as lens vectors. The scorer's lensBonus (lensWeight ×
+  // max cos(doc, lens)) then PROMOTES a stage-1-retrieved-but-cap-excluded truth
+  // into the reranker view + lifts its final rank — WITHOUT anchoring it
+  // (source stays 'stage1', never 'anchorMandatory'). This exercises the lens
+  // reweight path the historical matrix never wrote vectors for. Idealized
+  // (lens == truth region) to test mechanism viability on the real corpus;
+  // legitimate lens CONSTRUCTION (deriving such vectors without truth bookmark)
+  // is the follow-on once the mechanism is shown corpus-viable.
+  let lensVectorsWritten = 0;
+  if (cell.lensVectors === 'truth') {
+    const n = Math.min(pack.events.length, 36);
+    for (let i = 0; i < n; i++) {
+      const ev = pack.events[i];
+      const truth = ev.truthDocuments.find((t) => t.isCurrent) ?? ev.truthDocuments[0];
+      const emb = truth && ev.embeddings.perTruth.get(truth.id);
+      if (!emb) continue;
+      const kw = encodeRetrievalKeySlot(
+        { slotIndex: i, modelIdHash: biEncoderHash, l2Norm: 1.0, versionTag: 1, quantizedBytes: emb },
+        { retrievalKeyHeaderBytes: LAYOUT.headerBytes },
+      );
+      const base = RANGES.RETRIEVAL_KEYS_START + i * 8;
+      for (let j = 0; j < 8; j++) words[base + j] = kw[j];
+      lensVectorsWritten++;
+    }
+  }
+  return { words, slotAssignments: assignments, anchorsPlaced, edgesWritten, lensesWritten, lensVectorsWritten };
 }
 
 const baseOpts = {
@@ -300,6 +328,7 @@ const cells = [
   // ── generalized-routing ────────────────────────────────────────────────
   // The cells below can ONLY beat stage1-only via non-anchor routing.
   { family: 'generalized-routing', name: 'lens-only',                anchors: 'none',       categoryLenses: true },
+  { family: 'generalized-routing', name: 'lens-answer-region',       anchors: 'none',       lensVectors: 'truth' },
   { family: 'generalized-routing', name: 'lens+non-answer-anchors',  anchors: 'irrelevant', categoryLenses: true },
   { family: 'generalized-routing', name: 'phaseA-rels-no-answer-anchor', anchors: 'irrelevant', relations: true },
   { family: 'generalized-routing', name: 'selective-phaseB-fwd-budget-1', anchors: 'none', categoryLenses: true, traversalDirection: 'forward', categoryLensExpansionBudget: 1 },
