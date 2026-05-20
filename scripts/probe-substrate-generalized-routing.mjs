@@ -58,6 +58,9 @@ const rerankerArg = flag('reranker', 'deterministic');
 const reportPath = flag('out', '/var/lib/coretex/reports/substrate-generalized-routing.json');
 const seedHex = flag('seed', '0x' + 'c7'.repeat(32));
 const targetFamily = flag('family', 'multi_hop_relation');
+// Optional comma-separated cell-name allowlist (for timing probes / subsets).
+const cellsFilter = flag('cells', '');
+const cellsAllow = cellsFilter ? new Set(cellsFilter.split(',').map((s) => s.trim())) : null;
 
 if (!corpusPath || !existsSync(corpusPath)) { console.error('--corpus missing'); exit(1); }
 
@@ -68,7 +71,6 @@ const {
   createDeterministicBiEncoder,
   createDeterministicReranker,
   rerankerFromEnv,
-  biEncoderFromEnv,
   encodeMemoryIndexSlot,
   encodeRelationEdge,
   encodeRelationCategoryLens,
@@ -89,15 +91,16 @@ const BI = { modelId: corpus.biEncoderModelId, revision: corpus.biEncoderRevisio
 const LAYOUT = corpus.biEncoderRetrievalKeyLayout;
 const biEncoderHash = biEncoderModelIdHash(BI.modelId, BI.revision, BI.mode);
 
-let reranker, biEncoder;
-if (rerankerArg === 'env') {
-  reranker = await rerankerFromEnv();
-  biEncoder = biEncoderFromEnv(LAYOUT, { modelId: BI.modelId, revision: BI.revision });
-} else {
-  reranker = await createDeterministicReranker();
-  biEncoder = createDeterministicBiEncoder({ modelId: BI.modelId, revision: BI.revision, layout: LAYOUT });
-}
-console.log(`[genroute] reranker: ${reranker.model}`);
+// The scorer reads the query vector from the corpus's stored embedding
+// (query.embeddings.query) and runs stage-1 over the corpus's pre-baked real
+// BGE-M3 doc embeddings — opts.biEncoder.encode() is never called. So the
+// bi-encoder is always deterministic (zero-cost, no python child); only the
+// RERANKER needs to be real (Qwen3) for a substrate verdict.
+const biEncoder = createDeterministicBiEncoder({ modelId: BI.modelId, revision: BI.revision, layout: LAYOUT });
+const reranker = rerankerArg === 'env'
+  ? await rerankerFromEnv()
+  : await createDeterministicReranker();
+console.log(`[genroute] reranker: ${reranker.model} (bi-encoder: deterministic; corpus embeddings are pre-baked)`);
 
 const eventById = new Map(corpus.events.map((e) => [e.id, e]));
 
@@ -344,8 +347,11 @@ function aggregateSources(perQuery) {
   };
 }
 
+const activeCells = cellsAllow ? cells.filter((c) => cellsAllow.has(c.name)) : cells;
+if (cellsAllow) console.log(`[genroute] cell filter active: running ${activeCells.length}/${cells.length} cells`);
+
 const results = [];
-for (const cell of cells) {
+for (const cell of activeCells) {
   const tStart = Date.now();
   const state = buildState(cell);
   const opts = optsFor(cell);
