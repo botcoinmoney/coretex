@@ -18,6 +18,7 @@ const seedHex = flag('seed', '0x' + 'c7'.repeat(32));
 const targetFamily = flag('family', 'multi_hop_relation');
 const cap = Number(flag('cap', '128'));
 const firstStageTopK = Number(flag('first-stage', '3200'));
+const packSplit = flag('split', '');
 if (!existsSync(corpusPath)) { console.error('corpus missing'); exit(1); }
 
 const { loadProductionCorpus, dequantize, cosineSimilarity } = await import(distIndex);
@@ -27,7 +28,7 @@ console.log(`[diag] ${corpus.events.length} events; layout dim=${layout.dim} ${l
 
 // Build the SAME pack the viability probe uses.
 function shaIdx(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffffffff; return h >>> 0; }
-const cands = corpus.events.filter((e) => e.family === targetFamily && Array.isArray(e.relations) && e.relations.length > 0);
+const cands = corpus.events.filter((e) => e.family === targetFamily && Array.isArray(e.relations) && e.relations.length > 0 && (!packSplit || e.split === packSplit));
 const pack = cands.map((e) => ({ e, s: shaIdx(seedHex + ':' + e.id) })).sort((a, b) => a.s - b.s).slice(0, packSize).map((x) => x.e);
 
 // Precompute all corpus doc vectors once (truths + negatives).
