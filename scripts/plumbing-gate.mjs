@@ -120,7 +120,45 @@ async function gateTemporal() {
       on: { Arank: onA?.rank, Brank: onB?.rank, BtempBonus: onB?.temporalBonus, composite: +(on.composite ?? 0).toFixed(4) } } };
 }
 
-const GATES = { temporal: gateTemporal };
+// ── PHASE A gate: a substrate relation edge from an anchored bridge must let a
+// NON-anchored answer enter via anchorBFS (anchor-seeded relation routing). ────
+async function gatePhaseA() {
+  const q = dir('phaseA:q');
+  const bridgeVec = combine([{ v: q, w: 0.85 }, { v: dir('phaseA:bridge'), w: 0.5 }]); // query-close (stage1 finds it)
+  const ansVec = dir('phaseA:answer'); // query-far (stage1 misses with small firstStageTopK)
+  const answerEv = mkEvent({ id: 'gate:phaseA:answer', family: 'multi_hop_relation', queryText: 'What does the bridge derive from?', queryVec: q,
+    truths: [{ id: 'gate:phaseA:answer::truth', text: 'The derived entity is Helios Robotics, founded 2014 in Turin.', vec: ansVec, relevance: 1 }] });
+  // bridge event: query-close truth (rel 0), corpus relation derived_from -> answer.
+  const bridgeEv = mkEvent({ id: 'gate:phaseA:bridge', family: 'multi_hop_relation', queryText: 'bridge', queryVec: bridgeVec,
+    truths: [{ id: 'gate:phaseA:bridge::truth', text: 'The flagship project under review.', vec: bridgeVec, relevance: 0 }],
+    relations: [{ other_id: 'gate:phaseA:answer', edgeType: 'derived_from' }] });
+  const ansId = 'gate:phaseA:answer::truth';
+  const corpus = mkCorpus([answerEv, bridgeEv]);
+  const opts = { firstStageTopK: 1, rerankerInputTopK: 10, relationExpansionBudget: 12, relationHopBudget: 3 };
+  // OFF: anchor the bridge only (no relation edge).
+  const wOff = emptyWords(); writeAnchor(wOff, 0, bridgeEv);
+  const off = await score(wOff, corpus, answerEv, opts);
+  // ON: anchor bridge at slot 0 + a substrate relation edge slot0->slot0 carrying
+  // edgeType derived_from (the miner's instruction to follow that corpus edge).
+  const wOn = emptyWords(); writeAnchor(wOn, 0, bridgeEv); writeRelationEdge(wOn, 0, 0, 0, 'derived_from');
+  const on = await score(wOn, corpus, answerEv, opts);
+  const onRow = rowOf(on, ansId), offRow = rowOf(off, ansId);
+  const decodedSlotExists = true;
+  const src = onRow?.sources ?? [];
+  const scorerConsumes = src.includes('anchorBFS');
+  const sourceFires = scorerConsumes && !src.includes('anchorMandatory'); // via BFS, NOT direct mandatory
+  const metricCredits = (onRow?.rank ?? 99) <= 10;
+  const causalLift = onRow != null && offRow == null; // answer reachable ONLY with the relation edge
+  const pass = decodedSlotExists && scorerConsumes && sourceFires && metricCredits && causalLift;
+  return { component: 'phaseA', pass, chain: { decodedSlotExists, scorerConsumes, sourceFires, metricCredits, causalLift },
+    detail: { off_answerInPool: offRow != null, on_answerSources: src, on_answerRank: onRow?.rank ?? null } };
+}
+
+function writeRelationEdge(words, entryIndex, sourceSlot, targetSlot, edgeType) {
+  words[RANGES.RELATIONS_START + entryIndex] = encodeRelationEdge({ entryIndex, sourceSlot, targetSlot, edgeType, weight: 1 });
+}
+
+const GATES = { temporal: gateTemporal, phaseA: gatePhaseA };
 reranker = await createDeterministicReranker();
 const comps = componentArg === 'all' ? Object.keys(GATES) : [componentArg];
 const results = [];
