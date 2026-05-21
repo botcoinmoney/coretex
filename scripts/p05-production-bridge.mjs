@@ -69,10 +69,10 @@ const corpusPath = flag('corpus', 'release/calibration/2026-05-21-memory-corpus-
 const embPath = flag('emb', 'release/calibration/2026-05-21-memory-corpus-v2/p0-embeddings.json');
 const packSize = Math.min(32, Number(flag('pack-size', '24')));
 const rerankCap = Number(flag('rerank-cap', '128')); // rerankerInputTopK (lower → fewer Qwen pairs for CPU-bounded runs)
-// Relation-ablation smoke (P1.5 #2 leak proof): all (default) | no-query (strip query-event query→answer
-// relations) | no-memory (strip memory-doc→memory-doc relations). Proves categoryLensBFS routes ONLY via
-// public memory-doc relations, never query-event relations.
-const relMode = flag('rel-mode', 'all');
+// Relation traversal mode. DEFAULT 'no-query' (P1.5 #2 quarantine): query-event query→answer relations are
+// scorer/metric-only and must NEVER be traversed by categoryLensBFS. 'all' (legacy, LEAKY — reproduces the
+// query→answer bookmark) and 'no-memory' (query-only) are kept for the leak-ablation smoke.
+const relMode = flag('rel-mode', 'no-query');
 const rerankerArg = flag('reranker', 'deterministic');
 const outDir = flag('out', 'release/calibration/2026-05-21-memory-corpus-v2');
 
@@ -215,14 +215,15 @@ const reranker = rerankerArg === 'gpu' || rerankerArg === 'cpu'
 const baseOpts = {
   weights: DEFAULT_COMPOSITE_WEIGHTS, biEncoder, reranker, retrievalKeyLayout: LAYOUT, biEncoderHash,
   relationHopBudget: 3, abstentionThreshold: 0.001, rerankerTopK: 10, retrievalKeyTopK: 50,
-  firstStageTopK: 3200, rerankerInputTopK: rerankCap, lensTopK: 36, lensWeight: 0.4, anchorWeight: 0.6,
+  firstStageTopK: (() => { const i = argv.indexOf('--first-stage-topk'); return i >= 0 ? Number(argv[i + 1]) : 3200; })(), rerankerInputTopK: rerankCap, lensTopK: 36, lensWeight: 0.4, anchorWeight: 0.6,
   relationExpansionBudget: 12, categoryLensExpansionBudget: 0,
   temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1,
   pipelineVersion: 'coretex-retrieval-v2-lens-r3',
 };
 const lensBonusWeight = (() => { const i = argv.indexOf('--lens-bonus-weight'); return i >= 0 ? Number(argv[i + 1]) : undefined; })();
+const catBudget = (() => { const i = argv.indexOf('--cat-budget'); return i >= 0 ? Number(argv[i + 1]) : 50; })();
 const relOptsOff = { ...baseOpts, categoryLensExpansionBudget: 0 };
-const relOptsOn = { ...baseOpts, categoryLensExpansionBudget: 50, categoryLensTraversalDirection: 'bidirectional',
+const relOptsOn = { ...baseOpts, categoryLensExpansionBudget: catBudget, categoryLensTraversalDirection: 'bidirectional',
   ...(lensBonusWeight !== undefined ? { categoryLensBonusWeight: lensBonusWeight } : {}) };
 const tempOptsOff = { ...baseOpts, temporalCurrentBoost: 0, temporalStaleSuppression: 0 };
 const tempOptsOn = { ...baseOpts, temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1 };
@@ -237,6 +238,22 @@ const relOff = await evaluateRetrievalBenchmarkState(empty, corpus, mkPack(relat
 const relOn = await evaluateRetrievalBenchmarkState(relationSubstrate(), corpus, mkPack(relationPack), relOptsOn);
 const tmpOff = await evaluateRetrievalBenchmarkState(empty, corpus, mkPack(temporalPack), tempOptsOff);
 const tmpOn = await evaluateRetrievalBenchmarkState(temporalSubstrate(temporalPack), corpus, mkPack(temporalPack), tempOptsOn);
+
+// debug: inspect why memory-doc routing does/doesn't tag the answer (P1.5 #3)
+if (argv.includes('--debug')) {
+  const lq = new Map(logical.queries.map((q) => [q.id, q]));
+  for (let i = 0; i < Math.min(3, relationPack.length); i++) {
+    const ev = relationPack[i]; const pq = relOn.perQuery?.[i];
+    const q = lq.get(ev.id);
+    const answerDoc = [...(q.qrels ?? [])].sort((a, b) => b.relevance - a.relevance)[0]?.docId;
+    const bridgeDoc = (q.qrels ?? []).find((r) => r.role === 'bridge')?.docId;
+    const inCapped = (id) => { const k = (pq?.cappedDocIds ?? []).indexOf(id); return k >= 0 ? (pq.cappedDocSources?.[k] ?? []).join('+') : 'NOT-IN-POOL'; };
+    const inTop20 = (id) => { const r = (pq?.finalRankingTop20 ?? []).find((x) => x.docId === id); return r ? `rank${r.rank}[${(r.sources ?? []).join('+')}]` : 'not-top20'; };
+    console.error(`[debug] ${ev.id} answer=${answerDoc} bridge=${bridgeDoc}`);
+    console.error(`   answer: pool=${inCapped(answerDoc)} | ${inTop20(answerDoc)}`);
+    console.error(`   bridge: pool=${inCapped(bridgeDoc)} | ${inTop20(bridgeDoc)}`);
+  }
+}
 
 // categoryLensBFS attribution: relevant doc in top-10 reached via categoryLensBFS
 function bfsAttribution(score) {
