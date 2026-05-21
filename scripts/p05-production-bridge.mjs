@@ -78,6 +78,7 @@ const outDir = flag('out', 'release/calibration/2026-05-21-memory-corpus-v2');
 
 const {
   evaluateRetrievalBenchmarkState, biEncoderModelIdHash, computeCorpusRoot,
+  buildPublicCorpusIndex, firstStageCandidates, dequantize,
   createDeterministicBiEncoder, createDeterministicReranker, rerankerFromEnv, biEncoderFromEnv,
   encodeMemoryIndexSlot, encodeRelationCategoryLens, encodeTemporalRecord, stableRecordIdFor,
   DEFAULT_COMPOSITE_WEIGHTS,
@@ -287,6 +288,22 @@ const tmpOn = await evaluateRetrievalBenchmarkState(temporalSubstrate(temporalPa
 
 // debug: inspect why memory-doc routing does/doesn't tag the answer (P1.5 #3)
 if (argv.includes('--debug')) {
+  // int8 stage-1 rank check (the scorer's ACTUAL stage-1 path) for bridge/answer docs
+  const pidx = buildPublicCorpusIndex(corpus);
+  const docOrderById = (qEv) => {
+    const qv = dequantize(qEv.embeddings.query, LAYOUT);
+    const cands = firstStageCandidates(qv, pidx, corpus.events.length); // full ranking
+    const m = new Map(); cands.forEach((c, r) => m.set(c.id ?? c.documentId ?? c, r + 1));
+    return m;
+  };
+  const lq2 = new Map(logical.queries.map((q) => [q.id, q]));
+  for (let i = 0; i < Math.min(4, relationPack.length); i++) {
+    const ev = relationPack[i]; const q = lq2.get(ev.id);
+    const ans = [...(q.qrels ?? [])].sort((a, b) => b.relevance - a.relevance)[0]?.docId;
+    const br = (q.qrels ?? []).find((r) => r.role === 'bridge')?.docId;
+    const ranks = docOrderById(ev);
+    console.error(`[int8-stage1] ${ev.id} bridgeDoc=${br}@${ranks.get(br)} answerDoc=${ans}@${ranks.get(ans)} (firstStageTopK=${baseOpts.firstStageTopK})`);
+  }
   const lq = new Map(logical.queries.map((q) => [q.id, q]));
   for (let i = 0; i < Math.min(3, relationPack.length); i++) {
     const ev = relationPack[i]; const pq = relOn.perQuery?.[i];
