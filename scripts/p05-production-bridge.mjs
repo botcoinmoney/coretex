@@ -69,6 +69,10 @@ const corpusPath = flag('corpus', 'release/calibration/2026-05-21-memory-corpus-
 const embPath = flag('emb', 'release/calibration/2026-05-21-memory-corpus-v2/p0-embeddings.json');
 const packSize = Math.min(32, Number(flag('pack-size', '24')));
 const rerankCap = Number(flag('rerank-cap', '128')); // rerankerInputTopK (lower → fewer Qwen pairs for CPU-bounded runs)
+// Relation-ablation smoke (P1.5 #2 leak proof): all (default) | no-query (strip query-event query→answer
+// relations) | no-memory (strip memory-doc→memory-doc relations). Proves categoryLensBFS routes ONLY via
+// public memory-doc relations, never query-event relations.
+const relMode = flag('rel-mode', 'all');
 const rerankerArg = flag('reranker', 'deterministic');
 const outDir = flag('out', 'release/calibration/2026-05-21-memory-corpus-v2');
 
@@ -121,7 +125,7 @@ for (const d of logical.docs) {
     queryText: d.text,
     truthDocuments: [{ id: d.id, text: d.text, isCurrent: d.currentStaleFlag === false ? false : true }],
     hardNegatives: [], qrels: [{ documentId: d.id, relevance: 1.0 }], protected: false,
-    relations: (relBySrc.get(d.id) ?? []).map((r) => ({ other_id: memId(r.dst), edgeType: r.type })),
+    relations: relMode === 'no-memory' ? [] : (relBySrc.get(d.id) ?? []).map((r) => ({ other_id: memId(r.dst), edgeType: r.type })),
     provenance: PROV, embeddings: mkEmb(emb, [[d.id, emb]], []),
   });
 }
@@ -139,7 +143,7 @@ for (const q of logical.queries) {
   const perNeg = negs.map((n) => [n.id, docEmb.get(n.id)]);
   // answer doc = highest-relevance qrel; relation query->mem(answer) for multi-hop metric + routing
   const answer = [...(q.qrels ?? [])].sort((a, b) => b.relevance - a.relevance)[0];
-  const relations = answer ? [{ other_id: memId(answer.docId), edgeType: q.family === 'causal_memory_chain' ? 'causes' : 'supports' }] : [];
+  const relations = (relMode === 'no-query' || !answer) ? [] : [{ other_id: memId(answer.docId), edgeType: q.family === 'causal_memory_chain' ? 'causes' : 'supports' }];
   const ev = {
     id: q.id, family: fam, domain: q.lane, split: 'eval_hidden',
     queryText: q.queryText, truthDocuments: truths, hardNegatives: negs,
@@ -216,8 +220,10 @@ const baseOpts = {
   temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1,
   pipelineVersion: 'coretex-retrieval-v2-lens-r3',
 };
+const lensBonusWeight = (() => { const i = argv.indexOf('--lens-bonus-weight'); return i >= 0 ? Number(argv[i + 1]) : undefined; })();
 const relOptsOff = { ...baseOpts, categoryLensExpansionBudget: 0 };
-const relOptsOn = { ...baseOpts, categoryLensExpansionBudget: 50, categoryLensTraversalDirection: 'bidirectional' };
+const relOptsOn = { ...baseOpts, categoryLensExpansionBudget: 50, categoryLensTraversalDirection: 'bidirectional',
+  ...(lensBonusWeight !== undefined ? { categoryLensBonusWeight: lensBonusWeight } : {}) };
 const tempOptsOff = { ...baseOpts, temporalCurrentBoost: 0, temporalStaleSuppression: 0 };
 const tempOptsOn = { ...baseOpts, temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1 };
 
@@ -246,7 +252,7 @@ const gitSha = (() => { try { return execSync('git rev-parse --short HEAD', { cw
 
 const report = {
   provenance: { specVersion: logical.specVersion, corpusRoot, gitSha, reranker: (rerankerArg === 'env' || rerankerArg === 'gpu' || rerankerArg === 'cpu') ? `Qwen/Qwen3-Reranker-0.6B (${rerankerArg})` : 'deterministic-stub',
-    biEncoder: BE.modelId, layout: LAYOUT, packSizeCap: packSize, rerankerInputTopK: rerankCap, splits: { memory: 'train_visible', queries: 'eval_hidden' } },
+    biEncoder: BE.modelId, layout: LAYOUT, packSizeCap: packSize, rerankerInputTopK: rerankCap, relMode, splits: { memory: 'train_visible', queries: 'eval_hidden' } },
   relation: {
     pack: relationPack.map((e) => e.id), n: relationPack.length,
     off: { nDCG10: relOff.nDCG10, recall10: relOff.recall10, multiHopRecall10: relOff.multiHopRecall10, categoryLensRelationHit10: relOff.categoryLensRelationHit10 },
@@ -260,6 +266,7 @@ const report = {
   },
 };
 const suffix = (rerankerArg === 'env' || rerankerArg === 'gpu' || rerankerArg === 'cpu') ? 'qwen' : 'det';
-writeFileSync(resolve(outDir, `P05_PRODUCTION_BRIDGE_${suffix}.json`), JSON.stringify(report, null, 2));
+const relTag = relMode === 'all' ? '' : `_${relMode}`;
+writeFileSync(resolve(outDir, `P05_PRODUCTION_BRIDGE_${suffix}${relTag}.json`), JSON.stringify(report, null, 2));
 console.log(JSON.stringify(report, null, 2));
 if (typeof reranker.close === 'function') reranker.close();
