@@ -35,6 +35,15 @@ for S in s1 s2 s3; do
   done
 done
 
+echo "### Layer-8 bonus calibration under Qwen: find bonus that routes (hit up) WITHOUT flooding (lensJunk low). cap-64, seed s1"
+for W in 1 2 5 10; do
+  node scripts/p05-production-bridge.mjs --corpus "$CORPUS" --emb "$EMB" --pack-size 24 --rerank-cap 64 \
+    --reranker gpu --rel-mode no-query --first-stage-topk 128 --cat-budget 12 --lens-bonus-weight "$W" --pack-seed s1 \
+    > "$D/p2_bonus${W}.log" 2>>"$D/p2_sweep.err"
+  mv release/calibration/2026-05-21-memory-corpus-v2/P05_PRODUCTION_BRIDGE_qwen_no-query.json "$D/P2_BONUS${W}.json" 2>/dev/null \
+    && python3 -c "import json;r=json.load(open('$D/P2_BONUS${W}.json'))['relation'];print('bonus=$W relHit',round(r['on']['categoryLensRelationHit10'],3),'nDCG',round(r['on']['nDCG10'],3),'recall',round(r['on']['recall10'],3),'lensJunkTop10',r['flood']['on']['meanLensJunkInTop10'])" || echo "bonus=$W NO OUTPUT"
+done
+
 echo "### adversarial edge-injection robustness (Qwen): junk-edges 0 vs 5000 at cap-64 (does junk flood top-10 under the real reranker?)"
 for J in 0 5000; do
   node scripts/p05-production-bridge.mjs --corpus "$CORPUS" --emb "$EMB" --pack-size 24 --rerank-cap 64 \
