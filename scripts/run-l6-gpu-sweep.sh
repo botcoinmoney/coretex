@@ -5,9 +5,16 @@
 set -uo pipefail
 cd /workspace/cortex
 
+# Corpus-parametric (default P0). Override: CORPUS_PATH, EMB_PATH, PACK, TAG, CAPS.
+CORPUS_PATH="${CORPUS_PATH:-release/calibration/2026-05-21-memory-corpus-v2/p0-corpus.json}"
+EMB_PATH="${EMB_PATH:-release/calibration/2026-05-21-memory-corpus-v2/p0-embeddings.json}"
+PACK="${PACK:-24}"
+TAG="${TAG:-}"
+CAPS="${CAPS:-8 16 32 64 128}"
+
 DATEDIR="release/calibration/a100-$(date +%F)"
 mkdir -p "$DATEDIR"
-MAN="$DATEDIR/L6_SWEEP_MANIFEST.json"
+MAN="$DATEDIR/L6_SWEEP_MANIFEST${TAG}.json"
 SMOKE="$DATEDIR/l6_smoke.json"
 export HF_HUB_CACHE=/var/lib/coretex/model-cache
 export HF_HUB_OFFLINE=1
@@ -52,24 +59,24 @@ cat > "$MAN" <<JSON
   "gitSha": "$GIT_SHA", "distHash": "$DIST_HASH",
   "model": "Qwen/Qwen3-Reranker-0.6B", "revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
   "torch": "$TORCH_VER", "cudaAvailable": "$CUDA_OK", "gpu": "$GPU_NAME",
-  "biEncoder": "BAAI/bge-m3 int8/243", "corpus": "release/calibration/2026-05-21-memory-corpus-v2/p0-corpus.json",
-  "caps": [8,16,32,64,128], "packSize": 24,
-  "command": "node scripts/p05-production-bridge.mjs --pack-size 24 --rerank-cap <C> --reranker gpu",
+  "biEncoder": "BAAI/bge-m3 int8/243", "corpus": "$CORPUS_PATH",
+  "caps": "$CAPS", "packSize": $PACK,
+  "command": "node scripts/p05-production-bridge.mjs --corpus $CORPUS_PATH --emb $EMB_PATH --pack-size $PACK --rerank-cap <C> --reranker gpu",
   "env": {"CORETEX_RERANKER":"qwen3","CORETEX_RERANKER_MODE":"streaming","CORETEX_RERANKER_PRODUCTION":"1","CORETEX_RERANKER_ALLOW_CUDA":"1","CORETEX_RERANKER_PYTHON":"/usr/bin/python3","HF_HUB_OFFLINE":"1"}
 }
 JSON
 cat "$MAN"
 
 echo "### 5. cap sweep"
-for C in 8 16 32 64 128; do
+for C in $CAPS; do
   echo "=== cap $C $(date +%H:%M:%S) ==="
-  node scripts/p05-production-bridge.mjs --pack-size 24 --rerank-cap "$C" --reranker gpu \
-     > "$DATEDIR/l6_cap${C}.log" 2>>"$DATEDIR/l6_sweep.err"
+  node scripts/p05-production-bridge.mjs --corpus "$CORPUS_PATH" --emb "$EMB_PATH" --pack-size "$PACK" --rerank-cap "$C" --reranker gpu \
+     > "$DATEDIR/l6${TAG}_cap${C}.log" 2>>"$DATEDIR/l6${TAG}_sweep.err"
   if [ -f release/calibration/2026-05-21-memory-corpus-v2/P05_PRODUCTION_BRIDGE_qwen.json ]; then
-    mv release/calibration/2026-05-21-memory-corpus-v2/P05_PRODUCTION_BRIDGE_qwen.json "$DATEDIR/L6_cap${C}.json"
-    python3 -c "import json;json.load(open('$DATEDIR/L6_cap${C}.json'));print('cap $C JSON OK')" || echo "cap $C JSON UNPARSEABLE"
+    mv release/calibration/2026-05-21-memory-corpus-v2/P05_PRODUCTION_BRIDGE_qwen.json "$DATEDIR/L6${TAG}_cap${C}.json"
+    python3 -c "import json;json.load(open('$DATEDIR/L6${TAG}_cap${C}.json'));print('cap $C JSON OK')" || echo "cap $C JSON UNPARSEABLE"
   else
-    echo "cap $C NO OUTPUT"; tail -3 "$DATEDIR/l6_cap${C}.log"
+    echo "cap $C NO OUTPUT"; tail -3 "$DATEDIR/l6${TAG}_cap${C}.log"
   fi
 done
 

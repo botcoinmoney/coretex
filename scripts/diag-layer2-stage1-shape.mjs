@@ -68,11 +68,21 @@ async function main() {
   const docs = corpus.docs;
   const idToIdx = new Map(docs.map((d, i) => [d.id, i]));
 
-  console.error(`[layer2] embedding ${docs.length} docs + ${corpus.queries.length} queries (pinned BGE-M3, int8/243)…`);
+  const embCachePath = (() => { const i = args.indexOf('--emb'); return i >= 0 ? args[i + 1] : null; })();
   const t0 = Date.now();
-  const docVecs = await embedTexts(docs.map((d) => d.text));
-  const qVecs = await embedTexts(corpus.queries.map((q) => q.queryText));
-  console.error(`[layer2] embedded in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  let docVecs, qVecs;
+  if (embCachePath) {
+    const cache = JSON.parse(readFileSync(embCachePath, 'utf8'));
+    const b64 = (b) => { const buf = Buffer.from(b, 'base64'); return new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4); };
+    docVecs = docs.map((d) => b64(cache.docs[d.id]));
+    qVecs = corpus.queries.map((q) => b64(cache.queries[q.id]));
+    console.error(`[layer2] loaded ${docVecs.length} doc + ${qVecs.length} query vecs from cache in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  } else {
+    console.error(`[layer2] embedding ${docs.length} docs + ${corpus.queries.length} queries (pinned BGE-M3, int8/243)…`);
+    docVecs = await embedTexts(docs.map((d) => d.text));
+    qVecs = await embedTexts(corpus.queries.map((q) => q.queryText));
+    console.error(`[layer2] embedded in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  }
 
   const bm25 = bm25Ranker(docs);
   const Ks = [20, 50, 100, 128, 512, docs.length];
