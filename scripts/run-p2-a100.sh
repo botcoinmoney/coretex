@@ -11,6 +11,7 @@ EMB=release/calibration/2026-05-21-memory-corpus-v2/p2-embeddings.json
 export HF_HUB_CACHE=/var/lib/coretex/model-cache HF_HUB_OFFLINE=1
 export CORETEX_RERANKER=qwen3 CORETEX_RERANKER_MODE=streaming CORETEX_RERANKER_PRODUCTION=1
 export CORETEX_RERANKER_ALLOW_CUDA=1 CORETEX_RERANKER_PYTHON=/usr/bin/python3
+export NODE_OPTIONS=--max-old-space-size=8192  # 100k corpus build needs >2GB heap
 unset CUDA_VISIBLE_DEVICES || true
 
 echo "### preflight"; nvidia-smi --query-gpu=name --format=csv,noheader || exit 2
