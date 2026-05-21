@@ -131,7 +131,14 @@ for (const d of logical.docs) {
 }
 // QUERY events, eval_hidden.
 for (const q of logical.queries) {
-  if (q.abstain) continue;
+  if (q.abstain) {
+    // abstention event: empty truths (scorer treats truthDocuments.length===0 as an abstention probe).
+    const negs = (q.hardNegatives ?? []).map((n) => ({ id: n.docId, text: docById.get(n.docId).text, category: n.category }));
+    events.push({ id: q.id, family: bucket(q.family), domain: q.lane, split: q.split ?? 'eval_hidden',
+      queryText: q.queryText, truthDocuments: [], hardNegatives: negs, qrels: [], protected: false, relations: [],
+      provenance: PROV, embeddings: mkEmb(qEmb.get(q.id), [], negs.map((n) => [n.id, docEmb.get(n.id)])) });
+    continue;
+  }
   const fam = bucket(q.family);
   const truths = (q.qrels ?? []).filter((r) => r.relevance > 0).map((r) => {
     const d = docById.get(r.docId);
@@ -236,6 +243,41 @@ const mkPack = (evs) => ({ epochId: 0, evalSeedCommit: seedHex, corpusRoot, even
 
 console.error(`[p05] corpus events=${events.length} (mem=${logical.docs.length}, query=${events.length - logical.docs.length}); relationPack=${relationPack.length} temporalPack=${temporalPack.length}; reranker=${rerankerArg}`);
 
+// ── ABSTENTION-SEPARABILITY mode (P1.5 #6): threshold stats on top1Score ──
+// Mixed eval_hidden pack of abstention (no truth) + answerable queries; collect top1Score; compute
+// ROC-AUC + best balanced-accuracy threshold. Proves whether a global score threshold can gate abstention.
+if (argv.includes('--abstention')) {
+  // Threshold CALIBRATION (not held-out): use all abstention queries (small per-split) vs a matched
+  // answerable sample from non-train splits. AUC/threshold is a global-score-cutoff calibration estimate.
+  const abstainQ = shuf(logical.queries.filter((q) => q.abstain).map((q) => corpus.byId.get(q.id))).slice(0, packSize);
+  const answerableQ = shuf(logical.queries.filter((q) => !q.abstain && (q.split === 'eval_hidden' || q.split === 'calibration')).map((q) => corpus.byId.get(q.id))).slice(0, abstainQ.length);
+  const mixed = [...abstainQ, ...answerableQ];
+  const sc = await evaluateRetrievalBenchmarkState({ words: emptyWords() }, corpus, mkPack(mixed), baseOpts);
+  const rows = (sc.perQuery ?? []).map((pq) => ({ id: pq.recordId, abstain: corpus.byId.get(pq.recordId)?.truthDocuments.length === 0, top1: pq.top1Score }));
+  const pos = rows.filter((r) => !r.abstain).map((r) => r.top1); // answerable
+  const neg = rows.filter((r) => r.abstain).map((r) => r.top1);   // abstain
+  // ROC-AUC (P(answerable top1 > abstain top1))
+  let wins = 0, ties = 0; for (const p of pos) for (const n of neg) { if (p > n) wins++; else if (p === n) ties++; }
+  const auc = pos.length && neg.length ? (wins + 0.5 * ties) / (pos.length * neg.length) : null;
+  // best balanced-accuracy threshold over candidate cutoffs
+  const cuts = [...new Set([...pos, ...neg])].sort((a, b) => a - b);
+  let best = { thr: null, bacc: 0, tpr: 0, tnr: 0 };
+  for (const t of cuts) {
+    const tpr = pos.filter((x) => x >= t).length / (pos.length || 1); // answerable correctly above
+    const tnr = neg.filter((x) => x < t).length / (neg.length || 1);  // abstain correctly below
+    const bacc = (tpr + tnr) / 2;
+    if (bacc > best.bacc) best = { thr: +t.toFixed(4), bacc: +bacc.toFixed(3), tpr: +tpr.toFixed(3), tnr: +tnr.toFixed(3) };
+  }
+  const mean = (a) => a.length ? +(a.reduce((s, x) => s + x, 0) / a.length).toFixed(4) : null;
+  const out = { provenance: { specVersion: logical.specVersion, corpusRoot, gitSha: (() => { try { return execSync('git rev-parse --short HEAD', { cwd: repoRoot }).toString().trim(); } catch { return 'unknown'; } })(), reranker: rerankerArg, packSeed, n: { abstain: neg.length, answerable: pos.length } },
+    auc, answerableTop1Mean: mean(pos), abstainTop1Mean: mean(neg), bestThreshold: best,
+    viableGlobalThreshold: auc != null && auc >= 0.9 && best.bacc >= 0.85 };
+  writeFileSync(resolve(outDir, `P05_ABSTENTION_${(rerankerArg === 'env' || rerankerArg === 'gpu' || rerankerArg === 'cpu') ? 'qwen' : 'det'}.json`), JSON.stringify(out, null, 2));
+  console.log(JSON.stringify(out, null, 2));
+  if (typeof reranker.close === 'function') reranker.close();
+  process.exit(0);
+}
+
 // ── run arms ──
 const empty = { words: emptyWords() };
 const relOff = await evaluateRetrievalBenchmarkState(empty, corpus, mkPack(relationPack), relOptsOff);
@@ -260,14 +302,21 @@ if (argv.includes('--debug')) {
 }
 
 // categoryLensBFS attribution: relevant doc in top-10 reached via categoryLensBFS
+const logFamById = new Map(logical.queries.map((q) => [q.id, q.family]));
 function bfsAttribution(score) {
   let n = 0, viaLens = 0;
+  const byFam = {};
   for (const pq of score.perQuery ?? []) {
     n++;
+    const lf = logFamById.get(pq.recordId) ?? pq.family;
+    byFam[lf] = byFam[lf] || { n: 0, hit: 0 };
+    byFam[lf].n++;
     const top = pq.finalRankingTop20 ?? [];
-    if (top.some((r) => r.rank <= 10 && r.relevance >= 0.8 && (r.sources ?? []).includes('categoryLensBFS'))) viaLens++;
+    const hit = top.some((r) => r.rank <= 10 && r.relevance >= 0.8 && (r.sources ?? []).includes('categoryLensBFS'));
+    if (hit) { viaLens++; byFam[lf].hit++; }
   }
-  return { n, viaLens };
+  const perFamily = Object.fromEntries(Object.entries(byFam).map(([f, o]) => [f, +(o.hit / o.n).toFixed(3)]));
+  return { n, viaLens, perFamily };
 }
 const gitSha = (() => { try { return execSync('git rev-parse --short HEAD', { cwd: repoRoot }).toString().trim(); } catch { return 'unknown'; } })();
 
