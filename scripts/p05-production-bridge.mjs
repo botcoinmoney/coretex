@@ -145,7 +145,7 @@ for (const q of logical.queries) {
   const answer = [...(q.qrels ?? [])].sort((a, b) => b.relevance - a.relevance)[0];
   const relations = (relMode === 'no-query' || !answer) ? [] : [{ other_id: memId(answer.docId), edgeType: q.family === 'causal_memory_chain' ? 'causes' : 'supports' }];
   const ev = {
-    id: q.id, family: fam, domain: q.lane, split: 'eval_hidden',
+    id: q.id, family: fam, domain: q.lane, split: q.split ?? 'eval_hidden',
     queryText: q.queryText, truthDocuments: truths, hardNegatives: negs,
     qrels: (q.qrels ?? []).map((r) => ({ documentId: r.docId, relevance: r.relevance })),
     protected: false, relations,
@@ -163,9 +163,13 @@ const corpus = {
   labelingModelId: manifest.model.reranker.modelId, labelingModelRevision: manifest.model.reranker.revision,
 };
 
-// ── build packs (≤ packSize, split-pure eval_hidden) ──
-const seedHex = '0x' + 'a5'.repeat(32);
-const leverQ = (famLogical) => logical.queries.filter((q) => !q.abstain && q.family === famLogical).map((q) => corpus.byId.get(q.id));
+// ── build packs (≤ packSize, SPLIT-PURE eval_hidden, multi-seed via --pack-seed) ──
+const packSeed = flag('pack-seed', 'a5');
+const seedHex = '0x' + (packSeed.length >= 2 ? packSeed.slice(0, 2) : 'a5').repeat(32);
+// deterministic shuffle keyed by packSeed (so ≥3 seeds give distinct eval subsets)
+function hseed(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+const shuf = (arr) => arr.map((x) => [x, hseed(`${packSeed}:${x.id}`)]).sort((a, b) => a[1] - b[1]).map((p) => p[0]);
+const leverQ = (famLogical) => shuf(logical.queries.filter((q) => !q.abstain && q.family === famLogical && (q.split ?? 'eval_hidden') === 'eval_hidden').map((q) => corpus.byId.get(q.id)));
 const relationPack = [...leverQ('multi_session_bridge').slice(0, Math.floor(packSize / 2)), ...leverQ('causal_memory_chain').slice(0, packSize - Math.floor(packSize / 2))].slice(0, packSize);
 const temporalPack = leverQ('temporal_update').slice(0, packSize);
 
@@ -269,7 +273,8 @@ const gitSha = (() => { try { return execSync('git rev-parse --short HEAD', { cw
 
 const report = {
   provenance: { specVersion: logical.specVersion, corpusRoot, gitSha, reranker: (rerankerArg === 'env' || rerankerArg === 'gpu' || rerankerArg === 'cpu') ? `Qwen/Qwen3-Reranker-0.6B (${rerankerArg})` : 'deterministic-stub',
-    biEncoder: BE.modelId, layout: LAYOUT, packSizeCap: packSize, rerankerInputTopK: rerankCap, relMode, splits: { memory: 'train_visible', queries: 'eval_hidden' } },
+    biEncoder: BE.modelId, layout: LAYOUT, packSizeCap: packSize, rerankerInputTopK: rerankCap, relMode, packSeed,
+    firstStageTopK: baseOpts.firstStageTopK, categoryLensBonusWeight: lensBonusWeight ?? 'default', splits: { memory: 'train_visible', queries: 'logical (split-pure eval_hidden pack)' } },
   relation: {
     pack: relationPack.map((e) => e.id), n: relationPack.length,
     off: { nDCG10: relOff.nDCG10, recall10: relOff.recall10, multiHopRecall10: relOff.multiHopRecall10, categoryLensRelationHit10: relOff.categoryLensRelationHit10 },

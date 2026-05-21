@@ -11,6 +11,7 @@ EMB_PATH="${EMB_PATH:-release/calibration/2026-05-21-memory-corpus-v2/p0-embeddi
 PACK="${PACK:-24}"
 TAG="${TAG:-}"
 CAPS="${CAPS:-8 16 32 64 128}"
+EXTRA_P05_ARGS="${EXTRA_P05_ARGS:-}"  # e.g. "--rel-mode no-query --first-stage-topk 128 --pack-seed s1"
 
 DATEDIR="release/calibration/a100-$(date +%F)"
 mkdir -p "$DATEDIR"
@@ -70,7 +71,7 @@ cat "$MAN"
 echo "### 5. cap sweep"
 for C in $CAPS; do
   echo "=== cap $C $(date +%H:%M:%S) ==="
-  node scripts/p05-production-bridge.mjs --corpus "$CORPUS_PATH" --emb "$EMB_PATH" --pack-size "$PACK" --rerank-cap "$C" --reranker gpu \
+  node scripts/p05-production-bridge.mjs --corpus "$CORPUS_PATH" --emb "$EMB_PATH" --pack-size "$PACK" --rerank-cap "$C" --reranker gpu $EXTRA_P05_ARGS \
      > "$DATEDIR/l6${TAG}_cap${C}.log" 2>>"$DATEDIR/l6${TAG}_sweep.err"
   if [ -f release/calibration/2026-05-21-memory-corpus-v2/P05_PRODUCTION_BRIDGE_qwen.json ]; then
     mv release/calibration/2026-05-21-memory-corpus-v2/P05_PRODUCTION_BRIDGE_qwen.json "$DATEDIR/L6${TAG}_cap${C}.json"

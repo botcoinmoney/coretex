@@ -212,6 +212,18 @@ function main() {
     });
   }
 
+  // ── explicit split hygiene (P1.5 #1): no null/missing splits on queries ──
+  const VALID_SPLITS = new Set(['train_visible', 'calibration', 'eval_hidden', 'canary']);
+  const splitDist = {};
+  for (const q of queries) {
+    if (q.split == null) fail(errors, 'QUERY_SPLIT_NULL', `${q.id ?? '?'} has null/missing split`);
+    else if (!VALID_SPLITS.has(q.split)) fail(errors, 'QUERY_SPLIT_INVALID', `${q.id} split ${q.split} not in ${[...VALID_SPLITS]}`);
+    else splitDist[q.split] = (splitDist[q.split] || 0) + 1;
+  }
+  for (const d of docs) { if (d.split != null && !VALID_SPLITS.has(d.split)) fail(errors, 'DOC_SPLIT_INVALID', `${d.id} split ${d.split} invalid`); }
+  // need a non-trivial eval set for meaningful metrics
+  if ((splitDist.eval_hidden ?? 0) < 1) warn(warnings, 'NO_EVAL_SPLIT', 'no eval_hidden queries');
+
   // ── invariant coverage (Layer-0 says >=1 example per invariant) ──
   const missingInv = ALL_INVARIANTS.filter((i) => !invariantSeen.has(i));
   if (missingInv.length > 0) fail(errors, 'INVARIANT_COVERAGE', `invariants with no query: ${missingInv.join(', ')}`);
@@ -225,6 +237,8 @@ function main() {
     counts: { docs: docs.length, queries: queries.length, relations: relations.length, entities: entities.length },
     laneCounts,
     invariantCoverage: { present: [...invariantSeen].sort(), missing: missingInv },
+    splitDist,
+    abstentionCount: queries.filter((q) => q.abstain).length,
     errors, warnings,
     pass: errors.length === 0,
   };

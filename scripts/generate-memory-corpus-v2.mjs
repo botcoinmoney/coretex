@@ -18,6 +18,17 @@
  *        [--seed S] [--out path]
  */
 import { writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+
+// Explicit split assignment (P1.5 #1): deterministic 70/10/15/5
+// train_visible/calibration/eval_hidden/canary. No split=null anywhere.
+function splitFor(id, seed) {
+  const h = parseInt(createHash('sha256').update(`${seed}:${id}`).digest('hex').slice(0, 8), 16) % 100;
+  if (h < 70) return 'train_visible';
+  if (h < 80) return 'calibration';
+  if (h < 95) return 'eval_hidden';
+  return 'canary';
+}
 
 // ── deterministic RNG (mulberry32 seeded from string) ──
 function hashSeed(str) {
@@ -519,23 +530,45 @@ for (const m of projMeta) {
     hardNegatives: padNegs([{ docId: d.gotcha, category: 'near_collision_attribute' }, ...nearColl('node_pin', d.node_pin, 'near_collision_entity', 3)], [d.node_pin]) });
 }
 
-// ── abstention queries (corpus-level, I14) ──
-const ABSTAIN_CONV = ['blood type', 'social security number', 'shoe size', 'passport number'];
-const ABSTAIN_AGENT = ['AWS region for the production deployment', 'on-call PagerDuty rotation', 'cloud monthly bill', 'SOC2 audit date'];
-for (let i = 0; i < Math.min(6, userMeta.length); i++) {
-  const m = userMeta[i * 3 % userMeta.length];
+// ── abstention queries (corpus-level, I14) — EXPANDED for Layer-8 threshold stats (P1.5 #5) ──
+// (1) not-stored attribute; (2) HARD: attribute that exists for a DIFFERENT same-first-name person/project
+// (plausible-but-wrong, strong trap); ~1 per 4 users + 1 per 3 projects → healthy abstention sample.
+const ABSTAIN_CONV = ['blood type', 'social security number', 'shoe size', 'passport number', 'credit score', 'apartment number'];
+const ABSTAIN_AGENT = ['AWS region for the production deployment', 'on-call PagerDuty rotation', 'cloud monthly bill', 'SOC2 audit date', 'Datadog dashboard URL', 'PCI compliance scope'];
+for (let i = 0; i < userMeta.length; i += 4) {
+  const m = userMeta[i];
+  // hard abstention: ask for a stored-attribute KIND about this person, but the trap is ANOTHER same-first-name
+  // person's matching doc (plausible-but-wrong); the answer is NOT stored for THIS person.
+  const sameName = userMeta.filter((o) => o.first === m.first && o.u !== m.u);
+  const hard = sameName.length > 0 && chance(0.5);
   addQuery({ lane: 'conversational', family: 'abstention', invariant: 'I14', abstain: true,
-    queryText: `What is ${m.first}'s ${ABSTAIN_CONV[i % ABSTAIN_CONV.length]}?`,
+    queryText: hard
+      ? `What breed of dog does ${m.first} ${m.last} have?` // trap: other ${first}'s pet docs; this person's pet may be a cat/none
+      : `What is ${m.first}'s ${ABSTAIN_CONV[(i / 4) % ABSTAIN_CONV.length]}?`,
     qrels: [],
-    hardNegatives: padNegs([{ docId: m.docs.allergy, category: 'trap' }, { docId: m.docs.job, category: 'trap' }], [], 4) });
+    hardNegatives: padNegs(hard
+      ? sameName.slice(0, 3).map((o) => ({ docId: o.docs.pet_intro, category: 'trap' }))
+      : [{ docId: m.docs.allergy, category: 'trap' }, { docId: m.docs.job, category: 'trap' }], [], 6) });
 }
-for (let i = 0; i < Math.min(5, projMeta.length); i++) {
-  const m = projMeta[i * 2 % projMeta.length];
+for (let i = 0; i < projMeta.length; i += 3) {
+  const m = projMeta[i];
+  const sameName = projMeta.filter((o) => o.pname.split('-')[0] === m.pname.split('-')[0] && o.p !== m.p);
+  const hard = sameName.length > 0 && chance(0.5);
   addQuery({ lane: 'agent_workflow', family: 'abstention', invariant: 'I14', abstain: true,
-    queryText: `What is the ${ABSTAIN_AGENT[i % ABSTAIN_AGENT.length]} for ${m.pname}?`,
+    queryText: hard
+      ? `What is ${m.pname}'s staging database password?` // never stored (secret doc says don't commit, not the value)
+      : `What is the ${ABSTAIN_AGENT[(i / 3) % ABSTAIN_AGENT.length]} for ${m.pname}?`,
     qrels: [],
-    hardNegatives: padNegs([{ docId: m.docs.stack, category: 'trap' }, { docId: m.docs.secret, category: 'trap' }], [], 4) });
+    hardNegatives: padNegs([{ docId: m.docs.stack, category: 'trap' }, { docId: m.docs.secret, category: 'trap' },
+      ...(d_secret_others(projMeta, m).slice(0, 2))], [], 6) });
 }
+function d_secret_others(arr, me) { return arr.filter((o) => o.p !== me.p).slice(0, 2).map((o) => ({ docId: o.docs.secret, category: 'trap' })); }
+
+// ── explicit splits (P1.5 #1): every query + doc gets a non-null split ──
+// Memory docs are proposer-visible stored memories → train_visible. Queries → deterministic 70/10/15/5.
+for (const d of docs) d.split = 'train_visible';
+for (const q of queries) q.split = splitFor(q.id, SEED);
+const splitCount = queries.reduce((a, q) => (a[q.split] = (a[q.split] || 0) + 1, a), {});
 
 // ── assemble + write ──
 const corpus = {
@@ -544,7 +577,8 @@ const corpus = {
   seed: SEED,
   generator: 'scripts/generate-memory-corpus-v2.mjs',
   params: { users: N_USERS, projects: N_PROJECTS },
-  description: 'P0 synthetic blended long-term agent memory (conversational + agent_workflow). Logical layer; embed separately. No analytics; currency is curated metadata.',
+  splitRatios: { train_visible: 70, calibration: 10, eval_hidden: 15, canary: 5 },
+  description: 'Synthetic blended long-term agent memory (conversational + agent_workflow). Logical layer; embed separately. No analytics; currency is curated metadata. Explicit splits (no null).',
   entities, docs, relations, queries,
 };
 
@@ -554,3 +588,4 @@ const famCount = queries.reduce((a, q) => (a[q.family] = (a[q.family] || 0) + 1,
 console.log(`wrote ${OUT}`);
 console.log(`docs=${docs.length} (${JSON.stringify(laneCount)}) queries=${queries.length} relations=${relations.length} entities=${entities.length}`);
 console.log(`families: ${JSON.stringify(famCount)}`);
+console.log(`query splits: ${JSON.stringify(splitCount)}`);
