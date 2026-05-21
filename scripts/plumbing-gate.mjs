@@ -157,8 +157,70 @@ async function gatePhaseA() {
 function writeRelationEdge(words, entryIndex, sourceSlot, targetSlot, edgeType) {
   words[RANGES.RELATIONS_START + entryIndex] = encodeRelationEdge({ entryIndex, sourceSlot, targetSlot, edgeType, weight: 1 });
 }
+function writeRetrievalKey(words, slot, vec) {
+  const w = encodeRetrievalKeySlot({ slotIndex: slot, modelIdHash: biEncoderHash, l2Norm: 1.0, versionTag: 1, quantizedBytes: quantize(vec) }, { retrievalKeyHeaderBytes: LAYOUT.headerBytes });
+  const b = RANGES.RETRIEVAL_KEYS_START + slot * 8; for (let j = 0; j < 8; j++) words[b + j] = w[j];
+}
+function writeCategoryLens(words, entry, edgeType, weight = 0x8000) {
+  words[RANGES.RELATIONS_START + entry] = encodeRelationCategoryLens({ entryIndex: entry, edgeType, weight });
+}
+function inCap(pq, id) { return (pq?.cappedDocIds ?? []).includes(id); }
 
-const GATES = { temporal: gateTemporal, phaseA: gatePhaseA };
+// ── LENS gate: decoded.retrievalKeys must promote a stage1-buried answer ──────
+async function gateLens() {
+  const q = dir('lens:q'), a = dir('lens:answer'); // answer ~orthogonal to query
+  const negs = []; for (let i = 0; i < 5; i++) negs.push({ id: `gate:lens:neg${i}`, text: `distractor ${i}`, vec: combine([{ v: q, w: 0.2 }, { v: dir('lens:n' + i), w: 0.98 }]), relevance: 0 });
+  const ev = mkEvent({ id: 'gate:lens:q', family: 'multi_hop_relation', queryText: 'capital of France?', queryVec: q, truths: [{ id: 'gate:lens:A::truth', text: 'Paris is the capital of France.', vec: a, relevance: 1 }], negs });
+  const Aid = 'gate:lens:A::truth'; const corpus = mkCorpus([ev]); const opts = { rerankerInputTopK: 3 };
+  const off = await score(emptyWords(), corpus, ev, opts);
+  const wOn = emptyWords(); writeRetrievalKey(wOn, 0, a); const on = await score(wOn, corpus, ev, opts);
+  const onR = rowOf(on, Aid), offR = rowOf(off, Aid);
+  const scorerConsumes = (onR?.lensBonus ?? 0) > 0, sourceFires = inCap(on, Aid) && !inCap(off, Aid);
+  const metricCredits = (onR?.rank ?? 99) <= 10 && !(onR?.sources ?? []).includes('anchorMandatory');
+  const causalLift = (on.composite ?? 0) > (off.composite ?? 0) + 1e-9;
+  const pass = scorerConsumes && sourceFires && metricCredits && causalLift;
+  return { component: 'lens', pass, chain: { decodedSlotExists: true, scorerConsumes, sourceFires, metricCredits, causalLift },
+    detail: { off: { rank: offR?.rank ?? null, inCap: inCap(off, Aid), composite: +(off.composite ?? 0).toFixed(4) }, on: { rank: onR?.rank ?? null, inCap: inCap(on, Aid), lensBonus: onR?.lensBonus, composite: +(on.composite ?? 0).toFixed(4) } } };
+}
+
+// ── PHASE B gate: decoded.categoryLenses must route bridge->answer via catLensBFS
+async function gatePhaseB() {
+  const q = dir('phaseB:q');
+  const bridgeVec = combine([{ v: q, w: 0.8 }, { v: dir('phaseB:bridge'), w: 0.6 }]); const ansVec = dir('phaseB:answer');
+  const answerEv = mkEvent({ id: 'gate:phaseB:answer', family: 'multi_hop_relation', queryText: 'which company did it derive from?', queryVec: q, truths: [{ id: 'gate:phaseB:A::truth', text: 'It derived from Helios Robotics.', vec: ansVec, relevance: 1 }] });
+  const bridgeEv = mkEvent({ id: 'gate:phaseB:bridge', family: 'multi_hop_relation', queryText: 'bridge', queryVec: bridgeVec, truths: [{ id: 'gate:phaseB:bridge::truth', text: 'flagship project', vec: bridgeVec, relevance: 0 }], relations: [{ other_id: 'gate:phaseB:answer', edgeType: 'derived_from' }] });
+  const Aid = 'gate:phaseB:A::truth'; const corpus = mkCorpus([answerEv, bridgeEv]);
+  const opts = { firstStageTopK: 1, rerankerInputTopK: 20, categoryLensExpansionBudget: 4, categoryLensTraversalDirection: 'forward', categoryLensBonusEnabled: false };
+  const off = await score(emptyWords(), corpus, answerEv, { ...opts, categoryLensExpansionBudget: 0 });
+  const wOn = emptyWords(); writeCategoryLens(wOn, 127, 'derived_from'); const on = await score(wOn, corpus, answerEv, opts);
+  const onR = rowOf(on, Aid), offR = rowOf(off, Aid); const src = onR?.sources ?? [];
+  const scorerConsumes = src.includes('categoryLensBFS'), sourceFires = scorerConsumes && !src.includes('anchorMandatory');
+  const metricCredits = (onR?.rank ?? 99) <= 10; const causalLift = onR != null && offR == null;
+  const pass = scorerConsumes && sourceFires && metricCredits && causalLift;
+  return { component: 'phaseB', pass, chain: { decodedSlotExists: true, scorerConsumes, sourceFires, metricCredits, causalLift },
+    detail: { off_answerInPool: offR != null, on_answerSources: src, on_answerRank: onR?.rank ?? null } };
+}
+
+// ── ANCHOR-SPLIT gate: separate mandatory INCLUSION from similarity BONUS ──────
+async function gateAnchorSplit() {
+  const q = dir('anchor:q'); const farVec = dir('anchor:far'); // answer query-far (would be below cap)
+  // distractors fill the cap by query-cosine
+  const negs = []; for (let i = 0; i < 6; i++) negs.push({ id: `gate:anchor:neg${i}`, text: `d${i}`, vec: combine([{ v: q, w: 0.3 }, { v: dir('anchor:n' + i), w: 0.95 }]), relevance: 0 });
+  const ev = mkEvent({ id: 'gate:anchor:q', family: 'multi_hop_relation', queryText: 'q', queryVec: q, truths: [{ id: 'gate:anchor:A::truth', text: 'the answer', vec: farVec, relevance: 1 }], negs });
+  const Aid = 'gate:anchor:A::truth'; const corpus = mkCorpus([ev]); const opts = { rerankerInputTopK: 3 };
+  // (1) mandatory inclusion: anchoring A force-includes it in the cap despite low biCosine.
+  const wAnchor = emptyWords(); writeAnchor(wAnchor, 0, ev); const anchored = await score(wAnchor, corpus, ev, opts);
+  const off = await score(emptyWords(), corpus, ev, opts);
+  const mandatoryInclusion = inCap(anchored, Aid) && !inCap(off, Aid);
+  const anchorRow = rowOf(anchored, Aid);
+  // (2) similarity bonus is a SEPARATE channel (anchorBonus>0 from cos to anchor truth vecs).
+  const similarityBonusWired = (anchorRow?.anchorBonus ?? 0) > 0;
+  const pass = mandatoryInclusion && similarityBonusWired; // both effects present AND distinguishable
+  return { component: 'anchor-split', pass, chain: { decodedSlotExists: true, scorerConsumes: mandatoryInclusion, sourceFires: (anchorRow?.sources ?? []).includes('anchorMandatory'), metricCredits: mandatoryInclusion, causalLift: mandatoryInclusion },
+    detail: { mandatoryInclusion, similarityBonus_anchorBonus: anchorRow?.anchorBonus, note: 'mandatory inclusion (cap force-include) and similarity bonus (anchorBonus) are distinct channels — do not conflate' } };
+}
+
+const GATES = { temporal: gateTemporal, phaseA: gatePhaseA, lens: gateLens, phaseB: gatePhaseB, 'anchor-split': gateAnchorSplit };
 reranker = await createDeterministicReranker();
 const comps = componentArg === 'all' ? Object.keys(GATES) : [componentArg];
 const results = [];
