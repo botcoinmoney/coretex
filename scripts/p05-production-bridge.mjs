@@ -201,7 +201,9 @@ function temporalSubstrate(pack) {
 }
 
 // ── scoring options ──
-const biEncoder = createDeterministicBiEncoder({ modelId: BE.modelId, revision: BE.revision, layout: LAYOUT });
+// Inert bi-encoder stub: the scorer never calls encode() (corpus/query embeddings are
+// pre-baked), and createDeterministicBiEncoder is refused under CORETEX_RERANKER_PRODUCTION=1.
+const biEncoder = { modelId: BE.modelId, revision: BE.revision, layout: LAYOUT, async encode() { throw new Error('biEncoder.encode not used — embeddings are pre-baked'); } };
 const RR = manifest.model.reranker;
 const reranker = rerankerArg === 'gpu' || rerankerArg === 'cpu'
   ? streamReranker({ model: RR.modelId, revision: RR.revision, python: process.env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: rerankerArg === 'gpu' })
