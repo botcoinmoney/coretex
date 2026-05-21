@@ -35,6 +35,15 @@ for S in s1 s2 s3; do
   done
 done
 
+echo "### adversarial edge-injection robustness (Qwen): junk-edges 0 vs 5000 at cap-64 (does junk flood top-10 under the real reranker?)"
+for J in 0 5000; do
+  node scripts/p05-production-bridge.mjs --corpus "$CORPUS" --emb "$EMB" --pack-size 24 --rerank-cap 64 \
+    --reranker gpu --rel-mode no-query --first-stage-topk 128 --cat-budget 12 --lens-bonus-weight 10 --junk-edges "$J" --pack-seed s1 \
+    > "$D/p2_junk${J}.log" 2>>"$D/p2_sweep.err"
+  mv release/calibration/2026-05-21-memory-corpus-v2/P05_PRODUCTION_BRIDGE_qwen_no-query.json "$D/P2_JUNK${J}.json" 2>/dev/null \
+    && python3 -c "import json;r=json.load(open('$D/P2_JUNK${J}.json'))['relation'];print('junk=$J relHit',round(r['on']['categoryLensRelationHit10'],3),'flood',r['flood']['on'])" || echo "junk=$J NO OUTPUT"
+done
+
 echo "### abstention separability at 100k (Qwen)"
 node scripts/p05-production-bridge.mjs --corpus "$CORPUS" --emb "$EMB" --pack-size 80 --rerank-cap 64 \
   --reranker gpu --abstention --pack-seed s1 > "$D/p2_abstention.log" 2>>"$D/p2_sweep.err"

@@ -74,6 +74,7 @@ const rerankCap = Number(flag('rerank-cap', '128')); // rerankerInputTopK (lower
 // scorer/metric-only and must NEVER be traversed by categoryLensBFS. 'all' (legacy, LEAKY — reproduces the
 // query→answer bookmark) and 'no-memory' (query-only) are kept for the leak-ablation smoke.
 const relMode = flag('rel-mode', 'no-query');
+const junkEdges = Number(flag('junk-edges', '0')); // adversarial: inject N random wrong mem→mem edges
 const rerankerArg = flag('reranker', 'deterministic');
 const outDir = flag('out', 'release/calibration/2026-05-21-memory-corpus-v2');
 
@@ -130,6 +131,18 @@ for (const d of logical.docs) {
     relations: relMode === 'no-memory' ? [] : (relBySrc.get(d.id) ?? []).map((r) => ({ other_id: memId(r.dst), edgeType: r.type })),
     provenance: PROV, embeddings: mkEmb(emb, [[d.id, emb]], []),
   });
+}
+// adversarial: inject N random (semantically WRONG) mem→mem edges of a lens edge-type, to test whether the
+// strong categoryLensBonus lets junk edges promote irrelevant docs (gameability). Deterministic by index.
+if (junkEdges > 0) {
+  const memEvById = new Map(events.map((e) => [e.id, e]));
+  const ids = logical.docs.map((d) => memId(d.id));
+  let s = 0x9e3779b1 >>> 0; const rnd = () => { s = (Math.imul(s ^ (s >>> 15), 0x2c1b3c6d) + 1) >>> 0; return s / 4294967296; };
+  for (let k = 0; k < junkEdges; k++) {
+    const src = memEvById.get(ids[Math.floor(rnd() * ids.length)]);
+    const dst = ids[Math.floor(rnd() * ids.length)];
+    if (src && dst && dst !== src.id) src.relations = [...(src.relations ?? []), { other_id: dst, edgeType: 'supports' }];
+  }
 }
 // QUERY events, eval_hidden.
 for (const q of logical.queries) {
@@ -322,13 +335,16 @@ if (argv.includes('--debug')) {
 // hard-negative flood: mean # of the query's hard negatives appearing in finalRankingTop20 (top-20)
 const negsById = new Map(logical.queries.map((q) => [q.id, new Set((q.hardNegatives ?? []).map((n) => n.docId))]));
 function floodStats(score) {
-  let n = 0, sum = 0, max = 0;
+  let n = 0, sum = 0, max = 0, junkSum = 0;
   for (const pq of score.perQuery ?? []) {
     const negs = negsById.get(pq.recordId) ?? new Set();
-    const c = (pq.finalRankingTop20 ?? []).filter((r) => r.rank <= 20 && negs.has(r.docId)).length;
-    n++; sum += c; if (c > max) max = c;
+    const top = pq.finalRankingTop20 ?? [];
+    const c = top.filter((r) => r.rank <= 20 && negs.has(r.docId)).length;
+    // adversarial/gameability: irrelevant (relevance 0) doc routed into top-10 via categoryLensBFS
+    const junk = top.filter((r) => r.rank <= 10 && (r.relevance ?? 0) === 0 && (r.sources ?? []).includes('categoryLensBFS')).length;
+    n++; sum += c; junkSum += junk; if (c > max) max = c;
   }
-  return { meanHardNegInTop20: n ? +(sum / n).toFixed(3) : null, maxHardNegInTop20: max };
+  return { meanHardNegInTop20: n ? +(sum / n).toFixed(3) : null, maxHardNegInTop20: max, meanLensJunkInTop10: n ? +(junkSum / n).toFixed(3) : null };
 }
 // categoryLensBFS attribution: relevant doc in top-10 reached via categoryLensBFS
 const logFamById = new Map(logical.queries.map((q) => [q.id, q.family]));
@@ -352,7 +368,7 @@ const gitSha = (() => { try { return execSync('git rev-parse --short HEAD', { cw
 const report = {
   provenance: { specVersion: logical.specVersion, corpusRoot, gitSha, reranker: (rerankerArg === 'env' || rerankerArg === 'gpu' || rerankerArg === 'cpu') ? `Qwen/Qwen3-Reranker-0.6B (${rerankerArg})` : 'deterministic-stub',
     biEncoder: BE.modelId, layout: LAYOUT, packSizeCap: packSize, rerankerInputTopK: rerankCap, relMode, packSeed,
-    firstStageTopK: baseOpts.firstStageTopK, categoryLensBonusWeight: lensBonusWeight ?? 'default', splits: { memory: 'train_visible', queries: 'logical (split-pure eval_hidden pack)' } },
+    firstStageTopK: baseOpts.firstStageTopK, categoryLensBonusWeight: lensBonusWeight ?? 'default', junkEdges, splits: { memory: 'train_visible', queries: 'logical (split-pure eval_hidden pack)' } },
   relation: {
     pack: relationPack.map((e) => e.id), n: relationPack.length,
     off: { nDCG10: relOff.nDCG10, recall10: relOff.recall10, multiHopRecall10: relOff.multiHopRecall10, categoryLensRelationHit10: relOff.categoryLensRelationHit10 },
