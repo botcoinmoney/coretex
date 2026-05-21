@@ -64,6 +64,7 @@ function streamReranker({ model, revision, python, allowCuda }) {
 }
 
 const argv = process.argv.slice(2);
+const START_T = Date.now();
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
 const corpusPath = flag('corpus', 'release/calibration/2026-05-21-memory-corpus-v2/p0-corpus.json');
 const embPath = flag('emb', 'release/calibration/2026-05-21-memory-corpus-v2/p0-embeddings.json');
@@ -318,6 +319,17 @@ if (argv.includes('--debug')) {
   }
 }
 
+// hard-negative flood: mean # of the query's hard negatives appearing in finalRankingTop20 (top-20)
+const negsById = new Map(logical.queries.map((q) => [q.id, new Set((q.hardNegatives ?? []).map((n) => n.docId))]));
+function floodStats(score) {
+  let n = 0, sum = 0, max = 0;
+  for (const pq of score.perQuery ?? []) {
+    const negs = negsById.get(pq.recordId) ?? new Set();
+    const c = (pq.finalRankingTop20 ?? []).filter((r) => r.rank <= 20 && negs.has(r.docId)).length;
+    n++; sum += c; if (c > max) max = c;
+  }
+  return { meanHardNegInTop20: n ? +(sum / n).toFixed(3) : null, maxHardNegInTop20: max };
+}
 // categoryLensBFS attribution: relevant doc in top-10 reached via categoryLensBFS
 const logFamById = new Map(logical.queries.map((q) => [q.id, q.family]));
 function bfsAttribution(score) {
@@ -346,12 +358,15 @@ const report = {
     off: { nDCG10: relOff.nDCG10, recall10: relOff.recall10, multiHopRecall10: relOff.multiHopRecall10, categoryLensRelationHit10: relOff.categoryLensRelationHit10 },
     on: { nDCG10: relOn.nDCG10, recall10: relOn.recall10, multiHopRecall10: relOn.multiHopRecall10, categoryLensRelationHit10: relOn.categoryLensRelationHit10 },
     attribution: { off: bfsAttribution(relOff), on: bfsAttribution(relOn) },
+    flood: { off: floodStats(relOff), on: floodStats(relOn) },
   },
   temporal: {
     pack: temporalPack.map((e) => e.id), n: temporalPack.length,
     off: { nDCG10: tmpOff.nDCG10, recall10: tmpOff.recall10, temporal: tmpOff.temporal },
     on: { nDCG10: tmpOn.nDCG10, recall10: tmpOn.recall10, temporal: tmpOn.temporal },
+    flood: { off: floodStats(tmpOff), on: floodStats(tmpOn) },
   },
+  cost: { qwenPairsApprox: rerankCap * (relationPack.length * 2 + temporalPack.length * 2), wallClockSec: +((Date.now() - START_T) / 1000).toFixed(1) },
 };
 const suffix = (rerankerArg === 'env' || rerankerArg === 'gpu' || rerankerArg === 'cpu') ? 'qwen' : 'det';
 const relTag = relMode === 'all' ? '' : `_${relMode}`;
