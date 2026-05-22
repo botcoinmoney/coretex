@@ -42,6 +42,9 @@ const randomPerEpoch = Number(flag('random-per-epoch', '12'));
 const hillclimbPerEpoch = Number(flag('hillclimb-per-epoch', '6'));
 const outDir = flag('out', 'release/calibration/2026-05-21-memory-corpus-v2/p3-rework');
 const tag = flag('tag', undefined);
+// Phase 6 stress: exhaust a family's honest signal (relation|temporal|mixed) to test
+// whether the OTHER families keep the runway alive. 'none' = normal Phase 4 market.
+const exhaustFamily = flag('exhaust-family', 'none');
 
 // ── controller candidates (Phase 2 shortlist C0–C3) ──
 const CONTROLLERS = {
@@ -109,7 +112,8 @@ const FAMILIES = ['relation', 'temporal', 'mixed'];
 /** One Monte Carlo run: returns the runbook Phase 4 metrics. */
 function simulate({ curve, controller, epochs, growth, pop, majorDeltaThreshold, mcSeed }) {
   const rand = mulberry32(hseed(`${mcSeed}:${growth}:${pop}`));
-  const pHonest = Object.fromEntries(FAMILIES.map((f) => [f, interp(curve.pts, `honest_${f}`)]));
+  // Phase 6 family-exhaustion: zero the exhausted family's acceptance (its real signal dried up).
+  const pHonest = Object.fromEntries(FAMILIES.map((f) => [f, f === exhaustFamily ? (() => 0) : interp(curve.pts, `honest_${f}`)]));
   const pHonestAny = interp(curve.pts, 'honest_any');
   const pRandom = interp(curve.pts, 'random');
   const pHill = interp(curve.pts, 'hillclimb');
@@ -225,7 +229,7 @@ const dirtyTree = (() => { try { return execSync('git status --porcelain', { cwd
 const out = {
   generatedAt: new Date().toISOString(),
   provenance: { curves: curvePaths, curvePhases: curves.map((c) => c.phase), gitSha, dirtyTree, targetAdvances, replayTolerancePpm: replayTol, majorDeltaThreshold,
-    honestPerEpoch, randomPerEpoch, hillclimbPerEpoch, epochsGrid, mcSeeds, controllers: CONTROLLERS, growthSchedules: GROWTH, populations: POPULATIONS,
+    honestPerEpoch, randomPerEpoch, hillclimbPerEpoch, epochsGrid, mcSeeds, exhaustFamily, controllers: CONTROLLERS, growthSchedules: GROWTH, populations: POPULATIONS,
     note: 'acceptance sampled from empirical Phase 3 response curves; controller is the real protocol nextMinImprovementPpm from dist' },
   byController,
   cells: results,
