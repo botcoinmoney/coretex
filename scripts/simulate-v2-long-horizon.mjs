@@ -32,12 +32,12 @@ import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { buildV2ProductionCorpus, inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
+import { honestPatch as honestPatchLib, empty, hseed, mulberry32, randomPatch } from './lib/v2-patch-families.mjs';
 
 const {
   scoringOptionsFromProfile, deriveQueryPack, evaluateBaseline, evaluateRetrievalBenchmarkPatch,
-  applyPatch, merkleizeState, nextMinImprovementPpm, isMajorDelta, createDeterministicReranker,
-  encodeRelationCategoryLens, encodeMemoryIndexSlot, encodeTemporalRecord, stableRecordIdFor,
-  PATCH_TYPE, RANGES, RESERVED_MASKS, MIN_IMPROVEMENT_PPM, MAX_IMPROVEMENT_PPM,
+  applyPatch, nextMinImprovementPpm, isMajorDelta, createDeterministicReranker,
+  MIN_IMPROVEMENT_PPM, MAX_IMPROVEMENT_PPM,
 } = await import(distIndex);
 
 const argv = process.argv.slice(2);
@@ -119,7 +119,6 @@ const structFloors = {
 
 // owner-growth: activate the first `frac` of owners (deterministic order).
 const owners = [...new Set(queryEvents.filter((e) => e.ownerScoped === true && e.ownerEntityId).map((e) => e.ownerEntityId))];
-function hseed(s) { let h = 2166136261 >>> 0; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h; }
 const ownerOrder = [...owners].map((o) => [o, hseed(`${masterSeed}:${o}`)]).sort((a, b) => a[1] - b[1]).map((p) => p[0]);
 // Active subset corpus: eval_hidden restricted to active owners (+ pooled families always on); all mem docs kept.
 function activeCorpus(frac) {
@@ -130,64 +129,12 @@ function activeCorpus(frac) {
     evalHiddenCount: events.filter((e) => e.split === 'eval_hidden').length };
 }
 
-// ── honest patch families ──
-// All three are GENUINE substrate compiles (proposer-visible memory structure, no
-// query→answer leak): the relation lever compiles category-lens edges; the temporal
-// lever compiles the corpus's own current/stale memory roles + a TemporalRecord (the
-// same construction the validated p05 ON arm uses). Each builds indices/newWords that
-// the harness wraps into a MIXED patch parented on `state` (mutate-best semantics).
-const empty = () => ({ words: new Array(1024).fill(0n) });
-const RELATION_EDGES = ['supports', 'causes', 'supersedes', 'coreference_of'];
-
-// relation-only: category-lens entries for the canonical edge set at top entryIndices.
-function relationUnits() {
-  const indices = [], newWords = [];
-  RELATION_EDGES.forEach((et, i) => {
-    indices.push(RANGES.RELATIONS_START + (128 - 1 - i));
-    newWords.push(encodeRelationCategoryLens({ entryIndex: 128 - 1 - i, edgeType: et, weight: 0x8000 }));
-  });
-  return { indices, newWords };
-}
-
-// temporal-only: for each temporal_update query in the pack, allocate stale+current
-// memory-index slots (revoked vs valid) and one TemporalRecord. Bounded to 12 records
-// / 42 slots (the substrate temporal/memory-index capacity used by the canonical bridge).
-function temporalUnits(pack) {
-  const indices = [], newWords = [];
-  let slot = 0, rec = 0;
-  for (const ev of pack.events) {
-    if (rec >= 12 || slot >= 42) break;
-    const lq = logicalQById.get(ev.id);
-    if (!lq || lq.family !== 'temporal_update') continue;
-    const cur = (lq.qrels ?? []).find((r) => r.role === 'direct');
-    const stale = (lq.qrels ?? []).find((r) => r.role === 'stale');
-    if (!cur || !stale) continue;
-    const staleSlot = slot++, curSlot = slot++;
-    const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(`mem_${stale.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, retrievalSlot: staleSlot, expiryEpoch: 0n });
-    for (let j = 0; j < 8; j++) { indices.push(RANGES.MEMORY_INDEX_START + staleSlot * 8 + j); newWords.push(sw[j]); }
-    const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(`mem_${cur.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: curSlot, expiryEpoch: 0n });
-    for (let j = 0; j < 8; j++) { indices.push(RANGES.MEMORY_INDEX_START + curSlot * 8 + j); newWords.push(cw[j]); }
-    const tw = encodeTemporalRecord({ recordIndex: rec, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: 1n, validUntilEpoch: (2n ** 40n - 1n), currentStaleFlag: true });
-    for (let j = 0; j < 8; j++) { indices.push(RANGES.TEMPORAL_START + rec * 8 + j); newWords.push(tw[j]); }
-    rec++;
-  }
-  return { indices, newWords };
-}
-
-function makePatch(state, units) {
-  return { patchType: PATCH_TYPE.MIXED, wordCount: units.indices.length, scoreDelta: 0n, parentStateRoot: merkleizeState(state), indices: units.indices, newWords: units.newWords };
-}
-// family ∈ {relation, temporal, mixed}. mixed = relation ∪ temporal (disjoint ranges).
-function honestPatch(state, family, pack) {
-  if (family === 'relation') return makePatch(state, relationUnits());
-  if (family === 'temporal') return makePatch(state, temporalUnits(pack));
-  const r = relationUnits(), t = temporalUnits(pack);
-  return makePatch(state, { indices: [...r.indices, ...t.indices], newWords: [...r.newWords, ...t.newWords] });
-}
+// ── honest patch families (shared lib — same levers measured in Phase 3) ──
+// relation | temporal | mixed are GENUINE substrate compiles (proposer-visible memory
+// structure, no query→answer leak). honestPatch wraps them into a MIXED patch parented
+// on `state` (mutate-best semantics). See scripts/lib/v2-patch-families.mjs.
+const honestPatch = (state, family, pack) => honestPatchLib({ state, family, pack, logicalQById });
 const HONEST_FAMILIES = honestFamily === 'all' ? ['relation', 'temporal', 'mixed'] : [honestFamily];
-function mulberry32(seed) { let t = seed >>> 0; return () => { t += 0x6D2B79F5; let x = Math.imul(t ^ (t >>> 15), 1 | t); x ^= x + Math.imul(x ^ (x >>> 7), 61 | x); return ((x ^ (x >>> 14)) >>> 0) / 4294967296; }; }
-function randomWord(rand, mask) { let v = 0n; for (let i = 0; i < 4; i++) v = (v << 64n) | (BigInt(Math.floor(rand() * 0x100000000)) << 32n) | BigInt(Math.floor(rand() * 0x100000000)); return v & (~mask); }
-function randomPatch(state, rand) { const n = 1 + Math.floor(rand() * 4); const used = new Set(); const indices = [], newWords = []; while (indices.length < n) { const idx = Math.floor(rand() * RANGES.WORD_COUNT); if (used.has(idx)) continue; used.add(idx); const mask = RESERVED_MASKS[idx] ?? 0n; let w = randomWord(rand, mask); if (w === (state.words[idx] ?? 0n)) w = (w + 1n) & (~mask); indices.push(idx); newWords.push(w); } return { patchType: PATCH_TYPE.MIXED, wordCount: n, scoreDelta: 0n, parentStateRoot: merkleizeState(state), indices, newWords }; }
 
 async function evalPatch(state, patch, corpus_, pack, acceptanceThresholdPpm, minImprovementPpm) {
   return evaluateRetrievalBenchmarkPatch(state, patch, corpus_, pack, opts, { ...structFloors, minImprovementPpm, acceptanceThresholdPpm });
