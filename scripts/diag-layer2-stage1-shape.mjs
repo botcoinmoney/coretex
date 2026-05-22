@@ -15,7 +15,7 @@
  *
  * Usage: node scripts/diag-layer2-stage1-shape.mjs <logical-corpus.json> [--out dir]
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { embedTexts, cosine } from './_embed-v2.mjs';
 
@@ -65,7 +65,15 @@ async function main() {
   const path = args.find((a) => !a.startsWith('--'));
   const outDir = (() => { const i = args.indexOf('--out'); return i >= 0 ? args[i + 1] : 'release/calibration/2026-05-21-memory-corpus-v2'; })();
   const ownerScope = args.includes('--owner-scope');
+  // --sample-queries N: deterministically sample N queries (family-balanced via
+  // per-query hash) so large corpora (P3: 37k queries, pooled families rank the
+  // full pool) finish fast. 0 = all queries.
+  const sampleQueries = (() => { const i = args.indexOf('--sample-queries'); return i >= 0 ? Number(args[i + 1]) : 0; })();
   const corpus = JSON.parse(readFileSync(path, 'utf8'));
+  if (sampleQueries > 0 && corpus.queries.length > sampleQueries) {
+    const hs = (s) => { let h = 2166136261 >>> 0; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h; };
+    corpus.queries = [...corpus.queries].sort((a, b) => hs('lq:' + a.id) - hs('lq:' + b.id)).slice(0, sampleQueries);
+  }
   const docs = corpus.docs;
   const idToIdx = new Map(docs.map((d, i) => [d.id, i]));
   // Owner→doc-index map (for owner-scoped dense-rank diagnostics): restrict the
@@ -208,6 +216,7 @@ async function main() {
   lines.push(`answerable mean=${report.abstention.answerableTop1CosineMean}, p10=${report.abstention.answerableTop1CosineP10}; abstain mean=${report.abstention.abstainTop1CosineMean}, p90=${report.abstention.abstainTop1CosineP90}.`);
   lines.push(absT1.length ? `(want abstain top-1 cosine clearly below answerable → a threshold can gate abstention)` : '(no abstention queries)');
 
+  mkdirSync(resolve(outDir), { recursive: true });
   const jsonPath = resolve(outDir, 'LAYER2_STAGE1_SHAPE.json');
   const mdPath = resolve(outDir, 'LAYER2_STAGE1_SHAPE.md');
   writeFileSync(jsonPath, JSON.stringify(report, null, 2));
