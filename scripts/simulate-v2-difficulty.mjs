@@ -40,10 +40,34 @@ const targetAdvances = Number(flag('target-advances', '5'));
 const scenario = flag('scenario', 'alternating-burst');
 const ownerFractions = String(flag('owner-fractions', '0.25,0.5,0.75,1.0')).split(',').map(Number);
 const epochsPerFraction = Number(flag('epochs-per-fraction', String(Math.ceil(epochs / 4))));
-const majorDeltaThreshold = Number(flag('major-delta-threshold', '0.1'));
+const majorDeltaThreshold = Number(flag('major-delta-threshold', '10'));
 const orderSeeds = String(flag('order-seeds', 's1,s2,s3')).split(',').filter(Boolean);
 const startFloorPpm = BigInt(flag('start-floor-ppm', '5000'));
 const outDir = flag('out', 'release/calibration/2026-05-21-memory-corpus-v2');
+// Controller-shape sweep flags (Phase 1 hardening). Undefined → controller defaults.
+const num = (n) => { const v = flag(n, undefined); return v === undefined ? undefined : Number(v); };
+const rampUpMaxRatio = num('ramp-up-max-ratio');
+const decayRatio = num('decay-ratio');
+const smallDriftRatio = num('small-drift-ratio');
+const qualityHighThresholdMult = num('quality-high-threshold-mult'); // qualityHighThreshold = mult * targetAdvances
+// Experimental clamp-bound overrides (research-only). Undefined → pinned protocol constants.
+const minImprovementFloorPpm = (() => { const v = flag('min-improvement-floor-ppm', undefined); return v === undefined ? undefined : BigInt(v); })();
+const maxImprovementCeilingPpm = (() => { const v = flag('max-improvement-ceiling-ppm', undefined); return v === undefined ? undefined : BigInt(v); })();
+// Effective clamp bounds used for plateau/stall detection (must track overrides).
+const EFF_MIN = minImprovementFloorPpm !== undefined && minImprovementFloorPpm > 0n ? Number(minImprovementFloorPpm) : MINP;
+const EFF_MAX = maxImprovementCeilingPpm !== undefined && maxImprovementCeilingPpm > BigInt(EFF_MIN) ? Number(maxImprovementCeilingPpm) : MAXP;
+
+// Production-count semantics for majorDeltaThreshold (Phase 1 item 7): isMajorDelta
+// compares an ABSOLUTE new-minus-prev eval_hidden COUNT against the threshold. A
+// ratio-like value (0<v<1) is almost certainly a mistake at production scale (it
+// would fire grace on essentially any growth). Refuse it loudly.
+if (majorDeltaThreshold > 0 && majorDeltaThreshold < 1) {
+  console.error(`[v2-diff] FATAL: --major-delta-threshold=${majorDeltaThreshold} is ratio-like; isMajorDelta expects an integer new-eval_hidden COUNT (e.g. 10). Refusing.`);
+  process.exit(2);
+}
+if (majorDeltaThreshold > 0 && !Number.isInteger(majorDeltaThreshold)) {
+  console.error(`[v2-diff] WARN: --major-delta-threshold=${majorDeltaThreshold} is non-integer; isMajorDelta is an integer count comparison.`);
+}
 
 // ── load V2 logical corpus; SEPARATE owner-scoped from pooled families ──
 const logical = JSON.parse(readFileSync(resolve(corpusPath), 'utf8'));
@@ -74,9 +98,35 @@ function scenarioCounts(kind, epoch) {
       : { observedAdvances: 100, qualityAttempts: 300 };
     case 'stalled': return { observedAdvances: 0, qualityAttempts: targetAdvances * 6 };
     case 'cooling': return { observedAdvances: 0, qualityAttempts: 0 };
+    // honest-improver-decay: a healthy honest population whose advance RATE
+    // decays over time (real signal getting scarcer) while it keeps trying hard.
+    // Tests whether the controller decays gracefully toward the floor instead of
+    // pinning high and starving the runway.
+    case 'honest-improver-decay': {
+      const adv = Math.max(0, targetAdvances - Math.floor((epoch - 1) / 8));
+      return { observedAdvances: adv, qualityAttempts: targetAdvances * 6 };
+    }
+    // adversarial-random-only: pure junk pressure — zero honest advances and zero
+    // genuine quality attempts. Tests drift-down-to-floor under noise (no false
+    // tightening). Random patches are bogus, so qualityAttempts (elevated/non-bogus) = 0.
+    case 'adversarial-random-only': return { observedAdvances: 0, qualityAttempts: 0 };
+    // mixed-honest-adversarial: a heterogeneous market — some honest advances below
+    // target plus high genuine quality activity (and implicit junk). Tests whether
+    // the controller equilibrates rather than oscillating.
+    case 'mixed-honest-adversarial': return { observedAdvances: Math.max(1, Math.floor(targetAdvances / 2)), qualityAttempts: targetAdvances * 4 };
     default: throw new Error(`unknown scenario ${kind}`);
   }
 }
+
+// Controller params threaded into every nextMinImprovementPpm call (undefined → defaults).
+const controllerParams = {
+  ...(rampUpMaxRatio !== undefined ? { rampUpMaxRatio } : {}),
+  ...(decayRatio !== undefined ? { decayRatio } : {}),
+  ...(smallDriftRatio !== undefined ? { smallDriftRatio } : {}),
+  ...(qualityHighThresholdMult !== undefined ? { qualityHighThreshold: qualityHighThresholdMult * targetAdvances } : {}),
+  ...(minImprovementFloorPpm !== undefined ? { minClampPpm: minImprovementFloorPpm } : {}),
+  ...(maxImprovementCeilingPpm !== undefined ? { maxClampPpm: maxImprovementCeilingPpm } : {}),
+};
 
 function runOrdering(orderSeed) {
   const owners = shuffledOwners(orderSeed);
@@ -92,15 +142,15 @@ function runOrdering(orderSeed) {
     prevEH = activeEH;
     if (majorDeltaActive) growthEpochs++;
     const { observedAdvances, qualityAttempts } = scenarioCounts(scenario, epoch);
-    const d = nextMinImprovementPpm({ current, observedAdvances, targetAdvances, qualityAttempts, majorDeltaActive });
+    const d = nextMinImprovementPpm({ current, observedAdvances, targetAdvances, qualityAttempts, majorDeltaActive, ...controllerParams });
     if (d.clamped) clampHits++;
     if (d.reason === 'major_delta_grace') graceFreezes++;
     if (d.reason === 'ramp_up') ramps++;
     if (d.reason === 'decay') decays++;
     const after = Number(d.next);
     if (d.next === current) { stagnant++; maxStagnant = Math.max(maxStagnant, stagnant); } else { stagnant = 0; moved++; }
-    if (after === MAXP && observedAdvances > targetAdvances) maxClampWhileAdvancing++;
-    if (after === MINP && observedAdvances === 0) minClampWhileStalled++;
+    if (after === EFF_MAX && observedAdvances > targetAdvances) maxClampWhileAdvancing++;
+    if (after === EFF_MIN && observedAdvances === 0) minClampWhileStalled++;
     rows.push({ epoch, ownerFraction: frac, activeScopedEvalHidden: activeEH, majorDeltaActive, observedAdvances, after, reason: d.reason });
     current = d.next;
   }
@@ -123,7 +173,10 @@ const plateauRiskAtMax = maxA(agg('maxClampWhileAdvancing'));
 const minClampStalled = maxA(agg('minClampWhileStalled'));
 const summary = {
   scenario, epochs, targetAdvances, ownerFractions, epochsPerFraction, majorDeltaThreshold,
-  clampBounds: { minPpm: MINP, maxPpm: MAXP }, orderSeeds,
+  controllerParams: { rampUpMaxRatio: rampUpMaxRatio ?? 1.5, decayRatio: decayRatio ?? 0.85, smallDriftRatio: smallDriftRatio ?? 1.05,
+    qualityHighThresholdMult: qualityHighThresholdMult ?? 4 },
+  clampBounds: { minPpm: EFF_MIN, maxPpm: EFF_MAX, pinnedMinPpm: MINP, pinnedMaxPpm: MAXP,
+    overridden: EFF_MIN !== MINP || EFF_MAX !== MAXP }, orderSeeds,
   scopedOwners: ownersAll.length, scopedEvalHidden: scopedEvalHidden.length, pooledEvalHidden: pooledEvalHidden.length,
   lastPpmMean: mean(agg('lastPpm')), rampsMean: mean(agg('ramps')), decaysMean: mean(agg('decays')),
   graceFreezesMean: mean(agg('graceFreezes')), ownerGrowthEpochsMean: mean(agg('ownerGrowthEpochs')),
@@ -140,7 +193,12 @@ const summary = {
 };
 const out = { generatedAt: new Date().toISOString(), corpus: corpusPath, phase: logical.phase, summary, perSeed };
 mkdirSync(dirname(resolve(outDir, 'x')), { recursive: true });
-const path = resolve(outDir, `V2_DIFFICULTY_${(logical.phase || 'p').toLowerCase()}_${scenario}.json`);
+// Sweep mode writes unique files per grid point: pass --tag to disambiguate, else
+// a short config hash keeps grid points from overwriting each other.
+const tag = flag('tag', undefined);
+const cfgHash = createHash('sha256').update(JSON.stringify(summary.controllerParams) + `:${targetAdvances}:${majorDeltaThreshold}:${EFF_MIN}:${EFF_MAX}`).digest('hex').slice(0, 8);
+const suffix = tag !== undefined ? `_${tag}` : ((summary.clampBounds.overridden || rampUpMaxRatio !== undefined || decayRatio !== undefined || smallDriftRatio !== undefined || qualityHighThresholdMult !== undefined) ? `_${cfgHash}` : '');
+const path = resolve(outDir, `V2_DIFFICULTY_${(logical.phase || 'p').toLowerCase()}_${scenario}${suffix}.json`);
 writeFileSync(path, JSON.stringify(out, null, 2));
 console.log(`# V2 difficulty sim (${logical.phase}, ${scenario}) — ${epochs} epochs × ${orderSeeds.length} owner-orderings, ${ownersAll.length} scoped owners`);
 console.log(JSON.stringify(summary, null, 2));

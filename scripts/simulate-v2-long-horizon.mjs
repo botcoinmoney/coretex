@@ -36,7 +36,8 @@ import { makeStreamReranker } from './lib/stream-reranker.mjs';
 const {
   scoringOptionsFromProfile, deriveQueryPack, evaluateBaseline, evaluateRetrievalBenchmarkPatch,
   applyPatch, merkleizeState, nextMinImprovementPpm, isMajorDelta, createDeterministicReranker,
-  encodeRelationCategoryLens, PATCH_TYPE, RANGES, RESERVED_MASKS, MIN_IMPROVEMENT_PPM, MAX_IMPROVEMENT_PPM,
+  encodeRelationCategoryLens, encodeMemoryIndexSlot, encodeTemporalRecord, stableRecordIdFor,
+  PATCH_TYPE, RANGES, RESERVED_MASKS, MIN_IMPROVEMENT_PPM, MAX_IMPROVEMENT_PPM,
 } = await import(distIndex);
 
 const argv = process.argv.slice(2);
@@ -58,10 +59,39 @@ const epochsPerFraction = Number(flag('epochs-per-fraction', String(Math.ceil(ep
 const packSizeOverride = Number(flag('pack-size', '0'));
 const rerankCapOverride = Number(flag('rerank-cap', '0'));
 const outDir = flag('out', 'release/calibration/2026-05-21-memory-corpus-v2');
+// ── Phase 1 hardening flags ──
+const num = (n) => { const v = flag(n, undefined); return v === undefined ? undefined : Number(v); };
+const big = (n) => { const v = flag(n, undefined); return v === undefined ? undefined : BigInt(v); };
+// Controller-shape sweep (undefined → controller defaults).
+const rampUpMaxRatio = num('ramp-up-max-ratio');
+const decayRatio = num('decay-ratio');
+const smallDriftRatio = num('small-drift-ratio');
+const qualityHighThresholdMult = num('quality-high-threshold-mult');
+// Experimental clamp-bound overrides (research-only; pinned constants otherwise).
+const minImprovementFloorPpm = big('min-improvement-floor-ppm');
+const maxImprovementCeilingPpm = big('max-improvement-ceiling-ppm');
+// Fixed-threshold response-curve mode: hold minImprovement fixed, optionally freeze
+// the controller entirely (measure acceptance vs difficulty without feedback).
+const fixedMinImprovementPpm = big('fixed-min-improvement-ppm');
+const disableController = argv.includes('--disable-controller') || fixedMinImprovementPpm !== undefined;
+// Honest patch families: relation | temporal | mixed | all (round-robin over the three).
+const honestFamily = flag('honest-family', 'all');
+// Checkpoint / resume for long A100 / many-epoch continuation.
+const resumePath = flag('resume', undefined);
+const stateOutPath = flag('state-out', undefined);
 const START_T = Date.now();
+const controllerOverrides = {
+  ...(rampUpMaxRatio !== undefined ? { rampUpMaxRatio } : {}),
+  ...(decayRatio !== undefined ? { decayRatio } : {}),
+  ...(smallDriftRatio !== undefined ? { smallDriftRatio } : {}),
+  ...(qualityHighThresholdMult !== undefined ? { qualityHighThreshold: qualityHighThresholdMult * targetAdvances } : {}),
+  ...(minImprovementFloorPpm !== undefined ? { minClampPpm: minImprovementFloorPpm } : {}),
+  ...(maxImprovementCeilingPpm !== undefined ? { maxClampPpm: maxImprovementCeilingPpm } : {}),
+};
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
-const { corpus, queryEvents, LAYOUT, BE, RR, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath });
+const { corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath });
+const logicalQById = new Map(logical.queries.map((q) => [q.id, q]));
 const reranker = rerankerArg === 'gpu' || rerankerArg === 'cpu'
   ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: process.env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: rerankerArg === 'gpu' })
   : await createDeterministicReranker();
@@ -75,6 +105,13 @@ const replayTol = Number(profile.replayTolerancePpm ?? 250);
 // silent default). Warn loudly if the profile lacks it rather than quietly using 0.1.
 if (profile.majorDeltaThreshold === undefined) console.error('[v2-lh] WARN: profile lacks majorDeltaThreshold; falling back to 0.1 (NOT profile-pinned)');
 const effMajorDelta = Number(profile.majorDeltaThreshold ?? 0.1);
+// Production-count semantics (Phase 1 item 7): isMajorDelta compares an ABSOLUTE
+// new-minus-prev eval_hidden COUNT. A ratio-like value (0<v<1) in production-profile
+// mode is almost certainly a misconfiguration — refuse it loudly.
+if (profile.majorDeltaThreshold !== undefined && effMajorDelta > 0 && effMajorDelta < 1) {
+  console.error(`[v2-lh] FATAL: profile.majorDeltaThreshold=${effMajorDelta} is ratio-like; isMajorDelta expects an integer new-eval_hidden COUNT. Refusing.`);
+  process.exit(2);
+}
 const structFloors = {
   structuralFloor: profile.patchAcceptanceFloors.structuralFloor,
   protectedRegressionFloor: -50000, familyCatastrophicFloor: -100000,
@@ -93,9 +130,61 @@ function activeCorpus(frac) {
     evalHiddenCount: events.filter((e) => e.split === 'eval_hidden').length };
 }
 
-// ── patches ──
+// ── honest patch families ──
+// All three are GENUINE substrate compiles (proposer-visible memory structure, no
+// query→answer leak): the relation lever compiles category-lens edges; the temporal
+// lever compiles the corpus's own current/stale memory roles + a TemporalRecord (the
+// same construction the validated p05 ON arm uses). Each builds indices/newWords that
+// the harness wraps into a MIXED patch parented on `state` (mutate-best semantics).
 const empty = () => ({ words: new Array(1024).fill(0n) });
-function positiveControlPatch(state) { const indices = [], newWords = []; ['supports', 'causes', 'supersedes', 'coreference_of'].forEach((et, i) => { indices.push(RANGES.RELATIONS_START + (128 - 1 - i)); newWords.push(encodeRelationCategoryLens({ entryIndex: 128 - 1 - i, edgeType: et, weight: 0x8000 })); }); return { patchType: PATCH_TYPE.MIXED, wordCount: 4, scoreDelta: 0n, parentStateRoot: merkleizeState(state), indices, newWords }; }
+const RELATION_EDGES = ['supports', 'causes', 'supersedes', 'coreference_of'];
+
+// relation-only: category-lens entries for the canonical edge set at top entryIndices.
+function relationUnits() {
+  const indices = [], newWords = [];
+  RELATION_EDGES.forEach((et, i) => {
+    indices.push(RANGES.RELATIONS_START + (128 - 1 - i));
+    newWords.push(encodeRelationCategoryLens({ entryIndex: 128 - 1 - i, edgeType: et, weight: 0x8000 }));
+  });
+  return { indices, newWords };
+}
+
+// temporal-only: for each temporal_update query in the pack, allocate stale+current
+// memory-index slots (revoked vs valid) and one TemporalRecord. Bounded to 12 records
+// / 42 slots (the substrate temporal/memory-index capacity used by the canonical bridge).
+function temporalUnits(pack) {
+  const indices = [], newWords = [];
+  let slot = 0, rec = 0;
+  for (const ev of pack.events) {
+    if (rec >= 12 || slot >= 42) break;
+    const lq = logicalQById.get(ev.id);
+    if (!lq || lq.family !== 'temporal_update') continue;
+    const cur = (lq.qrels ?? []).find((r) => r.role === 'direct');
+    const stale = (lq.qrels ?? []).find((r) => r.role === 'stale');
+    if (!cur || !stale) continue;
+    const staleSlot = slot++, curSlot = slot++;
+    const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(`mem_${stale.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, retrievalSlot: staleSlot, expiryEpoch: 0n });
+    for (let j = 0; j < 8; j++) { indices.push(RANGES.MEMORY_INDEX_START + staleSlot * 8 + j); newWords.push(sw[j]); }
+    const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(`mem_${cur.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: curSlot, expiryEpoch: 0n });
+    for (let j = 0; j < 8; j++) { indices.push(RANGES.MEMORY_INDEX_START + curSlot * 8 + j); newWords.push(cw[j]); }
+    const tw = encodeTemporalRecord({ recordIndex: rec, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: 1n, validUntilEpoch: (2n ** 40n - 1n), currentStaleFlag: true });
+    for (let j = 0; j < 8; j++) { indices.push(RANGES.TEMPORAL_START + rec * 8 + j); newWords.push(tw[j]); }
+    rec++;
+  }
+  return { indices, newWords };
+}
+
+function makePatch(state, units) {
+  return { patchType: PATCH_TYPE.MIXED, wordCount: units.indices.length, scoreDelta: 0n, parentStateRoot: merkleizeState(state), indices: units.indices, newWords: units.newWords };
+}
+// family ∈ {relation, temporal, mixed}. mixed = relation ∪ temporal (disjoint ranges).
+function honestPatch(state, family, pack) {
+  if (family === 'relation') return makePatch(state, relationUnits());
+  if (family === 'temporal') return makePatch(state, temporalUnits(pack));
+  const r = relationUnits(), t = temporalUnits(pack);
+  return makePatch(state, { indices: [...r.indices, ...t.indices], newWords: [...r.newWords, ...t.newWords] });
+}
+const HONEST_FAMILIES = honestFamily === 'all' ? ['relation', 'temporal', 'mixed'] : [honestFamily];
 function mulberry32(seed) { let t = seed >>> 0; return () => { t += 0x6D2B79F5; let x = Math.imul(t ^ (t >>> 15), 1 | t); x ^= x + Math.imul(x ^ (x >>> 7), 61 | x); return ((x ^ (x >>> 14)) >>> 0) / 4294967296; }; }
 function randomWord(rand, mask) { let v = 0n; for (let i = 0; i < 4; i++) v = (v << 64n) | (BigInt(Math.floor(rand() * 0x100000000)) << 32n) | BigInt(Math.floor(rand() * 0x100000000)); return v & (~mask); }
 function randomPatch(state, rand) { const n = 1 + Math.floor(rand() * 4); const used = new Set(); const indices = [], newWords = []; while (indices.length < n) { const idx = Math.floor(rand() * RANGES.WORD_COUNT); if (used.has(idx)) continue; used.add(idx); const mask = RESERVED_MASKS[idx] ?? 0n; let w = randomWord(rand, mask); if (w === (state.words[idx] ?? 0n)) w = (w + 1n) & (~mask); indices.push(idx); newWords.push(w); } return { patchType: PATCH_TYPE.MIXED, wordCount: n, scoreDelta: 0n, parentStateRoot: merkleizeState(state), indices, newWords }; }
@@ -104,13 +193,34 @@ async function evalPatch(state, patch, corpus_, pack, acceptanceThresholdPpm, mi
   return evaluateRetrievalBenchmarkPatch(state, patch, corpus_, pack, opts, { ...structFloors, minImprovementPpm, acceptanceThresholdPpm });
 }
 
-let current = BigInt(Number(profile.patchAcceptanceFloors.minImprovementPpm) || 5000);
+// State (de)serialization for checkpoint/resume — bigint words ↔ decimal strings.
+const serializeState = (s) => s.words.map((w) => w.toString());
+const deserializeState = (arr) => ({ words: arr.map((x) => BigInt(x)) });
+
+// Initial minImprovement: fixed-threshold mode pins it; else the profile floor.
+let current = fixedMinImprovementPpm !== undefined ? fixedMinImprovementPpm : BigInt(Number(profile.patchAcceptanceFloors.minImprovementPpm) || 5000);
 let bestState = empty();
 let prevEH = 0, clampHits = 0, maxClampWhileAdvancing = 0, baselineRecomputes = 0;
 let cachedVariance = null, cachedFrac = null;
-const rows = [];
-console.error(`[v2-lh] corpus=${corpus.events.length} evt, scopedOwners=${owners.length}, reranker=${rerankerArg}, profile=${profilePath}, epochs=${epochs}`);
-for (let epoch = 1; epoch <= epochs; epoch++) {
+let startEpoch = 1;
+let rows = [];
+if (resumePath) {
+  const ck = JSON.parse(readFileSync(resolve(repoRoot, resumePath), 'utf8'));
+  bestState = deserializeState(ck.bestState);
+  if (!disableController) current = BigInt(ck.current);
+  prevEH = ck.prevEH ?? 0; clampHits = ck.clampHits ?? 0; maxClampWhileAdvancing = ck.maxClampWhileAdvancing ?? 0;
+  baselineRecomputes = ck.baselineRecomputes ?? 0; cachedVariance = ck.cachedVariance ?? null; cachedFrac = ck.cachedFrac ?? null;
+  rows = ck.rows ?? []; startEpoch = (ck.lastEpoch ?? 0) + 1;
+  console.error(`[v2-lh] RESUMED from ${resumePath} at epoch ${startEpoch} (rows=${rows.length}, current=${current})`);
+}
+function writeStateOut(lastEpoch) {
+  if (!stateOutPath) return;
+  const ck = { lastEpoch, current: current.toString(), prevEH, clampHits, maxClampWhileAdvancing, baselineRecomputes,
+    cachedVariance, cachedFrac, bestState: serializeState(bestState), rows };
+  writeFileSync(resolve(repoRoot, stateOutPath), JSON.stringify(ck));
+}
+console.error(`[v2-lh] corpus=${corpus.events.length} evt, scopedOwners=${owners.length}, reranker=${rerankerArg}, profile=${profilePath}, epochs=${epochs}, families=[${HONEST_FAMILIES}], controller=${disableController ? 'DISABLED(fixed=' + current + ')' : 'on'}`);
+for (let epoch = startEpoch; epoch <= epochs; epoch++) {
   const fracIdx = Math.min(ownerFractions.length - 1, Math.floor((epoch - 1) / Math.max(1, epochsPerFraction)));
   const frac = ownerFractions[fracIdx] ?? 1;
   const ac = activeCorpus(frac);
@@ -125,13 +235,27 @@ for (let epoch = 1; epoch <= epochs; epoch++) {
   }
   const acceptanceThresholdPpm = Number(current) + cachedVariance + replayTol;
 
-  // HONEST population: positive-control lever (+ variants) from bestState. Major-delta
-  // epochs are a controller grace freeze, but we still measure advances honestly.
+  // HONEST population: genuine substrate-compile levers from bestState, rotating over
+  // the selected families (relation / temporal / mixed). Major-delta epochs are a
+  // controller grace freeze, but we still measure advances honestly. Per-component
+  // deltas (retrieval/temporal/relation/abstention/structural) are recorded so
+  // non-retrieval fluff can be filtered out downstream (Phase 1 item 5).
+  const compDelta = () => ({ retrieval: 0, temporal: 0, relation: 0, abstention: 0, structural: 0 });
+  const familyStats = {}; for (const f of HONEST_FAMILIES) familyStats[f] = { attempts: 0, accepts: 0, deltaPpm: [], comp: compDelta() };
   let honestAccepts = 0, honestAttempts = 0; let pcDelta = null;
   for (let h = 0; h < honestPerEpoch; h++) {
-    const r = await evalPatch(bestState, positiveControlPatch(bestState), ac, pack, acceptanceThresholdPpm, Number(current));
-    honestAttempts++; if (h === 0) pcDelta = r.deltaPpm;
-    if (r.accepted) { honestAccepts++; const ap = applyPatch(bestState, positiveControlPatch(bestState)); if (ap.ok) bestState = ap.state; }
+    const family = HONEST_FAMILIES[(epoch + h) % HONEST_FAMILIES.length];
+    const r = await evalPatch(bestState, honestPatch(bestState, family, pack), ac, pack, acceptanceThresholdPpm, Number(current));
+    honestAttempts++; familyStats[family].attempts++;
+    if (h === 0) pcDelta = r.deltaPpm;
+    familyStats[family].deltaPpm.push(r.deltaPpm);
+    const c = familyStats[family].comp;
+    c.retrieval += r.after.nDCG10 - r.before.nDCG10;
+    c.temporal += r.after.temporal - r.before.temporal;
+    c.relation += r.after.categoryLensRelationHit10 - r.before.categoryLensRelationHit10;
+    c.abstention += r.after.abstention - r.before.abstention;
+    c.structural += r.after.structuralValidity - r.before.structuralValidity;
+    if (r.accepted) { honestAccepts++; familyStats[family].accepts++; const ap = applyPatch(bestState, honestPatch(bestState, family, pack)); if (ap.ok) bestState = ap.state; }
   }
 
   // ADVERSARIAL population: random (from empty) + hillclimb (mutate bestState).
@@ -140,18 +264,33 @@ for (let epoch = 1; epoch <= epochs; epoch++) {
   for (let i = 0; i < randomProbes; i++) { const r = await evalPatch(empty(), randomPatch(empty(), rand), ac, pack, acceptanceThresholdPpm, Number(current)); randDeltas.push(r.deltaPpm); if (r.accepted) randAccepts++; }
   for (let i = 0; i < hillclimbProbes; i++) { const r = await evalPatch(bestState, randomPatch(bestState, rand), ac, pack, acceptanceThresholdPpm, Number(current)); hillDeltas.push(r.deltaPpm); if (r.accepted) hillAccepts++; }
 
-  // Controller: ONLY honest advances feed observedAdvances.
-  const d = nextMinImprovementPpm({ current, observedAdvances: honestAccepts, targetAdvances, qualityAttempts: honestAttempts, majorDeltaActive });
-  if (d.clamped) clampHits++;
-  if (Number(d.next) === Number(MAX_IMPROVEMENT_PPM) && honestAccepts > targetAdvances) maxClampWhileAdvancing++;
+  // Controller: ONLY honest advances feed observedAdvances. In fixed-threshold /
+  // disable-controller mode the threshold is held constant (Phase 3 response-surface
+  // measurement) — no ramp/decay feedback.
+  const minImprBefore = Number(current);
+  let reason = 'fixed_threshold';
+  if (!disableController) {
+    const d = nextMinImprovementPpm({ current, observedAdvances: honestAccepts, targetAdvances, qualityAttempts: honestAttempts, majorDeltaActive, ...controllerOverrides });
+    if (d.clamped) clampHits++;
+    const effMax = maxImprovementCeilingPpm !== undefined ? Number(maxImprovementCeilingPpm) : Number(MAX_IMPROVEMENT_PPM);
+    if (Number(d.next) === effMax && honestAccepts > targetAdvances) maxClampWhileAdvancing++;
+    current = d.next; reason = d.reason;
+  }
+  // Round per-family component deltas for readability.
+  const fstats = {};
+  for (const f of HONEST_FAMILIES) {
+    const s = familyStats[f]; const r4 = (x) => +x.toFixed(6);
+    fstats[f] = { attempts: s.attempts, accepts: s.accepts, deltaPpmMax: s.deltaPpm.length ? Math.max(...s.deltaPpm) : null,
+      componentDelta: { retrieval: r4(s.comp.retrieval), temporal: r4(s.comp.temporal), relation: r4(s.comp.relation), abstention: r4(s.comp.abstention), structural: r4(s.comp.structural) } };
+  }
   rows.push({ epoch, ownerFraction: frac, activeEvalHidden: ac.evalHiddenCount, majorDeltaActive, packN: pack.events.length,
     acceptanceThresholdPpm, variancePpm: cachedVariance,
-    honestAccepts, honestAttempts, positiveControlDeltaPpm: pcDelta,
+    honestAccepts, honestAttempts, positiveControlDeltaPpm: pcDelta, familyStats: fstats,
     randomProbes, randomAccepts: randAccepts, randomAcceptanceRate: +(randAccepts / Math.max(1, randomProbes)).toFixed(4), randomDeltaPpmMax: randDeltas.length ? Math.max(...randDeltas) : null,
     hillclimbProbes, hillclimbAccepts: hillAccepts, hillclimbAcceptanceRate: +(hillAccepts / Math.max(1, hillclimbProbes)).toFixed(4), hillclimbDeltaPpmMax: hillDeltas.length ? Math.max(...hillDeltas) : null,
-    minImprBefore: Number(current), minImprAfter: Number(d.next), reason: d.reason });
-  current = d.next;
-  console.error(`[v2-lh] ep ${epoch}/${epochs} frac=${frac} packN=${pack.events.length} thr=${acceptanceThresholdPpm} | honest ${honestAccepts}/${honestAttempts}(Δ${pcDelta}) rand ${randAccepts}/${randomProbes} hill ${hillAccepts}/${hillclimbProbes} | minImpr ${Number(current === d.next ? rows.at(-1).minImprBefore : current)}→${rows.at(-1).minImprAfter} [${d.reason}]`);
+    minImprBefore, minImprAfter: Number(current), reason });
+  writeStateOut(epoch);
+  console.error(`[v2-lh] ep ${epoch}/${epochs} frac=${frac} packN=${pack.events.length} thr=${acceptanceThresholdPpm} | honest ${honestAccepts}/${honestAttempts}(Δ${pcDelta}) rand ${randAccepts}/${randomProbes} hill ${hillAccepts}/${hillclimbProbes} | minImpr ${minImprBefore}→${Number(current)} [${reason}]`);
 }
 const gitSha = (() => { try { return execSync('git rev-parse --short HEAD', { cwd: repoRoot }).toString().trim(); } catch { return 'unknown'; } })();
 const distHash = (() => { try { return execSync('sha256sum packages/cortex/dist/eval/retrieval-benchmark.js', { cwd: repoRoot }).toString().trim().slice(0, 16); } catch { return 'unknown'; } })();
@@ -163,7 +302,13 @@ const out = {
     reranker: rerankerArg === 'gpu' || rerankerArg === 'cpu' ? `Qwen/Qwen3-Reranker-0.6B@${RR.revision} (${rerankerArg})` : 'deterministic-stub',
     seed: masterSeed, replayTolerancePpm: replayTol, majorDeltaThreshold: effMajorDelta,
     majorDeltaThresholdProfilePinned: profile.majorDeltaThreshold !== undefined,
-    clampBounds: { minPpm: Number(MIN_IMPROVEMENT_PPM), maxPpm: Number(MAX_IMPROVEMENT_PPM) },
+    clampBounds: { minPpm: minImprovementFloorPpm !== undefined ? Number(minImprovementFloorPpm) : Number(MIN_IMPROVEMENT_PPM),
+      maxPpm: maxImprovementCeilingPpm !== undefined ? Number(maxImprovementCeilingPpm) : Number(MAX_IMPROVEMENT_PPM),
+      pinnedMinPpm: Number(MIN_IMPROVEMENT_PPM), pinnedMaxPpm: Number(MAX_IMPROVEMENT_PPM),
+      overridden: minImprovementFloorPpm !== undefined || maxImprovementCeilingPpm !== undefined },
+    honestFamilies: HONEST_FAMILIES, targetAdvances,
+    controllerMode: disableController ? (fixedMinImprovementPpm !== undefined ? `fixed=${fixedMinImprovementPpm}` : 'disabled') : 'feedback',
+    controllerOverrides: { rampUpMaxRatio: rampUpMaxRatio ?? 1.5, decayRatio: decayRatio ?? 0.85, smallDriftRatio: smallDriftRatio ?? 1.05, qualityHighThresholdMult: qualityHighThresholdMult ?? 4 },
     acceptanceRule: 'delta > minImprovementPpm + variancePpm + replayTolerancePpm' },
   summary: {
     epochs, scopedOwners: owners.length, baselineRecomputes,
@@ -181,12 +326,24 @@ const out = {
     antiCheatCleanRandom: mean(rows.map((r) => r.randomAcceptanceRate)) <= 0.01,
     antiCheatCleanHillclimb: mean(rows.map((r) => r.hillclimbAcceptanceRate)) <= 0.01,
     advanceSignalPresent: rows.some((r) => r.honestAccepts > 0),
+    // Per-family advance signal: which honest families actually produced accepts /
+    // real retrieval+temporal gains over the run (filters single-family longevity).
+    perFamily: Object.fromEntries(HONEST_FAMILIES.map((f) => {
+      const accepts = rows.reduce((s, r) => s + (r.familyStats?.[f]?.accepts ?? 0), 0);
+      const attempts = rows.reduce((s, r) => s + (r.familyStats?.[f]?.attempts ?? 0), 0);
+      const dRetr = rows.reduce((s, r) => s + (r.familyStats?.[f]?.componentDelta?.retrieval ?? 0), 0);
+      const dTemp = rows.reduce((s, r) => s + (r.familyStats?.[f]?.componentDelta?.temporal ?? 0), 0);
+      const dRel = rows.reduce((s, r) => s + (r.familyStats?.[f]?.componentDelta?.relation ?? 0), 0);
+      return [f, { attempts, accepts, acceptanceRate: +(accepts / Math.max(1, attempts)).toFixed(4), sumRetrievalDelta: +dRetr.toFixed(6), sumTemporalDelta: +dTemp.toFixed(6), sumRelationDelta: +dRel.toFixed(6) }];
+    })),
   },
   epochs: rows,
 };
 const suffix = rerankerArg === 'gpu' || rerankerArg === 'cpu' ? 'qwen' : 'det';
 mkdirSync(resolve(outDir), { recursive: true });
-const path = resolve(outDir, `V2_LONG_HORIZON_${(profile.name || 'p').toLowerCase().replace(/[^a-z0-9]+/g, '-')}_${suffix}.json`);
+const tag = flag('tag', undefined);
+const tagSuffix = tag !== undefined ? `_${tag}` : '';
+const path = resolve(outDir, `V2_LONG_HORIZON_${(profile.name || 'p').toLowerCase().replace(/[^a-z0-9]+/g, '-')}_${suffix}${tagSuffix}.json`);
 writeFileSync(path, JSON.stringify(out, null, 2));
 console.log(JSON.stringify(out.summary, null, 2));
 console.log(`wrote ${path}`);
