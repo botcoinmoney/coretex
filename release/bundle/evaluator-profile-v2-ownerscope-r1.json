@@ -1,0 +1,107 @@
+{
+  "name": "coretex-evaluator-v2-ownerscope",
+  "version": "r1-candidate-2026-05-22",
+  "scoreScale": "ppm",
+  "scorePpmEncoding": "uint32-0-to-1000000",
+  "patchScoreDeltaEncoding": "int64-ppm",
+  "primaryMetric": "ndcg@10",
+  "acceleratorPolicy": "cpu_only",
+  "runtimePin": {
+    "flavor": "torch-transformers",
+    "versions": {
+      "torch": "2.6.*",
+      "transformers": "4.55.*",
+      "huggingface_hub": "0.36.*",
+      "tokenizers": "0.21.*"
+    },
+    "buildFlags": [
+      "cpu-only"
+    ]
+  },
+  "replayTolerancePpm": 250,
+  "compositeWeights": {
+    "w_retrieval": 0.75,
+    "w_temporal": 0.08,
+    "w_relation_recall": 0.07,
+    "w_abstention": 0.05,
+    "w_structural_sanity": 0.05
+  },
+  "patchAcceptanceFloors": {
+    "minImprovementPpm": 2500,
+    "structuralFloor": 0.95,
+    "protectedRegressionFloor": 0.05,
+    "familyCatastrophicFloor": 0.85
+  },
+  "splitRatios": {
+    "trainVisiblePct": 70,
+    "calibrationPct": 10,
+    "evalHiddenPct": 15,
+    "canaryPct": 5
+  },
+  "hiddenPack": {
+    "packSize": 64,
+    "quotas": [
+      {
+        "stratum": "family=near_collision,bucket=medium",
+        "minCount": 16
+      },
+      {
+        "stratum": "family=temporal,bucket=medium",
+        "minCount": 8
+      },
+      {
+        "stratum": "family=multi_hop_relation,bucket=medium",
+        "minCount": 8
+      }
+    ]
+  },
+  "relationHopBudget": 3,
+  "abstentionThreshold": 0.001,
+  "rerankerTopK": 10,
+  "retrievalKeyTopK": 50,
+  "relationEdgeTypes": [
+    "supports",
+    "supersedes",
+    "coreference_of",
+    "causes",
+    "derived_from",
+    "co_occurs_with"
+  ],
+  "revealGracePeriodSeconds": 21600,
+  "negCategoryRelevanceMap": {
+    "near_collision_attribute": 0.4,
+    "near_collision_entity": 0.2,
+    "temporal_stale": 0.4,
+    "trap": 0,
+    "lexical_distractor": 0.2,
+    "relation_neighbor": 0.4,
+    "unrelated": 0
+  },
+  "baseRpcConfig": {
+    "chainId": 8453,
+    "blockTimeSeconds": 2,
+    "targetBlockOffset": 30,
+    "replayBlockhashLookbackBlocks": 50000
+  },
+  "pipelineVersion": "coretex-retrieval-v2-lens-r3",
+  "firstStageTopK": 3200,
+  "rerankerInputTopK": 64,
+  "lensTopK": 36,
+  "lensWeight": 0.4,
+  "anchorWeight": 0.6,
+  "relationExpansionBudget": 50,
+  "categoryLensExpansionBudget": 50,
+  "temporalCurrentBoost": 0.1,
+  "temporalStaleSuppression": 0.1,
+  "lensDiversityFloor": 0.7,
+  "corpusDocDedupe": "canonical-doc-id",
+  "firstStageTopKSelection": {
+    "method": "worst-stratum-target",
+    "reason": "DEFAULT_PROFILE placeholder; calibration Run 1 replaces this with the production-pinned method and evidence.",
+    "calibrationReport": "release/calibration/first-stage-topk-sweep.json"
+  },
+  "ownerScopeMode": "restrict",
+  "categoryLensFinalBonusWeight": 0,
+  "categoryLensScoreInheritance": 0.3,
+  "_candidateNote": "CANDIDATE, NOT launch-signed. categoryLensScoreInheritance=0.3 is current best, not pinned (needs 3-seed adversarial + larger sample sign-off). rel-mode no-query is a corpus-construction property (bridge builds no query->answer edges). Full bundleHash re-sign is a launch step. Requires deriveQueryPack-on-V2 (item 4) before production-faithful pack derivation."
+}
