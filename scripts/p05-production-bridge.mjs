@@ -269,9 +269,13 @@ const catBudget = (() => { const i = argv.indexOf('--cat-budget'); return i >= 0
 // Score-inheritance alpha (default 0 = off). When >0, ON arm lets a lens-linked
 // answer inherit a bounded fraction of its bridge's reranker score.
 const lensInherit = (() => { const i = argv.indexOf('--lens-inherit'); return i >= 0 ? Number(argv[i + 1]) : 0; })();
+// Precise-admission: seed the category-lens BFS only from the top-K most query-similar
+// stage-1 docs (0/undefined = legacy all-stage-1-seed). Deep universes need a small K.
+const lensSeedTopK = (() => { const i = argv.indexOf('--lens-seed-topk'); return i >= 0 ? Number(argv[i + 1]) : undefined; })();
 const relOptsOff = { ...baseOpts, categoryLensExpansionBudget: 0 };
 const relOptsOn = { ...baseOpts, categoryLensExpansionBudget: catBudget, categoryLensTraversalDirection: 'bidirectional',
   categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: lensInherit,
+  ...(lensSeedTopK !== undefined ? { categoryLensSeedTopK: lensSeedTopK } : {}),
   ...(lensBonusWeight !== undefined ? { categoryLensBonusWeight: lensBonusWeight } : {}) };
 const tempOptsOff = { ...baseOpts, temporalCurrentBoost: 0, temporalStaleSuppression: 0 };
 const tempOptsOn = { ...baseOpts, temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1 };
@@ -416,7 +420,7 @@ const report = {
   provenance: { specVersion: logical.specVersion, corpusRoot, gitSha, distHashRetrievalBenchmark: distHash, dirtyTree,
     reranker: (rerankerArg === 'env' || rerankerArg === 'gpu' || rerankerArg === 'cpu') ? `Qwen/Qwen3-Reranker-0.6B@${RRev} (${rerankerArg})` : 'deterministic-stub',
     biEncoder: BE.modelId, layout: LAYOUT, packSizeCap: packSize, rerankerInputTopK: rerankCap, relMode, packSeed,
-    ownerScopeMode: baseOpts.ownerScopeMode, categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: lensInherit,
+    ownerScopeMode: baseOpts.ownerScopeMode, categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: lensInherit, categoryLensSeedTopK: lensSeedTopK ?? null,
     firstStageTopK: baseOpts.firstStageTopK, categoryLensBonusWeight: lensBonusWeight ?? 'default', junkEdges, splits: { memory: 'train_visible', queries: 'logical (split-pure eval_hidden pack)' } },
   relation: {
     pack: relationPack.map((e) => e.id), n: relationPack.length,
@@ -439,7 +443,7 @@ const relTag = relMode === 'all' ? '' : `_${relMode}`;
 // Run-specific filename so D1/D2/cap/seed/alpha runs don't overwrite each other (audit provenance).
 const phaseTag = (logical.phase || 'p').toLowerCase().replace(/[^a-z0-9]+/g, '');
 const nsTag = logical.deepRemap ? `_ns${logical.deepRemap.namespaces}` : '';
-const runTag = `${phaseTag}${nsTag}_cap${rerankCap}_a${String(lensInherit).replace('.', 'p')}_${packSeed}`;
+const runTag = `${phaseTag}${nsTag}_cap${rerankCap}_a${String(lensInherit).replace('.', 'p')}${lensSeedTopK !== undefined ? '_seed' + lensSeedTopK : ''}_${packSeed}`;
 const outName = `P05_PRODUCTION_BRIDGE_${phaseTag}_${suffix}${relTag}_${runTag}.json`;
 writeFileSync(resolve(outDir, outName), JSON.stringify(report, null, 2));
 console.error(`[p05] wrote ${outName}`);
