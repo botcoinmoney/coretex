@@ -45,6 +45,15 @@ const tag = flag('tag', undefined);
 // Phase 6 stress: exhaust a family's honest signal (relation|temporal|mixed) to test
 // whether the OTHER families keep the runway alive. 'none' = normal Phase 4 market.
 const exhaustFamily = flag('exhaust-family', 'none');
+// FINITE-HEADROOM model (longevity realism): the substrate has a finite supply of
+// distinct honest improvements per family (e.g. the global relation category-lens maxes
+// the relation metric in ~2 edges → ~2 advances, then re-proposing yields Δ0 — exactly
+// what the mutate-best long-horizon harness shows). Each accepted honest advance consumes
+// one unit; corpus growth optionally replenishes a few. Default Infinity = optimistic
+// RENEWABLE supply (upper bound); pass a finite value for the REALISTIC plateau test.
+const honestHeadroom = flag('honest-headroom', 'inf');
+const HEADROOM = honestHeadroom === 'inf' ? Infinity : Number(honestHeadroom);
+const replenishPerGrowth = Number(flag('replenish-per-growth', '0'));
 
 // ── controller candidates (Phase 2 shortlist C0–C3) ──
 const CONTROLLERS = {
@@ -129,12 +138,17 @@ function simulate({ curve, controller, epochs, growth, pop, majorDeltaThreshold,
   let epochsSinceBaselineAfterGrowth = 0, longestBaselineLag = 0, pendingBaseline = false;
   let randomAcceptsTotal = 0, hillAcceptsTotal = 0, attemptsRandom = 0, attemptsHill = 0;
   const familyAccepts = Object.fromEntries(FAMILIES.map((f) => [f, 0]));
+  // Finite honest headroom per family (depletes on accept; replenishes on growth).
+  const remaining = Object.fromEntries(FAMILIES.map((f) => [f, HEADROOM]));
   let plateauOnset = null;
   const distFromTarget = [];
 
   for (let epoch = 1; epoch <= epochs; epoch++) {
     const activeEH = growthSchedule(growth, epoch, epochs, maxEH);
     const majorDeltaActive = isMajorDelta(activeEH, prevEH, majorDeltaThreshold); prevEH = activeEH;
+    // Corpus growth optionally replenishes honest headroom (does NEW substrate structure
+    // create NEW advance opportunities? For the global edge-type relation lens, no → 0).
+    if (majorDeltaActive && replenishPerGrowth > 0 && Number.isFinite(HEADROOM)) for (const f of FAMILIES) remaining[f] += replenishPerGrowth;
     if (majorDeltaActive) { pendingBaseline = true; epochsSinceBaselineAfterGrowth = 0; }
     // baseline recompute happens THIS epoch on grace (production rule); lag = epochs grace was pending.
     if (pendingBaseline) { longestBaselineLag = Math.max(longestBaselineLag, epochsSinceBaselineAfterGrowth); pendingBaseline = false; }
@@ -147,7 +161,9 @@ function simulate({ curve, controller, epochs, growth, pop, majorDeltaThreshold,
     for (const f of FAMILIES) {
       const nf = Math.round(P.honest / FAMILIES.length) + (P.strongBurst > 0 ? 1 : 0);
       const p = Math.min(1, (pHonest[f](T)) * (P.qMult + P.strongBurst));
-      const k = binom(nf, p, rand);
+      let k = binom(nf, p, rand);
+      // deplete finite headroom: cannot accept more honest advances than remain.
+      if (Number.isFinite(remaining[f])) { k = Math.min(k, Math.max(0, Math.floor(remaining[f]))); remaining[f] -= k; }
       accFam[f] = k; familyAccepts[f] += k; honestAccepts += k;
     }
     advancesTotal += honestAccepts;
@@ -157,8 +173,11 @@ function simulate({ curve, controller, epochs, growth, pop, majorDeltaThreshold,
     const ra = binom(P.random, Math.min(1, pRandom(T)), rand); randomAcceptsTotal += ra; attemptsRandom += P.random;
     const ha = binom(P.hillclimb, Math.min(1, pHill(T)), rand); hillAcceptsTotal += ha; attemptsHill += P.hillclimb;
 
-    // honest POTENTIAL at this epoch = supply at the easiest threshold (independent of T).
-    const potential = P.honest * Math.min(1, pHonestAny(curve.pts[0].T) * (P.qMult + P.strongBurst));
+    // honest POTENTIAL at this epoch = supply at the easiest threshold (independent of T),
+    // GATED by remaining finite headroom (a depleted substrate has no potential → genuine
+    // exhaustion, distinct from a controller-induced plateau).
+    const headroomLeft = FAMILIES.reduce((s, f) => s + (Number.isFinite(remaining[f]) ? Math.max(0, remaining[f]) : Infinity), 0);
+    const potential = headroomLeft <= 0 ? 0 : P.honest * Math.min(1, pHonestAny(curve.pts[0].T) * (P.qMult + P.strongBurst));
     const atMax = T >= ceiling - 1;
     const atMin = T <= MINP + 1;
     if (atMax && potential > targetAdvances && honestAccepts < targetAdvances) { timeAtMaxWhilePotential++; if (plateauOnset === null) plateauOnset = epoch; }
@@ -229,7 +248,8 @@ const dirtyTree = (() => { try { return execSync('git status --porcelain', { cwd
 const out = {
   generatedAt: new Date().toISOString(),
   provenance: { curves: curvePaths, curvePhases: curves.map((c) => c.phase), gitSha, dirtyTree, targetAdvances, replayTolerancePpm: replayTol, majorDeltaThreshold,
-    honestPerEpoch, randomPerEpoch, hillclimbPerEpoch, epochsGrid, mcSeeds, exhaustFamily, controllers: CONTROLLERS, growthSchedules: GROWTH, populations: POPULATIONS,
+    honestPerEpoch, randomPerEpoch, hillclimbPerEpoch, epochsGrid, mcSeeds, exhaustFamily,
+    honestHeadroomPerFamily: honestHeadroom, replenishPerGrowth, controllers: CONTROLLERS, growthSchedules: GROWTH, populations: POPULATIONS,
     note: 'acceptance sampled from empirical Phase 3 response curves; controller is the real protocol nextMinImprovementPpm from dist' },
   byController,
   cells: results,
