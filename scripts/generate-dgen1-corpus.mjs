@@ -88,8 +88,12 @@ const addEntity = (id, canonicalName, aliases, lane) => { entities.push({ id, ca
 function addDoc(d) { const id = docId(); const split = splitFor(id); docs.push({ id, split, ...d }); return id; }
 function addRel(src, dst, type, label) { relations.push({ src, dst, type, label }); }
 function addQuery(q) { const id = qId(); const split = splitFor(id); queries.push({ id, split, ownerScoped: true, ...q }); return id; }
-// continuity-label → scorer routing edge type
-const EDGE = { supersedes: 'supersedes', supports: 'supports', belongs_to_project: 'supports', depends_on: 'supports', context_of: 'supports', causes: 'causes', fixes: 'causes', decision_reason: 'causes', decision_outcome: 'derived_from', coreference_of: 'coreference_of' };
+// continuity-label → scorer routing edge type. The categoryLens routes only on
+// supports/causes/supersedes/coreference_of, so ONLY low-fanout ANSWER-bearing labels
+// map to those; high-fanout structural labels (context_of) map to a NON-routed type
+// (co_occurs_with) so they are recorded as public continuity structure WITHOUT flooding
+// the lens (dense context_of→supports stars were the relation-flood source on the smoke).
+const EDGE = { supersedes: 'supersedes', supports: 'supports', belongs_to_project: 'supports', depends_on: 'supports', context_of: 'co_occurs_with', causes: 'causes', fixes: 'causes', decision_reason: 'causes', decision_outcome: 'derived_from', coreference_of: 'coreference_of' };
 const rel = (src, dst, label) => addRel(src, dst, EDGE[label] ?? 'supports', label);
 
 // timestamp over a long window (depth → more revisits over time)
