@@ -83,7 +83,7 @@ const {
   buildPublicCorpusIndex, firstStageCandidates, dequantize,
   createDeterministicBiEncoder, createDeterministicReranker, rerankerFromEnv, biEncoderFromEnv,
   encodeMemoryIndexSlot, encodeRelationCategoryLens, encodeTemporalRecord, stableRecordIdFor,
-  DEFAULT_COMPOSITE_WEIGHTS,
+  DEFAULT_COMPOSITE_WEIGHTS, scoringOptionsFromProfile,
 } = await import(distIndex);
 
 // ── bundle bi-encoder pin + layout ──
@@ -246,15 +246,18 @@ const RR = manifest.model.reranker;
 const reranker = rerankerArg === 'gpu' || rerankerArg === 'cpu'
   ? streamReranker({ model: RR.modelId, revision: RR.revision, python: process.env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: rerankerArg === 'gpu' })
   : rerankerArg === 'env' ? await rerankerFromEnv() : await createDeterministicReranker();
+// CANONICAL base: scoring options from the signed V2 profile (single source of
+// truth), then CALIBRATION sweep overrides on top (this is a sweep/diagnostic
+// tool; OFF/ON arms + CLI flags vary specific knobs). lensWeight/anchorWeight/
+// temporal/hop/abstention/pipelineVersion come from the profile.
+const V2_PROFILE = JSON.parse(readFileSync(resolve(repoRoot, flag('profile', 'release/bundle/evaluator-profile-v2-ownerscope-r1.json')), 'utf8'));
 const baseOpts = {
-  weights: DEFAULT_COMPOSITE_WEIGHTS, biEncoder, reranker, retrievalKeyLayout: LAYOUT, biEncoderHash,
-  relationHopBudget: 3, abstentionThreshold: 0.001, rerankerTopK: 10, retrievalKeyTopK: 50,
-  firstStageTopK: (() => { const i = argv.indexOf('--first-stage-topk'); return i >= 0 ? Number(argv[i + 1]) : 3200; })(), rerankerInputTopK: rerankCap, lensTopK: 36, lensWeight: 0.4, anchorWeight: 0.6,
-  relationExpansionBudget: 12, categoryLensExpansionBudget: 0,
-  temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1,
-  // Owner-scoped retrieval (Layer-2 validity fix). 'off' reproduces pooled
-  // (pre-scope) behavior; 'restrict' scopes stage-1 to the query's public owner.
-  ownerScopeMode: flag('owner-scope', 'restrict'),
+  ...scoringOptionsFromProfile(V2_PROFILE, { biEncoder, reranker, biEncoderHash, retrievalKeyLayout: LAYOUT }),
+  // sweep overrides:
+  firstStageTopK: (() => { const i = argv.indexOf('--first-stage-topk'); return i >= 0 ? Number(argv[i + 1]) : (V2_PROFILE.firstStageTopK ?? 3200); })(),
+  rerankerInputTopK: rerankCap,
+  categoryLensExpansionBudget: 0, // base/OFF arm; relOptsOn overrides
+  ownerScopeMode: flag('owner-scope', V2_PROFILE.ownerScopeMode ?? 'restrict'),
   pipelineVersion: 'coretex-retrieval-v2-lens-r3',
 };
 const lensBonusWeight = (() => { const i = argv.indexOf('--lens-bonus-weight'); return i >= 0 ? Number(argv[i + 1]) : undefined; })();

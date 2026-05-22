@@ -27,7 +27,7 @@ const outDir = flag('out', 'release/calibration/2026-05-21-memory-corpus-v2');
 
 const {
   evaluateRetrievalBenchmarkState, biEncoderModelIdHash, computeCorpusRoot, createDeterministicReranker,
-  buildPublicCorpusIndex, firstStageCandidates, dequantize, encodeRelationCategoryLens, DEFAULT_COMPOSITE_WEIGHTS,
+  buildPublicCorpusIndex, firstStageCandidates, dequantize, encodeRelationCategoryLens, DEFAULT_COMPOSITE_WEIGHTS, scoringOptionsFromProfile,
 } = await import(distIndex);
 
 const manifest = JSON.parse(readFileSync(resolve(repoRoot, 'release/bundle/bundle-manifest-launch-v3.json'), 'utf8'));
@@ -86,12 +86,15 @@ const words = new Array(1024).fill(0n);
 const state = { words };
 
 const reranker = await createDeterministicReranker();
-const opts = { weights: DEFAULT_COMPOSITE_WEIGHTS, biEncoder: { modelId: BE.modelId, revision: BE.revision, layout: LAYOUT, async encode() { throw new Error('unused'); } },
-  reranker, retrievalKeyLayout: LAYOUT, biEncoderHash, relationHopBudget: 3, abstentionThreshold: 0.001, rerankerTopK: 10, retrievalKeyTopK: 50,
-  firstStageTopK: FST, rerankerInputTopK: CAP, lensTopK: 36, lensWeight: 0.4, anchorWeight: 0.6,
-  relationExpansionBudget: 12, categoryLensExpansionBudget: BUDGET, categoryLensTraversalDirection: 'bidirectional', categoryLensBonusWeight: BONUS,
-  categoryLensFinalBonusWeight: FINAL_BONUS, ownerScopeMode: OWNER_SCOPE,
-  temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1, pipelineVersion: 'coretex-retrieval-v2-lens-r3' };
+// CANONICAL base from the signed V2 profile + TRACE sweep overrides (this is a
+// diagnostic that varies fst/cap/budget/bonus/finalBonus/ownerScope per run).
+const V2_PROFILE = JSON.parse(readFileSync(resolve(repoRoot, flag('profile', 'release/bundle/evaluator-profile-v2-ownerscope-r1.json')), 'utf8'));
+const biEncoderStub = { modelId: BE.modelId, revision: BE.revision, layout: LAYOUT, async encode() { throw new Error('unused'); } };
+const opts = {
+  ...scoringOptionsFromProfile(V2_PROFILE, { biEncoder: biEncoderStub, reranker, biEncoderHash, retrievalKeyLayout: LAYOUT }),
+  firstStageTopK: FST, rerankerInputTopK: CAP,
+  categoryLensExpansionBudget: BUDGET, categoryLensTraversalDirection: 'bidirectional', categoryLensBonusWeight: BONUS,
+  categoryLensFinalBonusWeight: FINAL_BONUS, ownerScopeMode: OWNER_SCOPE };
 
 // public index for bridge/answer dense-rank stratification (the scorer's int8 stage-1 path)
 const pidx = buildPublicCorpusIndex(corpus);
