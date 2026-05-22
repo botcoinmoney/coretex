@@ -91,11 +91,14 @@ async function scorePatch(state, patch) {
   return { deltaPpm: r.deltaPpm, acceptedAtMin: r.accepted, reason: r.reason ?? null, comp };
 }
 
-// HONEST: strength-swept levers (deterministic).
+// HONEST: strength-swept levers, ALL within the 4-word patch budget.
+//   relation: edgeCount 1..4 (1..4 words)
+//   temporal: per-query units at startIndex 0..4 (3 words each — different temporal queries)
+//   mixed:    1 relation edge + 1 temporal unit at startIndex 0..2 (4 words)
 const honestSpecs = [];
 for (const ec of [1, 2, 3, 4]) honestSpecs.push({ family: 'relation', strength: `e${ec}`, patch: honestPatch({ state: empty(), family: 'relation', pack, logicalQById, edgeCount: ec }) });
-for (const mr of [1, 2, 4, 8, 12]) honestSpecs.push({ family: 'temporal', strength: `r${mr}`, patch: honestPatch({ state: empty(), family: 'temporal', pack, logicalQById, maxRecords: mr }) });
-for (const mr of [1, 4, 12]) honestSpecs.push({ family: 'mixed', strength: `e4r${mr}`, patch: honestPatch({ state: empty(), family: 'mixed', pack, logicalQById, edgeCount: 4, maxRecords: mr }) });
+for (const si of [0, 1, 2, 3, 4]) honestSpecs.push({ family: 'temporal', strength: `q${si}`, patch: honestPatch({ state: empty(), family: 'temporal', pack, logicalQById, startIndex: si }) });
+for (const si of [0, 1, 2]) honestSpecs.push({ family: 'mixed', strength: `e1q${si}`, patch: honestPatch({ state: empty(), family: 'mixed', pack, logicalQById, startIndex: si }) });
 const honest = [];
 for (const s of honestSpecs) { const r = await scorePatch(empty(), s.patch); honest.push({ family: s.family, strength: s.strength, wordCount: s.patch.wordCount, ...r }); }
 

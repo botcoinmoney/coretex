@@ -33,41 +33,57 @@ export function relationUnits(edgeCount = RELATION_EDGES.length) {
 }
 
 /**
- * temporal lever: for each temporal_update query in the pack (up to `maxRecords`),
- * allocate stale+current memory-index slots (revoked vs valid) and one TemporalRecord.
- * Bounded to the substrate temporal/memory-index capacity (12 records / 42 slots).
+ * temporal lever: compile `maxRecords` temporal_update queries from the pack (starting
+ * at the `startIndex`-th temporal query), each as stale+current memory-index slots
+ * (revoked vs valid) + one TemporalRecord.
+ *
+ * IMPORTANT (4-word patch budget): each substrate block (memory-index slot, temporal
+ * record) encodes into exactly ONE nonzero word (w0); the other 7 words are 0. We emit
+ * ONLY the nonzero w0 of each block — leaving the rest at their (zero) genesis value,
+ * which decodes identically — so one temporal unit = 1 record + 2 slots = 3 words, a
+ * VALID single STATE_ADVANCE patch (applyPatch caps wordCount at 4). Compiling temporal
+ * for many queries is therefore many small patches (realistic incremental mining), not
+ * one over-budget patch. Slot/record indices advance with startIndex so successive
+ * patches build disjoint substrate.
  */
-export function temporalUnits({ pack, logicalQById, maxRecords = 12 }) {
+export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex = 0 }) {
   const indices = [], newWords = [];
-  let slot = 0, rec = 0;
-  for (const ev of pack.events) {
-    if (rec >= maxRecords || slot >= 42) break;
-    const lq = logicalQById.get(ev.id);
-    if (!lq || lq.family !== 'temporal_update') continue;
+  const tq = pack.events.map((ev) => logicalQById.get(ev.id)).filter((lq) => lq && lq.family === 'temporal_update'
+    && (lq.qrels ?? []).find((r) => r.role === 'direct') && (lq.qrels ?? []).find((r) => r.role === 'stale'));
+  let rec = 0;
+  for (let qi = startIndex; qi < tq.length && rec < maxRecords; qi++) {
+    const lq = tq[qi];
+    const recIdx = startIndex + rec;          // distinct record per query
+    const staleSlot = recIdx * 2, curSlot = recIdx * 2 + 1;
+    if (recIdx >= 12 || curSlot >= 42) break; // substrate temporal(12)/memory-index(42) capacity
     const cur = (lq.qrels ?? []).find((r) => r.role === 'direct');
     const stale = (lq.qrels ?? []).find((r) => r.role === 'stale');
-    if (!cur || !stale) continue;
-    const staleSlot = slot++, curSlot = slot++;
     const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(`mem_${stale.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, retrievalSlot: staleSlot, expiryEpoch: 0n });
-    for (let j = 0; j < 8; j++) { indices.push(RANGES.MEMORY_INDEX_START + staleSlot * 8 + j); newWords.push(sw[j]); }
+    indices.push(RANGES.MEMORY_INDEX_START + staleSlot * 8); newWords.push(sw[0]); // nonzero w0 only
     const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(`mem_${cur.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: curSlot, expiryEpoch: 0n });
-    for (let j = 0; j < 8; j++) { indices.push(RANGES.MEMORY_INDEX_START + curSlot * 8 + j); newWords.push(cw[j]); }
-    const tw = encodeTemporalRecord({ recordIndex: rec, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: 1n, validUntilEpoch: (2n ** 40n - 1n), currentStaleFlag: true });
-    for (let j = 0; j < 8; j++) { indices.push(RANGES.TEMPORAL_START + rec * 8 + j); newWords.push(tw[j]); }
+    indices.push(RANGES.MEMORY_INDEX_START + curSlot * 8); newWords.push(cw[0]);
+    const tw = encodeTemporalRecord({ recordIndex: recIdx, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: 1n, validUntilEpoch: (2n ** 40n - 1n), currentStaleFlag: true });
+    indices.push(RANGES.TEMPORAL_START + recIdx * 8); newWords.push(tw[0]);
     rec++;
   }
-  return { indices, newWords, recordsCompiled: rec };
+  return { indices, newWords, recordsCompiled: rec, temporalQueriesAvailable: tq.length };
 }
 
 export function makePatch(state, units) {
   return { patchType: PATCH_TYPE.MIXED, wordCount: units.indices.length, scoreDelta: 0n, parentStateRoot: merkleizeState(state), indices: units.indices, newWords: units.newWords };
 }
 
-/** family ∈ {relation, temporal, mixed}. mixed = relation ∪ temporal (disjoint ranges). */
-export function honestPatch({ state, family, pack, logicalQById, edgeCount, maxRecords }) {
+/**
+ * family ∈ {relation, temporal, mixed}, all within the 4-word patch budget:
+ *   relation → up to 4 category-lens edges (edgeCount, default 4)
+ *   temporal → ONE temporal query's unit (3 words: 2 slots + 1 record) at startIndex
+ *   mixed    → 1 relation edge + 1 temporal unit = 4 words (the only combination that fits)
+ * `startIndex` selects which temporal query (incremental mining across patches).
+ */
+export function honestPatch({ state, family, pack, logicalQById, edgeCount = 4, startIndex = 0 }) {
   if (family === 'relation') return makePatch(state, relationUnits(edgeCount));
-  if (family === 'temporal') return makePatch(state, temporalUnits({ pack, logicalQById, maxRecords }));
-  const r = relationUnits(edgeCount), t = temporalUnits({ pack, logicalQById, maxRecords });
+  if (family === 'temporal') return makePatch(state, temporalUnits({ pack, logicalQById, maxRecords: 1, startIndex }));
+  const r = relationUnits(1), t = temporalUnits({ pack, logicalQById, maxRecords: 1, startIndex });
   return makePatch(state, { indices: [...r.indices, ...t.indices], newWords: [...r.newWords, ...t.newWords] });
 }
 

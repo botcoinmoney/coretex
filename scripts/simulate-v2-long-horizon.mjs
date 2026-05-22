@@ -133,7 +133,7 @@ function activeCorpus(frac) {
 // relation | temporal | mixed are GENUINE substrate compiles (proposer-visible memory
 // structure, no query→answer leak). honestPatch wraps them into a MIXED patch parented
 // on `state` (mutate-best semantics). See scripts/lib/v2-patch-families.mjs.
-const honestPatch = (state, family, pack) => honestPatchLib({ state, family, pack, logicalQById });
+const honestPatch = (state, family, pack, startIndex = 0) => honestPatchLib({ state, family, pack, logicalQById, startIndex });
 const HONEST_FAMILIES = honestFamily === 'all' ? ['relation', 'temporal', 'mixed'] : [honestFamily];
 
 async function evalPatch(state, patch, corpus_, pack, acceptanceThresholdPpm, minImprovementPpm) {
@@ -150,6 +150,9 @@ let bestState = empty();
 let prevEH = 0, clampHits = 0, maxClampWhileAdvancing = 0, baselineRecomputes = 0;
 let cachedVariance = null, cachedFrac = null;
 let startEpoch = 1;
+// Incremental temporal mining: each accepted temporal/mixed patch claims the next
+// temporal query/record (the per-query unit is 3 words; one per patch within budget).
+let temporalStart = 0;
 let rows = [];
 if (resumePath) {
   const ck = JSON.parse(readFileSync(resolve(repoRoot, resumePath), 'utf8'));
@@ -157,13 +160,13 @@ if (resumePath) {
   if (!disableController) current = BigInt(ck.current);
   prevEH = ck.prevEH ?? 0; clampHits = ck.clampHits ?? 0; maxClampWhileAdvancing = ck.maxClampWhileAdvancing ?? 0;
   baselineRecomputes = ck.baselineRecomputes ?? 0; cachedVariance = ck.cachedVariance ?? null; cachedFrac = ck.cachedFrac ?? null;
-  rows = ck.rows ?? []; startEpoch = (ck.lastEpoch ?? 0) + 1;
-  console.error(`[v2-lh] RESUMED from ${resumePath} at epoch ${startEpoch} (rows=${rows.length}, current=${current})`);
+  rows = ck.rows ?? []; startEpoch = (ck.lastEpoch ?? 0) + 1; temporalStart = ck.temporalStart ?? 0;
+  console.error(`[v2-lh] RESUMED from ${resumePath} at epoch ${startEpoch} (rows=${rows.length}, current=${current}, temporalStart=${temporalStart})`);
 }
 function writeStateOut(lastEpoch) {
   if (!stateOutPath) return;
   const ck = { lastEpoch, current: current.toString(), prevEH, clampHits, maxClampWhileAdvancing, baselineRecomputes,
-    cachedVariance, cachedFrac, bestState: serializeState(bestState), rows };
+    cachedVariance, cachedFrac, temporalStart, bestState: serializeState(bestState), rows };
   writeFileSync(resolve(repoRoot, stateOutPath), JSON.stringify(ck));
 }
 console.error(`[v2-lh] corpus=${corpus.events.length} evt, scopedOwners=${owners.length}, reranker=${rerankerArg}, profile=${profilePath}, epochs=${epochs}, families=[${HONEST_FAMILIES}], controller=${disableController ? 'DISABLED(fixed=' + current + ')' : 'on'}`);
@@ -192,7 +195,8 @@ for (let epoch = startEpoch; epoch <= epochs; epoch++) {
   let honestAccepts = 0, honestAttempts = 0; let pcDelta = null;
   for (let h = 0; h < honestPerEpoch; h++) {
     const family = HONEST_FAMILIES[(epoch + h) % HONEST_FAMILIES.length];
-    const r = await evalPatch(bestState, honestPatch(bestState, family, pack), ac, pack, acceptanceThresholdPpm, Number(current));
+    const si = family === 'relation' ? 0 : temporalStart; // temporal/mixed mine the next query
+    const r = await evalPatch(bestState, honestPatch(bestState, family, pack, si), ac, pack, acceptanceThresholdPpm, Number(current));
     honestAttempts++; familyStats[family].attempts++;
     if (h === 0) pcDelta = r.deltaPpm;
     familyStats[family].deltaPpm.push(r.deltaPpm);
@@ -202,7 +206,7 @@ for (let epoch = startEpoch; epoch <= epochs; epoch++) {
     c.relation += r.after.categoryLensRelationHit10 - r.before.categoryLensRelationHit10;
     c.abstention += r.after.abstention - r.before.abstention;
     c.structural += r.after.structuralValidity - r.before.structuralValidity;
-    if (r.accepted) { honestAccepts++; familyStats[family].accepts++; const ap = applyPatch(bestState, honestPatch(bestState, family, pack)); if (ap.ok) bestState = ap.state; }
+    if (r.accepted) { honestAccepts++; familyStats[family].accepts++; const ap = applyPatch(bestState, honestPatch(bestState, family, pack, si)); if (ap.ok) { bestState = ap.state; if (family !== 'relation') temporalStart++; } }
   }
 
   // ADVERSARIAL population: random (from empty) + hillclimb (mutate bestState).
