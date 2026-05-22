@@ -187,18 +187,22 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     }
 
     // ── FAMILY 3: multi_session_bridge (belongs_to / depends_on; bridge hop) ──
+    // ROUTING-REQUIRED: the answer doc does NOT name the subject (lexically distant from
+    // the subject-named query), so dense stage-1 can't find it directly — it is reachable
+    // ONLY via a public support/depends_on edge from a findable bridge SEED doc that DOES
+    // name the subject. (Mirrors the V2 bridge@1→answer design + decision_provenance.)
     {
-      // a buried attribute reachable via a public support edge from a bridge doc
+      const sibName = `${FIRST[(s * 11 + 3) % FIRST.length]} ${LAST[(s * 17 + 5) % LAST.length]}`;
       const attrVal = isProject ? pick(DBS) : pick(JOBS);
       const answerDoc = addDoc({ lane: 'deep', kind: 'bridge_answer', entityIds: tagU(),
-        text: isProject ? `The ${canonical} service depends on a ${attrVal} cluster managed by infra.` : `${first}'s sibling works as a ${attrVal}.`,
+        text: isProject ? `The data layer for that platform service runs on a ${attrVal} cluster managed by infra.` : `${sibName} works as a ${attrVal} and lives downtown.`,
         shape: 'bridge_record', timestamp: ts(5 + ri(20)), currentStaleFlag: true });
       const bridgeDoc = addDoc({ lane: 'deep', kind: 'bridge_seed', entityIds: tagU(),
-        text: isProject ? `${canonical} owns the data layer described in the infra notes.` : `${canonical} often talks about their sibling.`,
+        text: isProject ? `${canonical} owns the data layer for that platform service.` : `${canonical}'s sibling is ${sibName}.`,
         shape: 'bridge_seed', timestamp: ts(4 + ri(10)), currentStaleFlag: true });
       rel(bridgeDoc, answerDoc, isProject ? 'depends_on' : 'supports');
       const nDist = 1 + ri(3);
-      addQuery({ lane: 'deep', family: 'multi_session_bridge', queryText: isProject ? `What datastore does ${canonical} depend on?` : `What is the job of ${first}'s sibling (the one ${canonical})?`,
+      addQuery({ lane: 'deep', family: 'multi_session_bridge', queryText: isProject ? `What datastore does ${canonical} depend on?` : `What is the job of ${canonical}'s sibling?`,
         qrels: [{ docId: answerDoc, relevance: 1.0, role: 'direct' }, { docId: bridgeDoc, relevance: 0.5, role: 'bridge' }],
         hardNegatives: [{ docId: introId, category: 'relation_neighbor' }], ownerEntityId: universe, band: band(4, nDist, chance(0.15)) });
     }
@@ -214,10 +218,13 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
         hardNegatives: [{ docId: outcome, category: 'relation_neighbor' }], ownerEntityId: universe, band: band(3, 2, chance(0.2)) });
     }
 
-    // ── FAMILY 5: workflow_gotcha / fixes (causes edge) ──
+    // ── FAMILY 5: workflow_gotcha / fixes (causes edge) — ROUTING-REQUIRED ──
+    // The FIX doc states the remedy without naming the subject (distant from the
+    // subject+error query); reachable only via the `fixes` edge from the findable
+    // error/gotcha SEED that names the subject.
     if (isProject) {
       const err = pick(ERRORS), envv = pick(ENVVARS);
-      const fixDoc = addDoc({ lane: 'deep', kind: 'fix', entityIds: tagU(), text: `For ${canonical}, the ${err} was fixed by setting ${envv} correctly.`, shape: 'fix_record', timestamp: ts(7 + ri(12)), currentStaleFlag: true });
+      const fixDoc = addDoc({ lane: 'deep', kind: 'fix', entityIds: tagU(), text: `That deploy failure was resolved by setting ${envv} correctly before warmup.`, shape: 'fix_record', timestamp: ts(7 + ri(12)), currentStaleFlag: true });
       const errDoc = addDoc({ lane: 'deep', kind: 'gotcha', entityIds: tagU(), text: `${canonical} hit a ${err} during deploys.`, shape: 'gotcha_record', timestamp: ts(6 + ri(12)), currentStaleFlag: true });
       rel(fixDoc, errDoc, 'fixes');
       addQuery({ lane: 'deep', family: 'causal_memory_chain', queryText: `How was the ${err} in ${canonical} resolved?`,
