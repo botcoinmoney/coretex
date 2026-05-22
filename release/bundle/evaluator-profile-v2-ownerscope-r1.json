@@ -42,15 +42,15 @@
     "packSize": 64,
     "quotas": [
       {
-        "stratum": "family=near_collision,bucket=medium",
+        "stratum": "family=near_collision",
         "minCount": 16
       },
       {
-        "stratum": "family=temporal,bucket=medium",
+        "stratum": "family=temporal",
         "minCount": 8
       },
       {
-        "stratum": "family=multi_hop_relation,bucket=medium",
+        "stratum": "family=multi_hop_relation",
         "minCount": 8
       }
     ]
