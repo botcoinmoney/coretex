@@ -129,6 +129,9 @@ for (const d of logical.docs) {
     truthDocuments: [{ id: d.id, text: d.text, isCurrent: d.currentStaleFlag === false ? false : true }],
     hardNegatives: [], qrels: [{ documentId: d.id, relevance: 1.0 }], protected: false,
     relations: relMode === 'no-memory' ? [] : (relBySrc.get(d.id) ?? []).map((r) => ({ other_id: memId(r.dst), edgeType: r.type })),
+    // Proposer-visible entity tags: the entity this memory is ABOUT. Drives the
+    // scorer's query-text entity resolver → scale-aware seeding.
+    ...(Array.isArray(d.entityIds) && d.entityIds.length > 0 ? { entityIds: d.entityIds } : {}),
     provenance: PROV, embeddings: mkEmb(emb, [[d.id, emb]], []),
   });
 }
@@ -171,6 +174,9 @@ for (const q of logical.queries) {
     queryText: q.queryText, truthDocuments: truths, hardNegatives: negs,
     qrels: (q.qrels ?? []).map((r) => ({ documentId: r.docId, relevance: r.relevance })),
     protected: false, relations,
+    // PUBLIC owner scope from generation (q.ownerEntityId / q.ownerScoped) — the
+    // realistic session/user store the query searches. NEVER derived from qrels.
+    ...(q.ownerEntityId !== undefined ? { ownerEntityId: q.ownerEntityId, ownerScoped: q.ownerScoped !== false } : {}),
     provenance: PROV, embeddings: mkEmb(qEmb.get(q.id), perTruth, perNeg),
   };
   if (fam === 'temporal') {
@@ -181,6 +187,8 @@ for (const q of logical.queries) {
 const corpusRoot = computeCorpusRoot(events);
 const corpus = {
   events, byId: new Map(events.map((e) => [e.id, e])), corpusRoot, corpusEpoch: 0,
+  // Proposer-visible entity table for the scorer's query-text resolver.
+  entities: (logical.entities ?? []).map((e) => ({ id: e.id, canonicalName: e.canonicalName, aliases: e.aliases ?? [] })),
   biEncoderModelId: BE.modelId, biEncoderRevision: BE.revision, biEncoderRetrievalKeyLayout: LAYOUT,
   labelingModelId: manifest.model.reranker.modelId, labelingModelRevision: manifest.model.reranker.revision,
 };
@@ -244,12 +252,20 @@ const baseOpts = {
   firstStageTopK: (() => { const i = argv.indexOf('--first-stage-topk'); return i >= 0 ? Number(argv[i + 1]) : 3200; })(), rerankerInputTopK: rerankCap, lensTopK: 36, lensWeight: 0.4, anchorWeight: 0.6,
   relationExpansionBudget: 12, categoryLensExpansionBudget: 0,
   temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1,
+  // Owner-scoped retrieval (Layer-2 validity fix). 'off' reproduces pooled
+  // (pre-scope) behavior; 'restrict' scopes stage-1 to the query's public owner.
+  ownerScopeMode: flag('owner-scope', 'restrict'),
   pipelineVersion: 'coretex-retrieval-v2-lens-r3',
 };
 const lensBonusWeight = (() => { const i = argv.indexOf('--lens-bonus-weight'); return i >= 0 ? Number(argv[i + 1]) : undefined; })();
+// Non-flooding promotion: FINAL-reorder lens bonus. Default 0 = INCLUSION-ONLY
+// (category-lens admits to the cap; the reranker decides final order). Pass a
+// value to restore a final additive bonus (legacy/flood-prone) for comparison.
+const lensFinalBonusWeight = (() => { const i = argv.indexOf('--lens-final-bonus-weight'); return i >= 0 ? Number(argv[i + 1]) : 0; })();
 const catBudget = (() => { const i = argv.indexOf('--cat-budget'); return i >= 0 ? Number(argv[i + 1]) : 50; })();
 const relOptsOff = { ...baseOpts, categoryLensExpansionBudget: 0 };
 const relOptsOn = { ...baseOpts, categoryLensExpansionBudget: catBudget, categoryLensTraversalDirection: 'bidirectional',
+  categoryLensFinalBonusWeight: lensFinalBonusWeight,
   ...(lensBonusWeight !== undefined ? { categoryLensBonusWeight: lensBonusWeight } : {}) };
 const tempOptsOff = { ...baseOpts, temporalCurrentBoost: 0, temporalStaleSuppression: 0 };
 const tempOptsOn = { ...baseOpts, temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1 };
@@ -346,6 +362,27 @@ function floodStats(score) {
   }
   return { meanHardNegInTop20: n ? +(sum / n).toFixed(3) : null, maxHardNegInTop20: max, meanLensJunkInTop10: n ? +(junkSum / n).toFixed(3) : null };
 }
+// SUBSTRATE-INDUCED flood/lift (paired ON vs OFF, same pack order). The honest
+// gameability gate: irrelevant docs the substrate PUSHED into top-10 (ON rank≤10
+// but OFF rank>10), separated from the GOOD lift (relevant docs it pulled in).
+// Avoids the tag-based meanLensJunkInTop10 artifact, which over-counts docs that
+// were already in OFF's top-10 (now merely tagged) under owner-scope.
+function inducedDelta(onScore, offScore) {
+  const offByRec = new Map((offScore.perQuery ?? []).map((pq) => [pq.recordId, pq]));
+  let n = 0, junkIn = 0, junkInMax = 0, liftIn = 0;
+  for (const on of onScore.perQuery ?? []) {
+    const off = offByRec.get(on.recordId); if (!off) continue;
+    n++;
+    const offRank = new Map((off.finalRankingTop20 ?? []).map((r) => [r.docId, r.rank]));
+    const rank = (id) => offRank.get(id) ?? 999; // not in OFF top-20 ⇒ >10
+    const onTop = (on.finalRankingTop20 ?? []).filter((r) => r.rank <= 10);
+    const j = onTop.filter((r) => (r.relevance ?? 0) === 0 && rank(r.docId) > 10).length;
+    const l = onTop.filter((r) => (r.relevance ?? 0) >= 0.8 && rank(r.docId) > 10).length;
+    junkIn += j; liftIn += l; if (j > junkInMax) junkInMax = j;
+  }
+  return { meanInducedJunkTop10: n ? +(junkIn / n).toFixed(3) : null, maxInducedJunkTop10: junkInMax,
+    meanInducedLiftTop10: n ? +(liftIn / n).toFixed(3) : null, n };
+}
 // categoryLensBFS attribution: relevant doc in top-10 reached via categoryLensBFS
 const logFamById = new Map(logical.queries.map((q) => [q.id, q.family]));
 function bfsAttribution(score) {
@@ -364,10 +401,16 @@ function bfsAttribution(score) {
   return { n, viaLens, perFamily };
 }
 const gitSha = (() => { try { return execSync('git rev-parse --short HEAD', { cwd: repoRoot }).toString().trim(); } catch { return 'unknown'; } })();
+// Gate-required provenance: dist (scorer) hash + dirty-tree waiver + reranker revision.
+const distHash = (() => { try { return execSync('sha256sum packages/cortex/dist/eval/retrieval-benchmark.js', { cwd: repoRoot }).toString().trim().slice(0, 16); } catch { return 'unknown'; } })();
+const dirtyTree = (() => { try { return execSync('git status --porcelain', { cwd: repoRoot }).toString().trim().length > 0; } catch { return null; } })();
+const RRev = manifest.model.reranker.revision;
 
 const report = {
-  provenance: { specVersion: logical.specVersion, corpusRoot, gitSha, reranker: (rerankerArg === 'env' || rerankerArg === 'gpu' || rerankerArg === 'cpu') ? `Qwen/Qwen3-Reranker-0.6B (${rerankerArg})` : 'deterministic-stub',
+  provenance: { specVersion: logical.specVersion, corpusRoot, gitSha, distHashRetrievalBenchmark: distHash, dirtyTree,
+    reranker: (rerankerArg === 'env' || rerankerArg === 'gpu' || rerankerArg === 'cpu') ? `Qwen/Qwen3-Reranker-0.6B@${RRev} (${rerankerArg})` : 'deterministic-stub',
     biEncoder: BE.modelId, layout: LAYOUT, packSizeCap: packSize, rerankerInputTopK: rerankCap, relMode, packSeed,
+    ownerScopeMode: baseOpts.ownerScopeMode, categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: baseOpts.categoryLensScoreInheritance ?? 0,
     firstStageTopK: baseOpts.firstStageTopK, categoryLensBonusWeight: lensBonusWeight ?? 'default', junkEdges, splits: { memory: 'train_visible', queries: 'logical (split-pure eval_hidden pack)' } },
   relation: {
     pack: relationPack.map((e) => e.id), n: relationPack.length,
@@ -375,6 +418,7 @@ const report = {
     on: { nDCG10: relOn.nDCG10, recall10: relOn.recall10, multiHopRecall10: relOn.multiHopRecall10, categoryLensRelationHit10: relOn.categoryLensRelationHit10 },
     attribution: { off: bfsAttribution(relOff), on: bfsAttribution(relOn) },
     flood: { off: floodStats(relOff), on: floodStats(relOn) },
+    induced: inducedDelta(relOn, relOff),
   },
   temporal: {
     pack: temporalPack.map((e) => e.id), n: temporalPack.length,

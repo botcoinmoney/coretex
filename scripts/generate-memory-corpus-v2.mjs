@@ -53,6 +53,7 @@ const argVal = (flag, def) => { const i = args.indexOf(flag); return i >= 0 ? ar
 const N_USERS = parseInt(argVal('--users', '15'), 10);
 const N_PROJECTS = parseInt(argVal('--projects', '10'), 10);
 const SEED = argVal('--seed', 'p0-2026-05-21');
+const PHASE = argVal('--phase', (SEED.match(/^(p\d+)/i)?.[1] ?? 'P0').toUpperCase());
 const OUT = argVal('--out', 'release/calibration/2026-05-21-memory-corpus-v2/p0-corpus.json');
 
 const rand = mulberry32(hashSeed(SEED));
@@ -391,7 +392,29 @@ function padNegs(negs, answerIds, target = 10) {
   return negs;
 }
 
-function addQuery(q) { q.id = `q${String(++qseq).padStart(4, '0')}`; queries.push(q); }
+// ── owner scope (Layer-2 validity fix, 2026-05-21) ──────────────────────────
+// Real memory retrieval is owner/session-scoped: you search a KNOWN user's /
+// project's memory store, not a pooled corpus of strangers. Without this, the
+// first-name subject collides ~80-way at 100k ("Maya's sister" → 39 identical
+// bridges) → the relation families are ill-posed and the gold is unrecoverable
+// from query text. `ownerEntityId` is PUBLIC retrieval context, set at
+// generation time from the user/project loop — NEVER inferred from qrels/gold.
+// `ownerScoped=false` for cross-entity families (entity_disambiguation, I6),
+// which deliberately disambiguate same-named entities across the whole pool.
+let currentOwnerEntityId = null;
+// Cross-entity-by-design families stay POOLED (owner scope would erase the test):
+// - entity_disambiguation (I6): disambiguate same-named entities across the pool.
+// - abstention (I14): the HARD trap is another same-name entity's plausible doc;
+//   it's a pooled threshold test (no gold to recover), strong pooled (AUC 0.956).
+const UNSCOPED_FAMILIES = new Set(['entity_disambiguation', 'abstention']);
+function addQuery(q) {
+  q.id = `q${String(++qseq).padStart(4, '0')}`;
+  if (currentOwnerEntityId !== null) {
+    q.ownerEntityId = currentOwnerEntityId;
+    q.ownerScoped = !UNSCOPED_FAMILIES.has(q.family);
+  }
+  queries.push(q);
+}
 
 // ── query generators (round-robin over entities to hit family quotas) ──
 // Helper: build near-collision negs from same-kind docs of OTHER entities.
@@ -401,6 +424,7 @@ function nearColl(kind, answerId, cat, n = 3) {
 
 for (const m of userMeta) {
   const d = m.docs;
+  currentOwnerEntityId = m.eid;
   // I1 single_hop (pet)
   addQuery({ lane: 'conversational', family: 'single_hop_memory', invariant: 'I1',
     queryText: `What kind of pet does ${m.first} have?`,
@@ -483,6 +507,7 @@ for (const m of userMeta) {
 
 for (const m of projMeta) {
   const d = m.docs;
+  currentOwnerEntityId = m.eid;
   // I1 single hop (stack)
   addQuery({ lane: 'agent_workflow', family: 'single_hop_memory', invariant: 'I1',
     queryText: `What is Project ${m.pname} built with?`,
@@ -537,6 +562,7 @@ const ABSTAIN_CONV = ['blood type', 'social security number', 'shoe size', 'pass
 const ABSTAIN_AGENT = ['AWS region for the production deployment', 'on-call PagerDuty rotation', 'cloud monthly bill', 'SOC2 audit date', 'Datadog dashboard URL', 'PCI compliance scope'];
 for (let i = 0; i < userMeta.length; i += 4) {
   const m = userMeta[i];
+  currentOwnerEntityId = m.eid;
   // hard abstention: ask for a stored-attribute KIND about this person, but the trap is ANOTHER same-first-name
   // person's matching doc (plausible-but-wrong); the answer is NOT stored for THIS person.
   const sameName = userMeta.filter((o) => o.first === m.first && o.u !== m.u);
@@ -552,6 +578,7 @@ for (let i = 0; i < userMeta.length; i += 4) {
 }
 for (let i = 0; i < projMeta.length; i += 3) {
   const m = projMeta[i];
+  currentOwnerEntityId = m.eid;
   const sameName = projMeta.filter((o) => o.pname.split('-')[0] === m.pname.split('-')[0] && o.p !== m.p);
   const hard = sameName.length > 0 && chance(0.5);
   addQuery({ lane: 'agent_workflow', family: 'abstention', invariant: 'I14', abstain: true,
@@ -573,7 +600,7 @@ const splitCount = queries.reduce((a, q) => (a[q.split] = (a[q.split] || 0) + 1,
 // ── assemble + write ──
 const corpus = {
   specVersion: 'coretex.memory-corpus.v2-spec.r1',
-  phase: 'P0',
+  phase: PHASE,
   seed: SEED,
   generator: 'scripts/generate-memory-corpus-v2.mjs',
   params: { users: N_USERS, projects: N_PROJECTS },

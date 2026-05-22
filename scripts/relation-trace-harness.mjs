@@ -19,6 +19,9 @@ const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[
 const corpusPath = flag('corpus', 'release/calibration/2026-05-21-memory-corpus-v2/p1-corpus.json');
 const embPath = flag('emb', 'release/calibration/2026-05-21-memory-corpus-v2/p1-embeddings.json');
 const FST = Number(flag('fst', '128')), CAP = Number(flag('cap', '64')), BUDGET = Number(flag('budget', '12')), BONUS = Number(flag('bonus', '10'));
+// Owner-scope (Layer-2 fix) + non-flooding promotion. Defaults: scoped + inclusion-only.
+const OWNER_SCOPE = flag('owner-scope', 'restrict');
+const FINAL_BONUS = Number(flag('final-bonus', '0'));
 const PER_BUCKET = Number(flag('per-bucket', '4'));
 const outDir = flag('out', 'release/calibration/2026-05-21-memory-corpus-v2');
 
@@ -56,6 +59,7 @@ for (const d of logical.docs) {
     truthDocuments: [{ id: d.id, text: d.text, isCurrent: d.currentStaleFlag === false ? false : true }],
     hardNegatives: [], qrels: [{ documentId: d.id, relevance: 1.0 }], protected: false,
     relations: (relBySrc.get(d.id) ?? []).map((r) => ({ other_id: memId(r.dst), edgeType: r.type })),
+    ...(Array.isArray(d.entityIds) && d.entityIds.length > 0 ? { entityIds: d.entityIds } : {}),
     provenance: PROV, embeddings: mkEmb(e, [[d.id, e]], []) });
 }
 for (const q of logical.queries) {
@@ -65,11 +69,13 @@ for (const q of logical.queries) {
   const ev = { id: q.id, family: bucketFam(q.family), domain: q.lane, split: q.split ?? 'eval_hidden', queryText: q.queryText,
     truthDocuments: truths, hardNegatives: negs, qrels: (q.qrels ?? []).map((r) => ({ documentId: r.docId, relevance: r.relevance })),
     protected: false, relations: [], provenance: PROV,
+    ...(q.ownerEntityId !== undefined ? { ownerEntityId: q.ownerEntityId, ownerScoped: q.ownerScoped !== false } : {}),
     embeddings: mkEmb(qEmb.get(q.id), truths.map((t) => [t.id, docEmb.get(t.id)]), negs.map((n) => [n.id, docEmb.get(n.id)])) };
   events.push(ev);
 }
 const corpusRoot = computeCorpusRoot(events);
 const corpus = { events, byId: new Map(events.map((e) => [e.id, e])), corpusRoot, corpusEpoch: 0,
+  entities: (logical.entities ?? []).map((e) => ({ id: e.id, canonicalName: e.canonicalName, aliases: e.aliases ?? [] })),
   biEncoderModelId: BE.modelId, biEncoderRevision: BE.revision, biEncoderRetrievalKeyLayout: LAYOUT,
   labelingModelId: manifest.model.reranker.modelId, labelingModelRevision: manifest.model.reranker.revision };
 
@@ -84,6 +90,7 @@ const opts = { weights: DEFAULT_COMPOSITE_WEIGHTS, biEncoder: { modelId: BE.mode
   reranker, retrievalKeyLayout: LAYOUT, biEncoderHash, relationHopBudget: 3, abstentionThreshold: 0.001, rerankerTopK: 10, retrievalKeyTopK: 50,
   firstStageTopK: FST, rerankerInputTopK: CAP, lensTopK: 36, lensWeight: 0.4, anchorWeight: 0.6,
   relationExpansionBudget: 12, categoryLensExpansionBudget: BUDGET, categoryLensTraversalDirection: 'bidirectional', categoryLensBonusWeight: BONUS,
+  categoryLensFinalBonusWeight: FINAL_BONUS, ownerScopeMode: OWNER_SCOPE,
   temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1, pipelineVersion: 'coretex-retrieval-v2-lens-r3' };
 
 // public index for bridge/answer dense-rank stratification (the scorer's int8 stage-1 path)
@@ -139,9 +146,9 @@ for (const m of sample) {
 process.stderr.write = origWrite;
 
 const bucketCounts = rows.reduce((a, r) => (a[r.bucket] = (a[r.bucket] || 0) + 1, a), {});
-const report = { corpus: corpusPath, phase: logical.phase, config: { FST, CAP, BUDGET, BONUS }, n: rows.length, bucketCounts, rows };
+const report = { corpus: corpusPath, phase: logical.phase, config: { FST, CAP, BUDGET, BONUS, FINAL_BONUS, OWNER_SCOPE }, n: rows.length, bucketCounts, rows };
 const tag = (logical.phase || 'P').toLowerCase();
 writeFileSync(resolve(outDir, `RELATION_TRACE_${tag}.json`), JSON.stringify(report, null, 2));
-console.log(`# Relation trace (${logical.phase}) — config fst=${FST} cap=${CAP} budget=${BUDGET} bonus=${BONUS}`);
+console.log(`# Relation trace (${logical.phase}) — config fst=${FST} cap=${CAP} budget=${BUDGET} bonus=${BONUS} finalBonus=${FINAL_BONUS} ownerScope=${OWNER_SCOPE}`);
 console.log('bucket counts:', JSON.stringify(bucketCounts));
 for (const r of rows) console.log(`  [${r.stratum}] ${r.queryId} ${r.family} brRank=${r.brRank} ansRank=${r.ansRank} edge=${r.edge} -> ${r.bucket} (ansSrc=${JSON.stringify(r.answer?.sources)} inCap=${r.answer?.inCap} finalRank=${r.answer?.finalRank} junk=${r.lensJunkTop10})`);
