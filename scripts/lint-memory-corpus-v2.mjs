@@ -24,6 +24,9 @@ const BRIDGE_FAMILIES = new Set([
   'multi_session_bridge', 'causal_memory_chain', 'coreference_resolution', 'decision_provenance',
 ]);
 const TEMPORAL_FAMILIES = new Set(['temporal_update', 'decision_provenance']);
+// Cross-entity-by-design families that MUST stay pooled (ownerScoped=false):
+// they disambiguate same-named entities / trap across the whole pool.
+const POOLED_FAMILIES = new Set(['entity_disambiguation', 'abstention']);
 const ALL_INVARIANTS = ['I1','I2','I3','I4','I5','I6','I7','I8','I9','I10','I11','I12','I13','I14'];
 
 // §5.3.2 — label-like text that encodes the eval verdict. Case-insensitive.
@@ -162,6 +165,30 @@ function main() {
     const strongPos = new Set(qrels.filter((qr) => qr.relevance >= 0.8).map((qr) => qr.docId));
     for (const n of negs) {
       if (strongPos.has(n.docId)) fail(errors, 'NEG_IS_POS', `${tag} doc ${n.docId} is both a >=0.8 answer and a hard negative`);
+    }
+
+    // ── owner-scope invariants (Layer-2 validity, 2026-05-22) ──
+    // Owner scope is PUBLIC retrieval context. Enforce: scoped queries carry an
+    // ownerEntityId; pooled families are explicitly unscoped; and a scoped
+    // query's DIRECT answer doc(s) belong to the owner (answerable within scope).
+    if (q.ownerScoped === true) {
+      if (!q.ownerEntityId) fail(errors, 'SCOPED_NO_OWNER', `${tag} ownerScoped but no ownerEntityId`);
+      else if (!entityIds.has(q.ownerEntityId)) fail(errors, 'OWNER_UNKNOWN', `${tag} ownerEntityId ${q.ownerEntityId} not a known entity`);
+      if (POOLED_FAMILIES.has(q.family)) fail(errors, 'POOLED_FAMILY_SCOPED', `${tag} family ${q.family} must be pooled (ownerScoped=false), not scoped`);
+      if (!q.abstain && q.ownerEntityId) {
+        // The direct answer must live in the owner's store (owner-scoped retrieval
+        // restricts to it). Otherwise the scoped task is unanswerable.
+        for (const qr of (q.qrels ?? []).filter((r) => r.relevance >= 0.8)) {
+          const dd = docById.get(qr.docId);
+          if (dd && !(dd.entityIds ?? []).includes(q.ownerEntityId)) {
+            fail(errors, 'SCOPED_ANSWER_OFF_OWNER', `${tag} direct answer ${qr.docId} not owned by scope ${q.ownerEntityId} (entityIds=${JSON.stringify(dd.entityIds)})`);
+          }
+        }
+      }
+    } else if (q.ownerScoped === false) {
+      if (!POOLED_FAMILIES.has(q.family)) warn(warnings, 'SCOPED_FAMILY_POOLED', `${tag} family ${q.family} is pooled (ownerScoped=false) but not a known cross-entity family`);
+    } else if (q.ownerEntityId !== undefined || q.ownerScoped !== undefined) {
+      fail(errors, 'OWNER_SCOPE_PARTIAL', `${tag} has partial owner-scope fields (ownerEntityId=${q.ownerEntityId}, ownerScoped=${q.ownerScoped})`);
     }
 
     if (q.abstain) {

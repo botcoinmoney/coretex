@@ -64,9 +64,19 @@ async function main() {
   const args = process.argv.slice(2);
   const path = args.find((a) => !a.startsWith('--'));
   const outDir = (() => { const i = args.indexOf('--out'); return i >= 0 ? args[i + 1] : 'release/calibration/2026-05-21-memory-corpus-v2'; })();
+  const ownerScope = args.includes('--owner-scope');
   const corpus = JSON.parse(readFileSync(path, 'utf8'));
   const docs = corpus.docs;
   const idToIdx = new Map(docs.map((d, i) => [d.id, i]));
+  // Owner→doc-index map (for owner-scoped dense-rank diagnostics): restrict the
+  // candidate set to the query's owner store, matching production owner-scoped
+  // retrieval. Pooled queries (ownerScoped!==true) still rank over the full pool.
+  const ownerDocIdx = new Map();
+  if (ownerScope) {
+    for (let i = 0; i < docs.length; i++) for (const e of docs[i].entityIds ?? []) {
+      if (!ownerDocIdx.has(e)) ownerDocIdx.set(e, []); ownerDocIdx.get(e).push(i);
+    }
+  }
 
   const embCachePath = (() => { const i = args.indexOf('--emb'); return i >= 0 ? args[i + 1] : null; })();
   const t0 = Date.now();
@@ -96,15 +106,22 @@ async function main() {
   for (let qi = 0; qi < corpus.queries.length; qi++) {
     const q = corpus.queries[qi];
     const qv = qVecs[qi];
-    // dense ranking
-    const denseScored = docs.map((_, i) => ({ i, s: cosine(qv, docVecs[i]) })).sort((a, b) => b.s - a.s);
+    // Candidate set: owner-scoped store for scoped queries (--owner-scope), else full pool.
+    const scoped = ownerScope && q.ownerScoped === true && q.ownerEntityId && ownerDocIdx.has(q.ownerEntityId);
+    const candIdx = scoped ? ownerDocIdx.get(q.ownerEntityId) : null; // null = full pool
+    // dense ranking (within candidate set)
+    const denseScored = (candIdx ?? docs.map((_, i) => i)).map((i) => ({ i, s: cosine(qv, docVecs[i]) })).sort((a, b) => b.s - a.s);
     const denseOrder = denseScored.map((x) => x.i);
-    const bm25Order = bm25(q.queryText);
-    // rank maps for RRF
-    const denseRank = new Array(docs.length), bm25Rank = new Array(docs.length);
-    denseOrder.forEach((idx, r) => { denseRank[idx] = r + 1; });
-    bm25Order.forEach((idx, r) => { bm25Rank[idx] = r + 1; });
-    const hybridOrder = rrf([denseRank, bm25Rank]);
+    // bm25 over full pool, then restrict to candidate set (preserve order).
+    const candSet = candIdx ? new Set(candIdx) : null;
+    const bm25Order = candSet ? bm25(q.queryText).filter((i) => candSet.has(i)) : bm25(q.queryText);
+    // rank maps for RRF (over the candidate set)
+    const denseRank = new Map(), bm25Rank = new Map();
+    denseOrder.forEach((idx, r) => denseRank.set(idx, r + 1));
+    bm25Order.forEach((idx, r) => bm25Rank.set(idx, r + 1));
+    const candList = candIdx ?? [...Array(docs.length).keys()];
+    const rrfScore = new Map(candList.map((i) => [i, 1 / (60 + (denseRank.get(i) ?? candList.length)) + 1 / (60 + (bm25Rank.get(i) ?? candList.length))]));
+    const hybridOrder = [...candList].sort((a, b) => rrfScore.get(b) - rrfScore.get(a));
 
     const rankIn = (order, idx) => order.indexOf(idx) + 1;
     const F = ensure(q.family); const A = ensure('__all__');
