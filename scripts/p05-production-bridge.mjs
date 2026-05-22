@@ -263,9 +263,12 @@ const lensBonusWeight = (() => { const i = argv.indexOf('--lens-bonus-weight'); 
 // value to restore a final additive bonus (legacy/flood-prone) for comparison.
 const lensFinalBonusWeight = (() => { const i = argv.indexOf('--lens-final-bonus-weight'); return i >= 0 ? Number(argv[i + 1]) : 0; })();
 const catBudget = (() => { const i = argv.indexOf('--cat-budget'); return i >= 0 ? Number(argv[i + 1]) : 50; })();
+// Score-inheritance alpha (default 0 = off). When >0, ON arm lets a lens-linked
+// answer inherit a bounded fraction of its bridge's reranker score.
+const lensInherit = (() => { const i = argv.indexOf('--lens-inherit'); return i >= 0 ? Number(argv[i + 1]) : 0; })();
 const relOptsOff = { ...baseOpts, categoryLensExpansionBudget: 0 };
 const relOptsOn = { ...baseOpts, categoryLensExpansionBudget: catBudget, categoryLensTraversalDirection: 'bidirectional',
-  categoryLensFinalBonusWeight: lensFinalBonusWeight,
+  categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: lensInherit,
   ...(lensBonusWeight !== undefined ? { categoryLensBonusWeight: lensBonusWeight } : {}) };
 const tempOptsOff = { ...baseOpts, temporalCurrentBoost: 0, temporalStaleSuppression: 0 };
 const tempOptsOn = { ...baseOpts, temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1 };
@@ -410,7 +413,7 @@ const report = {
   provenance: { specVersion: logical.specVersion, corpusRoot, gitSha, distHashRetrievalBenchmark: distHash, dirtyTree,
     reranker: (rerankerArg === 'env' || rerankerArg === 'gpu' || rerankerArg === 'cpu') ? `Qwen/Qwen3-Reranker-0.6B@${RRev} (${rerankerArg})` : 'deterministic-stub',
     biEncoder: BE.modelId, layout: LAYOUT, packSizeCap: packSize, rerankerInputTopK: rerankCap, relMode, packSeed,
-    ownerScopeMode: baseOpts.ownerScopeMode, categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: baseOpts.categoryLensScoreInheritance ?? 0,
+    ownerScopeMode: baseOpts.ownerScopeMode, categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: lensInherit,
     firstStageTopK: baseOpts.firstStageTopK, categoryLensBonusWeight: lensBonusWeight ?? 'default', junkEdges, splits: { memory: 'train_visible', queries: 'logical (split-pure eval_hidden pack)' } },
   relation: {
     pack: relationPack.map((e) => e.id), n: relationPack.length,
