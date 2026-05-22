@@ -436,6 +436,12 @@ const report = {
 };
 const suffix = (rerankerArg === 'env' || rerankerArg === 'gpu' || rerankerArg === 'cpu') ? 'qwen' : 'det';
 const relTag = relMode === 'all' ? '' : `_${relMode}`;
-writeFileSync(resolve(outDir, `P05_PRODUCTION_BRIDGE_${suffix}${relTag}.json`), JSON.stringify(report, null, 2));
+// Run-specific filename so D1/D2/cap/seed/alpha runs don't overwrite each other (audit provenance).
+const phaseTag = (logical.phase || 'p').toLowerCase().replace(/[^a-z0-9]+/g, '');
+const nsTag = logical.deepRemap ? `_ns${logical.deepRemap.namespaces}` : '';
+const runTag = `${phaseTag}${nsTag}_cap${rerankCap}_a${String(lensInherit).replace('.', 'p')}_${packSeed}`;
+const outName = `P05_PRODUCTION_BRIDGE_${phaseTag}_${suffix}${relTag}_${runTag}.json`;
+writeFileSync(resolve(outDir, outName), JSON.stringify(report, null, 2));
+console.error(`[p05] wrote ${outName}`);
 console.log(JSON.stringify(report, null, 2));
 if (typeof reranker.close === 'function') reranker.close();
