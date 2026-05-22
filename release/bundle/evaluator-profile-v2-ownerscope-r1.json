@@ -103,5 +103,6 @@
   "ownerScopeMode": "restrict",
   "categoryLensFinalBonusWeight": 0,
   "categoryLensScoreInheritance": 0.3,
-  "_candidateNote": "CANDIDATE, NOT launch-signed. categoryLensScoreInheritance=0.3 is current best, not pinned (needs 3-seed adversarial + larger sample sign-off). rel-mode no-query is a corpus-construction property (bridge builds no query->answer edges). Full bundleHash re-sign is a launch step. Requires deriveQueryPack-on-V2 (item 4) before production-faithful pack derivation."
+  "_candidateNote": "CANDIDATE, NOT launch-signed. categoryLensScoreInheritance=0.3 is current best, not pinned (needs 3-seed adversarial + larger sample sign-off). rel-mode no-query is a corpus-construction property (bridge builds no query->answer edges). Full bundleHash re-sign is a launch step. Requires deriveQueryPack-on-V2 (item 4) before production-faithful pack derivation. majorDeltaThreshold=10 is a P1/P2-validation candidate (isMajorDelta is an ABSOLUTE new-eval_hidden count, new-prev>=threshold); LAUNCH must recalibrate to ~5% of the launch corpus eval_hidden population (cf launch-v3=5076 for 679k). Baseline UNPINNED (computed at runtime per-epoch by the harness); launch signing pins baseline{ParentScorePpm,VariancePpm,EvalSeedHex} from a fixed-seed measurement.",
+  "majorDeltaThreshold": 10
 }
