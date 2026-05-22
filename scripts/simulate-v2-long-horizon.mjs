@@ -71,6 +71,10 @@ const opts = scoringOptionsFromProfile(profile, { biEncoder: inertBiEncoder(BE, 
 if (rerankCapOverride > 0) opts.rerankerInputTopK = rerankCapOverride;
 const hiddenPack = packSizeOverride > 0 ? { ...profile.hiddenPack, packSize: packSizeOverride } : profile.hiddenPack;
 const replayTol = Number(profile.replayTolerancePpm ?? 250);
+// Effective major-delta threshold MUST come from the profile (auditable, not a
+// silent default). Warn loudly if the profile lacks it rather than quietly using 0.1.
+if (profile.majorDeltaThreshold === undefined) console.error('[v2-lh] WARN: profile lacks majorDeltaThreshold; falling back to 0.1 (NOT profile-pinned)');
+const effMajorDelta = Number(profile.majorDeltaThreshold ?? 0.1);
 const structFloors = {
   structuralFloor: profile.patchAcceptanceFloors.structuralFloor,
   protectedRegressionFloor: -50000, familyCatastrophicFloor: -100000,
@@ -110,7 +114,7 @@ for (let epoch = 1; epoch <= epochs; epoch++) {
   const fracIdx = Math.min(ownerFractions.length - 1, Math.floor((epoch - 1) / Math.max(1, epochsPerFraction)));
   const frac = ownerFractions[fracIdx] ?? 1;
   const ac = activeCorpus(frac);
-  const majorDeltaActive = isMajorDelta(ac.evalHiddenCount, prevEH, Number(profile.majorDeltaThreshold ?? 0.1)); prevEH = ac.evalHiddenCount;
+  const majorDeltaActive = isMajorDelta(ac.evalHiddenCount, prevEH, effMajorDelta); prevEH = ac.evalHiddenCount;
   const seedHex = '0x' + createHash('sha256').update(`${masterSeed}:${epoch}`).digest('hex');
   const pack = deriveQueryPack(epoch, seedHex, ac, hiddenPack);
 
@@ -157,7 +161,9 @@ const out = {
   generatedAt: new Date().toISOString(),
   provenance: { corpus: corpusPath, corpusRoot: corpus.corpusRoot, profile: profilePath, gitSha, distHashRetrievalBenchmark: distHash, dirtyTree,
     reranker: rerankerArg === 'gpu' || rerankerArg === 'cpu' ? `Qwen/Qwen3-Reranker-0.6B@${RR.revision} (${rerankerArg})` : 'deterministic-stub',
-    seed: masterSeed, replayTolerancePpm: replayTol, clampBounds: { minPpm: Number(MIN_IMPROVEMENT_PPM), maxPpm: Number(MAX_IMPROVEMENT_PPM) },
+    seed: masterSeed, replayTolerancePpm: replayTol, majorDeltaThreshold: effMajorDelta,
+    majorDeltaThresholdProfilePinned: profile.majorDeltaThreshold !== undefined,
+    clampBounds: { minPpm: Number(MIN_IMPROVEMENT_PPM), maxPpm: Number(MAX_IMPROVEMENT_PPM) },
     acceptanceRule: 'delta > minImprovementPpm + variancePpm + replayTolerancePpm' },
   summary: {
     epochs, scopedOwners: owners.length, baselineRecomputes,
