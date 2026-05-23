@@ -20,6 +20,7 @@ const args = process.argv.slice(2);
 const corpusPath = args[0] ?? 'release/calibration/2026-05-21-memory-corpus-v2/dgen1-smoke-corpus.json';
 const embPath = (() => { const i = args.indexOf('--emb'); return i >= 0 ? args[i + 1] : 'release/calibration/2026-05-21-memory-corpus-v2/dgen1-smoke-embeddings.json'; })();
 const seedTopK = (() => { const i = args.indexOf('--seed-topk'); return i >= 0 ? Number(args[i + 1]) : 8; })();
+const alpha = (() => { const i = args.indexOf('--alpha'); return i >= 0 ? Number(args[i + 1]) : 0.3; })();
 const profile = JSON.parse(readFileSync('release/bundle/evaluator-profile-v2-ownerscope-r1.json', 'utf8'));
 const { corpus, logical, LAYOUT, BE, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath });
 const logicalQById = new Map(logical.queries.map((q) => [q.id, q]));
@@ -36,7 +37,7 @@ try { const dec = decodeSubstrate(state); console.log('decoded categoryLenses:',
 const reranker = await createDeterministicReranker();
 const opts = { ...scoringOptionsFromProfile(profile, { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT }),
   rerankerInputTopK: 64, ownerScopeMode: 'restrict', categoryLensExpansionBudget: 50, categoryLensTraversalDirection: 'bidirectional',
-  categoryLensSeedTopK: seedTopK, categoryLensFinalBonusWeight: 0, categoryLensScoreInheritance: 0.3, categoryLensBonusWeight: 4.0, firstStageTopK: 3200 };
+  categoryLensSeedTopK: seedTopK, categoryLensFinalBonusWeight: 0, categoryLensScoreInheritance: alpha, categoryLensBonusWeight: 4.0, firstStageTopK: 3200 };
 
 const seedHex = '0x' + createHash('sha256').update('adm:diag').digest('hex');
 const ac = { ...corpus, byId: corpus.byId };
@@ -58,7 +59,11 @@ for (const pq of cs.perQuery) {
   const bIdx = capIds.indexOf(bridgeMem), aIdx = capIds.indexOf(ansMem);
   if (bIdx >= 0) seedInCap++;
   if (aIdx >= 0) { ansInCap++; if ((capSrc[aIdx] ?? []).includes('categoryLensBFS')) ansViaLens++; }
-  if (samples.length < 4) samples.push({ q: pq.recordId, bridgeInCap: bIdx >= 0 ? `rank${bIdx}` : 'NO', answerInCap: aIdx >= 0 ? `rank${aIdx} src=${JSON.stringify(capSrc[aIdx])}` : 'NO', capSize: capIds.length });
+  // answer's FINAL ranking position (does inheritance lift it?). finalRankingTop20 carries rank.
+  const ansFinal = (pq.finalRankingTop20 ?? []).find((r) => r.docId === ansMem);
+  const ansFinalRank = ansFinal ? ansFinal.rank : '>20';
+  if (samples.length < 6) samples.push({ q: pq.recordId, answerInCap: aIdx >= 0 ? `cap-rank${aIdx}` : 'NO', answerFinalRank: ansFinalRank });
 }
-console.log(JSON.stringify({ relationQueries: n, seedTopK, bridgeSeedInCapRate: +(seedInCap / n).toFixed(3), answerInCapRate: +(ansInCap / n).toFixed(3), answerInCapViaLensRate: +(ansViaLens / n).toFixed(3), samples }, null, 2));
+let ansTop10 = 0; for (const pq of cs.perQuery) { const lq = logicalQById.get(pq.recordId); if (!lq) continue; const ansId = (lq.qrels ?? []).find((r) => r.role === 'direct')?.docId; if (!ansId) continue; const af = (pq.finalRankingTop20 ?? []).find((r) => r.docId === ansId); if (af && af.rank <= 10) ansTop10++; }
+console.log(JSON.stringify({ relationQueries: n, seedTopK, alpha, bridgeSeedInCapRate: +(seedInCap / n).toFixed(3), answerInCapRate: +(ansInCap / n).toFixed(3), answerInCapViaLensRate: +(ansViaLens / n).toFixed(3), answerFinalTop10Rate: +(ansTop10 / n).toFixed(3), samples }, null, 2));
 if (typeof reranker.close === 'function') reranker.close();
