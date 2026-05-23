@@ -274,8 +274,11 @@ const lensInherit = (() => { const i = argv.indexOf('--lens-inherit'); return i 
 const lensSeedTopK = (() => { const i = argv.indexOf('--lens-seed-topk'); return i >= 0 ? Number(argv[i + 1]) : undefined; })();
 // Evidence-bundle reranking: score routed answer together with its bridge (final-surfacing fix).
 const evidenceBundle = argv.includes('--evidence-bundle');
+// Traversal: 'forward' admits only the seed's forward edge-targets (the direct bridge→answer hop,
+// minimal cluster); 'bidirectional' (default) also pulls inverse-edge cluster (more collateral).
+const traversal = (() => { const i = argv.indexOf('--traversal'); return i >= 0 ? argv[i + 1] : 'bidirectional'; })();
 const relOptsOff = { ...baseOpts, categoryLensExpansionBudget: 0 };
-const relOptsOn = { ...baseOpts, categoryLensExpansionBudget: catBudget, categoryLensTraversalDirection: 'bidirectional',
+const relOptsOn = { ...baseOpts, categoryLensExpansionBudget: catBudget, categoryLensTraversalDirection: traversal,
   categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: lensInherit,
   ...(lensSeedTopK !== undefined ? { categoryLensSeedTopK: lensSeedTopK } : {}),
   ...(evidenceBundle ? { categoryLensEvidenceBundle: true } : {}),
@@ -400,6 +403,51 @@ function bridgeCapture(score) {
   }
   return { n, bridgeSeedInTop20Rate: n ? +(seedInTop20 / n).toFixed(3) : null, answerViaLensTop10Rate: n ? +(answerViaLens / n).toFixed(3) : null };
 }
+// Explicit surfacing metrics (per operator): is the EXACT direct target surfaced cleanly,
+// or is the substrate just lifting a cluster? All from PUBLIC structure + the ranking; the
+// qrels roles are used only for MEASUREMENT (not by the scorer).
+function surfacingStats(score, seedTopK) {
+  let n = 0, bridgeInCap = 0, bridgeInTopK = 0, directInCap = 0, directTop10 = 0, viaLens = 0;
+  const clusterSizes = [], nonTargetLifted = [];
+  for (const pq of score.perQuery ?? []) {
+    const lq = logical.queries.find((q) => q.id === pq.recordId); if (!lq) continue;
+    const bridgeDoc = (lq.qrels ?? []).find((r) => r.role === 'bridge')?.docId;
+    const ansDoc = (lq.qrels ?? []).find((r) => r.role === 'direct')?.docId;
+    if (!ansDoc) continue; n++;
+    const cap = pq.cappedDocIds ?? [], capSrc = pq.cappedDocSources ?? [];
+    const top = pq.finalRankingTop20 ?? [];
+    const aCap = cap.indexOf(ansDoc), bCap = bridgeDoc ? cap.indexOf(bridgeDoc) : -1;
+    if (bCap >= 0) { bridgeInCap++; if (bCap < (seedTopK || 64)) bridgeInTopK++; }
+    if (aCap >= 0) directInCap++;
+    const aTop = top.find((r) => r.docId === ansDoc && r.rank <= 10);
+    if (aTop) { directTop10++; if ((aTop.sources ?? []).includes('categoryLensBFS')) viaLens++; }
+    // cluster admitted = #docs in cap sourced categoryLensBFS; non-target lifted = lens-sourced
+    // docs in top-10 that are NOT the direct answer (cluster collateral surfacing).
+    let cluster = 0; for (const s of capSrc) if ((s ?? []).includes('categoryLensBFS')) cluster++;
+    clusterSizes.push(cluster);
+    let nonTgt = 0; for (const r of top) if (r.rank <= 10 && r.docId !== ansDoc && r.docId !== bridgeDoc && (r.sources ?? []).includes('categoryLensBFS')) nonTgt++;
+    nonTargetLifted.push(nonTgt);
+  }
+  const mean = (a) => a.length ? +(a.reduce((x, y) => x + y, 0) / a.length).toFixed(3) : 0;
+  return { n, seedTopK: seedTopK ?? null,
+    bridgeSeedInCapRate: n ? +(bridgeInCap / n).toFixed(3) : null,
+    bridgeSeedInTopKRate: n ? +(bridgeInTopK / n).toFixed(3) : null,
+    directTargetInCapRate: n ? +(directInCap / n).toFixed(3) : null,
+    directTargetTop10Rate: n ? +(directTop10 / n).toFixed(3) : null,
+    answerViaLensTop10Rate: n ? +(viaLens / n).toFixed(3) : null,
+    clusterSizeAdmittedMean: mean(clusterSizes),
+    nonTargetPeersLiftedTop10Mean: mean(nonTargetLifted) };
+}
+// LEGITIMACY guard: the substrate must NOT effectively hardcode answer selection. If the
+// EXACT direct target reaches top-10 far more than the bridge seed it routes from, or the
+// cluster is suspiciously precise (≈1 admitted doc that is always the answer), flag it —
+// honest routing surfaces a cluster the reranker must still resolve, not the gold alone.
+function legitimacyFlags(surf) {
+  const flags = [];
+  // a near-1.0 direct-top10 with near-0 non-target lift + cluster≈1 would look like answer-selection.
+  if ((surf.directTargetTop10Rate ?? 0) > 0.9 && (surf.clusterSizeAdmittedMean ?? 9) < 1.5) flags.push('SUSPECT_answer_selection: near-perfect direct surfacing with ~1 admitted doc');
+  return { suspectAnswerSelection: flags.length > 0, flags };
+}
 // SUBSTRATE-INDUCED flood/lift (paired ON vs OFF, same pack order). The honest
 // gameability gate: irrelevant docs the substrate PUSHED into top-10 (ON rank≤10
 // but OFF rank>10), separated from the GOOD lift (relevant docs it pulled in).
@@ -448,7 +496,7 @@ const report = {
   provenance: { specVersion: logical.specVersion, corpusRoot, gitSha, distHashRetrievalBenchmark: distHash, dirtyTree,
     reranker: (rerankerArg === 'env' || rerankerArg === 'gpu' || rerankerArg === 'cpu') ? `Qwen/Qwen3-Reranker-0.6B@${RRev} (${rerankerArg})` : 'deterministic-stub',
     biEncoder: BE.modelId, layout: LAYOUT, packSizeCap: packSize, rerankerInputTopK: rerankCap, relMode, packSeed,
-    ownerScopeMode: baseOpts.ownerScopeMode, categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: lensInherit, categoryLensSeedTopK: lensSeedTopK ?? null, categoryLensEvidenceBundle: evidenceBundle,
+    ownerScopeMode: baseOpts.ownerScopeMode, categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: lensInherit, categoryLensSeedTopK: lensSeedTopK ?? null, categoryLensEvidenceBundle: evidenceBundle, categoryLensTraversalDirection: traversal,
     firstStageTopK: baseOpts.firstStageTopK, categoryLensBonusWeight: lensBonusWeight ?? 'default', junkEdges, splits: { memory: 'train_visible', queries: 'logical (split-pure eval_hidden pack)' } },
   relation: {
     pack: relationPack.map((e) => e.id), n: relationPack.length,
@@ -457,6 +505,8 @@ const report = {
     attribution: { off: bfsAttribution(relOff), on: bfsAttribution(relOn) },
     flood: { off: floodStats(relOff), on: floodStats(relOn) },
     bridgeCapture: { off: bridgeCapture(relOff), on: bridgeCapture(relOn) },
+    surfacing: { on: surfacingStats(relOn, lensSeedTopK) },
+    legitimacy: legitimacyFlags(surfacingStats(relOn, lensSeedTopK)),
     induced: inducedDelta(relOn, relOff),
   },
   temporal: {
