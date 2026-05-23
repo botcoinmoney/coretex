@@ -360,17 +360,42 @@ if (argv.includes('--debug')) {
 
 // hard-negative flood: mean # of the query's hard negatives appearing in finalRankingTop20 (top-20)
 const negsById = new Map(logical.queries.map((q) => [q.id, new Set((q.hardNegatives ?? []).map((n) => n.docId))]));
+function pctl(sorted, p) { if (!sorted.length) return 0; const i = Math.min(sorted.length - 1, Math.floor(p * sorted.length)); return sorted[i]; }
 function floodStats(score) {
-  let n = 0, sum = 0, max = 0, junkSum = 0;
+  let n = 0, sum = 0, max = 0;
+  const junkArr = []; const offenders = []; // per-query lens junk + query-ids exceeding tail
   for (const pq of score.perQuery ?? []) {
     const negs = negsById.get(pq.recordId) ?? new Set();
     const top = pq.finalRankingTop20 ?? [];
     const c = top.filter((r) => r.rank <= 20 && negs.has(r.docId)).length;
     // adversarial/gameability: irrelevant (relevance 0) doc routed into top-10 via categoryLensBFS
     const junk = top.filter((r) => r.rank <= 10 && (r.relevance ?? 0) === 0 && (r.sources ?? []).includes('categoryLensBFS')).length;
-    n++; sum += c; junkSum += junk; if (c > max) max = c;
+    n++; sum += c; junkArr.push(junk); if (c > max) max = c;
+    if (junk >= 3) offenders.push({ id: pq.recordId, junk }); // tail-gate offenders (p95<=3, max<=4)
   }
-  return { meanHardNegInTop20: n ? +(sum / n).toFixed(3) : null, maxHardNegInTop20: max, meanLensJunkInTop10: n ? +(junkSum / n).toFixed(3) : null };
+  const sorted = [...junkArr].sort((a, b) => a - b);
+  const mean = n ? junkArr.reduce((a, b) => a + b, 0) / n : 0;
+  return { meanHardNegInTop20: n ? +(sum / n).toFixed(3) : null, maxHardNegInTop20: max,
+    meanLensJunkInTop10: +mean.toFixed(3), p95LensJunkInTop10: pctl(sorted, 0.95), maxLensJunkInTop10: sorted.length ? sorted[sorted.length - 1] : 0,
+    junkOffenderIds: offenders.sort((a, b) => b.junk - a.junk).slice(0, 10) };
+}
+// Bridge-seed capture: for relation queries, did the public bridge SEED (qrels role 'bridge')
+// land in the final top-20 (necessary for the lens to route from it to the buried answer)?
+// And was the buried direct answer reached via categoryLensBFS (routing succeeded)?
+function bridgeCapture(score) {
+  let n = 0, seedInTop20 = 0, answerViaLens = 0;
+  for (const pq of score.perQuery ?? []) {
+    const lq = logical.queries.find((q) => q.id === pq.recordId); if (!lq) continue;
+    const bridgeDoc = (lq.qrels ?? []).find((r) => r.role === 'bridge')?.docId;
+    const ansDoc = (lq.qrels ?? []).find((r) => r.role === 'direct')?.docId;
+    if (!bridgeDoc && !ansDoc) continue;
+    n++;
+    const top = pq.finalRankingTop20 ?? [];
+    if (bridgeDoc && top.some((r) => r.docId === bridgeDoc)) seedInTop20++;
+    const ans = top.find((r) => r.docId === ansDoc && r.rank <= 10);
+    if (ans && (ans.sources ?? []).includes('categoryLensBFS')) answerViaLens++;
+  }
+  return { n, bridgeSeedInTop20Rate: n ? +(seedInTop20 / n).toFixed(3) : null, answerViaLensTop10Rate: n ? +(answerViaLens / n).toFixed(3) : null };
 }
 // SUBSTRATE-INDUCED flood/lift (paired ON vs OFF, same pack order). The honest
 // gameability gate: irrelevant docs the substrate PUSHED into top-10 (ON rank≤10
@@ -428,6 +453,7 @@ const report = {
     on: { nDCG10: relOn.nDCG10, recall10: relOn.recall10, multiHopRecall10: relOn.multiHopRecall10, categoryLensRelationHit10: relOn.categoryLensRelationHit10 },
     attribution: { off: bfsAttribution(relOff), on: bfsAttribution(relOn) },
     flood: { off: floodStats(relOff), on: floodStats(relOn) },
+    bridgeCapture: { off: bridgeCapture(relOff), on: bridgeCapture(relOn) },
     induced: inducedDelta(relOn, relOff),
   },
   temporal: {
