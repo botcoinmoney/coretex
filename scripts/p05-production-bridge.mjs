@@ -228,7 +228,10 @@ function temporalSubstrate(pack) {
   const words = emptyWords();
   let slot = 0, rec = 0;
   for (const q of pack) {
-    if (rec >= 12 || slot >= 42) break;
+    // Temporal RECORD capacity is 96 (stride-1). But each current/stale PAIR uses two
+    // MemoryIndex slots whose retrievalSlot must be < 36, so curSlot=slot+1 < 36 caps the
+    // patch-family at 18 temporal pairs end-to-end (NOT 96). This is the honest ceiling.
+    if (rec >= 96 || slot + 1 >= 36) break;
     const lq = logical.queries.find((x) => x.id === q.id);
     const cur = lq.qrels.find((r) => r.role === 'direct'); const stale = lq.qrels.find((r) => r.role === 'stale');
     if (!cur || !stale) continue;

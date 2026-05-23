@@ -55,7 +55,11 @@ export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex =
     const lq = tq[qi];
     const recIdx = startIndex + rec;          // distinct record per query
     const staleSlot = recIdx * 2, curSlot = recIdx * 2 + 1;
-    if (recIdx >= 96 || curSlot >= 42) break; // temporal records now stride-1 (96 cap); memory-index curSlot<42 (→ ≤21 temporal pairs) is now the binding temporal-pair constraint
+    // Temporal RECORD capacity is 96 (stride-1). But each pair uses two MemoryIndex slots
+    // whose retrievalSlot must be < 36, so curSlot = recIdx*2+1 < 36 caps the patch-family at
+    // 18 temporal pairs end-to-end (NOT 96). Honest ceiling until MemoryIndex/retrieval-slot
+    // coupling is redesigned.
+    if (recIdx >= 96 || curSlot >= 36) break;
     const cur = (lq.qrels ?? []).find((r) => r.role === 'direct');
     const stale = (lq.qrels ?? []).find((r) => r.role === 'stale');
     const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(`mem_${stale.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, retrievalSlot: staleSlot, expiryEpoch: 0n });

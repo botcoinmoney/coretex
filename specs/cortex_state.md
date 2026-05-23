@@ -131,18 +131,20 @@ edgeType enum:
 
 ### Range E: Temporal (words 800–895)
 
-96 words = 12 temporal records × 8 words each. The canonical decoder
+96 words = **96 temporal records × 1 word each**. The canonical decoder
 (`packages/cortex/src/substrate/retrieval-decoder.ts:decodeTemporal`)
 and `substrate_retrieval_semantics.md §Temporal records` are
-authoritative for the per-record layout; the earlier "96 entries × 1
-word" framing was a planning sketch and is superseded — miners who
-follow it will produce patches the decoder drops.
+authoritative for the per-record layout. The raw state decoder
+(`packages/cortex/src/decoder/index.ts:decodeTemporal`) reads the SAME
+one-word layout — both layers and `state/validate.ts` agree (reserved
+bits 151:0). (Historical note: an earlier revision read records at an
+8-word stride, capping capacity at 12; that padding was an artifact and
+is removed — the payload was always a single word.)
 
-**Per-record layout** (8 words per record, record `k` occupies words
-`800 + k*8 .. 800 + k*8 + 7`, for `k` ∈ [0, 11]). Only word 0 carries
-data; words 1..7 MUST be zero.
+**Per-record layout** (1 word per record, record `k` occupies word
+`800 + k`, for `k` ∈ [0, 95]).
 
-Word 0 fields:
+Word fields:
 
 | Field                      | Bits      | Type    | Description                                            |
 |----------------------------|-----------|---------|--------------------------------------------------------|
@@ -156,9 +158,14 @@ Word 0 fields:
 Decoder failure modes (record dropped silently):
 - `memorySlot >= 44`
 - `validFromEpoch > validUntilEpoch`
-- non-zero reserved bits in word 0 or non-zero words 1..7
+- non-zero reserved bits (151:0) in the record word
 - `currentStaleFlag` set without the referenced MemoryIndex slot's
   `revoked` bit also set
+
+> **Capacity note (honest):** the temporal RANGE holds 96 one-word records, but a
+> current/stale temporal *pair* in the eval patch-families consumes two MemoryIndex
+> slots whose `retrievalSlot` must be < 36, so the end-to-end temporal-PAIR capacity is
+> **18 pairs**, not 96, until the MemoryIndex/retrieval-key coupling is redesigned.
 
 ### Range F: Codebook (words 896–991)
 
@@ -207,7 +214,7 @@ mechanism is intentionally minimal:
   parameterizes on `wordCount`.
 - **Region layout doubles where it helps, dead-pads where it doesn't.**
   Indicative shape: MemoryIndex 44→88 slots, RetrievalKeys 36→72 slots,
-  Relations 128→256 entries, Temporal 12→24 records, Codebook 48→96
+  Relations 128→256 entries, Temporal 96→192 records, Codebook 48→96
   entries, plus a reserved region for further ladder steps. Concrete
   ranges land in the spec when the ladder triggers — not before.
 - **Trigger is governance-on-data, not preemptive.** The launch design
