@@ -59,6 +59,34 @@ const epochsPerFraction = Number(flag('epochs-per-fraction', String(Math.ceil(ep
 const packSizeOverride = Number(flag('pack-size', '0'));
 const rerankCapOverride = Number(flag('rerank-cap', '0'));
 const outDir = flag('out', 'release/calibration/2026-05-21-memory-corpus-v2');
+// Difficulty-band progression: as epochs advance (corpus deepens), shift the hidden
+// pack's band mix toward harder bands, with a MANDATORY exhaustion probe (runbook 1C.3).
+// Off by default; --band-progression turns it on (requires a band-bearing corpus, e.g. DGEN-1).
+const bandProgression = argv.includes('--band-progression');
+const BANDS = ['easy', 'medium', 'hard', 'very_hard', 'exhaustion'];
+// Quotas must not exceed what the corpus's eval_hidden actually has per band (else
+// deriveQueryPack fails closed). `availCounts` is computed once from the corpus.
+function bandQuotasForEpoch(epoch, epochsN, packSize, availCounts) {
+  const t = epochsN > 1 ? (epoch - 1) / (epochsN - 1) : 1; // difficulty pointer 0..1
+  const w = {
+    easy: Math.max(0, 0.30 - 0.30 * t), medium: Math.max(0, 0.35 - 0.15 * t),
+    hard: 0.20 + 0.10 * Math.min(1, 2 * t), very_hard: 0.10 + 0.30 * t, exhaustion: 0.05 + 0.20 * t,
+  };
+  // zero out bands the corpus lacks, renormalize over available bands.
+  for (const b of BANDS) if ((availCounts[b] ?? 0) === 0) w[b] = 0;
+  const sum = Object.values(w).reduce((a, b) => a + b, 0) || 1;
+  const quotas = [];
+  for (const b of BANDS) {
+    const want = Math.floor((w[b] / sum) * packSize);
+    const mc = Math.min(want, availCounts[b] ?? 0);
+    if (mc > 0) quotas.push({ stratum: `band=${b}`, minCount: mc });
+  }
+  // mandatory exhaustion probe IF the corpus has any (tests apparent-live-but-exhausted families).
+  if ((availCounts.exhaustion ?? 0) > 0 && !quotas.some((q) => q.stratum === 'band=exhaustion')) {
+    quotas.push({ stratum: 'band=exhaustion', minCount: 1 });
+  }
+  return quotas;
+}
 // ── Phase 1 hardening flags ──
 const num = (n) => { const v = flag(n, undefined); return v === undefined ? undefined : Number(v); };
 const big = (n) => { const v = flag(n, undefined); return v === undefined ? undefined : BigInt(v); };
@@ -100,6 +128,9 @@ const reranker = rerankerArg === 'gpu' || rerankerArg === 'cpu'
 const opts = scoringOptionsFromProfile(profile, { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT });
 if (rerankCapOverride > 0) opts.rerankerInputTopK = rerankCapOverride;
 const hiddenPack = packSizeOverride > 0 ? { ...profile.hiddenPack, packSize: packSizeOverride } : profile.hiddenPack;
+// Band availability in eval_hidden (for band-progression quota capping; 0 if no bands).
+const bandAvailCounts = (() => { const c = {}; for (const e of corpus.events) { if (e.split === 'eval_hidden' && e.band) c[e.band] = (c[e.band] ?? 0) + 1; } return c; })();
+if (bandProgression) console.error(`[v2-lh] band-progression ON; eval_hidden band availability: ${JSON.stringify(bandAvailCounts)}`);
 const replayTol = Number(profile.replayTolerancePpm ?? 250);
 // Effective major-delta threshold MUST come from the profile (auditable, not a
 // silent default). Warn loudly if the profile lacks it rather than quietly using 0.1.
@@ -176,7 +207,12 @@ for (let epoch = startEpoch; epoch <= epochs; epoch++) {
   const ac = activeCorpus(frac);
   const majorDeltaActive = isMajorDelta(ac.evalHiddenCount, prevEH, effMajorDelta); prevEH = ac.evalHiddenCount;
   const seedHex = '0x' + createHash('sha256').update(`${masterSeed}:${epoch}`).digest('hex');
-  const pack = deriveQueryPack(epoch, seedHex, ac, hiddenPack);
+  // Band-progression: per-epoch band quotas (harder bands as the run advances + mandatory
+  // exhaustion probe). Merged onto the profile quotas; deriveQueryPack enforces them.
+  const epochPack = bandProgression
+    ? { ...hiddenPack, quotas: [...(hiddenPack.quotas ?? []), ...bandQuotasForEpoch(epoch, epochs, packSizeOverride > 0 ? packSizeOverride : (hiddenPack.packSize ?? 64), bandAvailCounts)] }
+    : hiddenPack;
+  const pack = deriveQueryPack(epoch, seedHex, ac, epochPack);
 
   // Baseline + variance: recompute on first epoch or major-delta (owner-growth).
   if (cachedVariance === null || majorDeltaActive || frac !== cachedFrac) {
@@ -258,6 +294,7 @@ const out = {
       pinnedMinPpm: Number(MIN_IMPROVEMENT_PPM), pinnedMaxPpm: Number(MAX_IMPROVEMENT_PPM),
       overridden: minImprovementFloorPpm !== undefined || maxImprovementCeilingPpm !== undefined },
     honestFamilies: HONEST_FAMILIES, targetAdvances,
+    bandProgression,
     controllerMode: disableController ? (fixedMinImprovementPpm !== undefined ? `fixed=${fixedMinImprovementPpm}` : 'disabled') : 'feedback',
     controllerOverrides: { rampUpMaxRatio: rampUpMaxRatio ?? 1.5, decayRatio: decayRatio ?? 0.85, smallDriftRatio: smallDriftRatio ?? 1.05, qualityHighThresholdMult: qualityHighThresholdMult ?? 4 },
     acceptanceRule: 'delta > minImprovementPpm + variancePpm + replayTolerancePpm' },
