@@ -71,6 +71,7 @@ export function buildV2ProductionCorpus({ corpusPath, embPath, junkEdges = 0 }) 
     const ev = { id: q.id, family: bucket(q.family), logicalFamily: q.family, domain: q.lane, split: q.split ?? 'eval_hidden', queryText: q.queryText,
       truthDocuments: truths, hardNegatives: negs, qrels: (q.qrels ?? []).map((r) => ({ documentId: r.docId, relevance: r.relevance })), protected: false, relations: [],
       ...(q.band ? { band: q.band } : {}),
+      ...(q.grounding ? { grounding: q.grounding } : {}),
       ...(q.ownerEntityId !== undefined ? { ownerEntityId: q.ownerEntityId, ownerScoped: q.ownerScoped !== false } : {}), provenance: PROV, embeddings: mkEmb(qEmb.get(q.id), truths.map((t) => [t.id, docEmb.get(t.id)]), negs.map((n) => [n.id, docEmb.get(n.id)])) };
     if (ev.family === 'temporal') ev.temporal = { validFromEpoch: 1, validUntilEpoch: Number.MAX_SAFE_INTEGER, currentStaleFlag: false };
     events.push(ev); queryEvents.push(ev);
