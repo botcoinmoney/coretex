@@ -277,10 +277,14 @@ const evidenceBundle = argv.includes('--evidence-bundle');
 // Traversal: 'forward' admits only the seed's forward edge-targets (the direct bridge→answer hop,
 // minimal cluster); 'bidirectional' (default) also pulls inverse-edge cluster (more collateral).
 const traversal = (() => { const i = argv.indexOf('--traversal'); return i >= 0 ? argv[i + 1] : 'bidirectional'; })();
+// Lens-specific hop budget: 1 admits only direct routed-edge targets of the query-similar seed
+// (the answer), excluding the answer's 2-hop sibling cluster (induced-junk source).
+const lensHopBudget = (() => { const i = argv.indexOf('--lens-hop-budget'); return i >= 0 ? Number(argv[i + 1]) : undefined; })();
 const relOptsOff = { ...baseOpts, categoryLensExpansionBudget: 0 };
 const relOptsOn = { ...baseOpts, categoryLensExpansionBudget: catBudget, categoryLensTraversalDirection: traversal,
   categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: lensInherit,
   ...(lensSeedTopK !== undefined ? { categoryLensSeedTopK: lensSeedTopK } : {}),
+  ...(lensHopBudget !== undefined ? { categoryLensHopBudget: lensHopBudget } : {}),
   ...(evidenceBundle ? { categoryLensEvidenceBundle: true } : {}),
   ...(lensBonusWeight !== undefined ? { categoryLensBonusWeight: lensBonusWeight } : {}) };
 const tempOptsOff = { ...baseOpts, temporalCurrentBoost: 0, temporalStaleSuppression: 0 };
@@ -496,7 +500,7 @@ const report = {
   provenance: { specVersion: logical.specVersion, corpusRoot, gitSha, distHashRetrievalBenchmark: distHash, dirtyTree,
     reranker: (rerankerArg === 'env' || rerankerArg === 'gpu' || rerankerArg === 'cpu') ? `Qwen/Qwen3-Reranker-0.6B@${RRev} (${rerankerArg})` : 'deterministic-stub',
     biEncoder: BE.modelId, layout: LAYOUT, packSizeCap: packSize, rerankerInputTopK: rerankCap, relMode, packSeed,
-    ownerScopeMode: baseOpts.ownerScopeMode, categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: lensInherit, categoryLensSeedTopK: lensSeedTopK ?? null, categoryLensEvidenceBundle: evidenceBundle, categoryLensTraversalDirection: traversal,
+    ownerScopeMode: baseOpts.ownerScopeMode, categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: lensInherit, categoryLensSeedTopK: lensSeedTopK ?? null, categoryLensHopBudget: lensHopBudget ?? null, categoryLensEvidenceBundle: evidenceBundle, categoryLensTraversalDirection: traversal,
     firstStageTopK: baseOpts.firstStageTopK, categoryLensBonusWeight: lensBonusWeight ?? 'default', junkEdges, splits: { memory: 'train_visible', queries: 'logical (split-pure eval_hidden pack)' } },
   relation: {
     pack: relationPack.map((e) => e.id), n: relationPack.length,
@@ -522,7 +526,7 @@ const relTag = relMode === 'all' ? '' : `_${relMode}`;
 // Run-specific filename so D1/D2/cap/seed/alpha runs don't overwrite each other (audit provenance).
 const phaseTag = (logical.phase || 'p').toLowerCase().replace(/[^a-z0-9]+/g, '');
 const nsTag = logical.deepRemap ? `_ns${logical.deepRemap.namespaces}` : '';
-const runTag = `${phaseTag}${nsTag}_cap${rerankCap}_a${String(lensInherit).replace('.', 'p')}${lensSeedTopK !== undefined ? '_seed' + lensSeedTopK : ''}_${packSeed}`;
+const runTag = `${phaseTag}${nsTag}_cap${rerankCap}_a${String(lensInherit).replace('.', 'p')}${lensSeedTopK !== undefined ? '_seed' + lensSeedTopK : ''}${lensHopBudget !== undefined ? '_h' + lensHopBudget : ''}_${packSeed}`;
 const outName = `P05_PRODUCTION_BRIDGE_${phaseTag}_${suffix}${relTag}_${runTag}.json`;
 writeFileSync(resolve(outDir, outName), JSON.stringify(report, null, 2));
 console.error(`[p05] wrote ${outName}`);

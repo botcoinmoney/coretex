@@ -198,15 +198,23 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     {
       const sibName = `${FIRST[(s * 11 + 3) % FIRST.length]} ${LAST[(s * 17 + 5) % LAST.length]}`;
       const attrVal = isProject ? pick(DBS) : pick(JOBS);
+      // REALISM SLICE: ~1/3 of bridge answers are PARTIALLY grounded (carry a weak subject
+      // reference) rather than maximally lexically-distant — to test whether relation
+      // surfacing generalizes off the most-adversarial end (operator: benchmark may be too
+      // adversarial if only fully-distant works/fails). `grounding` is recorded for analysis.
+      const partial = chance(0.34);
       const answerDoc = addDoc({ lane: 'deep', kind: 'bridge_answer', entityIds: tagU(),
-        text: isProject ? `The data layer for that platform service runs on a ${attrVal} cluster managed by infra.` : `${sibName} works as a ${attrVal} and lives downtown.`,
+        text: isProject
+          ? (partial ? `The ${canonical} service's data layer runs on a ${attrVal} cluster managed by infra.` : `The data layer for that platform service runs on a ${attrVal} cluster managed by infra.`)
+          : (partial ? `${sibName}, ${canonical}'s sibling, works as a ${attrVal} downtown.` : `${sibName} works as a ${attrVal} and lives downtown.`),
         shape: 'bridge_record', timestamp: ts(5 + ri(20)), currentStaleFlag: true });
       const bridgeDoc = addDoc({ lane: 'deep', kind: 'bridge_seed', entityIds: tagU(),
         text: isProject ? `${canonical} owns the data layer for that platform service.` : `${canonical}'s sibling is ${sibName}.`,
         shape: 'bridge_seed', timestamp: ts(4 + ri(10)), currentStaleFlag: true });
       rel(bridgeDoc, answerDoc, isProject ? 'depends_on' : 'supports');
       const nDist = 1 + ri(3);
-      addQuery({ lane: 'deep', family: 'multi_session_bridge', queryText: isProject ? `What datastore does ${canonical} depend on?` : `What is the job of ${canonical}'s sibling?`,
+      addQuery({ lane: 'deep', family: 'multi_session_bridge', grounding: partial ? 'partial' : 'distant',
+        queryText: isProject ? `What datastore does ${canonical} depend on?` : `What is the job of ${canonical}'s sibling?`,
         qrels: [{ docId: answerDoc, relevance: 1.0, role: 'direct' }, { docId: bridgeDoc, relevance: 0.5, role: 'bridge' }],
         hardNegatives: [{ docId: introId, category: 'relation_neighbor' }], ownerEntityId: universe, band: band(4, nDist, chance(0.15)) });
     }
