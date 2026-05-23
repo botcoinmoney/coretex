@@ -199,7 +199,10 @@ const seedHex = '0x' + (packSeed.length >= 2 ? packSeed.slice(0, 2) : 'a5').repe
 // deterministic shuffle keyed by packSeed (so ≥3 seeds give distinct eval subsets)
 function hseed(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
 const shuf = (arr) => arr.map((x) => [x, hseed(`${packSeed}:${x.id}`)]).sort((a, b) => a[1] - b[1]).map((p) => p[0]);
-const leverQ = (famLogical) => shuf(logical.queries.filter((q) => !q.abstain && q.family === famLogical && (q.split ?? 'eval_hidden') === 'eval_hidden').map((q) => corpus.byId.get(q.id)));
+// Optional realism-slice filter: restrict relation families to one grounding band
+// (distant = maximally lexically-distant answer; partial = weak subject reference).
+const groundingFilter = flag('grounding', '');
+const leverQ = (famLogical) => shuf(logical.queries.filter((q) => !q.abstain && q.family === famLogical && (q.split ?? 'eval_hidden') === 'eval_hidden' && (!groundingFilter || q.grounding === groundingFilter)).map((q) => corpus.byId.get(q.id)));
 const relationPack = [...leverQ('multi_session_bridge').slice(0, Math.floor(packSize / 2)), ...leverQ('causal_memory_chain').slice(0, packSize - Math.floor(packSize / 2))].slice(0, packSize);
 const temporalPack = leverQ('temporal_update').slice(0, packSize);
 
@@ -526,7 +529,7 @@ const relTag = relMode === 'all' ? '' : `_${relMode}`;
 // Run-specific filename so D1/D2/cap/seed/alpha runs don't overwrite each other (audit provenance).
 const phaseTag = (logical.phase || 'p').toLowerCase().replace(/[^a-z0-9]+/g, '');
 const nsTag = logical.deepRemap ? `_ns${logical.deepRemap.namespaces}` : '';
-const runTag = `${phaseTag}${nsTag}_cap${rerankCap}_a${String(lensInherit).replace('.', 'p')}${lensSeedTopK !== undefined ? '_seed' + lensSeedTopK : ''}${lensHopBudget !== undefined ? '_h' + lensHopBudget : ''}_${packSeed}`;
+const runTag = `${phaseTag}${nsTag}_cap${rerankCap}_a${String(lensInherit).replace('.', 'p')}${lensSeedTopK !== undefined ? '_seed' + lensSeedTopK : ''}${lensHopBudget !== undefined ? '_h' + lensHopBudget : ''}${groundingFilter ? '_g' + groundingFilter : ''}_${packSeed}`;
 const outName = `P05_PRODUCTION_BRIDGE_${phaseTag}_${suffix}${relTag}_${runTag}.json`;
 writeFileSync(resolve(outDir, outName), JSON.stringify(report, null, 2));
 console.error(`[p05] wrote ${outName}`);
