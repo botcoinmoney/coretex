@@ -238,7 +238,7 @@ function temporalSubstrate(pack) {
     const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(memId(cur.docId)), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: curSlot, expiryEpoch: 0n });
     for (let j = 0; j < 8; j++) words[RANGES.MEMORY_INDEX_START + curSlot * 8 + j] = cw[j];
     const tw = encodeTemporalRecord({ recordIndex: rec, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: 1n, validUntilEpoch: (2n ** 40n - 1n), currentStaleFlag: true });
-    for (let j = 0; j < 8; j++) words[RANGES.TEMPORAL_START + rec * 8 + j] = tw[j];
+    for (let j = 0; j < tw.length; j++) words[RANGES.TEMPORAL_START + rec * tw.length + j] = tw[j]; // stride-1 temporal records
     rec++;
   }
   return { words };

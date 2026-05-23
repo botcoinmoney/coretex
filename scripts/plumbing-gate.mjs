@@ -59,7 +59,7 @@ function mkCorpus(events) { return { events, byId: new Map(events.map((e) => [e.
   biEncoderModelId: MODEL_ID, biEncoderRevision: REVISION, biEncoderRetrievalKeyLayout: LAYOUT, labelingModelId: 'gate', labelingModelRevision: 'gate' }; }
 function emptyWords() { return new Array(1024).fill(0n); }
 function writeAnchor(words, slot, ev, revoked = false) { const w = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(ev.id), family: ev.family, domainBits: 1n, valid: true, revoked, protected: false, retrievalSlot: slot, expiryEpoch: 0n }); const b = RANGES.MEMORY_INDEX_START + slot * 8; for (let j = 0; j < 8; j++) words[b + j] = w[j]; }
-const TEMPORAL_WORDS_PER_RECORD = 8; // matches decoder
+const TEMPORAL_WORDS_PER_RECORD = 1; // matches decoder (stride-1 temporal records, 96 cap)
 function writeTemporal(words, recordIndex, memorySlot, currentStaleFlag) {
   const w = encodeTemporalRecord({ recordIndex, memorySlot, supersededBy: 0xff, validFromEpoch: 0n, validUntilEpoch: 0n, currentStaleFlag });
   const base = RANGES.TEMPORAL_START + recordIndex * TEMPORAL_WORDS_PER_RECORD;

@@ -55,7 +55,7 @@ export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex =
     const lq = tq[qi];
     const recIdx = startIndex + rec;          // distinct record per query
     const staleSlot = recIdx * 2, curSlot = recIdx * 2 + 1;
-    if (recIdx >= 12 || curSlot >= 42) break; // substrate temporal(12)/memory-index(42) capacity
+    if (recIdx >= 96 || curSlot >= 42) break; // temporal records now stride-1 (96 cap); memory-index curSlot<42 (→ ≤21 temporal pairs) is now the binding temporal-pair constraint
     const cur = (lq.qrels ?? []).find((r) => r.role === 'direct');
     const stale = (lq.qrels ?? []).find((r) => r.role === 'stale');
     const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(`mem_${stale.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, retrievalSlot: staleSlot, expiryEpoch: 0n });
@@ -63,7 +63,7 @@ export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex =
     const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(`mem_${cur.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: curSlot, expiryEpoch: 0n });
     indices.push(RANGES.MEMORY_INDEX_START + curSlot * 8); newWords.push(cw[0]);
     const tw = encodeTemporalRecord({ recordIndex: recIdx, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: 1n, validUntilEpoch: (2n ** 40n - 1n), currentStaleFlag: true });
-    indices.push(RANGES.TEMPORAL_START + recIdx * 8); newWords.push(tw[0]);
+    indices.push(RANGES.TEMPORAL_START + recIdx); newWords.push(tw[0]); // stride-1 temporal records
     rec++;
   }
   return { indices, newWords, recordsCompiled: rec, temporalQueriesAvailable: tq.length };
