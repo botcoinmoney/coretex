@@ -272,10 +272,13 @@ const lensInherit = (() => { const i = argv.indexOf('--lens-inherit'); return i 
 // Precise-admission: seed the category-lens BFS only from the top-K most query-similar
 // stage-1 docs (0/undefined = legacy all-stage-1-seed). Deep universes need a small K.
 const lensSeedTopK = (() => { const i = argv.indexOf('--lens-seed-topk'); return i >= 0 ? Number(argv[i + 1]) : undefined; })();
+// Evidence-bundle reranking: score routed answer together with its bridge (final-surfacing fix).
+const evidenceBundle = argv.includes('--evidence-bundle');
 const relOptsOff = { ...baseOpts, categoryLensExpansionBudget: 0 };
 const relOptsOn = { ...baseOpts, categoryLensExpansionBudget: catBudget, categoryLensTraversalDirection: 'bidirectional',
   categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: lensInherit,
   ...(lensSeedTopK !== undefined ? { categoryLensSeedTopK: lensSeedTopK } : {}),
+  ...(evidenceBundle ? { categoryLensEvidenceBundle: true } : {}),
   ...(lensBonusWeight !== undefined ? { categoryLensBonusWeight: lensBonusWeight } : {}) };
 const tempOptsOff = { ...baseOpts, temporalCurrentBoost: 0, temporalStaleSuppression: 0 };
 const tempOptsOn = { ...baseOpts, temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1 };
@@ -445,7 +448,7 @@ const report = {
   provenance: { specVersion: logical.specVersion, corpusRoot, gitSha, distHashRetrievalBenchmark: distHash, dirtyTree,
     reranker: (rerankerArg === 'env' || rerankerArg === 'gpu' || rerankerArg === 'cpu') ? `Qwen/Qwen3-Reranker-0.6B@${RRev} (${rerankerArg})` : 'deterministic-stub',
     biEncoder: BE.modelId, layout: LAYOUT, packSizeCap: packSize, rerankerInputTopK: rerankCap, relMode, packSeed,
-    ownerScopeMode: baseOpts.ownerScopeMode, categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: lensInherit, categoryLensSeedTopK: lensSeedTopK ?? null,
+    ownerScopeMode: baseOpts.ownerScopeMode, categoryLensFinalBonusWeight: lensFinalBonusWeight, categoryLensScoreInheritance: lensInherit, categoryLensSeedTopK: lensSeedTopK ?? null, categoryLensEvidenceBundle: evidenceBundle,
     firstStageTopK: baseOpts.firstStageTopK, categoryLensBonusWeight: lensBonusWeight ?? 'default', junkEdges, splits: { memory: 'train_visible', queries: 'logical (split-pure eval_hidden pack)' } },
   relation: {
     pack: relationPack.map((e) => e.id), n: relationPack.length,
