@@ -202,7 +202,10 @@ const shuf = (arr) => arr.map((x) => [x, hseed(`${packSeed}:${x.id}`)]).sort((a,
 // Optional realism-slice filter: restrict relation families to one grounding band
 // (distant = maximally lexically-distant answer; partial = weak subject reference).
 const groundingFilter = flag('grounding', '');
-const leverQ = (famLogical) => shuf(logical.queries.filter((q) => !q.abstain && q.family === famLogical && (q.split ?? 'eval_hidden') === 'eval_hidden' && (!groundingFilter || q.grounding === groundingFilter)).map((q) => corpus.byId.get(q.id)));
+// Grounding filter constrains ONLY queries that carry a grounding field (bridge family);
+// temporal/causal/coref queries have none and must pass through unaffected (else the
+// temporal pack empties → false temporal=0).
+const leverQ = (famLogical) => shuf(logical.queries.filter((q) => !q.abstain && q.family === famLogical && (q.split ?? 'eval_hidden') === 'eval_hidden' && (!groundingFilter || q.grounding === undefined || q.grounding === groundingFilter)).map((q) => corpus.byId.get(q.id)));
 const relationPack = [...leverQ('multi_session_bridge').slice(0, Math.floor(packSize / 2)), ...leverQ('causal_memory_chain').slice(0, packSize - Math.floor(packSize / 2))].slice(0, packSize);
 const temporalPack = leverQ('temporal_update').slice(0, packSize);
 
