@@ -50,7 +50,13 @@ const ACCEPTS_PER_MINER = num('accepts-per-miner', 0.5);
 const MAJOR_DELTA_THRESHOLD = num('major-delta-threshold', 56); // launch ~5% of G3 eval_hidden (1129) ≈ 56
 const CHURN = num('churn', 0.0);                                // LIVE churn of held facts: 0 in DGEN-1 today
 const WORKING_SETS = [64, 96];
-const YIELDS = { inContextObserved: 64 / 380, isolatedBurial: 310 / 380, ideal: 1.0 };
+// Honest-lift yield = fraction of new eval chains that produce genuine acceptable lift.
+// CPU-CONFIRMED (measure-temporal-honest-lift-yield.mjs, g2 100k): supply+admission yield = 309/380 = 0.813
+// (a stale buries current AND the boosted current re-admits to the rerank cap past unrelated docs; admission
+// is non-binding). The legacy 0.168 "in-context" floor was a CONFOUNDED stock/schedule number — RETIRED.
+// The realized in-context yield ≤ cpuSupplyAdmission, degraded only by cross-query pack interference + Qwen
+// final reorder — pending the staged A100 confirmation. 'ideal' = upper sanity bound.
+const YIELDS = { cpuSupplyAdmission: 309 / 380, ideal: 1.0 };
 
 // Cadence = epochs to deliver one G2→G3-magnitude (≈3×) corpus expansion (1 epoch ≈ 1 day).
 // "daily/weekly/..." = that 3× expansion delivered over the named period; realistic band is
@@ -129,7 +135,7 @@ console.log(`\n=== Maximum Sustainable Target curve  (T_max = replenishment + ch
 console.log(`grounding: ${NEW_EVAL_CHAINS_PER_TRIPLING} new eval chains/tripling, accepts/miner=${ACCEPTS_PER_MINER}, LIVE churn=${CHURN} (DGEN-1 today), majorDeltaThreshold=${MAJOR_DELTA_THRESHOLD}`);
 console.log(`cap64 vs cap96 ΔT_max = churn·32 = ${capMatters}/epoch  → ${capMatters === 0 ? 'cap does NOT matter while churn=0 (replenishment-bound)' : 'cap matters'}\n`);
 
-for (const yname of ['inContextObserved', 'isolatedBurial']) {
+for (const yname of ['cpuSupplyAdmission']) {
   console.log(`--- honest-lift yield = ${yname} (${(YIELDS[yname]).toFixed(3)}); workingSet=96 ---`);
   console.log(`${pad('cadence', 15)} ${pad('replenish/ep', 13)} ${pad('Tmax acc/ep', 12)} ${pad('prod.miners', 12)} ${pad('baselineReset@', 15)} ${pad('depletes@stall', 15)}`);
   for (const row of curve.filter((r) => r.workingSet === 96 && r.yieldName === yname)) {
