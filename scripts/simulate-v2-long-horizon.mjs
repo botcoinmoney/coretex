@@ -190,6 +190,12 @@ let startEpoch = 1;
 // temporal query/record (the per-query unit is 3 words; one per patch within budget).
 let temporalRecordSlot = 0;            // next free temporal record slot (0..17; 18-pair cap)
 let minedTemporalDocs = new Set();     // current-docs already compiled into the substrate
+let attemptedRejectedTemporal = new Set(); // temporal current-docs attempted but NOT accepted (Δ≤bar)
+// Opt-in mining-selection fix: also skip attempted-AND-rejected temporal queries (not just accepted),
+// so nextTemporalDocId advances past non-minable Δ0 heads instead of re-picking them every epoch
+// (root cause of the 64-pair plateau; see V2_DGEN1_ENDURANCE_FINDINGS.md §COVERAGE RE-DIAGNOSIS).
+// Default OFF → canonical behavior byte-identical.
+const skipRejectedTemporal = process.argv.slice(2).includes('--skip-rejected-temporal');
 let rows = [];
 if (resumePath) {
   const ck = JSON.parse(readFileSync(resolve(repoRoot, resumePath), 'utf8'));
@@ -200,12 +206,13 @@ if (resumePath) {
   rows = ck.rows ?? []; startEpoch = (ck.lastEpoch ?? 0) + 1;
   temporalRecordSlot = ck.temporalRecordSlot ?? 0;
   minedTemporalDocs = new Set(ck.minedTemporalDocs ?? []);
+  attemptedRejectedTemporal = new Set(ck.attemptedRejectedTemporal ?? []);
   console.error(`[v2-lh] RESUMED from ${resumePath} at epoch ${startEpoch} (rows=${rows.length}, current=${current}, temporalRecordSlot=${temporalRecordSlot}, minedTemporal=${minedTemporalDocs.size})`);
 }
 function writeStateOut(lastEpoch) {
   if (!stateOutPath) return;
   const ck = { lastEpoch, current: current.toString(), prevEH, clampHits, maxClampWhileAdvancing, baselineRecomputes,
-    cachedVariance, cachedFrac, temporalRecordSlot, minedTemporalDocs: [...minedTemporalDocs], bestState: serializeState(bestState), rows };
+    cachedVariance, cachedFrac, temporalRecordSlot, minedTemporalDocs: [...minedTemporalDocs], attemptedRejectedTemporal: [...attemptedRejectedTemporal], bestState: serializeState(bestState), rows };
   writeFileSync(resolve(repoRoot, stateOutPath), JSON.stringify(ck));
 }
 console.error(`[v2-lh] corpus=${corpus.events.length} evt, scopedOwners=${owners.length}, reranker=${rerankerArg}, profile=${profilePath}, epochs=${epochs}, families=[${HONEST_FAMILIES}], controller=${disableController ? 'DISABLED(fixed=' + current + ')' : 'on'}`);
@@ -241,8 +248,14 @@ for (let epoch = startEpoch; epoch <= epochs; epoch++) {
     const family = HONEST_FAMILIES[(epoch + h) % HONEST_FAMILIES.length];
     // pack-aligned temporal mining: the uncovered pack temporal query this patch will mine
     // (null for relation, or when every pack temporal query is already in the substrate).
-    const minedDoc = family === 'relation' ? null : nextTemporalDocId(pack, logicalQById, minedTemporalDocs);
-    const mkPatch = () => honestPatch(bestState, family, pack, temporalRecordSlot, minedTemporalDocs);
+    // Skip set = accepted docs, plus (opt-in) attempted-and-rejected docs so mining advances past
+    // non-minable Δ0 heads. Both nextTemporalDocId and honestPatch get the SAME set so the tracked
+    // minedDoc matches what the patch actually mines.
+    const temporalSkip = skipRejectedTemporal
+      ? new Set([...minedTemporalDocs, ...attemptedRejectedTemporal])
+      : minedTemporalDocs;
+    const minedDoc = family === 'relation' ? null : nextTemporalDocId(pack, logicalQById, temporalSkip);
+    const mkPatch = () => honestPatch(bestState, family, pack, temporalRecordSlot, temporalSkip);
     const r = await evalPatch(bestState, mkPatch(), ac, pack, acceptanceThresholdPpm, Number(current));
     honestAttempts++; familyStats[family].attempts++;
     if (h === 0) pcDelta = r.deltaPpm;
@@ -254,6 +267,7 @@ for (let epoch = startEpoch; epoch <= epochs; epoch++) {
     c.abstention += r.after.abstention - r.before.abstention;
     c.structural += r.after.structuralValidity - r.before.structuralValidity;
     if (r.accepted) { honestAccepts++; familyStats[family].accepts++; const ap = applyPatch(bestState, mkPatch()); if (ap.ok) { bestState = ap.state; if (family !== 'relation' && minedDoc) { minedTemporalDocs.add(minedDoc); temporalRecordSlot++; } } }
+    else if (skipRejectedTemporal && family !== 'relation' && minedDoc) { attemptedRejectedTemporal.add(minedDoc); } // non-minable head → skip next time
   }
 
   // ADVERSARIAL population: random (from empty) + hillclimb (mutate bestState).
