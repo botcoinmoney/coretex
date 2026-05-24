@@ -44,8 +44,32 @@ const SEEDS = flag('seeds', 'a5,b7,c3').split(',');
 const rerankerArg = flag('reranker', 'deterministic');
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
+// ── ZERO-SUBSTRATE-CHANGE profile/qrel experiment (yield-recovery test) ──
+// --w-temporal X : shift composite mass retrieval→temporal (test if reweighting recovers yield).
+const wTemporalOverride = num('w-temporal', undefined);
+if (wTemporalOverride !== undefined) {
+  const cw = { ...profile.compositeWeights };
+  const shift = wTemporalOverride - cw.w_temporal;
+  cw.w_temporal = wTemporalOverride;
+  cw.w_retrieval = +(cw.w_retrieval - shift).toFixed(6); // shift mass retrieval→temporal (sum preserved)
+  profile.compositeWeights = cw;
+}
+const retrievalFloorOk = profile.compositeWeights.w_retrieval >= 0.70 - 1e-9;
+
 const { corpus, logical, LAYOUT, BE, RR, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath });
 const logicalQById = new Map(logical.queries.map((q) => [q.id, q]));
+// --stale-relevance R : TEMPORAL-SPECIFIC qrel treatment — set temporal_update stale docs' nDCG
+// relevance to R (contrast role, not strongly rewarded). NOT a global qrel change; temporal queries only.
+const staleRelOverride = num('stale-relevance', undefined);
+let staleQrelsModified = 0;
+if (staleRelOverride !== undefined) {
+  for (const ev of corpus.events) {
+    if (ev.logicalFamily !== 'temporal_update') continue;
+    const lq = logicalQById.get(ev.id); if (!lq) continue;
+    const staleDocs = new Set((lq.qrels || []).filter((r) => r.role === 'stale').map((r) => r.docId));
+    for (const qr of (ev.qrels || [])) if (staleDocs.has(qr.documentId)) { qr.relevance = staleRelOverride; staleQrelsModified++; }
+  }
+}
 const reranker = (rerankerArg === 'gpu' || rerankerArg === 'cpu')
   ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: process.env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: rerankerArg === 'gpu' })
   : await createDeterministicReranker();
@@ -114,6 +138,8 @@ const summary = {
   generatedAt: new Date().toISOString(),
   track: corpusPath, profile: profilePath, reranker: rerankerArg, packSize: PACK_SIZE, nChains: n, seeds: SEEDS,
   oracleScope, mode: oracleScope ? 'scoped-lifecycle-oracle' : 'blunt-global (current temporal)',
+  compositeWeights: profile.compositeWeights, retrievalFloorOk,
+  staleRelevanceOverride: staleRelOverride ?? null, staleQrelsModified,
   isolatedPositiveYield: rate(measured, (m) => m.isoPos),
   inContextPositiveYield: rate(measured, (m) => m.inctxPos),
   inContextPositiveYield_CI95: wilson(inctxPos, n),

@@ -58,7 +58,11 @@ const WORKING_SETS = [64, 96];
 // So 'realizedInContext' is the launch number; 'supplyCeiling' is the headroom a lower-interference
 // mechanism (conflict/update lifecycle, scoped suppression) could recover toward. (The legacy 0.168 endurance
 // stock number was low for the right reason — interference — plus schedule/selection confounds.)
-const YIELDS = { realizedInContext: 0.30, supplyCeiling: 309 / 380, ideal: 1.0 };
+// profileQrelRecovered = the yield after the ZERO-substrate-change profile/qrel fix (drop temporal
+// stale partial-credit + modest w_temporal raise): deterministic-CPU estimate 0.55 (control 0.33 matched
+// real-Qwen 0.30, so representative); real-Qwen confirmation pending (A100 down). ~0.45 interference is
+// REAL in-context saturation that the metric fix does NOT recover. See PROFILE_QREL_YIELD_EXPERIMENT.md.
+const YIELDS = { realizedInContext: 0.30, profileQrelRecovered: 0.55, supplyCeiling: 309 / 380, ideal: 1.0 };
 
 // Cadence = epochs to deliver one G2→G3-magnitude (≈3×) corpus expansion (1 epoch ≈ 1 day).
 // "daily/weekly/..." = that 3× expansion delivered over the named period; realistic band is
@@ -137,7 +141,7 @@ console.log(`\n=== Maximum Sustainable Target curve  (T_max = replenishment + ch
 console.log(`grounding: ${NEW_EVAL_CHAINS_PER_TRIPLING} new eval chains/tripling, accepts/miner=${ACCEPTS_PER_MINER}, LIVE churn=${CHURN} (DGEN-1 today), majorDeltaThreshold=${MAJOR_DELTA_THRESHOLD}`);
 console.log(`cap64 vs cap96 ΔT_max = churn·32 = ${capMatters}/epoch  → ${capMatters === 0 ? 'cap does NOT matter while churn=0 (replenishment-bound)' : 'cap matters'}\n`);
 
-for (const yname of ['realizedInContext', 'supplyCeiling']) {
+for (const yname of ['realizedInContext', 'profileQrelRecovered', 'supplyCeiling']) {
   console.log(`--- honest-lift yield = ${yname} (${(YIELDS[yname]).toFixed(3)}); workingSet=96 ---`);
   console.log(`${pad('cadence', 15)} ${pad('replenish/ep', 13)} ${pad('Tmax acc/ep', 12)} ${pad('prod.miners', 12)} ${pad('baselineReset@', 15)} ${pad('depletes@stall', 15)}`);
   for (const row of curve.filter((r) => r.workingSet === 96 && r.yieldName === yname)) {
