@@ -50,6 +50,10 @@ const reranker = (rerankerArg === 'gpu' || rerankerArg === 'cpu')
   ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: process.env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: rerankerArg === 'gpu' })
   : await createDeterministicReranker();
 const opts = scoringOptionsFromProfile(profile, { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT });
+// ORACLE scoped-lifecycle upper-bound (substrate-vNext): scope each chain's temporal boost/suppress
+// to its OWNING query (vs the blunt global default that floods neighbours = the 0.65 interference).
+const oracleScope = argv.includes('--oracle-scope');
+if (oracleScope) opts.temporalOracleScopePerQuery = true;
 const minImpr = Number(profile.patchAcceptanceFloors.minImprovementPpm);
 const replayTol = Number(profile.replayTolerancePpm);
 const accOpts = { structuralFloor: profile.patchAcceptanceFloors.structuralFloor, minImprovementPpm: minImpr, acceptanceThresholdPpm: minImpr + replayTol };
@@ -109,6 +113,7 @@ const inctxDeltas = measured.map((m) => m.inctxDeltaPpm);
 const summary = {
   generatedAt: new Date().toISOString(),
   track: corpusPath, profile: profilePath, reranker: rerankerArg, packSize: PACK_SIZE, nChains: n, seeds: SEEDS,
+  oracleScope, mode: oracleScope ? 'scoped-lifecycle-oracle' : 'blunt-global (current temporal)',
   isolatedPositiveYield: rate(measured, (m) => m.isoPos),
   inContextPositiveYield: rate(measured, (m) => m.inctxPos),
   inContextPositiveYield_CI95: wilson(inctxPos, n),
