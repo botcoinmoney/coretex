@@ -62,13 +62,19 @@ const REMINE_FRAC = num('remine-frac', 1.0);        // fraction of churn-freed p
 
 // Replenishment r = new minable temporal/update pairs per epoch from corpus growth.
 // Churn c = fraction of held pairs/epoch superseded (conflict/update lifecycle) → frees a slot + (×reMineFrac) new minable.
-// We sweep BOTH because they are the launch unknowns. Scenarios chosen to bracket the regimes:
-const SCENARIOS = [
-  { name: 'static-corpus',        replenish: 0.0,  churn: 0.00 },  // no growth, no churn → pure depletion
-  { name: 'slow-growth',          replenish: 0.5,  churn: 0.01 },  // modest daily growth
-  { name: 'target-matched-growth',replenish: EMISSION_TARGET, churn: 0.02 }, // growth == emission target
-  { name: 'fast-growth',          replenish: 4.0,  churn: 0.04 },  // aggressive growth
-];
+// We sweep BOTH because they are the launch unknowns. Scenarios chosen to bracket the regimes.
+// MEASURED MODE: pass --replenish R --churn C (from measure-dgen1-churn-replenish.mjs) to run a single
+// measured operating point instead of the bracketing sweep (--scenario-name labels the artifact).
+const replenishFlag = flag('replenish', undefined);
+const churnFlag = flag('churn', undefined);
+const SCENARIOS = (replenishFlag !== undefined && churnFlag !== undefined)
+  ? [{ name: flag('scenario-name', 'measured'), replenish: Number(replenishFlag), churn: Number(churnFlag) }]
+  : [
+      { name: 'static-corpus',        replenish: 0.0,  churn: 0.00 },  // no growth, no churn → pure depletion
+      { name: 'slow-growth',          replenish: 0.5,  churn: 0.01 },  // modest daily growth
+      { name: 'target-matched-growth',replenish: EMISSION_TARGET, churn: 0.02 }, // growth == emission target
+      { name: 'fast-growth',          replenish: 4.0,  churn: 0.04 },  // aggressive growth
+    ];
 
 function runSim({ miners, cap, replenish, churn, accessibleInitial }) {
   let unmined = accessibleInitial;     // accessible static pool at t=0 (=cap-bound burst on current corpus)
@@ -191,7 +197,7 @@ for (const scen of SCENARIOS) {
 //    an independent supply stream (its own target budget + working set). ──
 const secondSurface = [];
 {
-  const scen = SCENARIOS.find((s) => s.name === 'target-matched-growth');
+  const scen = SCENARIOS.find((s) => s.name === 'target-matched-growth') ?? SCENARIOS[0];
   for (const miners of MINERS) {
     const r = results.find((x) => x.scenario === scen.name && x.cap === SUBSTRATE_CAP && x.miners === miners);
     secondSurface.push({
