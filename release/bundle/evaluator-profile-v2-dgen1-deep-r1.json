@@ -83,7 +83,7 @@
     "targetBlockOffset": 30,
     "replayBlockhashLookbackBlocks": 50000
   },
-  "pipelineVersion": "coretex-retrieval-v2-lens-r3",
+  "pipelineVersion": "coretex-retrieval-v2-lens-r4",
   "firstStageTopK": 3200,
   "rerankerInputTopK": 64,
   "lensTopK": 36,

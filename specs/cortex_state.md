@@ -13,7 +13,7 @@ Each word is a packed bit field: sub-word fields are extracted by masking and sh
 | Range          | Words (inclusive) | Count | Purpose                                               |
 |----------------|-------------------|-------|-------------------------------------------------------|
 | Header         | 0 – 31            | 32    | Protocol header, schema hash fragments, score counters, epoch metadata |
-| MemoryIndex    | 32 – 383          | 352   | Memory-object index slots: event IDs, type, validity, domain code, checksum |
+| MemoryIndex    | 32 – 383          | 352   | Memory-object index slots (Tier-2 stride-1: 352 one-word slots; recordId, family, domain, validity, retrievalSlot, expiry) |
 | RetrievalKeys  | 384 – 671         | 288   | Binary / multi-vector retrieval keys                  |
 | Relations      | 672 – 799         | 128   | Typed directed edges over MemoryIndex slots           |
 | Temporal       | 800 – 895         | 96    | Temporal validity / revocation map                    |
@@ -57,35 +57,41 @@ Each word in this range has dedicated semantics. Unused bit positions within eac
 
 ### Range B: MemoryIndex (words 32–383)
 
-352 words = 44 memory-object slots × 8 words each.
+**352 words = 352 memory-object slots × 1 word each (Tier-2 STRIDE-1; canonical).**
 
-**Slot layout** (8 words per slot, slot `k` occupies words `32 + 8k` through `32 + 8k + 7`, for `k` ∈ [0, 43]):
+Tier-2 (`TEMPORAL_DECOUPLING_DESIGN.md`, protocol epoch `coretex-retrieval-v2-lens-r4`)
+repacked MemoryIndex to **stride-1**: only word 0 of the old 8-word slot was ever used, so
+the region now holds up to **352 slots instead of 44**. This is what the V2 launch scorer
+(`substrate/retrieval-decoder.ts:decodeMemoryIndex`), the patch encoders
+(`scripts/lib/v2-patch-families.mjs`), and the reserved-bit validator (`state/validate.ts`,
+which applies the word-0 reserved mask to every word in the range) all agree on. Lifting the
+slot count is what decoupled the temporal current/stale PAIR cap from the MemoryIndex (18→96).
 
-| Slot-word | Field           | Bits    | Type    | Description                                           |
-|-----------|-----------------|---------|---------|-------------------------------------------------------|
-| 0         | EVENT_ID        | 255:128 | uint128 | 128-bit opaque event identifier                       |
-| 0         | DOMAIN_CODE     | 127:96  | uint32  | Domain classifier (0 = unset)                         |
-| 0         | OBJ_TYPE        | 95:80   | uint16  | Object type enum (see below)                          |
-| 0         | VALIDITY_FLAGS  | 79:64   | uint16  | Bit 0: active. Bit 1: stale. Bit 2: revoked. Bits 3–15: reserved |
-| 0         | reserved_slot0  | 63:0    | —       | Reserved; MUST be zero                                |
-| 1         | CHECKSUM        | 255:128 | uint128 | Truncated keccak256 of the object bytes               |
-| 1         | CORPUS_EPOCH    | 127:64  | uint64  | Epoch in which this object was first admitted         |
-| 1         | EXPIRY_EPOCH    | 63:0    | uint64  | Epoch after which object is expired (0 = never)       |
-| 2–7       | PAYLOAD_WORDS   | 255:0   | bytes32 | Six arbitrary-use payload words for this slot         |
+**Canonical slot layout** (1 word per slot, slot `k` at word `32 + k`, for `k` ∈ [0, 351]):
 
-**OBJ_TYPE enum**:
+| Bits    | Field         | Type    | Description                                                     |
+|---------|---------------|---------|-----------------------------------------------------------------|
+| 255:128 | RECORD_ID     | uint128 | 128-bit opaque record identifier (0 = empty slot)               |
+| 127:124 | FAMILY        | uint4   | Family code (temporal / relation / …; see `FAMILY_BY_BITS`)     |
+| 123:64  | DOMAIN_BITS   | uint60  | Domain classifier bits                                          |
+| 63:48   | FLAGS         | uint16  | Bit 0: valid. Bit 1: revoked. Bit 2: protected. Bits 3–15: reserved |
+| 47:40   | RETRIEVAL_SLOT| uint8   | Associated RetrievalKeys slot (must be < 36); 0 = unbound       |
+| 39:0    | EXPIRY_EPOCH  | uint40  | Epoch after which the object is expired (0 = never)             |
 
-| Value  | Name        |
-|--------|-------------|
-| 0x0000 | UNSET       |
-| 0x0001 | MEMORY_EVENT|
-| 0x0002 | SKILL_ENTRY |
-| 0x0003 | RULE_ENTRY  |
-| 0x0004 | SUMMARY     |
-| 0x0005–0xFFFE | Reserved |
-| 0xFFFF | TOMBSTONE   |
+A slot with a non-zero word but RECORD_ID=0, an unknown FAMILY, RETRIEVAL_SLOT≥36, or any
+non-zero high padding decodes as a failure (counted, slot dropped). 8-bit slot-reference
+fields elsewhere (temporal `memorySlot`/`supersededBy`, relation `source`/`target`) cap
+referencible slots at 0–255 — ample for the 96-pair temporal ceiling (≤192 slots).
 
-VALIDITY_FLAGS reserved bits 3–15 MUST be zero.
+> **Legacy V4 work-unit layout (SUPERSEDED for the substrate path).** The raw decoder
+> `decoder/index.ts:decodeMemoryIndex` and the debug CLI still read this region as **44 slots ×
+> 8 words** (slot-word 0: EVENT_ID 255:128, DOMAIN_CODE 127:96, OBJ_TYPE 95:80, VALIDITY_FLAGS
+> 79:64; slot-word 1: CHECKSUM/CORPUS_EPOCH/EXPIRY_EPOCH; words 2–7: payload). This is the
+> pre-Tier-2 on-chain V4 work-unit object model (`eval/index.ts:scoreWithLoader`), a DIFFERENT
+> track from the V2 retrieval scorer; it is NOT the canonical substrate layout above and is not
+> on the V2 launch path. Unifying the raw decoder onto the stride-1 model is a separate scoped
+> change. OBJ_TYPE enum (legacy): 0x0000 UNSET / 0x0001 MEMORY_EVENT / 0x0002 SKILL_ENTRY /
+> 0x0003 RULE_ENTRY / 0x0004 SUMMARY / 0xFFFF TOMBSTONE.
 
 ### Range C: RetrievalKeys (words 384–671)
 
@@ -148,7 +154,7 @@ Word fields:
 
 | Field                      | Bits      | Type    | Description                                            |
 |----------------------------|-----------|---------|--------------------------------------------------------|
-| memorySlot                 | 255:248   | uint8   | Target MemoryIndex slot (0–43)                         |
+| memorySlot                 | 255:248   | uint8   | Target MemoryIndex slot (0–255; 8-bit ref into the 352-slot stride-1 MemoryIndex) |
 | supersededBy_memorySlot    | 247:240   | uint8   | Slot that supersedes this one; `0xFF` = none           |
 | validFromEpoch             | 239:200   | uint40  | First epoch for which this record is valid             |
 | validUntilEpoch            | 199:160   | uint40  | Last epoch (inclusive); 0 = unbounded                  |
@@ -156,16 +162,22 @@ Word fields:
 | reserved_tmp               | 151:0     | —       | Reserved; MUST be zero                                 |
 
 Decoder failure modes (record dropped silently):
-- `memorySlot >= 44`
+- `memorySlot` references a slot that does not decode to a valid stale MemoryIndex slot
 - `validFromEpoch > validUntilEpoch`
 - non-zero reserved bits (151:0) in the record word
 - `currentStaleFlag` set without the referenced MemoryIndex slot's
   `revoked` bit also set
 
-> **Capacity note (honest):** the temporal RANGE holds 96 one-word records, but a
-> current/stale temporal *pair* in the eval patch-families consumes two MemoryIndex
-> slots whose `retrievalSlot` must be < 36, so the end-to-end temporal-PAIR capacity is
-> **18 pairs**, not 96, until the MemoryIndex/retrieval-key coupling is redesigned.
+> **Capacity note (Tier-2, `coretex-retrieval-v2-lens-r4`):** the temporal RANGE holds 96
+> one-word records, and the end-to-end current/stale temporal-PAIR capacity is now **96 pairs**.
+> Tier-2 removed the artificial `retrievalSlot < 36` coupling (temporal slots pin
+> `retrievalSlot=0`; the scorer resolves temporal via the record's `recordId`/`memorySlot`,
+> never `retrievalSlot`) and repacked MemoryIndex to stride-1 (352 slots), so a pair consuming
+> two one-word MemoryIndex slots (≤192 slots for 96 pairs) is no longer MemoryIndex-bound. The
+> cross-layer invariant test (`temporal-capacity-crosslayer.test.mjs`) constructs and round-trips
+> N=12/18/24/48/96 identically across the raw decoder, retrieval decoder, and validator.
+> (Historical: the prior **18-pair** end-to-end cap was the `retrievalSlot<36` artifact, since
+> removed; beyond 96 needs a Temporal-region expansion, separately gated.)
 
 ### Range F: Codebook (words 896–991)
 
@@ -213,8 +225,8 @@ mechanism is intentionally minimal:
   Merkle tree depth grows from 10 → 11 levels; pack/unpack already
   parameterizes on `wordCount`.
 - **Region layout doubles where it helps, dead-pads where it doesn't.**
-  Indicative shape: MemoryIndex 44→88 slots, RetrievalKeys 36→72 slots,
-  Relations 128→256 entries, Temporal 96→192 records, Codebook 48→96
+  Indicative shape: MemoryIndex 352→704 slots (Tier-2 stride-1), RetrievalKeys
+  36→72 slots, Relations 128→256 entries, Temporal 96→192 records, Codebook 48→96
   entries, plus a reserved region for further ladder steps. Concrete
   ranges land in the spec when the ladder triggers — not before.
 - **Trigger is governance-on-data, not preemptive.** The launch design

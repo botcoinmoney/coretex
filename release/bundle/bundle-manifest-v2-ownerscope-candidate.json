@@ -9,8 +9,8 @@
       {
         "role": "substrate-spec",
         "path": "specs/cortex_state.md",
-        "sha256": "8a82d24508c2dd18eccb37cc11781c9a1c98bb93ea791b0dbdceb585d57db4c1",
-        "bytes": 16662
+        "sha256": "4ef8ffc30b78f9b3414857716b6be76aa379d2eb83014a440c56c7484fde3f35",
+        "bytes": 17138
       },
       {
         "role": "substrate-spec",
@@ -95,8 +95,8 @@
       {
         "role": "substrate-impl",
         "path": "packages/cortex/src/state/validate.ts",
-        "sha256": "1e89cee1de5306c65c076c64c0f6706eeda2b7f07ecf3099e9f9ecf6951f5d48",
-        "bytes": 6574
+        "sha256": "5660f1748d16cc24ac6455b2195d6be75dfa40e749ca4d27e85deb8ccb0c13e3",
+        "bytes": 6798
       },
       {
         "role": "substrate-impl",
@@ -221,7 +221,7 @@
         "targetBlockOffset": 30,
         "replayBlockhashLookbackBlocks": 50000
       },
-      "pipelineVersion": "coretex-retrieval-v2-lens-r3",
+      "pipelineVersion": "coretex-retrieval-v2-lens-r4",
       "firstStageTopK": 3200,
       "rerankerInputTopK": 64,
       "lensTopK": 36,
@@ -242,20 +242,27 @@
       "categoryLensFinalBonusWeight": 0,
       "categoryLensScoreInheritance": 0.3,
       "_candidateNote": "CANDIDATE, NOT launch-signed. categoryLensScoreInheritance=0.3 is current best, not pinned (needs 3-seed adversarial + larger sample sign-off). rel-mode no-query is a corpus-construction property (bridge builds no query->answer edges). Full bundleHash re-sign is a launch step. Requires deriveQueryPack-on-V2 (item 4) before production-faithful pack derivation. majorDeltaThreshold=10 is a P1/P2-validation candidate (isMajorDelta is an ABSOLUTE new-eval_hidden count, new-prev>=threshold); LAUNCH must recalibrate to ~5% of the launch corpus eval_hidden population (cf launch-v3=5076 for 679k). Baseline UNPINNED (computed at runtime per-epoch by the harness); launch signing pins baseline{ParentScorePpm,VariancePpm,EvalSeedHex} from a fixed-seed measurement.",
-      "majorDeltaThreshold": 10
+      "majorDeltaThreshold": 10,
+      "_controllerNote": "Launch controller calibration (2026-05-24 same-seed A/B, V2_DGEN1_ENDURANCE_FINDINGS.md §Controller-calibration A/B): qualityHighThresholdMult=1 lets the decay branch engage (qualityHighThreshold = mult × targetAdvances ≤ honestAttempts; mult=2 made threshold>attempts so decay was unreachable and small_drift_up ratcheted the bar, rejecting positive-delta pairs); rampUpMaxRatio 1.1 (gentler than 1.5) avoids over-ramping. Recovered temporal runway 51->64 (+25%) with anti-cheat 0/180. decayRatio 0.8 / smallDriftRatio 1.05 carried from C3. Sourced into the harness via controllerParamsFromProfile().",
+      "controllerParams": {
+        "rampUpMaxRatio": 1.1,
+        "decayRatio": 0.8,
+        "smallDriftRatio": 1.05,
+        "qualityHighThresholdMult": 1
+      }
     },
     "files": [
       {
         "role": "evaluator",
         "path": "packages/cortex/src/eval/retrieval-corpus.ts",
-        "sha256": "2bda952ee47c2ea1163d4f2e6903ab40db493c8d0398c8ac7da518c4002ae20b",
-        "bytes": 24834
+        "sha256": "8da76934caa1f9b089f8400a08e2e1f906252915890aac0c33cbf93c6fea47d8",
+        "bytes": 25853
       },
       {
         "role": "evaluator",
         "path": "packages/cortex/src/eval/retrieval-benchmark.ts",
-        "sha256": "ad1e3ab1a2f02a61f99c68c35921244149cba1ee18db346d5f685e3639952dc2",
-        "bytes": 76340
+        "sha256": "89a7fe919c0155570b465867fe5a96eecd99766312263404178c33a34a6689e3",
+        "bytes": 86577
       },
       {
         "role": "evaluator",
@@ -266,8 +273,8 @@
       {
         "role": "evaluator",
         "path": "packages/cortex/src/eval/hidden-query-pack.ts",
-        "sha256": "ae0290b78ed44ead91ab679459cc7baaa8f0bcf2f0ee46c189496b2519c813e8",
-        "bytes": 11257
+        "sha256": "7b4ad3c90dd41b5c997717c2465203d38d4055eee6b02821152bf298e0816912",
+        "bytes": 11752
       },
       {
         "role": "evaluator",
@@ -326,8 +333,8 @@
       {
         "role": "evaluator",
         "path": "packages/cortex/src/substrate/retrieval-decoder.ts",
-        "sha256": "6aa84a30cbbf0de803e4277d28d4cd2ba53ccec5ea8d448939d30efaac354732",
-        "bytes": 33222
+        "sha256": "4bab81cb84a78535f15b95f70bfc8aa4e909a4550213fb61760da0930c5125ba",
+        "bytes": 34678
       },
       {
         "role": "evaluator",
@@ -362,8 +369,8 @@
       {
         "role": "evaluator",
         "path": "packages/cortex/src/rewards/difficulty.ts",
-        "sha256": "002f839a9e3bcdd7a62584d26aff0c3ad76214e102f9b07463fd1c4201972632",
-        "bytes": 7765
+        "sha256": "631d185afb298b45281a7780498a6d478ff44cd5db4451b073e2233c04b0ed17",
+        "bytes": 9206
       },
       {
         "role": "evaluator",
@@ -606,5 +613,5 @@
     "coordinatorCacheOptional": true,
     "snapshots": []
   },
-  "bundleHash": "0x8e11bdf3fdeaae7049fa39e06d69a495a8d17824da641882fff9d2aa49ea2b88"
+  "bundleHash": "0x9b109fc28d2af4a2d1452f25d4712023d6ccdf2e22cf3196d71d7486d2c2cbb1"
 }
