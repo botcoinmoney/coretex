@@ -231,15 +231,17 @@ function temporalSubstrate(pack) {
     // Temporal RECORD capacity is 96 (stride-1). But each current/stale PAIR uses two
     // MemoryIndex slots whose retrievalSlot must be < 36, so curSlot=slot+1 < 36 caps the
     // patch-family at 18 temporal pairs end-to-end (NOT 96). This is the honest ceiling.
-    if (rec >= 96 || slot + 1 >= 36) break;
+    // Tier-2 (stride-1 + retrievalSlot decoupled): pair cap is now the Temporal region (96
+    // records) / MemoryIndex slot count (352), NOT the old retrievalSlot<36 → 18.
+    if (rec >= 96 || slot + 1 >= 352) break;
     const lq = logical.queries.find((x) => x.id === q.id);
     const cur = lq.qrels.find((r) => r.role === 'direct'); const stale = lq.qrels.find((r) => r.role === 'stale');
     if (!cur || !stale) continue;
     const staleSlot = slot++, curSlot = slot++;
-    const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(memId(stale.docId)), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, retrievalSlot: staleSlot, expiryEpoch: 0n });
-    for (let j = 0; j < 8; j++) words[RANGES.MEMORY_INDEX_START + staleSlot * 8 + j] = sw[j];
-    const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(memId(cur.docId)), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: curSlot, expiryEpoch: 0n });
-    for (let j = 0; j < 8; j++) words[RANGES.MEMORY_INDEX_START + curSlot * 8 + j] = cw[j];
+    const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(memId(stale.docId)), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, retrievalSlot: 0, expiryEpoch: 0n });
+    words[RANGES.MEMORY_INDEX_START + staleSlot] = sw[0]; // Tier-2 stride-1: one word per slot
+    const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(memId(cur.docId)), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: 0, expiryEpoch: 0n });
+    words[RANGES.MEMORY_INDEX_START + curSlot] = cw[0]; // Tier-2 stride-1: one word per slot
     const tw = encodeTemporalRecord({ recordIndex: rec, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: 1n, validUntilEpoch: (2n ** 40n - 1n), currentStaleFlag: true });
     for (let j = 0; j < tw.length; j++) words[RANGES.TEMPORAL_START + rec * tw.length + j] = tw[j]; // stride-1 temporal records
     rec++;

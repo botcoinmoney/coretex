@@ -46,10 +46,62 @@ export function relationUnits(edgeCount = RELATION_EDGES.length) {
  * one over-budget patch. Slot/record indices advance with startIndex so successive
  * patches build disjoint substrate.
  */
-export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex = 0 }) {
-  const indices = [], newWords = [];
-  const tq = pack.events.map((ev) => logicalQById.get(ev.id)).filter((lq) => lq && lq.family === 'temporal_update'
+// pack temporal queries (have both a current/direct and a stale qrel) — the minable set.
+function packTemporalQueries(pack, logicalQById) {
+  return pack.events.map((ev) => logicalQById.get(ev.id)).filter((lq) => lq && lq.family === 'temporal_update'
     && (lq.qrels ?? []).find((r) => r.role === 'direct') && (lq.qrels ?? []).find((r) => r.role === 'stale'));
+}
+
+/**
+ * PACK-ALIGNED incremental mining (long-horizon production-faithful mode). Returns the
+ * current-doc id of the first pack temporal query NOT yet covered by the substrate
+ * (`skipDocIds`), or null if every pack temporal query is already mined. The long-horizon
+ * harness uses this to (a) know what a temporal patch will mine THIS epoch and (b) advance
+ * its mined-set + free record slot only on accept — decoupling the global record slot
+ * (capped at 18 pairs) from the per-epoch random pack so mining does not stall when the
+ * global counter exceeds a single pack's temporal-query count.
+ */
+export function nextTemporalDocId(pack, logicalQById, skipDocIds = new Set()) {
+  for (const lq of packTemporalQueries(pack, logicalQById)) {
+    const cur = (lq.qrels ?? []).find((r) => r.role === 'direct');
+    if (cur && !skipDocIds.has(cur.docId)) return cur.docId;
+  }
+  return null;
+}
+
+export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex = 0, recordSlot, skipDocIds }) {
+  const indices = [], newWords = [];
+  const tq = packTemporalQueries(pack, logicalQById);
+  // ── NEW pack-aligned mode (recordSlot given): mine the first UNCOVERED pack temporal
+  // query into the explicit free record slot. Deterministic (first uncovered) so the
+  // eval-call and the apply-call build the identical patch. ──
+  if (recordSlot !== undefined) {
+    const skip = skipDocIds ?? new Set();
+    const slotBase = recordSlot, staleSlot = slotBase * 2, curSlot = slotBase * 2 + 1;
+    // TIER-1 DECOUPLING (TEMPORAL_DECOUPLING_DESIGN.md): the scorer's §temporal path resolves
+    // record→memorySlot→recordId→event and NEVER reads the slot's `retrievalSlot` field (the
+    // lens path iterates decoded.retrievalKeys directly). So pin temporal slots' retrievalSlot
+    // to a fixed in-range value (0) instead of the slot index, removing the artificial
+    // `retrievalSlot < 36` → 18-pair cap. The pair cap is now MemoryIndex-slot-bound:
+    // curSlot = slotBase*2+1 < MEMORY_INDEX_SLOT_COUNT(44) → 22 pairs. (Tier-2 stride-1 repack
+    // raises the slot count toward the 96-record ceiling — separate decoder change.)
+    const MEM_SLOTS = 352; // MEMORY_INDEX_SLOT_COUNT (Tier-2 stride-1 repack) — pair cap now Temporal-record-bound (slotBase<96)
+    if (slotBase >= 96 || curSlot >= MEM_SLOTS) return { indices, newWords, recordsCompiled: 0, minedDocId: null, temporalQueriesAvailable: tq.length };
+    for (const lq of tq) {
+      const cur = (lq.qrels ?? []).find((r) => r.role === 'direct');
+      const stale = (lq.qrels ?? []).find((r) => r.role === 'stale');
+      if (skip.has(cur.docId)) continue;
+      const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(`mem_${stale.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, retrievalSlot: 0, expiryEpoch: 0n });
+      indices.push(RANGES.MEMORY_INDEX_START + staleSlot * 1); newWords.push(sw[0]);
+      const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(`mem_${cur.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: 0, expiryEpoch: 0n });
+      indices.push(RANGES.MEMORY_INDEX_START + curSlot * 1); newWords.push(cw[0]);
+      const tw = encodeTemporalRecord({ recordIndex: slotBase, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: 1n, validUntilEpoch: (2n ** 40n - 1n), currentStaleFlag: true });
+      indices.push(RANGES.TEMPORAL_START + slotBase); newWords.push(tw[0]);
+      return { indices, newWords, recordsCompiled: 1, minedDocId: cur.docId, temporalQueriesAvailable: tq.length };
+    }
+    return { indices, newWords, recordsCompiled: 0, minedDocId: null, temporalQueriesAvailable: tq.length };
+  }
+  // ── LEGACY mode (startIndex) — unchanged; used by the response-surface / Monte-Carlo harnesses. ──
   let rec = 0;
   for (let qi = startIndex; qi < tq.length && rec < maxRecords; qi++) {
     const lq = tq[qi];
@@ -63,9 +115,9 @@ export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex =
     const cur = (lq.qrels ?? []).find((r) => r.role === 'direct');
     const stale = (lq.qrels ?? []).find((r) => r.role === 'stale');
     const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(`mem_${stale.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, retrievalSlot: staleSlot, expiryEpoch: 0n });
-    indices.push(RANGES.MEMORY_INDEX_START + staleSlot * 8); newWords.push(sw[0]); // nonzero w0 only
+    indices.push(RANGES.MEMORY_INDEX_START + staleSlot * 1); newWords.push(sw[0]); // nonzero w0 only
     const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(`mem_${cur.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: curSlot, expiryEpoch: 0n });
-    indices.push(RANGES.MEMORY_INDEX_START + curSlot * 8); newWords.push(cw[0]);
+    indices.push(RANGES.MEMORY_INDEX_START + curSlot * 1); newWords.push(cw[0]);
     const tw = encodeTemporalRecord({ recordIndex: recIdx, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: 1n, validUntilEpoch: (2n ** 40n - 1n), currentStaleFlag: true });
     indices.push(RANGES.TEMPORAL_START + recIdx); newWords.push(tw[0]); // stride-1 temporal records
     rec++;
@@ -84,10 +136,10 @@ export function makePatch(state, units) {
  *   mixed    → 1 relation edge + 1 temporal unit = 4 words (the only combination that fits)
  * `startIndex` selects which temporal query (incremental mining across patches).
  */
-export function honestPatch({ state, family, pack, logicalQById, edgeCount = 4, startIndex = 0 }) {
+export function honestPatch({ state, family, pack, logicalQById, edgeCount = 4, startIndex = 0, recordSlot, skipDocIds }) {
   if (family === 'relation') return makePatch(state, relationUnits(edgeCount));
-  if (family === 'temporal') return makePatch(state, temporalUnits({ pack, logicalQById, maxRecords: 1, startIndex }));
-  const r = relationUnits(1), t = temporalUnits({ pack, logicalQById, maxRecords: 1, startIndex });
+  if (family === 'temporal') return makePatch(state, temporalUnits({ pack, logicalQById, maxRecords: 1, startIndex, recordSlot, skipDocIds }));
+  const r = relationUnits(1), t = temporalUnits({ pack, logicalQById, maxRecords: 1, startIndex, recordSlot, skipDocIds });
   return makePatch(state, { indices: [...r.indices, ...t.indices], newWords: [...r.newWords, ...t.newWords] });
 }
 

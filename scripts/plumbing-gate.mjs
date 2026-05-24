@@ -58,7 +58,7 @@ function mkEvent({ id, family = 'temporal', queryText, queryVec, truths = [], ne
 function mkCorpus(events) { return { events, byId: new Map(events.map((e) => [e.id, e])), corpusRoot: '0x' + '00'.repeat(32), corpusEpoch: 0,
   biEncoderModelId: MODEL_ID, biEncoderRevision: REVISION, biEncoderRetrievalKeyLayout: LAYOUT, labelingModelId: 'gate', labelingModelRevision: 'gate' }; }
 function emptyWords() { return new Array(1024).fill(0n); }
-function writeAnchor(words, slot, ev, revoked = false) { const w = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(ev.id), family: ev.family, domainBits: 1n, valid: true, revoked, protected: false, retrievalSlot: slot, expiryEpoch: 0n }); const b = RANGES.MEMORY_INDEX_START + slot * 8; for (let j = 0; j < 8; j++) words[b + j] = w[j]; }
+function writeAnchor(words, slot, ev, revoked = false) { const w = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(ev.id), family: ev.family, domainBits: 1n, valid: true, revoked, protected: false, retrievalSlot: slot, expiryEpoch: 0n }); words[RANGES.MEMORY_INDEX_START + slot] = w[0]; /* Tier-2 stride-1: one word per slot */ }
 const TEMPORAL_WORDS_PER_RECORD = 1; // matches decoder (stride-1 temporal records, 96 cap)
 function writeTemporal(words, recordIndex, memorySlot, currentStaleFlag) {
   const w = encodeTemporalRecord({ recordIndex, memorySlot, supersededBy: 0xff, validFromEpoch: 0n, validUntilEpoch: 0n, currentStaleFlag });

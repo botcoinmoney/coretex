@@ -32,7 +32,7 @@ import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { buildV2ProductionCorpus, inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
-import { honestPatch as honestPatchLib, empty, hseed, mulberry32, randomPatch } from './lib/v2-patch-families.mjs';
+import { honestPatch as honestPatchLib, nextTemporalDocId, empty, hseed, mulberry32, randomPatch } from './lib/v2-patch-families.mjs';
 
 const {
   scoringOptionsFromProfile, deriveQueryPack, evaluateBaseline, evaluateRetrievalBenchmarkPatch,
@@ -164,7 +164,12 @@ function activeCorpus(frac) {
 // relation | temporal | mixed are GENUINE substrate compiles (proposer-visible memory
 // structure, no query→answer leak). honestPatch wraps them into a MIXED patch parented
 // on `state` (mutate-best semantics). See scripts/lib/v2-patch-families.mjs.
-const honestPatch = (state, family, pack, startIndex = 0) => honestPatchLib({ state, family, pack, logicalQById, startIndex });
+// PACK-ALIGNED incremental temporal mining: temporal/mixed patches mine the next pack
+// temporal query NOT yet covered by the substrate (skipDocIds), into the next free record
+// slot (recordSlot, capped at 18 pairs). This is the production-faithful regime (runbook
+// Phase-3 §3) — it decouples the global record slot from the per-epoch random pack so
+// mining does not stall when the slot counter exceeds a single pack's temporal-query count.
+const honestPatch = (state, family, pack, recordSlot, skipDocIds) => honestPatchLib({ state, family, pack, logicalQById, recordSlot, skipDocIds });
 const HONEST_FAMILIES = honestFamily === 'all' ? ['relation', 'temporal', 'mixed'] : [honestFamily];
 
 async function evalPatch(state, patch, corpus_, pack, acceptanceThresholdPpm, minImprovementPpm) {
@@ -183,7 +188,8 @@ let cachedVariance = null, cachedFrac = null;
 let startEpoch = 1;
 // Incremental temporal mining: each accepted temporal/mixed patch claims the next
 // temporal query/record (the per-query unit is 3 words; one per patch within budget).
-let temporalStart = 0;
+let temporalRecordSlot = 0;            // next free temporal record slot (0..17; 18-pair cap)
+let minedTemporalDocs = new Set();     // current-docs already compiled into the substrate
 let rows = [];
 if (resumePath) {
   const ck = JSON.parse(readFileSync(resolve(repoRoot, resumePath), 'utf8'));
@@ -191,13 +197,15 @@ if (resumePath) {
   if (!disableController) current = BigInt(ck.current);
   prevEH = ck.prevEH ?? 0; clampHits = ck.clampHits ?? 0; maxClampWhileAdvancing = ck.maxClampWhileAdvancing ?? 0;
   baselineRecomputes = ck.baselineRecomputes ?? 0; cachedVariance = ck.cachedVariance ?? null; cachedFrac = ck.cachedFrac ?? null;
-  rows = ck.rows ?? []; startEpoch = (ck.lastEpoch ?? 0) + 1; temporalStart = ck.temporalStart ?? 0;
-  console.error(`[v2-lh] RESUMED from ${resumePath} at epoch ${startEpoch} (rows=${rows.length}, current=${current}, temporalStart=${temporalStart})`);
+  rows = ck.rows ?? []; startEpoch = (ck.lastEpoch ?? 0) + 1;
+  temporalRecordSlot = ck.temporalRecordSlot ?? 0;
+  minedTemporalDocs = new Set(ck.minedTemporalDocs ?? []);
+  console.error(`[v2-lh] RESUMED from ${resumePath} at epoch ${startEpoch} (rows=${rows.length}, current=${current}, temporalRecordSlot=${temporalRecordSlot}, minedTemporal=${minedTemporalDocs.size})`);
 }
 function writeStateOut(lastEpoch) {
   if (!stateOutPath) return;
   const ck = { lastEpoch, current: current.toString(), prevEH, clampHits, maxClampWhileAdvancing, baselineRecomputes,
-    cachedVariance, cachedFrac, temporalStart, bestState: serializeState(bestState), rows };
+    cachedVariance, cachedFrac, temporalRecordSlot, minedTemporalDocs: [...minedTemporalDocs], bestState: serializeState(bestState), rows };
   writeFileSync(resolve(repoRoot, stateOutPath), JSON.stringify(ck));
 }
 console.error(`[v2-lh] corpus=${corpus.events.length} evt, scopedOwners=${owners.length}, reranker=${rerankerArg}, profile=${profilePath}, epochs=${epochs}, families=[${HONEST_FAMILIES}], controller=${disableController ? 'DISABLED(fixed=' + current + ')' : 'on'}`);
@@ -231,8 +239,11 @@ for (let epoch = startEpoch; epoch <= epochs; epoch++) {
   let honestAccepts = 0, honestAttempts = 0; let pcDelta = null;
   for (let h = 0; h < honestPerEpoch; h++) {
     const family = HONEST_FAMILIES[(epoch + h) % HONEST_FAMILIES.length];
-    const si = family === 'relation' ? 0 : temporalStart; // temporal/mixed mine the next query
-    const r = await evalPatch(bestState, honestPatch(bestState, family, pack, si), ac, pack, acceptanceThresholdPpm, Number(current));
+    // pack-aligned temporal mining: the uncovered pack temporal query this patch will mine
+    // (null for relation, or when every pack temporal query is already in the substrate).
+    const minedDoc = family === 'relation' ? null : nextTemporalDocId(pack, logicalQById, minedTemporalDocs);
+    const mkPatch = () => honestPatch(bestState, family, pack, temporalRecordSlot, minedTemporalDocs);
+    const r = await evalPatch(bestState, mkPatch(), ac, pack, acceptanceThresholdPpm, Number(current));
     honestAttempts++; familyStats[family].attempts++;
     if (h === 0) pcDelta = r.deltaPpm;
     familyStats[family].deltaPpm.push(r.deltaPpm);
@@ -242,7 +253,7 @@ for (let epoch = startEpoch; epoch <= epochs; epoch++) {
     c.relation += r.after.categoryLensRelationHit10 - r.before.categoryLensRelationHit10;
     c.abstention += r.after.abstention - r.before.abstention;
     c.structural += r.after.structuralValidity - r.before.structuralValidity;
-    if (r.accepted) { honestAccepts++; familyStats[family].accepts++; const ap = applyPatch(bestState, honestPatch(bestState, family, pack, si)); if (ap.ok) { bestState = ap.state; if (family !== 'relation') temporalStart++; } }
+    if (r.accepted) { honestAccepts++; familyStats[family].accepts++; const ap = applyPatch(bestState, mkPatch()); if (ap.ok) { bestState = ap.state; if (family !== 'relation' && minedDoc) { minedTemporalDocs.add(minedDoc); temporalRecordSlot++; } } }
   }
 
   // ADVERSARIAL population: random (from empty) + hillclimb (mutate bestState).
