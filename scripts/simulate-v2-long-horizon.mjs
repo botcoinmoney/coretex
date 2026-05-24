@@ -35,7 +35,7 @@ import { makeStreamReranker } from './lib/stream-reranker.mjs';
 import { honestPatch as honestPatchLib, nextTemporalDocId, empty, hseed, mulberry32, randomPatch } from './lib/v2-patch-families.mjs';
 
 const {
-  scoringOptionsFromProfile, deriveQueryPack, evaluateBaseline, evaluateRetrievalBenchmarkPatch,
+  scoringOptionsFromProfile, controllerParamsFromProfile, deriveQueryPack, evaluateBaseline, evaluateRetrievalBenchmarkPatch,
   applyPatch, nextMinImprovementPpm, isMajorDelta, createDeterministicReranker,
   MIN_IMPROVEMENT_PPM, MAX_IMPROVEMENT_PPM,
 } = await import(distIndex);
@@ -108,16 +108,30 @@ const honestFamily = flag('honest-family', 'all');
 const resumePath = flag('resume', undefined);
 const stateOutPath = flag('state-out', undefined);
 const START_T = Date.now();
-const controllerOverrides = {
-  ...(rampUpMaxRatio !== undefined ? { rampUpMaxRatio } : {}),
-  ...(decayRatio !== undefined ? { decayRatio } : {}),
-  ...(smallDriftRatio !== undefined ? { smallDriftRatio } : {}),
-  ...(qualityHighThresholdMult !== undefined ? { qualityHighThreshold: qualityHighThresholdMult * targetAdvances } : {}),
+// Research-only clamp-bound overrides (CLI; pinned protocol constants otherwise).
+const clampOverrides = {
   ...(minImprovementFloorPpm !== undefined ? { minClampPpm: minImprovementFloorPpm } : {}),
   ...(maxImprovementCeilingPpm !== undefined ? { maxClampPpm: maxImprovementCeilingPpm } : {}),
 };
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
+// CANONICAL: the difficulty-controller shape is SOURCED FROM THE SIGNED PROFILE
+// (controllerParamsFromProfile → the pinned launch controller), with CLI flags
+// overriding per-field ONLY for calibration sweeps. This proves profile → runtime
+// controller consumption the same way scoringOptionsFromProfile proves it for the
+// scorer. When the profile lacks controllerParams, this returns the difficulty.ts
+// protocol defaults (pre-pin behaviour) — backward compatible.
+const profileController = controllerParamsFromProfile(profile, targetAdvances);
+const controllerSource = profile.controllerParams !== undefined ? 'profile' : 'difficulty-defaults';
+const controllerOverrides = {
+  rampUpMaxRatio: rampUpMaxRatio ?? profileController.rampUpMaxRatio,
+  decayRatio: decayRatio ?? profileController.decayRatio,
+  smallDriftRatio: smallDriftRatio ?? profileController.smallDriftRatio,
+  qualityHighThreshold: qualityHighThresholdMult !== undefined
+    ? qualityHighThresholdMult * targetAdvances
+    : profileController.qualityHighThreshold,
+  ...clampOverrides,
+};
 const { corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath });
 const logicalQById = new Map(logical.queries.map((q) => [q.id, q]));
 const reranker = rerankerArg === 'gpu' || rerankerArg === 'cpu'
@@ -321,7 +335,18 @@ const out = {
     honestFamilies: HONEST_FAMILIES, targetAdvances,
     bandProgression,
     controllerMode: disableController ? (fixedMinImprovementPpm !== undefined ? `fixed=${fixedMinImprovementPpm}` : 'disabled') : 'feedback',
-    controllerOverrides: { rampUpMaxRatio: rampUpMaxRatio ?? 1.5, decayRatio: decayRatio ?? 0.85, smallDriftRatio: smallDriftRatio ?? 1.05, qualityHighThresholdMult: qualityHighThresholdMult ?? 4 },
+    // EFFECTIVE controller shape actually fed to nextMinImprovementPpm: profile-sourced
+    // (controllerParamsFromProfile) unless a CLI flag overrode that field.
+    controllerSource,
+    controllerProfilePinned: profile.controllerParams !== undefined,
+    controllerEffective: {
+      rampUpMaxRatio: controllerOverrides.rampUpMaxRatio,
+      decayRatio: controllerOverrides.decayRatio,
+      smallDriftRatio: controllerOverrides.smallDriftRatio,
+      qualityHighThreshold: controllerOverrides.qualityHighThreshold,
+      qualityHighThresholdMult: controllerOverrides.qualityHighThreshold / targetAdvances,
+    },
+    controllerCliOverrides: { rampUpMaxRatio, decayRatio, smallDriftRatio, qualityHighThresholdMult },
     acceptanceRule: 'delta > minImprovementPpm + variancePpm + replayTolerancePpm' },
   summary: {
     epochs, scopedOwners: owners.length, baselineRecomputes,

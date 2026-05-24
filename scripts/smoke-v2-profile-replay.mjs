@@ -26,7 +26,8 @@ import { buildV2ProductionCorpus, inertBiEncoder } from './lib/build-v2-producti
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
 
 const {
-  scoringOptionsFromProfile, deriveQueryPack, evaluateBaseline, createDeterministicReranker,
+  scoringOptionsFromProfile, controllerParamsFromProfile, nextMinImprovementPpm,
+  deriveQueryPack, evaluateBaseline, createDeterministicReranker,
 } = await import(distIndex);
 
 const argv = process.argv.slice(2);
@@ -81,6 +82,22 @@ const minImpr = Number(profile.patchAcceptanceFloors.minImprovementPpm);
 const acceptanceThresholdPpm = minImpr + base.variancePpm + profile.replayTolerancePpm;
 check('acceptance threshold computed (minImpr + variance + replayTol)', Number.isFinite(acceptanceThresholdPpm),
   `${minImpr} + ${base.variancePpm} + ${profile.replayTolerancePpm} = ${acceptanceThresholdPpm}`);
+
+// 7. Profile → CONTROLLER consumption (controllerParamsFromProfile is the single
+//    profile → difficulty-controller path, the controller analog of
+//    scoringOptionsFromProfile). The launch profile pins controllerParams; assert
+//    the pinned shape is consumed AND that the calibrated decay branch is reachable
+//    at honestAttempts == targetAdvances (the 2026-05-24 A/B fix).
+const target = Number(flag('target-advances', '3'));
+const cp = controllerParamsFromProfile(profile, target);
+const pinned = profile.controllerParams !== undefined;
+check('profile→controller: controllerParams pinned in launch profile', pinned,
+  pinned ? `mult=${profile.controllerParams.qualityHighThresholdMult} ramp=${profile.controllerParams.rampUpMaxRatio} decay=${profile.controllerParams.decayRatio}` : 'absent → difficulty.ts defaults');
+check('profile→controller: qualityHighThreshold = mult × targetAdvances', cp.qualityHighThreshold === (profile.controllerParams?.qualityHighThresholdMult ?? 4) * target,
+  `qualityHighThreshold=${cp.qualityHighThreshold} (target=${target})`);
+const decay = nextMinImprovementPpm({ current: 100_000n, observedAdvances: 0, targetAdvances: target, qualityAttempts: target, ...cp });
+check('profile→controller: decay branch FIRES at honestAttempts==targetAdvances', decay.reason === 'decay',
+  `reason=${decay.reason} ratio=${decay.ratioApplied} next=${decay.next}`);
 
 const allPass = checks.every((c) => c.ok);
 console.log(`\nRESULT: ${allPass ? 'ALL PASS ✅' : 'FAIL ❌'} (${checks.filter((c) => c.ok).length}/${checks.length})`);
