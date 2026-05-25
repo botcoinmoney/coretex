@@ -56,45 +56,57 @@ const pack = deriveQueryPack(1, seedHex, corpus, { ...r5Profile.hiddenPack, pack
 console.error(`[r5-bench] corpus=${corpus.events.length} evt | pack=${pack.events.length} q | families=${[...new Set(pack.events.map((e) => e.family))].join(',')}`);
 
 const empty = { words: new Array(1024).fill(0n) };
-
-// ── Honest atom compiler (PUBLIC structure only) ──────────────────────────────
-// support-in-degree per event (public): incoming `supports` edges. Hubs = answer-density anchors.
-const inDeg = new Map();
-for (const ev of corpus.events) for (const rel of ev.relations ?? []) if (rel.edgeType === 'supports') inDeg.set(rel.other_id, (inDeg.get(rel.other_id) ?? 0) + 1);
-const hubs = [...inDeg.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([id]) => id);
-const eventById = new Map(corpus.events.map((e) => [e.id, e]));
-const FAM_BITS = { near_collision: 'near_collision', temporal: 'temporal', long_horizon: 'long_horizon', multi_hop_relation: 'multi_hop_relation' };
 const bucket = (f) => (f === 'temporal_update' ? 'temporal' : f === 'near_collision' ? 'near_collision' : (f === 'multi_session_bridge' || f === 'causal_memory_chain' || f === 'decision_provenance' || f === 'conflict_lifecycle') ? 'multi_hop_relation' : 'long_horizon');
+const eventById = new Map(corpus.events.map((e) => [e.id, e]));
+// doc -> owning event (over all truth docs), for pool-frequency of candidate anchors.
+const docToEvent = new Map();
+for (const ev of corpus.events) for (const td of ev.truthDocuments ?? []) docToEvent.set(td.id, ev.id);
 
-function buildHonestState(maxAnchors = 128) {
-  const words = new Array(1024).fill(0n);
-  let slot = 0;
-  const anchors = hubs.slice(0, maxAnchors);
-  // MemoryIndex anchors for the hubs (public: high support-in-degree).
-  for (const evId of anchors) {
-    const ev = eventById.get(evId); if (!ev) continue;
-    const w = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(evId), family: bucket(ev.family), domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: 0, expiryEpoch: 0n });
-    words[RANGES.MEMORY_INDEX_START + slot] = w[0];
-    slot++;
-    if (slot >= 256) break;
-  }
-  // Evidence-bundle atoms: one per anchor, action=bundle (lift the anchor's public-edge reach + own docs).
-  let a = 0;
-  for (let s = 0; s < slot && a < 128; s++, a++) {
-    words[RANGES.POLICY_EVIDENCE_START + a] = encodePolicyAtom({ atomIndex: a, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY, evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path', targetSlot: s, budget: 1000, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
-  }
-  // Abstention atom: public no-evidence-path policy (operator threshold gates confidence).
-  words[RANGES.POLICY_ABSTENTION_START] = encodePolicyAtom({ atomIndex: 0, family: 'abstention', selector: POLICY_SELECTOR.MISSING_EVIDENCE, evidenceFeature: POLICY_EVIDENCE_FEATURE.NO_PUBLIC_EVIDENCE_PATH, action: 'abstain', scope: 'entity', targetSlot: POLICY_TARGET_NONE, budget: 0, flags: 0x01, validFromEpoch: 0n, expiryEpoch: 0n });
-  return { state: { words }, anchors: slot, evidenceAtoms: a };
-}
-
-const honest = buildHonestState();
-const dh = decodeSubstrate(honest.state, { policyAtomsMode: true });
-console.error(`[r5-bench] honest substrate: anchors=${honest.anchors} evidenceAtoms=${dh.evidenceBundleAtoms.length} abstentionAtoms=${dh.abstentionAtoms.length} decodeFailures=${dh.decodeFailures}`);
-
-// ── Score the three arms ──────────────────────────────────────────────────────
+// ── Score the no-op arms FIRST (A r4 baseline, B r5 no-atoms) ─────────────────
 const A = await evaluateRetrievalBenchmarkState(empty, corpus, pack, optsR4);
 const B = await evaluateRetrievalBenchmarkState(empty, corpus, pack, optsR5);
+
+// ── QUERY-SELECTIVE honest generator (PUBLIC structure only) ──────────────────
+// Anchor at SPECIFIC evidence events that appear in FEW query pools (query-local by
+// construction), NOT global support hubs. Pool-frequency is read from B's PUBLIC candidate
+// pools (cappedDocIds → owning event); support-in-degree + public edges are corpus structure.
+// No qrels / answer ids. This enforces the design rule (query-local scope, per-query budget).
+const inDeg = new Map();
+for (const ev of corpus.events) for (const rel of ev.relations ?? []) if (rel.edgeType === 'supports') inDeg.set(rel.other_id, (inDeg.get(rel.other_id) ?? 0) + 1);
+const eventPoolFreq = new Map();      // eventId -> # of query pools its truth docs appear in
+for (const q of B.perQuery) {
+  const evs = new Set();
+  for (const d of q.cappedDocIds ?? []) { const e = docToEvent.get(d); if (e) evs.add(e); }
+  for (const e of evs) eventPoolFreq.set(e, (eventPoolFreq.get(e) ?? 0) + 1);
+}
+const POOL_FREQ_MAX = Number(flag('pool-freq-max', '4'));   // query-local: ≤4 pools
+const MAX_ANCHORS = Number(flag('max-anchors', '48'));
+// candidate anchors: evidence events (≥1 public supports-edge target OR have outgoing public edges)
+// that are query-LOCAL (low pool-frequency) — the opposite of global hubs.
+const candidates = [...eventPoolFreq.entries()]
+  .filter(([id, freq]) => freq >= 1 && freq <= POOL_FREQ_MAX)
+  .filter(([id]) => { const ev = eventById.get(id); return ev && ((ev.relations ?? []).length > 0 || (inDeg.get(id) ?? 0) >= 1); })
+  .sort((a, b) => (a[1] - b[1]) || (a[0] < b[0] ? -1 : 1))   // lowest pool-freq first (most query-local)
+  .slice(0, MAX_ANCHORS)
+  .map(([id]) => id);
+
+function buildHonestState(anchorEventIds) {
+  const words = new Array(1024).fill(0n);
+  let slot = 0;
+  for (const evId of anchorEventIds) {
+    const ev = eventById.get(evId); if (!ev || slot >= 256) continue;
+    words[RANGES.MEMORY_INDEX_START + slot] = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(evId), family: bucket(ev.family), domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: 0, expiryEpoch: 0n })[0];
+    words[RANGES.POLICY_EVIDENCE_START + slot] = encodePolicyAtom({ atomIndex: slot, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY, evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path', targetSlot: slot, budget: 1000, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
+    slot++;
+  }
+  words[RANGES.POLICY_ABSTENTION_START] = encodePolicyAtom({ atomIndex: 0, family: 'abstention', selector: POLICY_SELECTOR.MISSING_EVIDENCE, evidenceFeature: POLICY_EVIDENCE_FEATURE.NO_PUBLIC_EVIDENCE_PATH, action: 'abstain', scope: 'entity', targetSlot: POLICY_TARGET_NONE, budget: 0, flags: 0x01, validFromEpoch: 0n, expiryEpoch: 0n });
+  return { state: { words }, anchors: slot };
+}
+
+const honest = buildHonestState(candidates);
+const dh = decodeSubstrate(honest.state, { policyAtomsMode: true });
+console.error(`[r5-bench] query-selective substrate: candidateAnchors=${candidates.length} (poolFreq<=${POOL_FREQ_MAX}) anchors=${honest.anchors} evidenceAtoms=${dh.evidenceBundleAtoms.length} abstentionAtoms=${dh.abstentionAtoms.length} decodeFailures=${dh.decodeFailures}`);
+
 const Cc = await evaluateRetrievalBenchmarkState(honest.state, corpus, pack, optsR5Trace);
 
 // no-op gate: per-query nDCG A vs B
@@ -121,13 +133,29 @@ for (const f of fams) {
 
 // junk/flood tail + traces from C
 let totalTraces = 0, totalDocsMoved = 0, falseAbstain = 0, abstainProbes = 0, abstainCorrect = 0;
+const movesPerQuery = [];
+let queriesFired = 0;
 for (const q of Cc.perQuery) {
-  if (q.policyTraces) { totalTraces += q.policyTraces.length; for (const t of q.policyTraces) totalDocsMoved += t.docsMoved; }
+  let qMoved = 0, qFired = 0;
+  if (q.policyTraces) { totalTraces += q.policyTraces.length; for (const t of q.policyTraces) { totalDocsMoved += t.docsMoved; qMoved += t.docsMoved; if (t.atomFamily !== 'abstention') qFired++; } }
+  movesPerQuery.push(qMoved);
+  if (qFired > 0) queriesFired++;
   if (q.policyFalseAbstain) falseAbstain++;
   const isAbstain = (logical.queries.find((lq) => lq.id === q.recordId)?.family) === 'abstention_missing';
   if (isAbstain) { abstainProbes++; if (q.policyAbstain) abstainCorrect++; }
 }
 const answerable = Cc.perQuery.length - abstainProbes;
+const maxMovesPerQuery = movesPerQuery.length ? Math.max(...movesPerQuery) : 0;
+const meanMovesPerQuery = movesPerQuery.length ? +(movesPerQuery.reduce((a, b) => a + b, 0) / movesPerQuery.length).toFixed(2) : 0;
+// PER-ATOM firing = the right query-locality metric: how many distinct queries each atom fires on.
+// A query-local atom fires on a HANDFUL of queries (its genuine stage-1 retrieval slice), not all.
+const atomFireQueries = new Map();
+for (const q of Cc.perQuery) for (const t of q.policyTraces ?? []) { if (t.atomFamily === 'abstention') continue; const s = atomFireQueries.get(t.atomId) ?? new Set(); s.add(q.recordId); atomFireQueries.set(t.atomId, s); }
+const perAtomFireCounts = [...atomFireQueries.values()].map((s) => s.size);
+const maxAtomFireQueries = perAtomFireCounts.length ? Math.max(...perAtomFireCounts) : 0;
+const meanAtomFireQueries = perAtomFireCounts.length ? +(perAtomFireCounts.reduce((a, b) => a + b, 0) / perAtomFireCounts.length).toFixed(2) : 0;
+// flood gate: a query-local generator => each atom fires on FEW queries (≤ ~2× the pool-freq bound).
+const floodGate = { queriesFired, totalQueries: Cc.perQuery.length, maxMovesPerQuery, meanMovesPerQuery, maxAtomFireQueries, meanAtomFireQueries, atomsFired: perAtomFireCounts.length, queryLocal: maxAtomFireQueries <= POOL_FREQ_MAX * 2 };
 
 const report = {
   probe: 'r5-cpu-benchmark (deterministic; wiring/no-op/attribution/damage — magnitude is a PROXY)',
@@ -135,8 +163,9 @@ const report = {
   corpus: corpusPath, packSize: pack.events.length, reranker: 'deterministic-stub',
   arms: { A_r4_baseline_ndcg: +A.nDCG10.toFixed(4), B_r5_noatoms_ndcg: +B.nDCG10.toFixed(4), C_r5_honest_ndcg: +Cc.nDCG10.toFixed(4) },
   noOpGate: { maxPerQueryNdcgDelta: maxNoOpDelta, holds: noOpHolds, note: 'B (r5 no-atoms) MUST equal A (r4 baseline)' },
-  honestSubstrate: { anchors: honest.anchors, evidenceAtoms: dh.evidenceBundleAtoms.length, abstentionAtoms: dh.abstentionAtoms.length, decodeFailures: dh.decodeFailures },
+  honestSubstrate: { generator: 'query-selective (pool-freq<=' + POOL_FREQ_MAX + ', max ' + MAX_ANCHORS + ' anchors)', anchors: honest.anchors, evidenceAtoms: dh.evidenceBundleAtoms.length, abstentionAtoms: dh.abstentionAtoms.length, decodeFailures: dh.decodeFailures },
   atomEffect_BtoC_perFamily: perFamily,
+  floodGate,
   attribution: { totalAtomTraces: totalTraces, totalDocsMoved },
   abstention: { abstainProbes, abstainCorrect, answerable, falseAbstain, falseAbstentionRate: answerable ? +(falseAbstain / answerable).toFixed(4) : 0 },
 };
