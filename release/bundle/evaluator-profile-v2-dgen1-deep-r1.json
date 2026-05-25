@@ -86,6 +86,7 @@
   "pipelineVersion": "coretex-retrieval-v2-lens-r4",
   "firstStageTopK": 3200,
   "rerankerInputTopK": 64,
+  "_reclaimedRegionsNote": "RetrievalKeys (lens) + Codebook (EvidencePolicy) RECLAIMED in r4 — NOT valid miner surfaces (both oracle-FAILED; admission-headroom ~0); lens/evidencePolicy knobs are INERT. Redefined in substrate-r5 as a typed PolicyAtom region (SUBSTRATE_R5_POLICY_ATOMS.md).",
   "lensTopK": 36,
   "lensWeight": 0.4,
   "anchorWeight": 0.6,

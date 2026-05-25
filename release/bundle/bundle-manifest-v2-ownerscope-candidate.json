@@ -9,8 +9,8 @@
       {
         "role": "substrate-spec",
         "path": "specs/cortex_state.md",
-        "sha256": "100c5b386ac78dca7ee349369d9ef7d5486d1aa52ebd9a6b85dd15616b57fed7",
-        "bytes": 19007
+        "sha256": "65b7e671dc19d6a3ec1bc5be6ee281ff44db829a5622f1aac4dbb05d180f0a74",
+        "bytes": 20074
       },
       {
         "role": "substrate-spec",
@@ -238,6 +238,7 @@
         "reason": "DEFAULT_PROFILE placeholder; calibration Run 1 replaces this with the production-pinned method and evidence.",
         "calibrationReport": "release/calibration/first-stage-topk-sweep.json"
       },
+      "_reclaimedRegionsNote": "RetrievalKeys (lens; lensTopK/lensWeight) and Codebook (EvidencePolicy) are RECLAIMED in r4 — NOT valid miner surfaces (static lens + static EvidencePolicy both oracle-FAILED; admission-headroom ~0). The lens/evidencePolicy knobs below are INERT (no honest generator populates those regions). Slated for redefinition in substrate-r5 as a typed query-conditioned PolicyAtom region (SUBSTRATE_R5_POLICY_ATOMS.md). Do not present RetrievalKeys/Codebook as miner surfaces.",
       "ownerScopeMode": "restrict",
       "categoryLensFinalBonusWeight": 0,
       "categoryLensScoreInheritance": 0.3,
@@ -615,5 +616,5 @@
     "coordinatorCacheOptional": true,
     "snapshots": []
   },
-  "bundleHash": "0x7c25d81eb3710c10a569055d53ddf7ba88548b1d02d9e0c87bd3ddfbe119b627"
+  "bundleHash": "0x87a548c62daabed958daa738a9b6a6763db452638a70d9ffa27b04fbb31b2773"
 }

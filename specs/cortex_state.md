@@ -93,7 +93,13 @@ referencible slots at 0–255 — ample for the 96-pair temporal ceiling (≤192
 > change. OBJ_TYPE enum (legacy): 0x0000 UNSET / 0x0001 MEMORY_EVENT / 0x0002 SKILL_ENTRY /
 > 0x0003 RULE_ENTRY / 0x0004 SUMMARY / 0xFFFF TOMBSTONE.
 
-### Range C: RetrievalKeys (words 384–671)
+### Range C: RetrievalKeys (words 384–671) — ⚠ RECLAIMED (r4): NOT a valid miner surface
+
+> **RECLAIMED 2026-05-25.** The static dense-lens surface FAILED (`LENS_THIRDCLASS_VERDICT.md`) and the
+> admission-headroom probe shows ~0 routing headroom for any static region. This region is **inactive** — no honest
+> patch generator emits it; it is decoded only for back-compat. It is slated for **redefinition in substrate-r5 as part
+> of a typed query-conditioned PolicyAtom region** (`SUBSTRATE_R5_POLICY_ATOMS.md`), NOT a static lens. Do not present
+> RetrievalKeys as a miner surface.
 
 288 words = 36 key-slots × 8 words each.
 
@@ -179,7 +185,13 @@ Decoder failure modes (record dropped silently):
 > (Historical: the prior **18-pair** end-to-end cap was the `retrievalSlot<36` artifact, since
 > removed; beyond 96 needs a Temporal-region expansion, separately gated.)
 
-### Range F: Codebook (words 896–991)
+### Range F: Codebook (words 896–991) — ⚠ RECLAIMED (r4): NOT a valid miner surface
+
+> **RECLAIMED 2026-05-25.** The static EvidencePolicy/high-density-policy surface FAILED
+> (`EVIDENCE_POLICY_DESIGN.md` §VERDICT). This region is **inactive** — no honest patch generator emits it; decoded
+> only for back-compat. Slated for **redefinition in substrate-r5 as part of the typed PolicyAtom region**
+> (`SUBSTRATE_R5_POLICY_ATOMS.md`) — a real query-conditioned mechanism, NOT another static policy atom. Do not present
+> Codebook as a miner surface.
 
 96 words = 48 codebook-entries × 2 words each.
 
