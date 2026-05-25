@@ -14,11 +14,19 @@ Each word is a packed bit field: sub-word fields are extracted by masking and sh
 |----------------|-------------------|-------|-------------------------------------------------------|
 | Header         | 0 – 31            | 32    | Protocol header, schema hash fragments, score counters, epoch metadata |
 | MemoryIndex    | 32 – 383          | 352   | Memory-object index slots (Tier-2 stride-1: 352 one-word slots; recordId, family, domain, validity, retrievalSlot, expiry) |
-| RetrievalKeys  | 384 – 671         | 288   | Binary / multi-vector retrieval keys                  |
+| RetrievalKeys  | 384 – 671         | 288   | **r4:** binary / multi-vector retrieval keys · **r5:** reclaimed → PolicyAtoms (evidence-bundle 384–511, conflict_lifecycle 512–639, abstention 640–671) |
 | Relations      | 672 – 799         | 128   | Typed directed edges over MemoryIndex slots           |
 | Temporal       | 800 – 895         | 96    | Temporal validity / revocation map                    |
-| Codebook       | 896 – 991         | 96    | Codebook / operator table                             |
+| Codebook       | 896 – 991         | 96    | **r4:** codebook / operator table · **r5:** reclaimed → reserved r5 policy capacity (MUST be zero) |
 | Reserved       | 992 – 1023        | 32    | Reserved / experimental / future compatibility        |
+
+> **r5 protocol epoch (`coretex-retrieval-v2-policy-r5`).** The RetrievalKeys + Codebook word ranges are
+> reclaimed for typed **PolicyAtoms** (see Range C-r5 / Range F-r5 below). The *static* forms of those regions
+> (dense lens, static EvidencePolicy) failed empirically — r5 reclaims their **words**, not their semantics, for a
+> typed/bounded/query-local policy grammar. Which interpretation is active is decided HARD by the bundle
+> `pipelineVersion` / profile: an r4 (lens) profile reads the words as RetrievalKeys/Codebook and ignores
+> PolicyAtoms; an r5 (policy) profile reads them as PolicyAtoms and does NOT decode RetrievalKeys as a dense lens.
+> No silent reinterpretation.
 
 ---
 
@@ -115,6 +123,46 @@ referencible slots at 0–255 — ample for the 96-pair temporal ceiling (≤192
 | 1–7       | KEY_VECTOR  | 255:0   | bytes32 | Seven words of key data (224 bytes); for binary keys MSB-first bit packed |
 
 KEY_FLAGS reserved bits 1–15 MUST be zero.
+
+### Range C-r5 / F-r5: PolicyAtoms (words 384–671 + reserved 896–991) — r5 protocol epoch
+
+Active under `pipelineVersion = coretex-retrieval-v2-policy-r5`. The same words that r4 reads as
+RetrievalKeys (384–671) and Codebook (896–991) are read as typed **PolicyAtoms**. A PolicyAtom is a typed,
+bounded, **query-local** routing/scoring policy a miner emits from PUBLIC Memory-IR / corpus structure — never
+from hidden qrels or direct answer identity. Atom families are implicit in the region:
+
+| Family region          | Words     | Slots | Allowed actions                  |
+|------------------------|-----------|-------|----------------------------------|
+| evidence-bundle / answer-density | 384–511 | 128 | include, boost, bundle, suppress(safe) |
+| conflict_lifecycle               | 512–639 | 128 | boost (resolved), suppress (candidate, in-set) |
+| abstention_missing               | 640–671 |  32 | abstain                          |
+| reserved r5 policy capacity      | 896–991 |  96 | none — MUST be zero (invalid-for-reward) |
+
+**Atom layout** (1 word per atom; atom `k` of a region at `regionStart + k`):
+
+| Bits    | Field           | Type   | Description                                                                   |
+|---------|-----------------|--------|-------------------------------------------------------------------------------|
+| 255:248 | SELECTOR        | uint8  | Query-predicate type (when the atom applies); enum, 0 = invalid               |
+| 247:240 | EVIDENCE_FEATURE| uint8  | Which PUBLIC feature it reads (support-in-degree, bridge-hop, lifecycleState, contradicts, scope_differs, no-evidence-path); enum, 0 = invalid |
+| 239:236 | ACTION          | uint4  | 1=include 2=boost 3=suppress 4=bundle 5=abstain (must be allowed for region)  |
+| 235:232 | SCOPE           | uint4  | 1=entity 2=owner 3=relationPath 4=temporalChain 5=conflictSet 6=aspect        |
+| 231:216 | TARGET_SLOT     | uint16 | Query-local anchor = MemoryIndex slot index (< 352); 0xFFFF = none (abstention)|
+| 215:200 | BUDGET          | uint16 | Bounded effect magnitude (0..65535; capped per-family by profile)             |
+| 199:192 | FLAGS           | uint8  | Per-family flags (e.g. abstention bit0 = require-no-evidence-path)            |
+| 191:152 | VALID_FROM_EPOCH| uint40 | Atom active from this epoch (0 = genesis)                                      |
+| 151:112 | EXPIRY_EPOCH    | uint40 | Atom expires at this epoch (0 = never); enables frontier-churn retirement      |
+| 111:0   | reserved_pa     | —      | Reserved; MUST be zero                                                          |
+
+Decode/validation rules (fail-closed per atom; an invalid atom is dropped + counted, never rewarded):
+- SELECTOR / EVIDENCE_FEATURE / ACTION / SCOPE must be members of their enums; ACTION must be allowed for the region.
+- TARGET_SLOT < 352, or 0xFFFF only when ACTION = abstain.
+- reserved_pa (bits 111:0) MUST be zero.
+- The atom carries **no** qrel/answer-id field — its effect set is reconstructed by the scorer from PUBLIC
+  edges out of TARGET_SLOT (answer-density = public support/provenance structure, not answer identity).
+- The reserved r5 policy region (896–991) MUST be entirely zero; any non-zero word there is invalid-for-reward.
+- **Hard gating:** under an r4 profile these words are NOT decoded as PolicyAtoms (zero effect); under r5 the
+  RetrievalKeys words are NOT decoded as a dense lens. The abstention low-top1/margin threshold is an OPERATOR
+  PROFILE knob (the miner atom only supplies the public no-evidence-path policy) — never a hardcoded constant.
 
 ### Range D: Relations (words 672–799)
 
