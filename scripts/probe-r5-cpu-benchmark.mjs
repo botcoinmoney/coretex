@@ -100,22 +100,28 @@ const candidates = [...eventPoolFreq.entries()]
   .slice(0, MAX_ANCHORS)
   .map(([id]) => id);
 
-function buildHonestState(anchorEventIds) {
+function buildHonestState(anchorEventIds, atomsOn = true) {
   const words = new Array(1024).fill(0n);
   let slot = 0;
   for (const evId of anchorEventIds) {
     const ev = eventById.get(evId); if (!ev || slot >= 256) continue;
-    words[RANGES.MEMORY_INDEX_START + slot] = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(evId), family: bucket(ev.family), domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: 0, expiryEpoch: 0n })[0];
-    words[RANGES.POLICY_EVIDENCE_START + slot] = encodePolicyAtom({ atomIndex: slot, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY, evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path', targetSlot: slot, budget: BUDGET, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
+    words[RANGES.MEMORY_INDEX_START + slot] = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(evId), family: bucket(ev.family), domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n })[0];
+    if (atomsOn) words[RANGES.POLICY_EVIDENCE_START + slot] = encodePolicyAtom({ atomIndex: slot, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY, evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path', targetSlot: slot, budget: BUDGET, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
     slot++;
   }
-  words[RANGES.POLICY_ABSTENTION_START] = encodePolicyAtom({ atomIndex: 0, family: 'abstention', selector: POLICY_SELECTOR.MISSING_EVIDENCE, evidenceFeature: POLICY_EVIDENCE_FEATURE.NO_PUBLIC_EVIDENCE_PATH, action: 'abstain', scope: 'entity', targetSlot: POLICY_TARGET_NONE, budget: 0, flags: 0x01, validFromEpoch: 0n, expiryEpoch: 0n });
+  if (atomsOn) words[RANGES.POLICY_ABSTENTION_START] = encodePolicyAtom({ atomIndex: 0, family: 'abstention', selector: POLICY_SELECTOR.MISSING_EVIDENCE, evidenceFeature: POLICY_EVIDENCE_FEATURE.NO_PUBLIC_EVIDENCE_PATH, action: 'abstain', scope: 'entity', targetSlot: POLICY_TARGET_NONE, budget: 0, flags: 0x01, validFromEpoch: 0n, expiryEpoch: 0n });
   return { state: { words }, anchors: slot };
 }
 
-const honest = buildHonestState(candidates);
+const honest = buildHonestState(candidates, true);
 const dh = decodeSubstrate(honest.state, { policyAtomsMode: true });
 console.error(`[r5-bench] query-selective substrate: candidateAnchors=${candidates.length} (poolFreq<=${POOL_FREQ_MAX}) anchors=${honest.anchors} evidenceAtoms=${dh.evidenceBundleAtoms.length} abstentionAtoms=${dh.abstentionAtoms.length} decodeFailures=${dh.decodeFailures}`);
+
+// ARM B' (anchors-only, NO policy atoms): isolates the anchor-mandatory injection cost from the
+// policy-atom effect. B->B' = cost of placing the MemoryIndex anchor scaffolding; B'->C = the
+// ISOLATED policy-atom effect (the actual question).
+const anchorsOnly = buildHonestState(candidates, false);
+const Bp = await evaluateRetrievalBenchmarkState(anchorsOnly.state, corpus, pack, optsR5);
 
 const Cc = await evaluateRetrievalBenchmarkState(honest.state, corpus, pack, optsR5Trace);
 
@@ -135,7 +141,26 @@ const E = await evaluateRetrievalBenchmarkState(randomState.state, corpus, pack,
 
 // no-op gate: per-query nDCG A vs B
 const byId = (sc) => new Map(sc.perQuery.map((q) => [q.recordId, q]));
-const aQ = byId(A), bQ = byId(B), cQ = byId(Cc);
+const aQ = byId(A), bQ = byId(B), cQ = byId(Cc), bpQ = byId(Bp);
+// DECOMPOSITION: separate the anchor-mandatory injection cost (B->B') from the ISOLATED
+// policy-atom effect (B'->C), and the atom effect restricted to the queries that actually fired.
+const firedQ = new Set();
+for (const q of Cc.perQuery) for (const t of q.policyTraces ?? []) if (t.atomFamily !== 'abstention') firedQ.add(q.recordId);
+let anchorCostSum = 0, anchorCostN = 0, atomSum = 0, atomN = 0, atomFiredSum = 0, atomFiredN = 0;
+for (const [id, qb] of bQ) {
+  const qbp = bpQ.get(id), qc = cQ.get(id); if (!qbp || !qc) continue;
+  anchorCostSum += qbp.nDCG10 - qb.nDCG10; anchorCostN++;
+  atomSum += qc.nDCG10 - qbp.nDCG10; atomN++;
+  if (firedQ.has(id)) { atomFiredSum += qc.nDCG10 - qbp.nDCG10; atomFiredN++; }
+}
+const decomposition = {
+  Bprime_anchorsOnly_ndcg: +Bp.nDCG10.toFixed(4),
+  anchorInjectionCost_BtoBprime: anchorCostN ? +(anchorCostSum / anchorCostN).toFixed(4) : 0,
+  isolatedAtomEffect_BprimeToC_all: atomN ? +(atomSum / atomN).toFixed(4) : 0,
+  isolatedAtomEffect_BprimeToC_firedQueriesOnly: atomFiredN ? +(atomFiredSum / atomFiredN).toFixed(4) : 0,
+  firedQueries: firedQ.size,
+  note: 'B->B\' = anchor-mandatory injection cost (scaffolding); B\'->C = ISOLATED policy-atom effect',
+};
 let maxNoOpDelta = 0;
 for (const [id, qa] of aQ) { const qb = bQ.get(id); if (qb) maxNoOpDelta = Math.max(maxNoOpDelta, Math.abs(qa.nDCG10 - qb.nDCG10)); }
 const noOpHolds = maxNoOpDelta < 1e-9;
@@ -203,6 +228,7 @@ const report = {
   noOpGate: { maxPerQueryNdcgDelta: maxNoOpDelta, holds: noOpHolds, note: 'B (r5 no-atoms) MUST equal A (r4 baseline)' },
   honestSubstrate: { generator: 'query-selective (pool-freq<=' + POOL_FREQ_MAX + ', max ' + MAX_ANCHORS + ' anchors)', anchors: honest.anchors, evidenceAtoms: dh.evidenceBundleAtoms.length, abstentionAtoms: dh.abstentionAtoms.length, decodeFailures: dh.decodeFailures },
   atomEffect_BtoC_perFamily: perFamily,
+  decomposition,
   randomControl_BtoE: randomControl,
   floodGate,
   anchorDiagTop,
