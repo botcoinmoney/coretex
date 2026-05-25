@@ -125,5 +125,6 @@
     "decayRatio": 0.8,
     "smallDriftRatio": 1.05,
     "qualityHighThresholdMult": 1
-  }
+  },
+  "policyAbstentionMarginThreshold": 0.0003
 }
