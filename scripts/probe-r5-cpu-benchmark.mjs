@@ -91,14 +91,49 @@ for (const q of B.perQuery) {
 }
 const POOL_FREQ_MAX = Number(flag('pool-freq-max', '2'));   // query-local: ≤2 top-K windows
 const MAX_ANCHORS = Number(flag('max-anchors', '48'));
-// candidate anchors: evidence events (≥1 public supports-edge target OR have outgoing public edges)
-// that are query-LOCAL (low pool-frequency) — the opposite of global hubs.
-const candidates = [...eventPoolFreq.entries()]
-  .filter(([id, freq]) => freq >= 1 && freq <= POOL_FREQ_MAX)
-  .filter(([id]) => { const ev = eventById.get(id); return ev && ((ev.relations ?? []).length > 0 || (inDeg.get(id) ?? 0) >= 1); })
-  .sort((a, b) => (a[1] - b[1]) || (a[0] < b[0] ? -1 : 1))   // lowest pool-freq first (most query-local)
-  .slice(0, MAX_ANCHORS)
-  .map(([id]) => id);
+const GEN = flag('gen', 'answer-density');   // 'answer-density' (per-query corroborated doc) | 'lowfreq' (legacy)
+// ANSWER-DENSITY generator (per-query): among the query's top-K retrieved events, anchor at the
+// one with the highest PUBLIC support-in-degree (most corroborated = the answer-density signal),
+// and BOOST it (action=include → its own docs). Honest: support-in-degree + retrieval are public,
+// no qrels. This targets the corroborated ANSWER rather than an arbitrary evidence node's reach.
+const ATOM_ACTION = GEN === 'answer-density' ? 'include' : 'bundle';
+let candidates;
+const roleByEvent = new Map();   // conflict: eventId -> 'boost'(resolved/head) | 'suppress'(candidate/superseded)
+if (GEN === 'conflict') {
+  // CONFLICT_LIFECYCLE generator (per-query, PUBLIC supersedes structure): among the query's
+  // top-K retrieved events, a supersedes edge A->B means A is the RESOLVED/current head and B the
+  // superseded CANDIDATE. Boost A, suppress B (both query-local, in top-K). Honest: supersedes is
+  // public corpus structure; resolved-vs-candidate is the public head/tail of the chain, no qrels.
+  for (const q of B.perQuery) {
+    const topK = new Set();
+    for (const d of (q.cappedDocIds ?? []).slice(0, GATE_TOPK)) { const e = docToEvent.get(d); if (e) topK.add(e); }
+    for (const evId of topK) {
+      const ev = eventById.get(evId); if (!ev) continue;
+      for (const rel of ev.relations ?? []) {
+        if (rel.edgeType === 'supersedes' && topK.has(rel.other_id)) {
+          if (!roleByEvent.has(evId)) roleByEvent.set(evId, 'boost');
+          if (!roleByEvent.has(rel.other_id)) roleByEvent.set(rel.other_id, 'suppress');
+        }
+      }
+    }
+  }
+  candidates = [...roleByEvent.keys()].slice(0, MAX_ANCHORS);
+} else if (GEN === 'answer-density') {
+  const anchorByQuery = new Map();
+  for (const q of B.perQuery) {
+    let best = null, bestDeg = -1;
+    for (const d of (q.cappedDocIds ?? []).slice(0, GATE_TOPK)) { const e = docToEvent.get(d); if (!e) continue; const deg = inDeg.get(e) ?? 0; if (deg > bestDeg) { bestDeg = deg; best = e; } }
+    if (best && bestDeg >= 1) anchorByQuery.set(q.recordId, best);
+  }
+  candidates = [...new Set(anchorByQuery.values())].slice(0, MAX_ANCHORS);
+} else {
+  candidates = [...eventPoolFreq.entries()]
+    .filter(([id, freq]) => freq >= 1 && freq <= POOL_FREQ_MAX)
+    .filter(([id]) => { const ev = eventById.get(id); return ev && ((ev.relations ?? []).length > 0 || (inDeg.get(id) ?? 0) >= 1); })
+    .sort((a, b) => (a[1] - b[1]) || (a[0] < b[0] ? -1 : 1))
+    .slice(0, MAX_ANCHORS)
+    .map(([id]) => id);
+}
 
 function buildHonestState(anchorEventIds, atomsOn = true) {
   const words = new Array(1024).fill(0n);
@@ -106,7 +141,13 @@ function buildHonestState(anchorEventIds, atomsOn = true) {
   for (const evId of anchorEventIds) {
     const ev = eventById.get(evId); if (!ev || slot >= 256) continue;
     words[RANGES.MEMORY_INDEX_START + slot] = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(evId), family: bucket(ev.family), domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n })[0];
-    if (atomsOn) words[RANGES.POLICY_EVIDENCE_START + slot] = encodePolicyAtom({ atomIndex: slot, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY, evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path', targetSlot: slot, budget: BUDGET, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
+    if (atomsOn) {
+      if (GEN === 'conflict') {
+        words[RANGES.POLICY_CONFLICT_START + slot] = encodePolicyAtom({ atomIndex: slot, family: 'conflict_lifecycle', selector: POLICY_SELECTOR.CONFLICT_SET_MEMBER, evidenceFeature: POLICY_EVIDENCE_FEATURE.LIFECYCLE_STATE, action: roleByEvent.get(evId) ?? 'boost', scope: 'conflict_set', targetSlot: slot, budget: BUDGET, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
+      } else {
+        words[RANGES.POLICY_EVIDENCE_START + slot] = encodePolicyAtom({ atomIndex: slot, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY, evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: ATOM_ACTION, scope: 'relation_path', targetSlot: slot, budget: BUDGET, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
+      }
+    }
     slot++;
   }
   if (atomsOn) words[RANGES.POLICY_ABSTENTION_START] = encodePolicyAtom({ atomIndex: 0, family: 'abstention', selector: POLICY_SELECTOR.MISSING_EVIDENCE, evidenceFeature: POLICY_EVIDENCE_FEATURE.NO_PUBLIC_EVIDENCE_PATH, action: 'abstain', scope: 'entity', targetSlot: POLICY_TARGET_NONE, budget: 0, flags: 0x01, validFromEpoch: 0n, expiryEpoch: 0n });
