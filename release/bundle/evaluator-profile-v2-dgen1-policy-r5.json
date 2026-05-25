@@ -115,6 +115,7 @@
   "policyMaxBudgetConflict": 1000,
   "policyAbstentionTop1Threshold": 0.9995,
   "policyEmitTraces": true,
+  "policyQueryLocalTopK": 24,
   "_r5PolicyNote": "PolicyAtom budget encodes beta*1000 (Phase-1 oracle used beta=1.0 => budget 1000): per-query nudge = (budget/1000)*(max-min rerankerScore of the query's OWN candidate list). Per-family caps (policyMaxBudget*) clamp the nudge (anti-flood). Abstention is a SPLIT: the miner atom carries the public no-evidence-path policy (selector MISSING_EVIDENCE + flag REQUIRE_NO_EVIDENCE_PATH); the confidence gate policyAbstentionTop1Threshold is OPERATOR-CALIBRATED (Qwen top1 saturates ~0.9994 abstain vs ~0.9998 answerable; 0.9995 is a candidate, re-calibrate per deployment). Evidence-bundle = PUBLIC support/provenance structure only (no answer identity). Conflict_lifecycle is zero-DAMAGE, strong-lift, beta-robust with junk->topK movement that the scorer measures + guards. Oracle verdict: evidence +0.299 / conflict +0.432 / abstention AUC 0.90 (R5_A100_ORACLE_FINDINGS.md). Subject-scope/noise/aspect REMAIN RESERVED (no light version).",
   "_candidateNote": "DGEN-1 r5 PolicyAtom candidate, derived from evaluator-profile-v2-dgen1-deep-r1.json with pipelineVersion bumped to coretex-retrieval-v2-policy-r5 + the 3 PASS-family enables. All r4 knobs identical to deep-r1. NOT launch-signed; baseline unpinned (runtime per-epoch). majorDeltaThreshold=10 candidate; LAUNCH must recalibrate to ~5% of the launch corpus eval_hidden population.",
   "majorDeltaThreshold": 10,

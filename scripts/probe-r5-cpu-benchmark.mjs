@@ -77,13 +77,19 @@ const B = await evaluateRetrievalBenchmarkState(empty, corpus, pack, optsR5);
 // No qrels / answer ids. This enforces the design rule (query-local scope, per-query budget).
 const inDeg = new Map();
 for (const ev of corpus.events) for (const rel of ev.relations ?? []) if (rel.edgeType === 'supports') inDeg.set(rel.other_id, (inDeg.get(rel.other_id) ?? 0) + 1);
-const eventPoolFreq = new Map();      // eventId -> # of query pools its truth docs appear in
+// Align anchor selection to the SCORER GATE: an atom fires iff its anchor is in the query's
+// top-K stage-1 by biCosine. With no atoms (arm B) the cap pool is ordered by biCosine, so
+// cappedDocIds[:TOPK] ≈ the query's top-K. Count an anchor's frequency over THAT window so a
+// low-frequency anchor is genuinely query-local under the gate (not the broad cap-64 / 3200-tail).
+const GATE_TOPK = Number(flag('local-topk', '24'));
+const BUDGET = Number(flag('budget', '250'));   // beta*1000; 250 = beta 0.25 (<< the flooding beta 1.0)
+const eventPoolFreq = new Map();      // eventId -> # of queries with it in their top-K stage-1
 for (const q of B.perQuery) {
   const evs = new Set();
-  for (const d of q.cappedDocIds ?? []) { const e = docToEvent.get(d); if (e) evs.add(e); }
+  for (const d of (q.cappedDocIds ?? []).slice(0, GATE_TOPK)) { const e = docToEvent.get(d); if (e) evs.add(e); }
   for (const e of evs) eventPoolFreq.set(e, (eventPoolFreq.get(e) ?? 0) + 1);
 }
-const POOL_FREQ_MAX = Number(flag('pool-freq-max', '4'));   // query-local: ≤4 pools
+const POOL_FREQ_MAX = Number(flag('pool-freq-max', '2'));   // query-local: ≤2 top-K windows
 const MAX_ANCHORS = Number(flag('max-anchors', '48'));
 // candidate anchors: evidence events (≥1 public supports-edge target OR have outgoing public edges)
 // that are query-LOCAL (low pool-frequency) — the opposite of global hubs.
@@ -100,7 +106,7 @@ function buildHonestState(anchorEventIds) {
   for (const evId of anchorEventIds) {
     const ev = eventById.get(evId); if (!ev || slot >= 256) continue;
     words[RANGES.MEMORY_INDEX_START + slot] = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(evId), family: bucket(ev.family), domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: 0, expiryEpoch: 0n })[0];
-    words[RANGES.POLICY_EVIDENCE_START + slot] = encodePolicyAtom({ atomIndex: slot, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY, evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path', targetSlot: slot, budget: 1000, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
+    words[RANGES.POLICY_EVIDENCE_START + slot] = encodePolicyAtom({ atomIndex: slot, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY, evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path', targetSlot: slot, budget: BUDGET, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
     slot++;
   }
   words[RANGES.POLICY_ABSTENTION_START] = encodePolicyAtom({ atomIndex: 0, family: 'abstention', selector: POLICY_SELECTOR.MISSING_EVIDENCE, evidenceFeature: POLICY_EVIDENCE_FEATURE.NO_PUBLIC_EVIDENCE_PATH, action: 'abstain', scope: 'entity', targetSlot: POLICY_TARGET_NONE, budget: 0, flags: 0x01, validFromEpoch: 0n, expiryEpoch: 0n });
@@ -179,6 +185,15 @@ const maxAtomFireQueries = perAtomFireCounts.length ? Math.max(...perAtomFireCou
 const meanAtomFireQueries = perAtomFireCounts.length ? +(perAtomFireCounts.reduce((a, b) => a + b, 0) / perAtomFireCounts.length).toFixed(2) : 0;
 // flood gate: a query-local generator => each atom fires on FEW queries (≤ ~2× the pool-freq bound).
 const floodGate = { queriesFired, totalQueries: Cc.perQuery.length, maxMovesPerQuery, meanMovesPerQuery, maxAtomFireQueries, meanAtomFireQueries, atomsFired: perAtomFireCounts.length, queryLocal: maxAtomFireQueries <= POOL_FREQ_MAX * 2 };
+// per-anchor diagnostic: pool-freq (from B) vs ACTUAL fire-count (from C). Exposes gate behavior.
+const anchorDiag = [];
+for (const [atomId, qset] of atomFireQueries) {
+  const slot = Number(String(atomId).replace('eb#', ''));
+  const evId = candidates[slot];
+  anchorDiag.push({ atomId, anchorEvent: evId, poolFreqB: eventPoolFreq.get(evId) ?? 0, fireCountC: qset.size });
+}
+anchorDiag.sort((a, b) => b.fireCountC - a.fireCountC);
+const anchorDiagTop = anchorDiag.slice(0, 6);
 
 const report = {
   probe: 'r5-cpu-benchmark (deterministic; wiring/no-op/attribution/damage — magnitude is a PROXY)',
@@ -190,6 +205,7 @@ const report = {
   atomEffect_BtoC_perFamily: perFamily,
   randomControl_BtoE: randomControl,
   floodGate,
+  anchorDiagTop,
   attribution: { totalAtomTraces: totalTraces, totalDocsMoved },
   abstention: { abstainProbes, abstainCorrect, answerable, falseAbstain, falseAbstentionRate: answerable ? +(falseAbstain / answerable).toFixed(4) : 0 },
 };
