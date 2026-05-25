@@ -51,8 +51,13 @@ const reranker = rerankerArg === 'gpu'
 const rt = { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT };
 const optsR4 = scoringOptionsFromProfile(r4Profile, rt);
 const optsR5 = scoringOptionsFromProfile(r5Profile, rt);
-// emit traces for the honest arm
-const optsR5Trace = { ...optsR5, exposeFullRanking: true };
+// r5.1: public entity registry (id -> lowercased canonicalName+aliases) for the entity-parse selector.
+const rawCorpus = JSON.parse(readFileSync(resolve(repoRoot, corpusPath), 'utf8'));
+const GENERIC_ENTITY_IDS = ['e_universe'];
+const policyEntityRegistry = (rawCorpus.entities ?? []).map((e) => ({ id: e.id, names: [e.canonicalName, ...(e.aliases ?? [])].filter(Boolean).map((n) => String(n).toLowerCase()) }));
+const ADMISSION = flag('admission', '1') === '1';   // r5.1 query-conditioned admission (on by default)
+// emit traces for the honest arm; arm C = r5.1 admission ON
+const optsR5Trace = { ...optsR5, exposeFullRanking: true, ...(ADMISSION ? { policyQueryConditionedAdmission: true, policyEntityRegistry, policyGenericEntityIds: GENERIC_ENTITY_IDS } : {}) };
 
 // Pack: a fixed eval_hidden pack (deterministic).
 const seedHex = '0x' + createHash('sha256').update('r5-cpu-benchmark').digest('hex');
@@ -91,15 +96,35 @@ for (const q of B.perQuery) {
 }
 const POOL_FREQ_MAX = Number(flag('pool-freq-max', '2'));   // query-local: ≤2 top-K windows
 const MAX_ANCHORS = Number(flag('max-anchors', '48'));
-const GEN = flag('gen', 'answer-density');   // 'answer-density' (per-query corroborated doc) | 'lowfreq' (legacy)
-// ANSWER-DENSITY generator (per-query): among the query's top-K retrieved events, anchor at the
-// one with the highest PUBLIC support-in-degree (most corroborated = the answer-density signal),
-// and BOOST it (action=include → its own docs). Honest: support-in-degree + retrieval are public,
-// no qrels. This targets the corroborated ANSWER rather than an arbitrary evidence node's reach.
-const ATOM_ACTION = GEN === 'answer-density' ? 'include' : 'bundle';
+const GEN = flag('gen', ADMISSION ? 'admission' : 'answer-density');   // admission(r5.1) | answer-density | conflict | lowfreq
+const ATOM_ACTION = (GEN === 'answer-density' || GEN === 'admission') ? 'include' : 'bundle';
 let candidates;
 const roleByEvent = new Map();   // conflict: eventId -> 'boost'(resolved/head) | 'suppress'(candidate/superseded)
-if (GEN === 'conflict') {
+if (GEN === 'admission') {
+  // r5.1 ADMISSION generator: anchor at SUBJECT-BEARING BRIDGE events (a non-generic entity + public
+  // edges) whose subject is mentioned by some eval query. The scorer's query-conditioned admission
+  // (entity-parse selector) routes each anchor's evidence into the matching queries' pool — so the
+  // anchor need NOT already be retrieved (it routes the MISS). Public: query text + entity registry
+  // + event structure; no qrels. Bounded by MAX_ANCHORS; per-query selectivity is the admission's job.
+  const evalSubjects = new Set();
+  for (const q of B.perQuery) {
+    const qt = (logical.queries.find((lq) => lq.id === q.recordId)?.queryText ?? '').toLowerCase();
+    for (const ent of policyEntityRegistry) { if (GENERIC_ENTITY_IDS.includes(ent.id)) continue; if (ent.names.some((n) => n && qt.includes(n))) evalSubjects.add(ent.id); }
+  }
+  // one BRIDGE anchor per eval subject = the subject's event with the most PUBLIC edges (maximizes
+  // coverage so admission can fire for every query about a covered subject). Bounded by MAX_ANCHORS.
+  const bridgeBySubject = new Map();
+  for (const ev of corpus.events) {
+    const deg = (ev.relations ?? []).length; if (deg === 0) continue;
+    for (const e of (ev.entityIds ?? [])) {
+      if (GENERIC_ENTITY_IDS.includes(e) || !evalSubjects.has(e)) continue;
+      const cur = bridgeBySubject.get(e);
+      if (!cur || deg > cur.deg) bridgeBySubject.set(e, { id: ev.id, deg });
+    }
+  }
+  candidates = [...bridgeBySubject.values()].map((b) => b.id).slice(0, MAX_ANCHORS);
+  console.error(`[r5-bench] admission: evalSubjects=${evalSubjects.size} bridgeAnchors=${candidates.length}`);
+} else if (GEN === 'conflict') {
   // CONFLICT_LIFECYCLE generator (per-query, PUBLIC supersedes structure): among the query's
   // top-K retrieved events, a supersedes edge A->B means A is the RESOLVED/current head and B the
   // superseded CANDIDATE. Boost A, suppress B (both query-local, in top-K). Honest: supersedes is
