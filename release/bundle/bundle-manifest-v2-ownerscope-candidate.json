@@ -9,8 +9,8 @@
       {
         "role": "substrate-spec",
         "path": "specs/cortex_state.md",
-        "sha256": "4ef8ffc30b78f9b3414857716b6be76aa379d2eb83014a440c56c7484fde3f35",
-        "bytes": 17138
+        "sha256": "100c5b386ac78dca7ee349369d9ef7d5486d1aa52ebd9a6b85dd15616b57fed7",
+        "bytes": 19007
       },
       {
         "role": "substrate-spec",
@@ -21,8 +21,8 @@
       {
         "role": "substrate-spec",
         "path": "specs/packing_spec.md",
-        "sha256": "3338c165bdf772e054650f89d2458559c9626ad48565a6b061b2df9a7903c251",
-        "bytes": 3278
+        "sha256": "dbe7813581fcf5c3c49436a7eba1600282274db9d2b9fba710dd3ece3b2a2c45",
+        "bytes": 3231
       },
       {
         "role": "substrate-spec",
@@ -158,8 +158,8 @@
       },
       "replayTolerancePpm": 250,
       "compositeWeights": {
-        "w_retrieval": 0.75,
-        "w_temporal": 0.08,
+        "w_retrieval": 0.7,
+        "w_temporal": 0.13,
         "w_relation_recall": 0.07,
         "w_abstention": 0.05,
         "w_structural_sanity": 0.05
@@ -241,6 +241,8 @@
       "ownerScopeMode": "restrict",
       "categoryLensFinalBonusWeight": 0,
       "categoryLensScoreInheritance": 0.3,
+      "temporalStaleContrast": true,
+      "_evalSemanticsNote": "temporalStaleContrast=true + w_temporal 0.08->0.13 / w_retrieval 0.75->0.70 (at the 0.70 floor): the temporal-specific answer-vs-contrast fix — stale docs are CONTRAST evidence (0 nDCG reward, recall tracked separately as temporalContrastRecall), not a correct answer to the current value. Real-Qwen CONFIRMED to recover in-context temporal yield 0.30->0.5625 (PROFILE_QREL_YIELD_EXPERIMENT.md). Eval-semantics only; NOT a substrate change / protocol epoch. Re-pin baseline before launch signing.",
       "_candidateNote": "CANDIDATE, NOT launch-signed. categoryLensScoreInheritance=0.3 is current best, not pinned (needs 3-seed adversarial + larger sample sign-off). rel-mode no-query is a corpus-construction property (bridge builds no query->answer edges). Full bundleHash re-sign is a launch step. Requires deriveQueryPack-on-V2 (item 4) before production-faithful pack derivation. majorDeltaThreshold=10 is a P1/P2-validation candidate (isMajorDelta is an ABSOLUTE new-eval_hidden count, new-prev>=threshold); LAUNCH must recalibrate to ~5% of the launch corpus eval_hidden population (cf old 679k launch profile=5076 for 679k). Baseline UNPINNED (computed at runtime per-epoch by the harness); launch signing pins baseline{ParentScorePpm,VariancePpm,EvalSeedHex} from a fixed-seed measurement.",
       "majorDeltaThreshold": 10,
       "_controllerNote": "Launch controller calibration (2026-05-24 same-seed A/B, V2_DGEN1_ENDURANCE_FINDINGS.md §Controller-calibration A/B): qualityHighThresholdMult=1 lets the decay branch engage (qualityHighThreshold = mult × targetAdvances ≤ honestAttempts; mult=2 made threshold>attempts so decay was unreachable and small_drift_up ratcheted the bar, rejecting positive-delta pairs); rampUpMaxRatio 1.1 (gentler than 1.5) avoids over-ramping. Recovered temporal runway 51->64 (+25%) with anti-cheat 0/180. decayRatio 0.8 / smallDriftRatio 1.05 carried from C3. Sourced into the harness via controllerParamsFromProfile().",
@@ -261,8 +263,8 @@
       {
         "role": "evaluator",
         "path": "packages/cortex/src/eval/retrieval-benchmark.ts",
-        "sha256": "89a7fe919c0155570b465867fe5a96eecd99766312263404178c33a34a6689e3",
-        "bytes": 86577
+        "sha256": "8d62d0d203bdd371058b675914f783015e367ba18fbbdaa82db475a278eb5731",
+        "bytes": 91789
       },
       {
         "role": "evaluator",
@@ -333,8 +335,8 @@
       {
         "role": "evaluator",
         "path": "packages/cortex/src/substrate/retrieval-decoder.ts",
-        "sha256": "4bab81cb84a78535f15b95f70bfc8aa4e909a4550213fb61760da0930c5125ba",
-        "bytes": 34678
+        "sha256": "438eb3221fe78b8f4a4ea9ec12246aa9aa8e70ecb186c32d5aaa9db2833cf7bf",
+        "bytes": 34652
       },
       {
         "role": "evaluator",
@@ -613,5 +615,5 @@
     "coordinatorCacheOptional": true,
     "snapshots": []
   },
-  "bundleHash": "0x9b109fc28d2af4a2d1452f25d4712023d6ccdf2e22cf3196d71d7486d2c2cbb1"
+  "bundleHash": "0x7c25d81eb3710c10a569055d53ddf7ba88548b1d02d9e0c87bd3ddfbe119b627"
 }

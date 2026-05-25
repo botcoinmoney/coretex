@@ -20,8 +20,8 @@
   },
   "replayTolerancePpm": 250,
   "compositeWeights": {
-    "w_retrieval": 0.75,
-    "w_temporal": 0.08,
+    "w_retrieval": 0.7,
+    "w_temporal": 0.13,
     "w_relation_recall": 0.07,
     "w_abstention": 0.05,
     "w_structural_sanity": 0.05
@@ -106,6 +106,8 @@
   "categoryLensSeedTopK": 2,
   "categoryLensHopBudget": 1,
   "categoryLensEvidenceBundle": true,
+  "temporalStaleContrast": true,
+  "_evalSemanticsNote": "temporalStaleContrast=true + w_temporal 0.08->0.13 / w_retrieval 0.75->0.70: temporal-specific answer-vs-contrast (stale = contrast, 0 nDCG reward, recall tracked separately). Real-Qwen CONFIRMED yield 0.30->0.5625. Eval-semantics only; re-pin baseline before launch.",
   "_candidateNote": "DGEN-1 DEEP candidate, derived from evaluator-profile-v2-ownerscope-r1.json (2026-05-23). Adds the locked deep relation-surfacing fix as PROFILE knobs (categoryLensSeedTopK=2, categoryLensHopBudget=1, categoryLensEvidenceBundle=true) so harnesses that consume scoringOptionsFromProfile WITHOUT CLI overrides (e.g. simulate-v2-long-horizon.mjs) apply the hop=1 evidence-bundle fix instead of flooding at deep-universe scale. All other knobs identical to ownerscope-r1. These categoryLens* knobs are SCORER/OPERATOR-mediated (not miner-facing); relation is a bounded scorer-mediated secondary per the Strategy Diversity downgrade. NOT launch-signed; baseline unpinned (runtime per-epoch). majorDeltaThreshold=10 candidate (P1/P2-validated, ABSOLUTE new-eval_hidden count); LAUNCH must recalibrate to ~5% of the launch corpus eval_hidden population.",
   "majorDeltaThreshold": 10,
   "_controllerNote": "Launch controller calibration (2026-05-24 same-seed A/B, V2_DGEN1_ENDURANCE_FINDINGS.md §Controller-calibration A/B): qualityHighThresholdMult=1 lets the decay branch engage; rampUpMaxRatio 1.1 gentler than 1.5. Recovered temporal runway 51->64 (+25%), anti-cheat 0/180. Sourced via controllerParamsFromProfile().",
