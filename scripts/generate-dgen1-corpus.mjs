@@ -52,6 +52,7 @@ const N_UNIVERSES = parseInt(argVal('--universes', '1'), 10);   // 1 = unified d
 const SEED = argVal('--seed', 'dgen1-smoke-2026-05-22');
 const PHASE = argVal('--phase', 'DGEN1');
 const OUT = argVal('--out', 'release/calibration/2026-05-21-memory-corpus-v2/dgen1-smoke-corpus.json');
+const R5_SYNTHESIS = args.includes('--r5-synthesis');            // adds conflict/aspect/abstention operation slices
 
 function hashSeed(s) { let h = 1779033703 ^ s.length; for (let i = 0; i < s.length; i++) { h = Math.imul(h ^ s.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); } return h >>> 0; }
 function mulberry32(a) { return function () { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
@@ -73,6 +74,7 @@ const STACKS = ['React/Node', 'Vue/Go', 'Svelte/Rust', 'Angular/Java', 'Next/Pyt
 const ENVVARS = ['DATABASE_URL', 'REDIS_HOST', 'API_TOKEN', 'S3_BUCKET', 'LOG_LEVEL', 'CACHE_TTL'];
 const ERRORS = ['CORS preflight 403', 'OOM on import', 'flaky timeout in CI', 'N+1 query', 'race in cache warmup', 'TLS handshake fail'];
 const TOPICS = ['onboarding flow', 'billing retries', 'search ranking', 'auth refresh', 'image pipeline', 'export job'];
+const ASPECTS = ['latency', 'cost', 'reliability', 'accessibility', 'security', 'maintainability'];
 
 // ── universe owners ──
 const universes = Array.from({ length: N_UNIVERSES }, (_, i) => `e_universe${N_UNIVERSES > 1 ? i : ''}`);
@@ -93,7 +95,7 @@ function addQuery(q) { const id = qId(); const split = splitFor(id); queries.pus
 // map to those; high-fanout structural labels (context_of) map to a NON-routed type
 // (co_occurs_with) so they are recorded as public continuity structure WITHOUT flooding
 // the lens (dense context_of→supports stars were the relation-flood source on the smoke).
-const EDGE = { supersedes: 'supersedes', supports: 'supports', belongs_to_project: 'supports', depends_on: 'supports', context_of: 'co_occurs_with', causes: 'causes', fixes: 'causes', decision_reason: 'causes', decision_outcome: 'derived_from', coreference_of: 'coreference_of' };
+const EDGE = { supersedes: 'supersedes', supports: 'supports', belongs_to_project: 'supports', depends_on: 'supports', context_of: 'co_occurs_with', causes: 'causes', fixes: 'causes', decision_reason: 'causes', decision_outcome: 'derived_from', coreference_of: 'coreference_of', contradicts: 'co_occurs_with', scope_differs: 'co_occurs_with', unresolved_conflict: 'co_occurs_with', aspect_of: 'co_occurs_with' };
 const rel = (src, dst, label) => addRel(src, dst, EDGE[label] ?? 'supports', label);
 
 // timestamp over a long window (depth → more revisits over time)
@@ -252,6 +254,77 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
         qrels: [{ docId: corefDoc, relevance: 1.0, role: 'direct' }],
         hardNegatives: [{ docId: introId, category: 'relation_neighbor' }], ownerEntityId: universe, band: band(2, 1, false) });
     }
+
+    // ── r5 SYNTHESIS: conflict/update lifecycle, aspect constraints, and abstention ──
+    // These opt-in slices are PUBLIC memory-operation structure for r5 PolicyAtom probes.
+    // They are not enabled in the historical DGEN-1 defaults so prior findings remain replayable.
+    if (R5_SYNTHESIS) {
+      // FAMILY 3: conflict/update lifecycle. Two public memories can both be currently valid,
+      // but one is contradicted / scope-different / unresolved. A policy atom should reason
+      // over the lifecycle edge/state rather than applying blunt temporal stale suppression.
+      const conflictAttr = isProject ? 'deployment region' : 'preferred clinic';
+      const scopedA = isProject ? pick(CITIES) : `${pick(CITIES)} family clinic`;
+      const scopedB = isProject ? pick(CITIES) : `${pick(CITIES)} specialist clinic`;
+      const stableScope = isProject ? 'production' : 'weekday care';
+      const conflictA = addDoc({ lane: 'deep', kind: 'lifecycle_conflict', entityIds: tagU(),
+        text: `${canonical}'s ${conflictAttr} for ${stableScope} was recorded as ${scopedA}.`,
+        shape: 'lifecycle_conflict_record', timestamp: ts(12 + ri(12)), currentStaleFlag: true,
+        lifecycleState: 'conflict_candidate', lifecycleScope: stableScope });
+      const conflictB = addDoc({ lane: 'deep', kind: 'lifecycle_conflict', entityIds: tagU(),
+        text: `${canonical}'s corrected ${conflictAttr} for ${stableScope} is ${scopedB}.`,
+        shape: 'lifecycle_conflict_record', timestamp: ts(13 + ri(12)), currentStaleFlag: true,
+        lifecycleState: 'conflict_resolved', lifecycleScope: stableScope });
+      const otherScope = isProject ? 'staging' : 'weekend care';
+      const scopeDoc = addDoc({ lane: 'deep', kind: 'lifecycle_scope', entityIds: tagU(),
+        text: `${canonical}'s ${conflictAttr} for ${otherScope} remains ${scopedA}.`,
+        shape: 'lifecycle_scope_record', timestamp: ts(14 + ri(12)), currentStaleFlag: true,
+        lifecycleState: 'scope_differs', lifecycleScope: otherScope });
+      rel(conflictB, conflictA, 'contradicts');
+      rel(scopeDoc, conflictB, 'scope_differs');
+      addQuery({ lane: 'deep', family: 'conflict_lifecycle',
+        queryText: `For ${stableScope}, what is ${canonical}'s current ${conflictAttr}?`,
+        qrels: [{ docId: conflictB, relevance: 1.0, role: 'direct' }, { docId: conflictA, relevance: 0.0, role: 'conflict' }, { docId: scopeDoc, relevance: 0.2, role: 'scope_differs' }],
+        hardNegatives: [{ docId: conflictA, category: 'temporal_stale' }, { docId: scopeDoc, category: 'near_collision_attribute' }],
+        ownerEntityId: universe, band: 'very_hard', operationFamily: 'conflict_lifecycle' });
+
+      // FAMILY 4: instruction/aspect constraint. One memory can mention multiple aspects;
+      // the query selects a specific aspect. Wrong-aspect docs are relevant-looking but not
+      // direct answers, matching MemReranker's aspect-constraint / partial-support failure mode.
+      const aspectWanted = ASPECTS[(s + ui) % ASPECTS.length];
+      const aspectOther = ASPECTS[(s + ui + 3) % ASPECTS.length];
+      const wantedVal = isProject ? `${ri(80) + 20} ms p95` : `${ri(6) + 2} days`;
+      const otherVal = isProject ? `$${ri(900) + 100}/month` : `${pick(DIETS)} support`;
+      const aspectDoc = addDoc({ lane: 'deep', kind: 'aspect_answer', entityIds: tagU(aspectWanted),
+        text: `${canonical}'s ${aspectWanted} note says the target is ${wantedVal}; the same memo also mentions ${aspectOther} only briefly.`,
+        shape: 'aspect_answer_record', timestamp: ts(15 + ri(12)), currentStaleFlag: true,
+        aspectTags: [aspectWanted, aspectOther] });
+      const wrongAspectDoc = addDoc({ lane: 'deep', kind: 'aspect_neighbor', entityIds: tagU(aspectOther),
+        text: `${canonical}'s ${aspectOther} note says the current value is ${otherVal}, with no ${aspectWanted} decision.`,
+        shape: 'aspect_partial_record', timestamp: ts(15 + ri(12)), currentStaleFlag: true,
+        aspectTags: [aspectOther] });
+      rel(aspectDoc, introId, 'aspect_of');
+      rel(wrongAspectDoc, introId, 'aspect_of');
+      addQuery({ lane: 'deep', family: 'aspect_constraint', intentAspect: aspectWanted,
+        queryText: `For ${canonical}, what is the ${aspectWanted} detail?`,
+        qrels: [{ docId: aspectDoc, relevance: 1.0, role: 'direct' }, { docId: wrongAspectDoc, relevance: 0.2, role: 'wrong_aspect' }],
+        hardNegatives: [{ docId: wrongAspectDoc, category: 'lexical_distractor' }],
+        ownerEntityId: universe, band: 'hard', operationFamily: 'aspect_constraint' });
+
+      // FAMILY 5: abstention/no-answer. The query is plausible and has hard same-subject
+      // distractors, but the direct answer memory is intentionally absent from the corpus.
+      // This lets abstain/no-evidence-path atoms be evaluated without query-specific oracle labels.
+      const missingTopic = isProject ? 'rollback owner' : 'emergency contact';
+      const distractA = addDoc({ lane: 'deep', kind: 'abstain_distractor', entityIds: tagU(),
+        text: `${canonical} discussed ${missingTopic} planning, but the final value was not recorded in this memory.`,
+        shape: 'abstain_context_record', timestamp: ts(16 + ri(12)), currentStaleFlag: true });
+      const distractB = addDoc({ lane: 'deep', kind: 'abstain_distractor', entityIds: tagU(),
+        text: `${canonical} mentioned adjacent ${pick(TOPICS)} notes without naming the ${missingTopic}.`,
+        shape: 'abstain_context_record', timestamp: ts(16 + ri(12)), currentStaleFlag: true });
+      addQuery({ lane: 'deep', family: 'abstention_missing', queryText: `What is ${canonical}'s ${missingTopic}?`,
+        qrels: [], abstain: true,
+        hardNegatives: [{ docId: distractA, category: 'lexical_distractor' }, { docId: distractB, category: 'trap' }],
+        ownerEntityId: universe, band: 'exhaustion', operationFamily: 'abstention' });
+    }
   }
 }
 
@@ -271,10 +344,10 @@ for (const q of queries) {
 const out = {
   specVersion: 'coretex.memory-corpus.dgen1.r1', phase: PHASE, seed: SEED,
   generator: 'generate-dgen1-corpus.mjs',
-  params: { subjects: N_SUBJECTS, depth: DEPTH, universes: N_UNIVERSES },
+  params: { subjects: N_SUBJECTS, depth: DEPTH, universes: N_UNIVERSES, r5Synthesis: R5_SYNTHESIS },
   splitRatios: { trainVisiblePct: 70, calibrationPct: 10, evalHiddenPct: 15, canaryPct: 5 },
-  description: 'DGEN-1 generator-native deep-memory longevity corpus: one coherent deep universe, unique in-universe subjects, deep sessions + 3-10 temporal revisions + relation/decision/coreference provenance, dense same-universe distractors, hidden difficulty bands. NO synthetic re-pooling.',
-  dgen1: { universes, families: ['temporal_update', 'multi_session_bridge', 'causal_memory_chain', 'decision_provenance', 'coreference_resolution'], continuityLabels: Object.keys(EDGE), bands: ['easy', 'medium', 'hard', 'very_hard', 'exhaustion'] },
+  description: `DGEN-1 generator-native deep-memory longevity corpus: one coherent deep universe, unique in-universe subjects, deep sessions + 3-10 temporal revisions + relation/decision/coreference provenance, dense same-universe distractors, hidden difficulty bands. ${R5_SYNTHESIS ? 'Includes opt-in r5 synthesis slices for conflict lifecycle, aspect constraints, and abstention/no-answer.' : 'NO synthetic re-pooling.'}`,
+  dgen1: { universes, families: ['temporal_update', 'multi_session_bridge', 'causal_memory_chain', 'decision_provenance', 'coreference_resolution', ...(R5_SYNTHESIS ? ['conflict_lifecycle', 'aspect_constraint', 'abstention_missing'] : [])], continuityLabels: Object.keys(EDGE), bands: ['easy', 'medium', 'hard', 'very_hard', 'exhaustion'], r5Synthesis: R5_SYNTHESIS },
   entities, docs, relations, queries,
 };
 writeFileSync(OUT, JSON.stringify(out));

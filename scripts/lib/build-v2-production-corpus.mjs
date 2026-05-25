@@ -14,7 +14,7 @@ import { repoRoot, distIndex } from '../_repo-root.mjs';
 const { computeCorpusRoot, biEncoderModelIdHash } = await import(distIndex);
 
 const PROV = { source: 'synthetic_challenge', sourceHash: '0x' + '00'.repeat(32) };
-const bucket = (f) => f === 'temporal_update' ? 'temporal'
+const bucket = (f) => (f === 'temporal_update' || f === 'conflict_lifecycle') ? 'temporal'
   : (f === 'multi_session_bridge' || f === 'causal_memory_chain' || f === 'decision_provenance') ? 'multi_hop_relation'
   : 'near_collision';
 
