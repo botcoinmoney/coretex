@@ -155,7 +155,8 @@ from hidden qrels or direct answer identity. Atom families are implicit in the r
 
 Decode/validation rules (fail-closed per atom; an invalid atom is dropped + counted, never rewarded):
 - SELECTOR / EVIDENCE_FEATURE / ACTION / SCOPE must be members of their enums; ACTION must be allowed for the region.
-- TARGET_SLOT < 352, or 0xFFFF only when ACTION = abstain.
+- TARGET_SLOT must be **0..255** (8-bit-addressable, matching temporal/relation slot references — avoids
+  decoded-but-unaddressable anchors in 256..351), or 0xFFFF only when ACTION = abstain.
 - reserved_pa (bits 111:0) MUST be zero.
 - The atom carries **no** qrel/answer-id field — its effect set is reconstructed by the scorer from PUBLIC
   edges out of TARGET_SLOT (answer-density = public support/provenance structure, not answer identity).

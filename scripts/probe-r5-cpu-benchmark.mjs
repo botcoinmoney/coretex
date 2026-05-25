@@ -76,7 +76,7 @@ function buildHonestState(maxAnchors = 128) {
     const w = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(evId), family: bucket(ev.family), domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: 0, expiryEpoch: 0n });
     words[RANGES.MEMORY_INDEX_START + slot] = w[0];
     slot++;
-    if (slot >= 350) break;
+    if (slot >= 256) break;
   }
   // Evidence-bundle atoms: one per anchor, action=bundle (lift the anchor's public-edge reach + own docs).
   let a = 0;
