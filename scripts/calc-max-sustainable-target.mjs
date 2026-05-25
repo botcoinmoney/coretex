@@ -58,11 +58,11 @@ const WORKING_SETS = [64, 96];
 // So 'realizedInContext' is the launch number; 'supplyCeiling' is the headroom a lower-interference
 // mechanism (conflict/update lifecycle, scoped suppression) could recover toward. (The legacy 0.168 endurance
 // stock number was low for the right reason — interference — plus schedule/selection confounds.)
-// profileQrelRecovered = the yield after the ZERO-substrate-change profile/qrel fix (drop temporal
-// stale partial-credit + modest w_temporal raise): deterministic-CPU estimate 0.55 (control 0.33 matched
-// real-Qwen 0.30, so representative); real-Qwen confirmation pending (A100 down). ~0.45 interference is
-// REAL in-context saturation that the metric fix does NOT recover. See PROFILE_QREL_YIELD_EXPERIMENT.md.
-const YIELDS = { realizedInContext: 0.30, profileQrelRecovered: 0.55, supplyCeiling: 309 / 380, ideal: 1.0 };
+// profileQrelRecovered = yield after the ZERO-substrate-change profile/qrel fix (drop temporal stale
+// partial-credit + modest w_temporal raise). REAL-QWEN CONFIRMED 2026-05-25: 0.5625 (n=80, 3-seed, CI
+// 0.45–0.67) vs control 0.30 reproduced exactly — matches the CPU estimate 0.55. ~0.44 interference is
+// REAL in-context saturation the metric fix does NOT recover. See PROFILE_QREL_YIELD_EXPERIMENT.md.
+const YIELDS = { realizedInContext: 0.30, profileQrelRecovered: 0.5625, supplyCeiling: 309 / 380, ideal: 1.0 };
 
 // Cadence = epochs to deliver one G2→G3-magnitude (≈3×) corpus expansion (1 epoch ≈ 1 day).
 // "daily/weekly/..." = that 3× expansion delivered over the named period; realistic band is
