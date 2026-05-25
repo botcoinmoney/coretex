@@ -21,7 +21,7 @@ import { argv, exit } from 'node:process';
 
 function flag(n, fb) { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fb; }
 const corpusPath = flag('corpus', '/var/lib/coretex/corpus-epoch-0-calibration-relation-qrels.json');
-const profilePath = flag('bundle-profile', '/etc/coretex/bundle-profile-launch-v3.json');
+const profilePath = flag('bundle-profile', 'release/bundle/evaluator-profile-v2-dgen1-deep-r1.json');
 const packSplit = flag('split', 'eval_hidden');
 const packSize = Number(flag('pack-size', '10'));
 const family = flag('family', 'multi_hop_relation');

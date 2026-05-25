@@ -23,7 +23,7 @@ const bucket = (f) => f === 'temporal_update' ? 'temporal'
  * @returns {{corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash}}
  */
 export function buildV2ProductionCorpus({ corpusPath, embPath, junkEdges = 0 }) {
-  const manifest = JSON.parse(readFileSync(resolve(repoRoot, 'release/bundle/bundle-manifest-launch-v3.json'), 'utf8'));
+  const manifest = JSON.parse(readFileSync(resolve(repoRoot, 'release/bundle/bundle-manifest-v2-ownerscope-candidate.json'), 'utf8'));
   const BE = manifest.model.biEncoder, RR = manifest.model.reranker;
   const LAYOUT = { dim: BE.retrievalKeyLayout.dim, quantization: BE.retrievalKeyLayout.quantization, headerBytes: BE.retrievalKeyLayout.headerBytes };
   const biEncoderHash = biEncoderModelIdHash(BE.modelId, BE.revision, 'dense');

@@ -94,7 +94,7 @@ All multi-byte fields inside a word are defined MSB-first (big-endian). When a b
 
 ## Round-trip test requirement
 
-The Phase 1 E2E gate runs 10 000 randomized states through `pack → unpack` and asserts byte-identity. See `test/e2e/phase-1/run.mjs`.
+The canonical pack/unpack checks now live in `packages/cortex/test/unit/codec.test.mjs`.
 
 ---
 

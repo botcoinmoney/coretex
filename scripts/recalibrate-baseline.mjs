@@ -16,7 +16,7 @@
  * Usage:
  *   node scripts/recalibrate-baseline.mjs \
  *     --corpus /var/lib/coretex/corpus-epoch-0-launch-MERGED.json \
- *     --bundle-profile /etc/coretex/bundle-profile-launch-v3.json \
+ *     --bundle-profile release/bundle/evaluator-profile-v2-dgen1-deep-r1.json \
  *     --samples 30 \
  *     --eval-seed-hex 0x...32-bytes \
  *     --out /var/lib/coretex/reports/baseline-recalibration.json

@@ -2,7 +2,8 @@
 /**
  * coretex-eval — miner self-eval harness.
  *
- * Spec: docs/CORETEX_SUBSTRATE_EXPANSION_HARDENING.md §6.8.
+ * Spec: specs/substrate_retrieval_semantics.md and the active evaluator
+ * profile documented in release/calibration/CURRENT.md.
  *
  * Runs the production scorer end-to-end against a SPLIT-VISIBLE query pack
  * for a candidate patch. The score breakdown matches what the coordinator

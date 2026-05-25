@@ -22,7 +22,7 @@ import { resolve } from 'node:path';
 import { cpus } from 'node:os';
 import { repoRoot } from './_repo-root.mjs';
 
-const MANIFEST = resolve(repoRoot, 'release/bundle/bundle-manifest-launch-v3.json');
+const MANIFEST = resolve(repoRoot, 'release/bundle/bundle-manifest-v2-ownerscope-candidate.json');
 const PYTHON = process.env.CORETEX_RERANKER_PYTHON ?? resolve(repoRoot, '.venv/bin/python');
 const CACHE_DIR = process.env.CORTEX_LOCAL_MODEL_CACHE ?? '/var/lib/coretex/model-cache';
 const LEVER = new Set(['temporal_update', 'multi_session_bridge', 'causal_memory_chain']);

@@ -36,7 +36,7 @@
  * Usage:
  *   node --max-old-space-size=8192 scripts/probe-substrate-generalized-routing.mjs \
  *     --corpus /var/lib/coretex/corpus-epoch-0-calibration-relation-qrels.json \
- *     --bundle-profile /etc/coretex/bundle-profile-launch-v3.json \
+ *     --bundle-profile release/bundle/evaluator-profile-v2-dgen1-deep-r1.json \
  *     --reranker deterministic --pack-size 16 \
  *     --out /var/lib/coretex/reports/substrate-generalized-routing.json
  */
@@ -436,7 +436,7 @@ const baseOpts = {
 };
 
 // Per-cell scoring options: the substrate-viability knobs vary per cell.
-// Viability default Phase B budget. The launch-v3 profile pins
+// Viability default Phase B budget. The old launch profile pins
 // categoryLensExpansionBudget=0 (Phase B disabled for production). The
 // viability question requires Phase B turned ON to be measurable, so any
 // categoryLenses cell that doesn't pin its own budget gets this default

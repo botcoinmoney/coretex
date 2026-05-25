@@ -30,7 +30,7 @@ const {
   buildPublicCorpusIndex, firstStageCandidates, dequantize, encodeRelationCategoryLens, DEFAULT_COMPOSITE_WEIGHTS, scoringOptionsFromProfile,
 } = await import(distIndex);
 
-const manifest = JSON.parse(readFileSync(resolve(repoRoot, 'release/bundle/bundle-manifest-launch-v3.json'), 'utf8'));
+const manifest = JSON.parse(readFileSync(resolve(repoRoot, 'release/bundle/bundle-manifest-v2-ownerscope-candidate.json'), 'utf8'));
 const BE = manifest.model.biEncoder;
 const LAYOUT = { dim: BE.retrievalKeyLayout.dim, quantization: BE.retrievalKeyLayout.quantization, headerBytes: BE.retrievalKeyLayout.headerBytes };
 const biEncoderHash = biEncoderModelIdHash(BE.modelId, BE.revision, 'dense');
