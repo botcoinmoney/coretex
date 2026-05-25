@@ -78,14 +78,30 @@ for (const e of pack.events) {
   const qt = (qtextOf.get(e.recordId ?? e.id) ?? '').toLowerCase();
   for (const ent of policyEntityRegistry) { if (GENERIC_ENTITY_IDS.includes(ent.id)) continue; if (ent.names.some((n) => n && qt.includes(n))) evalSubjects.add(ent.id); }
 }
-const anchorEvents = [];
+// The POLICY_EVIDENCE region holds 128 atom slots, so cap anchors at 128. Select GREEDILY to cover
+// as many (subject, routing-edge-type) pairs as possible → every covered query's intent has a matching
+// anchor. Honest: subject parse + corpus edge structure; no qrels/gold.
+const ANCHOR_CAP = 128;
+const candAnchors = [];
 for (const ev of corpus.events) {
-  if (anchorEvents.length >= 256) break;
-  if (!(ev.relations ?? []).some((r) => ROUTING_EDGES.has(r.edgeType))) continue;
-  if (!(ev.entityIds ?? []).some((e) => !GENERIC_ENTITY_IDS.includes(e) && evalSubjects.has(e))) continue;
-  anchorEvents.push(ev.id);
+  const edgeTypes = new Set((ev.relations ?? []).map((r) => r.edgeType).filter((t) => ROUTING_EDGES.has(t)));
+  if (edgeTypes.size === 0) continue;
+  const subs = (ev.entityIds ?? []).filter((e) => !GENERIC_ENTITY_IDS.includes(e) && evalSubjects.has(e));
+  if (subs.length === 0) continue;
+  candAnchors.push({ id: ev.id, subs, edgeTypes: [...edgeTypes] });
 }
-console.error(`[rt] evalSubjects=${evalSubjects.size} routing-edge anchors=${anchorEvents.length}`);
+const coveredPairs = new Set();
+const newCoverage = (a) => a.subs.reduce((acc, s) => acc + a.edgeTypes.filter((t) => !coveredPairs.has(`${s}|${t}`)).length, 0);
+const anchorEvents = [];
+const remaining = [...candAnchors];
+while (anchorEvents.length < ANCHOR_CAP && remaining.length) {
+  remaining.sort((a, b) => newCoverage(b) - newCoverage(a));
+  const best = remaining.shift();
+  if (newCoverage(best) === 0) break; // no anchor adds coverage → stop (rest are redundant)
+  anchorEvents.push(best.id);
+  for (const s of best.subs) for (const t of best.edgeTypes) coveredPairs.add(`${s}|${t}`);
+}
+console.error(`[rt] evalSubjects=${evalSubjects.size} routing-edge candidates=${candAnchors.length} selected anchors=${anchorEvents.length} coveredPairs=${coveredPairs.size}`);
 
 const eventById = new Map(corpus.events.map((e) => [e.id, e]));
 function buildState(anchorIds, atomsOn = true) {
