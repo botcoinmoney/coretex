@@ -21,6 +21,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { buildV2ProductionCorpus, inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
+import { makeStreamReranker } from './lib/stream-reranker.mjs';
 
 const C = await import(distIndex);
 const {
@@ -40,10 +41,13 @@ const r5ProfilePath = flag('r5-profile', 'release/bundle/evaluator-profile-v2-dg
 const packSize = Number(flag('pack-size', '96'));
 const outPath = flag('out', `${base}/r5-cpu-benchmark.json`);
 
+const rerankerArg = flag('reranker', 'deterministic');
 const r4Profile = JSON.parse(readFileSync(resolve(repoRoot, r4ProfilePath), 'utf8'));
 const r5Profile = JSON.parse(readFileSync(resolve(repoRoot, r5ProfilePath), 'utf8'));
-const { corpus, logical, LAYOUT, BE, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath });
-const reranker = await createDeterministicReranker();
+const { corpus, logical, LAYOUT, BE, RR, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath });
+const reranker = rerankerArg === 'gpu'
+  ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: process.env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: true })
+  : await createDeterministicReranker();
 const rt = { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT };
 const optsR4 = scoringOptionsFromProfile(r4Profile, rt);
 const optsR5 = scoringOptionsFromProfile(r5Profile, rt);
@@ -109,6 +113,20 @@ console.error(`[r5-bench] query-selective substrate: candidateAnchors=${candidat
 
 const Cc = await evaluateRetrievalBenchmarkState(honest.state, corpus, pack, optsR5Trace);
 
+// ── RANDOM-CONTROL arm (anti-cheat): anchor at RANDOM events, not evidence structure ──
+// Must NOT lift (a routing surface that rewards random atoms is gameable). Same atom count.
+let rng = 0x9e3779b9 >>> 0;
+const rand = () => { rng = (rng * 1664525 + 1013904223) >>> 0; return rng / 0x100000000; };
+const allEvIds = corpus.events.map((e) => e.id);
+const randomAnchors = [];
+const usedR = new Set();
+while (randomAnchors.length < candidates.length && usedR.size < allEvIds.length) {
+  const id = allEvIds[Math.floor(rand() * allEvIds.length)];
+  if (!usedR.has(id)) { usedR.add(id); randomAnchors.push(id); }
+}
+const randomState = buildHonestState(randomAnchors);
+const E = await evaluateRetrievalBenchmarkState(randomState.state, corpus, pack, optsR5);
+
 // no-op gate: per-query nDCG A vs B
 const byId = (sc) => new Map(sc.perQuery.map((q) => [q.recordId, q]));
 const aQ = byId(A), bQ = byId(B), cQ = byId(Cc);
@@ -145,6 +163,11 @@ for (const q of Cc.perQuery) {
   if (isAbstain) { abstainProbes++; if (q.policyAbstain) abstainCorrect++; }
 }
 const answerable = Cc.perQuery.length - abstainProbes;
+// random-control arm: overall + per-family mean nDCG delta vs B (must be ≈0 / negative, not a lift)
+const eQ = byId(E);
+let rDSum = 0, rN = 0;
+for (const [id, qb] of bQ) { const qe = eQ.get(id); if (qe) { rDSum += qe.nDCG10 - qb.nDCG10; rN++; } }
+const randomControl = { meanDeltaNdcg: rN ? +(rDSum / rN).toFixed(4) : 0, n: rN, note: 'random anchors — must NOT lift (anti-cheat)' };
 const maxMovesPerQuery = movesPerQuery.length ? Math.max(...movesPerQuery) : 0;
 const meanMovesPerQuery = movesPerQuery.length ? +(movesPerQuery.reduce((a, b) => a + b, 0) / movesPerQuery.length).toFixed(2) : 0;
 // PER-ATOM firing = the right query-locality metric: how many distinct queries each atom fires on.
@@ -160,11 +183,12 @@ const floodGate = { queriesFired, totalQueries: Cc.perQuery.length, maxMovesPerQ
 const report = {
   probe: 'r5-cpu-benchmark (deterministic; wiring/no-op/attribution/damage — magnitude is a PROXY)',
   generatedAt: new Date().toISOString(),
-  corpus: corpusPath, packSize: pack.events.length, reranker: 'deterministic-stub',
+  corpus: corpusPath, packSize: pack.events.length, reranker: rerankerArg === 'gpu' ? ('Qwen3-Reranker-0.6B (gpu)') : 'deterministic-stub',
   arms: { A_r4_baseline_ndcg: +A.nDCG10.toFixed(4), B_r5_noatoms_ndcg: +B.nDCG10.toFixed(4), C_r5_honest_ndcg: +Cc.nDCG10.toFixed(4) },
   noOpGate: { maxPerQueryNdcgDelta: maxNoOpDelta, holds: noOpHolds, note: 'B (r5 no-atoms) MUST equal A (r4 baseline)' },
   honestSubstrate: { generator: 'query-selective (pool-freq<=' + POOL_FREQ_MAX + ', max ' + MAX_ANCHORS + ' anchors)', anchors: honest.anchors, evidenceAtoms: dh.evidenceBundleAtoms.length, abstentionAtoms: dh.abstentionAtoms.length, decodeFailures: dh.decodeFailures },
   atomEffect_BtoC_perFamily: perFamily,
+  randomControl_BtoE: randomControl,
   floodGate,
   attribution: { totalAtomTraces: totalTraces, totalDocsMoved },
   abstention: { abstainProbes, abstainCorrect, answerable, falseAbstain, falseAbstentionRate: answerable ? +(falseAbstain / answerable).toFixed(4) : 0 },
