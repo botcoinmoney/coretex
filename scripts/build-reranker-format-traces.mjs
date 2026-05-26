@@ -89,6 +89,9 @@ function render(d, packet) {
   const text = d.text;
   if (format === 'F0') return text;
   if (format === 'F1') return `[as of ${tsOf(d)}] ${text}`;
+  // launch-header form: gate the header on lifecycle != none (match the scorer hook — lifecycle=none docs
+  // get raw text, no header noise). The non-launch F2 (with t=) keeps the unconditional header.
+  if (launchHeader && !noLifecycle && lifecycleOf(d.id) === 'none') return text;
   const header = mirHeader(d);
   if (format === 'F2') return `${header} ${text}`;
   if (format === 'F3') { const e = edgesOf(d); return `${header}${e.length ? ' [edges: ' + e.join('; ') + ']' : ''} ${text}`; }
