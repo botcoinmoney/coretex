@@ -51,11 +51,16 @@ run('1 export MemoryOps (full IR, merged)',
   `node scripts/export-memoryops-training-data.mjs --corpus ${primaryCorpus} --from-ledger ${primaryLedger}`
   + ` --supplement ${suppCorpus} --supplement-ledger ${suppLedger} --split ${split} --out ${memops}`,
   'NODE_OPTIONS=--max-old-space-size=8192');
-// 2. MANDATORY gates (incl. full-IR train/serve byte-equality) on the EVAL corpus slice.
-run('2 validate gates',
+// 2. MANDATORY gates per corpus slice. Supplement (r5-synth, embeddings present) runs ALL 6 incl. the
+//    full-IR train/serve byte-equality render gate; primary (DGEN1, no embeddings) runs gates 1/2/3/5/6
+//    (render path already proven on the supplement slice — same code, different data).
+run('2a validate gates (supplement r5-synth, full)',
   `node scripts/validate-memoryops-pipeline.mjs --ledger ${suppLedger} --memops ${memops} --corpus ${suppCorpus}`
-  + ` --emb ${suppCorpus.replace('-corpus.json', '-embeddings.json')} --split ${split}`
-  + ` --supplement ${suppCorpus} --supplement-ledger ${suppLedger}`,
+  + ` --emb ${suppCorpus.replace('-corpus.json', '-embeddings.json')} --split ${split} --corpus-tag supplement`,
+  'NODE_OPTIONS=--max-old-space-size=8192');
+run('2b validate gates (primary DGEN1, no render gate)',
+  `node scripts/validate-memoryops-pipeline.mjs --ledger ${primaryLedger} --memops ${memops} --corpus ${primaryCorpus}`
+  + ` --split ${split} --corpus-tag primary --skip-gate4`,
   'NODE_OPTIONS=--max-old-space-size=8192');
 // 3. train candidate reranker_{N+1}: ranking-aligned (BCE+pairwise+listwise), family-balanced. Base never written.
 run('3 train E1 (full IR, ranking-aligned)',

@@ -24,6 +24,7 @@
 import { distIndex, repoRoot } from './_repo-root.mjs';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 import { buildMemoryIRContext, computeMemoryIR, nonGeneric, resolvedLifecycleFromDecoded } from './lib/memory-ir.mjs';
 
 const C = await import(distIndex);
@@ -54,10 +55,12 @@ function resolvedLifecycleMap(ledgerPath, docs) {
 
 const ROLE_SOFT = { direct: 1.0, support: 0.4, bridge: 0.4, stale: 0.2, scope_differs: 0.2, conflict: 0.0, wrong_aspect: 0.2 };
 
-// deterministic entity-disjoint split (subject → train/validation/heldout_future), shared across corpora.
-let s2 = (seed * 2654435761) >>> 0; const rnd = () => { s2 = (Math.imul(s2 ^ (s2 >>> 15), 0x2c1b3c6d) + 1) >>> 0; return s2 / 4294967296; };
-const subjSplit = new Map();
-const splitOf = (subj) => { if (!subjSplit.has(subj)) { const r = rnd(); subjSplit.set(subj, r < 0.7 ? 'train' : r < 0.85 ? 'validation' : 'heldout_future'); } return subjSplit.get(subj); };
+// deterministic entity-disjoint split (subject → train/validation/heldout_future). HASH of the subject id
+// (ORDER-INDEPENDENT) so a subject lands in the same split whether exported alone or merged across corpora.
+const splitOf = (subj) => {
+  const h = parseInt(createHash('sha1').update(`${seed}:${subj}`).digest('hex').slice(0, 8), 16) / 0xffffffff;
+  return h < 0.7 ? 'train' : h < 0.85 ? 'validation' : 'heldout_future';
+};
 
 function exportCorpus(corpusPath, ledgerPath, tag, examples) {
   const corpus = JSON.parse(readFileSync(resolve(repoRoot, corpusPath), 'utf8'));
@@ -72,10 +75,13 @@ function exportCorpus(corpusPath, ledgerPath, tag, examples) {
     : (ctx.supDst.has(docId) ? 'superseded' : ctx.supSrc.has(docId) ? 'current' : 'none');
   console.error(`[memoryops] ${tag}: corpus=${corpusPath} ledger=${ledgerPath ?? '(none)'} advances=${advances} resolvedLifecycle=${resolved.size}`);
 
-  let s3 = (seed * 40503 + tag.length) >>> 0; const rng = () => { s3 = (Math.imul(s3 ^ (s3 >>> 13), 0x5bd1e995) + 1) >>> 0; return s3 / 4294967296; };
   for (const q of queries) {
     const qsplit = q.split ?? 'eval_hidden';
     if (splitFilterArg ? qsplit !== splitFilterArg : qsplit === 'eval_hidden') continue;  // never hidden-eval as source
+    // per-query sampling rng seeded by query id (ORDER/TAG-INDEPENDENT) → identical rows whether this corpus
+    // is exported alone or merged as primary/supplement.
+    let qs = parseInt(createHash('sha1').update(`${seed}:${q.id}`).digest('hex').slice(0, 8), 16) >>> 0;
+    const rng = () => { qs = (Math.imul(qs ^ (qs >>> 13), 0x5bd1e995) + 1) >>> 0; return qs / 4294967296; };
     const subj = ctx.querySubjects(q.queryText);
     const subjId = nonGeneric([...subj])[0] ?? `q:${q.id}`;
     // realistic candidate pool: all qrel roles + hard negatives sampled across categories (not just first N).
