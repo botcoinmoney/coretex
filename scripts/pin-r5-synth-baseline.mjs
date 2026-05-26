@@ -34,6 +34,10 @@ const opts = scoringOptionsFromProfile(r5, rt);
 const pack = deriveQueryPack(epochId, evalSeedHex, corpus, r5.hiddenPack);
 const empty = { words: new Array(1024).fill(0n) };
 const b = await evaluateBaseline(empty, corpus, pack, opts, { samples });
-console.log(JSON.stringify({ reranker: rerankerArg === 'gpu' ? `Qwen3-Reranker-0.6B@${RR.revision} (gpu)` : 'deterministic', epochId, evalSeedHex, samples, packSize: pack.events.length,
-  baselineParentScorePpm: b.parentScorePpm, baselineVariancePpm: b.variancePpm }, null, 2));
+const result = { reranker: rerankerArg === 'gpu' ? `Qwen3-Reranker-0.6B@${RR.revision} (gpu)` : 'deterministic', epochId, evalSeedHex, samples, packSize: pack.events.length,
+  adapter: process.env.CORETEX_RERANKER_ADAPTER_DIR ?? null,
+  baselineParentScorePpm: b.parentScorePpm, baselineVariancePpm: b.variancePpm };
+const outArg = (() => { const i = process.argv.indexOf('--out'); return i >= 0 ? process.argv[i + 1] : null; })();
+if (outArg) { const { writeFileSync } = await import('node:fs'); writeFileSync(outArg.startsWith('/') ? outArg : resolve(repoRoot, outArg), JSON.stringify(result, null, 2)); }
+console.log(JSON.stringify(result, null, 2));
 if (typeof reranker.close === 'function') reranker.close();
