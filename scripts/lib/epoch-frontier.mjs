@@ -28,17 +28,29 @@ const rootHash = (ids) => '0x' + createHash('sha256').update([...ids].sort().joi
  * @param {object} o
  * @param {string[]} o.evalHiddenIds  all eval_hidden ids (the frontier universe)
  * @param {(id:string)=>string} o.familyOf  stratum key per id (logical family preferred)
- * @param {'off'|'C0'|'C1'|'C2'} o.mode  off/C0 static; C1 conveyor; C2 replenish-on-low-advances
+ * @param {'off'|'C0'|'C1'|'C2'|'C3'|'C4'} o.mode  off/C0 static; C1 conveyor; C2 replenish-on-low-advances;
+ *        C3 adaptive watermark/EWMA-headroom reservoir controller; C4 age-only slow maintenance.
  * @param {number} o.activeWindow  active-frontier size K (held EQUAL across arms)
  * @param {number} o.churnRate  base units retired+activated per epoch (C1/C2)
  * @param {number} o.maxAge  hard age cap in epochs (∞ = none); retires aged units even in C0
  * @param {number} o.lowAdvancesThreshold  C2: if prevHonestAccepts < this → bump churn
  * @param {number} o.lowAdvancesBumpRate  C2 bumped rate (default 2×churnRate)
  * @param {string} o.seed  activation seed (precommit)
+ * --- C3 adaptive-watermark params (rotate only enough to maintain measured headroom) ---
+ * @param {number} o.minChurn  C3/C4 maintenance churn floor (≥0)
+ * @param {number} o.maxChurn  C3 churn ceiling
+ * @param {number} o.targetAccepts  measured replenishment/churn supply (desired honest accepts/epoch)
+ * @param {number} o.headroomLowWatermark  EWMA-accepts below this → reservoir LOW → replenish
+ * @param {number} o.headroomHighWatermark  EWMA-accepts above this → reservoir HEALTHY → churn 0
+ * @param {number} o.ewmaHalfLife  half-life (epochs) for the recent-accepts EWMA
+ * @param {number} o.expectedYieldPerUnit  accepts per activated unit (deficit→units conversion)
+ * @param {number} o.maxRootDeltaPerEpoch  hard cap on units rotated per epoch (replay-bounded)
  */
 export function makeEpochFrontier({
   evalHiddenIds, familyOf, mode = 'off', activeWindow, churnRate = 4,
   maxAge = Infinity, lowAdvancesThreshold = 1, lowAdvancesBumpRate, seed = 'frontier',
+  minChurn = 2, maxChurn = 12, targetAccepts = 2, headroomLowWatermark = 1, headroomHighWatermark = 3,
+  ewmaHalfLife = 3, expectedYieldPerUnit = 0.17, maxRootDeltaPerEpoch = 24,
 }) {
   // Precommitted stratum-balanced deterministic order: group by family, sort within by
   // seeded hash, round-robin interleave across families (sorted family names).
@@ -63,6 +75,9 @@ export function makeEpochFrontier({
   const active = new Map();          // id -> activationEpoch
   const retired = new Set();
   let cumulativeActivated = 0, cumulativeRetired = 0, initialized = false;
+  // C3 adaptive state: EWMA of recent honest accepts (the reservoir level). aggregate-only.
+  let ewmaAccepts = null;
+  const ewmaAlpha = 1 - Math.pow(0.5, 1 / Math.max(0.5, ewmaHalfLife));
 
   const activateNext = (n, epoch) => {
     let a = 0;
@@ -99,11 +114,27 @@ export function makeEpochFrontier({
       const a = activateNext(ret, epoch);     // C0 only refills age-capped slots (usually 0)
       return snapshot(epoch, a, ret, 0);
     }
-    // C1 conveyor / C2 replenish-on-low-advances (AGGREGATE-ONLY trigger).
-    let rate = churnRate;
-    if (mode === 'C2' && prevHonestAccepts !== null && prevHonestAccepts < lowAdvancesThreshold) {
-      rate = lowAdvancesBumpRate ?? (churnRate * 2);
+    // update the recent-accepts EWMA (aggregate-only; drives C3). null prev = no signal yet.
+    if (prevHonestAccepts !== null) ewmaAccepts = (ewmaAccepts === null) ? prevHonestAccepts : ewmaAlpha * prevHonestAccepts + (1 - ewmaAlpha) * ewmaAccepts;
+    let rate;
+    if (mode === 'C1') {
+      rate = churnRate;                                   // fixed conveyor
+    } else if (mode === 'C2') {                            // replenish-on-low-advances (bump when starved)
+      rate = (prevHonestAccepts !== null && prevHonestAccepts < lowAdvancesThreshold) ? (lowAdvancesBumpRate ?? (churnRate * 2)) : churnRate;
+    } else if (mode === 'C4') {
+      rate = minChurn;                                     // age-only slow maintenance, accept-independent
+    } else { // C3 adaptive watermark/EWMA-headroom reservoir controller (rotate only enough for headroom)
+      const recent = ewmaAccepts ?? targetAccepts;         // before first signal, assume at target (no over-churn)
+      const deficit = targetAccepts - recent;
+      if (recent <= headroomLowWatermark) {                // reservoir LOW → replenish proportional to deficit
+        rate = Math.min(maxChurn, Math.max(minChurn, Math.ceil(Math.max(0, deficit) / Math.max(1e-6, expectedYieldPerUnit))));
+      } else if (recent >= headroomHighWatermark) {        // reservoir HEALTHY → rest (no churn)
+        rate = 0;
+      } else {                                             // hysteresis band → minimum maintenance only
+        rate = minChurn;
+      }
     }
+    rate = Math.min(rate, maxRootDeltaPerEpoch);            // replay-bounded per-epoch root delta
     ret += retireOldest(rate);
     const a = activateNext(ret, epoch);        // refill to maintain window (shrinks if reserve exhausted)
     return snapshot(epoch, a, ret, rate);
@@ -111,3 +142,31 @@ export function makeEpochFrontier({
 
   return { stepEpoch, order, orderIdx, K, totalUnits: order.length, familyOrder: famNames };
 }
+
+/**
+ * EpochFrontierProfile — the launch-candidate adaptive churn config (the final churn output).
+ * `mode:'C3'` (adaptive) is the launch direction: rotate only enough active frontier to maintain
+ * measured headroom (watermark/EWMA reservoir), never blind per-epoch churn. Pin into the signed
+ * bundle alongside the evaluator profile when promoting EpochFrontier from opt-in to canonical.
+ * Invariants (frozen): precommitted deterministic stratum-balanced activation order; retirement by
+ * AGE/cohort only (never solved-vs-failed); churn decisions read AGGREGATE epoch stats only; baseline
+ * recomputes on activeRoot change; majorDelta on corpusRoot change only; every per-epoch frontier root
+ * (active/reserve/retired) is deterministically reproducible from (seed, evalHiddenIds, familyOf, mode,
+ * params, prevHonestAccepts sequence) → replay validators recompute it exactly.
+ */
+export const DEFAULT_EPOCH_FRONTIER_PROFILE = {
+  mode: 'C3',                    // adaptive watermark/EWMA-headroom reservoir controller
+  activeWindow: 96,              // launch frontier window (64/96 validated band)
+  minChurn: 2,                   // maintenance floor in the hysteresis band
+  maxChurn: 12,                  // replenishment ceiling when reservoir is low
+  headroomLowWatermark: 1,       // EWMA-accepts ≤ this → replenish
+  headroomHighWatermark: 3,      // EWMA-accepts ≥ this → rest (churn 0)
+  ewmaHalfLife: 3,               // epochs
+  targetAccepts: 2,             // tracks MEASURED replenishment/churn supply (re-pin per corpus)
+  expectedYieldPerUnit: 0.17,    // accepts/activated-unit (measured: C1 = 15 accepts / 90 rotated)
+  maxRootDeltaPerEpoch: 24,      // replay-bounded per-epoch root delta
+  maxAge: Infinity,              // age-cap (finite enables C4-style forced cohort retirement)
+  seed: 'frontier',              // precommit activation seed
+  baselineRecompute: 'activeRootChanged',
+  majorDeltaPolicy: 'corpusRootChanged',
+};

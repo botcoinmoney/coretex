@@ -62,6 +62,15 @@ const frontierChurn = Number(flag('frontier-churn-rate', '4'));   // C1/C2 units
 const frontierMaxAge = flag('frontier-max-age', 'inf') === 'inf' ? Infinity : Number(flag('frontier-max-age', 'inf'));
 const frontierSeed = flag('frontier-seed', 'frontier-2026-05-25');
 const frontierLowAdv = Number(flag('frontier-low-advances', '1'));
+// C3 adaptive watermark params (defaults mirror DEFAULT_EPOCH_FRONTIER_PROFILE)
+const frontierMinChurn = Number(flag('frontier-min-churn', '2'));
+const frontierMaxChurn = Number(flag('frontier-max-churn', '12'));
+const frontierTargetAccepts = Number(flag('frontier-target-accepts', '2'));
+const frontierLowWM = Number(flag('frontier-low-watermark', '1'));
+const frontierHighWM = Number(flag('frontier-high-watermark', '3'));
+const frontierEwmaHalfLife = Number(flag('frontier-ewma-halflife', '3'));
+const frontierYieldPerUnit = Number(flag('frontier-yield-per-unit', '0.17'));
+const frontierMaxRootDelta = Number(flag('frontier-max-root-delta', '24'));
 const epochsPerFraction = Number(flag('epochs-per-fraction', String(Math.ceil(epochs / ownerFractions.length))));
 // Bounded-run overrides (keep A100 Qwen-pair budget tractable). 0 = use profile.
 const packSizeOverride = Number(flag('pack-size', '0'));
@@ -195,8 +204,11 @@ if (frontierMode !== 'off') {
     evalHiddenIds, familyOf: (id) => famById.get(id), mode: frontierMode,
     activeWindow: frontierWindow > 0 ? frontierWindow : evalHiddenIds.length,
     churnRate: frontierChurn, maxAge: frontierMaxAge, lowAdvancesThreshold: frontierLowAdv, seed: frontierSeed,
+    minChurn: frontierMinChurn, maxChurn: frontierMaxChurn, targetAccepts: frontierTargetAccepts,
+    headroomLowWatermark: frontierLowWM, headroomHighWatermark: frontierHighWM, ewmaHalfLife: frontierEwmaHalfLife,
+    expectedYieldPerUnit: frontierYieldPerUnit, maxRootDeltaPerEpoch: frontierMaxRootDelta,
   });
-  console.error(`[v2-lh] FRONTIER ${frontierMode} window=${frontier.K}/${frontier.totalUnits} churn=${frontierChurn} maxAge=${frontierMaxAge} families=[${frontier.familyOrder}]`);
+  console.error(`[v2-lh] FRONTIER ${frontierMode} window=${frontier.K}/${frontier.totalUnits} churn=${frontierChurn} maxAge=${frontierMaxAge}${frontierMode === 'C3' ? ` [adaptive: target=${frontierTargetAccepts} wm=${frontierLowWM}/${frontierHighWM} churn=${frontierMinChurn}..${frontierMaxChurn} yield=${frontierYieldPerUnit}]` : ''} families=[${frontier.familyOrder}]`);
 }
 let prevHonestAccepts = null;  // aggregate-only churn trigger (C2); set at each epoch's end
 
