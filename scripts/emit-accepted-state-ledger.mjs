@@ -48,6 +48,9 @@ const queryPackRoot = '0x' + createHash('sha256').update(packEvents.map((e) => e
 
 // minable temporal queries from the pack (each has a direct=current + stale qrel docs).
 const minable = packEvents.map((e) => logicalQById.get(e.id)).filter((q) => q && (q.qrels ?? []).some((r) => r.role === 'direct') && (q.qrels ?? []).some((r) => r.role === 'stale'));
+// --shuffle-seed: rotate the mined COHORT (a churn frontier mines a different slice than the static one).
+const shuffleSeed = flag('shuffle-seed', null);
+if (shuffleSeed !== null) { let s = (Number(shuffleSeed) * 2654435761) >>> 0; const rnd = () => { s = (Math.imul(s ^ (s >>> 15), 0x2c1b3c6d) + 1) >>> 0; return s / 4294967296; }; for (let i = minable.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [minable[i], minable[j]] = [minable[j], minable[i]]; } }
 let state = { words: new Array(1024).fill(0n) };
 const ledger = [];
 const cap = maxAdvances > 0 ? maxAdvances : 96;
