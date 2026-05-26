@@ -126,6 +126,7 @@ for (const q of queries) {
       },
       label: c.soft, label_source: 'qrel_role', split: splitOf(subjId), family: q.family,
       state_source: stateSource, roots,
+      _split_key: subjId,   // PROVENANCE only (entity id, NOT a trainable field) — for split-disjointness audit
     });
   }
   famCount[q.family] = (famCount[q.family] ?? 0) + 1;
