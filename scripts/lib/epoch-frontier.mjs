@@ -101,8 +101,11 @@ export function makeEpochFrontier({
     activeRoot: rootHash(active.keys()), reserveRoot: rootHash(order.slice(reservePtr)), retiredRoot: rootHash(retired),
   });
 
-  /** Advance one epoch. `prevHonestAccepts` = aggregate honest accepts of the PREVIOUS epoch (null on first). */
-  function stepEpoch(epoch, prevHonestAccepts) {
+  /** Advance one epoch. `prevHonestAccepts` = aggregate honest accepts of the PREVIOUS epoch (null on
+   *  first). `prevQualityAttempts` = aggregate honest ATTEMPTS last epoch (null = unknown). C3 uses it to
+   *  distinguish LOW-ADVANCES (attempts present, advances low → replenish) from NO-ACTIVITY (no quality
+   *  attempts → PAUSE churn; don't rotate the frontier when there is no miner signal to act on). */
+  function stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts = null) {
     if (!initialized) { initialized = true; const a = activateNext(K, epoch); return snapshot(epoch, a, 0, 0); }
     // hard age-cap retirement applies in all modes (incl. C0/off if maxAge finite).
     let ret = 0;
@@ -123,6 +126,8 @@ export function makeEpochFrontier({
       rate = (prevHonestAccepts !== null && prevHonestAccepts < lowAdvancesThreshold) ? (lowAdvancesBumpRate ?? (churnRate * 2)) : churnRate;
     } else if (mode === 'C4') {
       rate = minChurn;                                     // age-only slow maintenance, accept-independent
+    } else if (mode === 'C3' && prevQualityAttempts === 0) {
+      rate = 0;                                            // NO-ACTIVITY pause: no quality attempts → don't churn (no signal)
     } else { // C3 adaptive watermark/EWMA-headroom reservoir controller (rotate only enough for headroom)
       const recent = ewmaAccepts ?? targetAccepts;         // before first signal, assume at target (no over-churn)
       const deficit = targetAccepts - recent;

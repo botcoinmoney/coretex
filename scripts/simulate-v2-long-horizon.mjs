@@ -210,7 +210,7 @@ if (frontierMode !== 'off') {
   });
   console.error(`[v2-lh] FRONTIER ${frontierMode} window=${frontier.K}/${frontier.totalUnits} churn=${frontierChurn} maxAge=${frontierMaxAge}${frontierMode === 'C3' ? ` [adaptive: target=${frontierTargetAccepts} wm=${frontierLowWM}/${frontierHighWM} churn=${frontierMinChurn}..${frontierMaxChurn} yield=${frontierYieldPerUnit}]` : ''} families=[${frontier.familyOrder}]`);
 }
-let prevHonestAccepts = null;  // aggregate-only churn trigger (C2); set at each epoch's end
+let prevHonestAccepts = null, prevQualityAttempts = null;  // aggregate-only churn triggers; set at each epoch end
 
 // ── honest patch families (shared lib — same levers measured in Phase 3) ──
 // relation | temporal | mixed are GENUINE substrate compiles (proposer-visible memory
@@ -275,7 +275,7 @@ for (let epoch = startEpoch; epoch <= epochs; epoch++) {
   // Phase-2 frontier: restrict eval_hidden to the epoch's ACTIVE frontier set (aggregate-only churn).
   let frontierManifest = null;
   if (frontier) {
-    const fr = frontier.stepEpoch(epoch, prevHonestAccepts);
+    const fr = frontier.stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts);
     ac.events = ac.events.filter((e) => e.split !== 'eval_hidden' || fr.activeIds.has(e.id));
     ac.byId = new Map(ac.events.map((e) => [e.id, e]));
     ac.evalHiddenCount = ac.events.filter((e) => e.split === 'eval_hidden').length;
@@ -367,7 +367,7 @@ for (let epoch = startEpoch; epoch <= epochs; epoch++) {
     hillclimbProbes, hillclimbAccepts: hillAccepts, hillclimbAcceptanceRate: +(hillAccepts / Math.max(1, hillclimbProbes)).toFixed(4), hillclimbDeltaPpmMax: hillDeltas.length ? Math.max(...hillDeltas) : null,
     minImprBefore, minImprAfter: Number(current), reason,
     ...(frontierManifest ? { frontier: frontierManifest } : {}) });
-  prevHonestAccepts = honestAccepts;   // aggregate-only churn trigger for the NEXT epoch (C2)
+  prevHonestAccepts = honestAccepts; prevQualityAttempts = honestAttempts;   // aggregate-only churn triggers for NEXT epoch (C2/C3 no-activity pause)
   writeStateOut(epoch);
   console.error(`[v2-lh] ep ${epoch}/${epochs} frac=${frac} packN=${pack.events.length} thr=${acceptanceThresholdPpm} | honest ${honestAccepts}/${honestAttempts}(Δ${pcDelta}) rand ${randAccepts}/${randomProbes} hill ${hillAccepts}/${hillclimbProbes} | minImpr ${minImprBefore}→${Number(current)} [${reason}]`);
 }
