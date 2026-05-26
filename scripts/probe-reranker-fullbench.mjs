@@ -33,17 +33,23 @@ const { corpus, logical, LAYOUT, BE, RR, biEncoderHash } = buildV2ProductionCorp
 const reranker = rerankerArg === 'gpu'
   ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: process.env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: true })
   : await createDeterministicReranker();
+const irSource = flag('ir-source', 'corpus');         // corpus | resolved (resolved needs --substrate)
+const substratePath = flag('substrate', null);         // resolved-state sidecar (ledger .state.json)
 const rt = { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT };
 const opts = { ...scoringOptionsFromProfile(r5, rt), exposeFullRanking: true };
 opts.rerankerMemoryIRFormat = mir === 'F2' ? 'F2' : 'off';
+opts.rerankerMemoryIRSource = irSource === 'resolved' ? 'resolved' : 'corpus';
 if (substrateOff) {  // substrate OFF: kill the temporal modulation channel (isolate the residual)
   opts.temporalCurrentBoost = 0; opts.temporalStaleSuppression = 0; opts.temporalStaleContrast = false;
 }
 const famOf = new Map(logical.queries.map((q) => [q.id, q.family]));
 const seedHex = '0x' + 'd5'.repeat(32);
 const pack = deriveQueryPack(1, seedHex, corpus, { ...r5.hiddenPack, packSize, quotas: [] });
-const empty = { words: new Array(1024).fill(0n) };
-const R = await evaluateRetrievalBenchmarkState(empty, corpus, pack, opts);
+// substrate = the ledger's resolved state (so resolved-IR + temporal modulation are EARNED) or empty.
+const substrate = substratePath
+  ? { words: JSON.parse(readFileSync(resolve(repoRoot, substratePath), 'utf8')).words.map((w) => BigInt(w)) }
+  : { words: new Array(1024).fill(0n) };
+const R = await evaluateRetrievalBenchmarkState(substrate, corpus, pack, opts);
 
 const fam = {};
 for (const q of R.perQuery) { const f = famOf.get(q.recordId) ?? q.family; (fam[f] ??= []).push(q.nDCG10); }

@@ -83,9 +83,10 @@ for (const s of captured) { if (!s.startsWith('[lifecycle=')) continue; const m 
 ok('4 train/serve-equality', serveMismatch === 0 && serveCompared > 0, `scorer-resolved render vs exporter earned lifecycle (unique-text): ${serveCompared} compared, ${serveMismatch} mismatch`);
 if (typeof reranker.close === 'function') reranker.close();
 
-// GATE 5 — DETERMINISM: re-export and hash-compare.
+// GATE 5 — DETERMINISM: re-export with the SAME flags (incl. --split) and hash-compare.
+const splitArg = flag('split', null);
 const h = (p) => createHash('sha256').update(readFileSync(resolve(repoRoot, p))).digest('hex');
-sh(`node scripts/export-memoryops-training-data.mjs --from-ledger ${ledgerPath} --corpus ${corpusPath} --out /tmp/memops-det2.jsonl`, { cwd: repoRoot, stdio: 'ignore' });
+sh(`node scripts/export-memoryops-training-data.mjs --from-ledger ${ledgerPath} --corpus ${corpusPath}${splitArg ? ' --split ' + splitArg : ''} --out /tmp/memops-det2.jsonl`, { cwd: repoRoot, stdio: 'ignore' });
 ok('5 determinism', h(memopsPath) === h('/tmp/memops-det2.jsonl'), `two exports ${h(memopsPath) === h('/tmp/memops-det2.jsonl') ? 'identical' : 'DIFFER'}`);
 
 // GATE 6 — SPLIT-safety: train/validation/heldout disjoint by the SPLIT KEY (query subject entity, the
