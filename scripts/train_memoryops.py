@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
-"""MemReranker-lite pointwise BCE trainer on MemoryOps examples (Phase 5 plumbing probe).
+"""MemReranker-lite trainer on FULL Memory-IR MemoryOps examples (2026-05-26 correction).
 
-Consumes the MemoryOps JSONL (export-memoryops-training-data.mjs): {query, candidate_text, memory_ir,
-label (soft 0..1), split, family, state_source}. The trainable document = the candidate rendered with the
-GATED resolved Memory-IR header (lifecycle!=none → "[lifecycle=X | subject=Y] text", else raw text) —
-EXACTLY the scorer's serve-time rerankerMemoryIRSource='resolved' render, so train==serve.
+Renders the candidate document with the PROTOCOL-OWNED shared renderer (scripts/lib/memory_ir_render.py) over
+the COMPLETE IR (lifecycle/role/path/conflict/scope/evidence/density) — byte-identical to the exporter's
+`memory_ir_text` and the scorer's serve-time render. A hard preflight asserts render(ex)==ex["memory_ir_text"]
+for a sample (the prior loop's defect — multi-field export but lifecycle-only train/serve — fails here).
 
-E0 = frozen pinned reranker. E1 = LoRA adapter on a fresh copy (base never written). BCE pointwise on the
-soft label. This is a PLUMBING probe (does training run, adapter save, eval run) — NOT a tuning competition.
+Objectives (ranking-aligned, query-grouped — trains on the SAME candidate lists it will rank):
+  pointwise BCE on soft labels  +  pairwise logistic (within-query ordered pairs)  +  listwise InfoNCE
+  (positive vs in-query negatives). `--objective combined|bce|pairwise|listwise`.
 
-Usage: python3 scripts/train_memoryops.py --data <memoryops.jsonl> --out <metrics.json> --adapter-dir <dir> [--epochs 2] [--max-train N] [--smoke]
+Family-balanced train sampling (`--per-family-cap`) so temporal (already earned by substrate modulation)
+does not dominate the gradient — the verdict is non-temporal/multi-family. E0 frozen, E1 LoRA (base never written).
+
+Usage: python3 scripts/train_memoryops.py --data <memoryops.jsonl> --out <metrics.json> --adapter-dir <dir>
+       [--epochs 1] [--per-family-cap 6000] [--objective combined] [--max-queries N] [--smoke]
 """
-import argparse, json, random
+import argparse, json, os, random, sys
+from collections import defaultdict
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "lib"))
+from memory_ir_render import render_memory_ir_doc  # the shared protocol renderer
 
 MODEL_ID = "Qwen/Qwen3-Reranker-0.6B"
 REVISION = "e61197ed45024b0ed8a2d74b80b4d909f1255473"
@@ -26,11 +35,22 @@ def build_prompt(query, document):
 
 
 def render(ex):
-    """GATED resolved-IR render — identical to the scorer's mirDoc (lifecycle!=none only)."""
-    ir = ex["memory_ir"]; lc = ir.get("lifecycle", "none")
-    if lc == "none":
-        return ex["candidate_text"]
-    return f"[lifecycle={lc} | subject={ir.get('subject_scope','?')}] {ex['candidate_text']}"
+    """FULL multi-field IR render — the shared protocol grammar (== exporter memory_ir_text == scorer)."""
+    return render_memory_ir_doc(ex.get("memory_ir"), ex["candidate_text"])
+
+
+def balanced_train(rows, per_family_cap, seed):
+    """Per-family cap so temporal does not swamp the non-temporal MemoryOps signal."""
+    rng = random.Random(seed)
+    by_fam = defaultdict(list)
+    for r in rows:
+        by_fam[r.get("family", "?")].append(r)
+    out = []
+    for fam, arr in by_fam.items():
+        rng.shuffle(arr)
+        out.extend(arr[:per_family_cap] if per_family_cap > 0 else arr)
+    rng.shuffle(out)
+    return out
 
 
 def main():
@@ -38,8 +58,10 @@ def main():
     ap.add_argument("--data", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--adapter-dir", default="/workspace/run/scratch/e1-memoryops")
-    ap.add_argument("--epochs", type=int, default=2)
-    ap.add_argument("--max-train", type=int, default=4000)
+    ap.add_argument("--epochs", type=int, default=1)
+    ap.add_argument("--per-family-cap", type=int, default=6000)
+    ap.add_argument("--max-queries", type=int, default=0)        # 0 = all train queries
+    ap.add_argument("--objective", choices=["combined", "bce", "pairwise", "listwise"], default="combined")
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--seed", type=int, default=20260526)
     ap.add_argument("--smoke", action="store_true")
@@ -50,16 +72,41 @@ def main():
     from peft import LoraConfig, get_peft_model
     torch.manual_seed(args.seed)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"[memops-train] device={dev}", flush=True)
+    print(f"[memops-train] device={dev} objective={args.objective}", flush=True)
 
     rows = [json.loads(l) for l in open(args.data) if l.strip()]
-    train = [r for r in rows if r.get("split") == "train"]
+    # HARD PREFLIGHT: trainer render must equal the exporter's memory_ir_text (train==export==serve).
+    drift = 0
+    for r in rows[:2000]:
+        if "memory_ir_text" in r and render(r) != r["memory_ir_text"]:
+            drift += 1
+            if drift <= 3:
+                print(f"[memops-train] RENDER DRIFT:\n  trainer: {render(r)!r}\n  export : {r['memory_ir_text']!r}", flush=True)
+    if drift:
+        print(f"[memops-train] ABORT — {drift} render-drift mismatches (trainer != exporter). Renderers are NOT byte-identical.", flush=True)
+        sys.exit(3)
+    print(f"[memops-train] render preflight OK (trainer==exporter on {min(2000,len(rows))} rows)", flush=True)
+
+    train_rows = [r for r in rows if r.get("split") == "train"]
     ev = [r for r in rows if r.get("split") == "validation"]
+    train_rows = balanced_train(train_rows, args.per_family_cap, args.seed)
+    # group into query candidate lists (the lists the reranker ranks).
+    def group(items):
+        g = defaultdict(list)
+        for r in items:
+            g[r["query"]].append(r)
+        return [v for v in g.values() if len(v) >= 1]
+    train_groups = group(train_rows)
+    if args.max_queries > 0:
+        train_groups = train_groups[:args.max_queries]
     if args.smoke:
-        train, ev, args.epochs = train[:8], ev[:8], 1
-    random.shuffle(train)
-    train = train[:args.max_train]
-    print(f"[memops-train] train={len(train)} eval={len(ev)} (of {len(rows)} total)", flush=True)
+        train_groups, ev, args.epochs = train_groups[:8], ev[:40], 1
+    n_train_ex = sum(len(g) for g in train_groups)
+    fam_dist = defaultdict(int)
+    for g in train_groups:
+        for r in g:
+            fam_dist[r.get("family", "?")] += 1
+    print(f"[memops-train] train_groups={len(train_groups)} train_ex={n_train_ex} eval={len(ev)} fam={dict(fam_dist)}", flush=True)
 
     tok = AutoTokenizer.from_pretrained(MODEL_ID, revision=REVISION, trust_remote_code=True)
     if tok.pad_token_id is None:
@@ -70,19 +117,22 @@ def main():
         m = AutoModelForCausalLM.from_pretrained(MODEL_ID, revision=REVISION, trust_remote_code=True, torch_dtype=torch.float32)
         return m.to(dev).eval()
 
-    def logit_diff(model, q, d):
-        enc = tok(build_prompt(q, d), return_tensors="pt", truncation=True, max_length=2048)
+    def logit_diffs(model, query, docs):
+        """Batched yes-no logit diff for one query's candidate docs (the list)."""
+        prompts = [build_prompt(query, d) for d in docs]
+        enc = tok(prompts, return_tensors="pt", truncation=True, max_length=1024, padding=True)
         enc = {k: v.to(dev) for k, v in enc.items()}
         logits = model(**enc).logits
-        last = int(enc["attention_mask"].sum().item()) - 1
-        return logits[0, last][yes_id] - logits[0, last][no_id]
+        last = enc["attention_mask"].sum(dim=1) - 1
+        idx = last.view(-1, 1, 1).expand(-1, 1, logits.size(-1))
+        lastlog = logits.gather(1, idx).squeeze(1)
+        return lastlog[:, yes_id] - lastlog[:, no_id]
 
-    # pairwise eval on held-out queries: per query, does the highest-label candidate outrank the lowest?
     def pairwise_eval(model, items):
-        from collections import defaultdict
         byq = defaultdict(list)
         for r in items:
             byq[r["query"]].append(r)
+        per_fam_c = defaultdict(int); per_fam_n = defaultdict(int)
         correct, n = 0, 0
         model.eval()
         with torch.no_grad():
@@ -92,35 +142,64 @@ def main():
                 pos = max(cs, key=lambda r: r["label"]); neg = min(cs, key=lambda r: r["label"])
                 if pos["label"] <= neg["label"]:
                     continue
-                sp = torch.sigmoid(logit_diff(model, q, render(pos))).item()
-                sn = torch.sigmoid(logit_diff(model, q, render(neg))).item()
-                n += 1
-                if sp > sn:
-                    correct += 1
-        return {"pairwise_acc": correct / max(1, n), "n": n}
+                diffs = logit_diffs(model, q, [render(pos), render(neg)])
+                fam = pos.get("family", "?")
+                n += 1; per_fam_n[fam] += 1
+                if torch.sigmoid(diffs[0]).item() > torch.sigmoid(diffs[1]).item():
+                    correct += 1; per_fam_c[fam] += 1
+        by_fam = {f: round(per_fam_c[f] / max(1, per_fam_n[f]), 4) for f in per_fam_n}
+        non_temp = [f for f in per_fam_n if f != "temporal_update"]
+        nt_c = sum(per_fam_c[f] for f in non_temp); nt_n = sum(per_fam_n[f] for f in non_temp)
+        return {"pairwise_acc": correct / max(1, n), "n": n,
+                "non_temporal_pairwise_acc": round(nt_c / max(1, nt_n), 4), "non_temporal_n": nt_n, "by_family": by_fam}
 
     e0 = load(); e0_eval = pairwise_eval(e0, ev)
     print(f"[memops-train] E0 eval={e0_eval}", flush=True)
+    del e0
+    if dev == "cuda":
+        torch.cuda.empty_cache()
     base = load()
     e1 = get_peft_model(base, LoraConfig(r=16, lora_alpha=32, lora_dropout=0.0, target_modules=["q_proj", "k_proj", "v_proj", "o_proj"], task_type="CAUSAL_LM"))
     opt = torch.optim.AdamW([p for p in e1.parameters() if p.requires_grad], lr=args.lr)
     bce = torch.nn.BCEWithLogitsLoss()
+    use_bce = args.objective in ("combined", "bce")
+    use_pair = args.objective in ("combined", "pairwise")
+    use_list = args.objective in ("combined", "listwise")
     for epoch in range(args.epochs):
-        e1.train(); random.shuffle(train); tot = 0.0
-        for r in train:
+        e1.train(); random.shuffle(train_groups); tot = 0.0; steps = 0
+        for g in train_groups:
+            docs = [render(r) for r in g]
+            labels = torch.tensor([float(r["label"]) for r in g], device=dev)
             opt.zero_grad()
-            diff = logit_diff(e1, r["query"], render(r))
-            loss = bce(diff.unsqueeze(0), torch.tensor([float(r["label"])], device=dev))
-            loss.backward(); opt.step(); tot += float(loss.item())
-        print(f"[memops-train] E1 epoch {epoch+1}/{args.epochs} loss={tot/max(1,len(train)):.4f}", flush=True)
+            diffs = logit_diffs(e1, g[0]["query"], docs)
+            loss = torch.zeros((), device=dev)
+            if use_bce:
+                loss = loss + bce(diffs, labels)
+            if use_pair and len(g) >= 2:
+                # logistic on ordered pairs (label_i > label_j → diff_i should exceed diff_j)
+                li = labels.unsqueeze(0); lj = labels.unsqueeze(1)
+                mask = (li > lj + 1e-6)
+                if mask.any():
+                    di = diffs.unsqueeze(0); dj = diffs.unsqueeze(1)
+                    loss = loss + torch.nn.functional.softplus(-(di - dj))[mask].mean()
+            if use_list and len(g) >= 2 and labels.max() > 0:
+                # InfoNCE: positive (max label) vs the whole in-query list
+                tgt = int(torch.argmax(labels).item())
+                loss = loss + torch.nn.functional.cross_entropy(diffs.unsqueeze(0), torch.tensor([tgt], device=dev))
+            loss.backward(); opt.step(); tot += float(loss.item()); steps += 1
+        print(f"[memops-train] E1 epoch {epoch+1}/{args.epochs} loss={tot/max(1,steps):.4f} ({steps} query-steps)", flush=True)
     e1_eval = pairwise_eval(e1, ev)
     print(f"[memops-train] E1 eval={e1_eval}", flush=True)
-    import os
     os.makedirs(args.adapter_dir, exist_ok=True)
     e1.save_pretrained(args.adapter_dir)
-    metrics = {"model": MODEL_ID, "device": dev, "n_train": len(train), "n_eval_queries": e1_eval["n"],
+    metrics = {"model": MODEL_ID, "device": dev, "objective": args.objective,
+               "n_train_queries": len(train_groups), "n_train_examples": n_train_ex, "train_family_dist": dict(fam_dist),
+               "n_eval_queries": e1_eval["n"],
                "E0_pairwise": e0_eval["pairwise_acc"], "E1_pairwise": e1_eval["pairwise_acc"],
-               "tuning_lift_pairwise": e1_eval["pairwise_acc"] - e0_eval["pairwise_acc"], "adapter_dir": args.adapter_dir}
+               "E0_non_temporal_pairwise": e0_eval["non_temporal_pairwise_acc"], "E1_non_temporal_pairwise": e1_eval["non_temporal_pairwise_acc"],
+               "tuning_lift_pairwise": e1_eval["pairwise_acc"] - e0_eval["pairwise_acc"],
+               "tuning_lift_non_temporal_pairwise": e1_eval["non_temporal_pairwise_acc"] - e0_eval["non_temporal_pairwise_acc"],
+               "E0_by_family": e0_eval["by_family"], "E1_by_family": e1_eval["by_family"], "adapter_dir": args.adapter_dir}
     json.dump(metrics, open(args.out, "w"), indent=1)
     print("[memops-train] METRICS:\n" + json.dumps(metrics, indent=1), flush=True)
 

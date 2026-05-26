@@ -18,9 +18,10 @@ import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execSync as sh } from 'node:child_process';
 import { buildV2ProductionCorpus, inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
+import { buildMemoryIRContext, computeMemoryIR, resolvedLifecycleFromDecoded } from './lib/memory-ir.mjs';
 
 const C = await import(distIndex);
-const { decodeSubstrate, stableRecordIdFor, scoringOptionsFromProfile, deriveQueryPack, evaluateRetrievalBenchmarkState, createDeterministicReranker } = C;
+const { decodeSubstrate, stableRecordIdFor, scoringOptionsFromProfile, deriveQueryPack, evaluateRetrievalBenchmarkState, createDeterministicReranker, renderMemoryIRDoc } = C;
 const flag = (n, d) => { const a = process.argv.slice(2); const i = a.indexOf(`--${n}`); return i >= 0 && i + 1 < a.length ? a[i + 1] : d; };
 const base = 'release/calibration/2026-05-21-memory-corpus-v2';
 const ledgerPath = flag('ledger', '/tmp/ledger-r5.jsonl');
@@ -68,25 +69,49 @@ const idRe = /\bd\d{7}\b|\bq\d{7}\b|mem_d|qrel/i;
 const leak = memops.filter((e) => idRe.test(JSON.stringify({ q: e.query, c: e.candidate_text, m: e.memory_ir, l: e.label }))).length;
 ok('3 id-leakage', leak === 0, `${leak} trainable examples contain ids (must be 0)`);
 
-// GATE 4 — TRAIN/SERVE equality: scorer resolved render lifecycle == exporter earned lifecycle, per doc.
+// GATE 4 — TRAIN/SERVE byte-equality (FULL IR): the scorer's full-IR serve path (shared lookup + protocol
+// renderer) reproduces the exporter's `memory_ir_text` EXACTLY on real (query, candidate) pairs. This is the
+// operationalized golden test through the actual serve-time render path (the prior loop's defect — multi-field
+// export but lifecycle-only serve — fails here). Plus a wiring check that the scorer emits [memory_ir …] headers.
 const reranker = await createDeterministicReranker();
-const { corpus, LAYOUT, BE, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath });
+const { corpus, logical, LAYOUT, BE, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath });
 const r5 = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
 const rt = { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT };
+// build the SAME full-IR lookup the scorer/harness uses (shared module + resolved state).
+const irCtx = buildMemoryIRContext(logical);
+const irDocById = new Map(logical.docs.map((d) => [d.id, d]));
+const irQueryById = new Map(logical.queries.map((q) => [q.id, q]));
+const resolvedLc = resolvedLifecycleFromDecoded(decoded, logical.docs, stableRecordIdFor);
+const lifecycleOf = (docId) => resolvedLc.get(`mem_${docId}`) ?? 'none';
+const irLookup = (queryId, eventId) => { const q = irQueryById.get(queryId); const d = irDocById.get(eventId.startsWith('mem_') ? eventId.slice(4) : eventId); return (q && d) ? computeMemoryIR(irCtx, q.queryText, d, lifecycleOf(d.id)) : null; };
+// (a) substantive: scorer-lookup-render == exporter memory_ir_text on real export rows (unique-text + resolvable query).
+const qTextToId = new Map(); { const c = new Map(); for (const q of logical.queries) c.set(q.queryText, (c.get(q.queryText) ?? 0) + 1); for (const q of logical.queries) if (c.get(q.queryText) === 1) qTextToId.set(q.queryText, q.id); }
+let serveMismatch = 0, serveCompared = 0;
+for (const e of memops) {
+  const qid = qTextToId.get(e.query); const did = docOfText.get(e.candidate_text);
+  if (!qid || !did || e.memory_ir_text === undefined) continue;
+  const rendered = renderMemoryIRDoc(irLookup(qid, `mem_${did}`), e.candidate_text);
+  serveCompared++; if (rendered !== e.memory_ir_text) serveMismatch++;
+}
+// (b) wiring: the scorer in rerankerMemoryIRMode='full' actually emits the protocol header for header docs.
 const captured = [];
 const cap = { async score(pairs) { for (const p of pairs) captured.push(p.document); return pairs.map(() => 0.5); } };
-const opts = { ...scoringOptionsFromProfile(r5, { ...rt, reranker: cap }), rerankerMemoryIRFormat: 'F2', rerankerMemoryIRSource: 'resolved', policyGenericEntityIds: ['e_universe'] };
+const opts = { ...scoringOptionsFromProfile(r5, { ...rt, reranker: cap }), rerankerMemoryIRMode: 'full', rerankerMemoryIRLookup: irLookup, policyGenericEntityIds: ['e_universe'] };
 const pack = deriveQueryPack(1, '0x' + 'f3'.repeat(32), corpus, { ...r5.hiddenPack, packSize: 120, quotas: [] });
 await evaluateRetrievalBenchmarkState(finalState, corpus, pack, opts);
-let serveMismatch = 0, serveCompared = 0;  // unique-text only (collision docs share text → ambiguous match)
-for (const s of captured) { if (!s.startsWith('[lifecycle=')) continue; const m = s.match(/^\[lifecycle=([a-z]+) \| subject=[^\]]*\] (.*)$/s); if (!m) continue; const did = docOfText.get(m[2]); if (!did) continue; serveCompared++; const exp = earnedLifecycle.get(did) ?? 'none'; if (m[1] !== exp) serveMismatch++; }
-ok('4 train/serve-equality', serveMismatch === 0 && serveCompared > 0, `scorer-resolved render vs exporter earned lifecycle (unique-text): ${serveCompared} compared, ${serveMismatch} mismatch`);
+const headerEmitted = captured.filter((s) => s.startsWith('[memory_ir ')).length;
+ok('4 train/serve-equality (full IR)', serveMismatch === 0 && serveCompared > 0 && headerEmitted > 0,
+  `scorer full-IR render == exporter memory_ir_text: ${serveCompared} compared, ${serveMismatch} mismatch; scorer emitted ${headerEmitted}/${captured.length} [memory_ir] headers`);
 if (typeof reranker.close === 'function') reranker.close();
 
-// GATE 5 — DETERMINISM: re-export with the SAME flags (incl. --split) and hash-compare.
+// GATE 5 — DETERMINISM: re-export with the SAME full invocation (incl. supplement + split) and hash-compare.
 const splitArg = flag('split', null);
+const supp = flag('supplement', null), suppLedger = flag('supplement-ledger', null);
 const h = (p) => createHash('sha256').update(readFileSync(resolve(repoRoot, p))).digest('hex');
-sh(`node scripts/export-memoryops-training-data.mjs --from-ledger ${ledgerPath} --corpus ${corpusPath}${splitArg ? ' --split ' + splitArg : ''} --out /tmp/memops-det2.jsonl`, { cwd: repoRoot, stdio: 'ignore' });
+const reexport = `node ${process.env.NODE_OPTIONS ? '' : ''}scripts/export-memoryops-training-data.mjs --corpus ${corpusPath} --from-ledger ${ledgerPath}`
+  + `${supp ? ` --supplement ${supp}${suppLedger ? ` --supplement-ledger ${suppLedger}` : ''}` : ''}`
+  + `${splitArg ? ' --split ' + splitArg : ''} --out /tmp/memops-det2.jsonl`;
+sh(reexport, { cwd: repoRoot, stdio: 'ignore', env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=8192' } });
 ok('5 determinism', h(memopsPath) === h('/tmp/memops-det2.jsonl'), `two exports ${h(memopsPath) === h('/tmp/memops-det2.jsonl') ? 'identical' : 'DIFFER'}`);
 
 // GATE 6 — SPLIT-safety: train/validation/heldout disjoint by the SPLIT KEY (query subject entity, the
