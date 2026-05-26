@@ -35,6 +35,7 @@ const kindFilter = flag('kind', 'both');   // temporal | routing | both
 const shuffleTs = has('shuffle-timestamps');
 const shuffleLifecycle = has('shuffle-lifecycle');  // CONTROL: permute current/superseded → F2 MUST collapse (else leakage)
 const noLifecycle = has('no-lifecycle');            // ABLATION: F2 header w/o the lifecycle field → should drop near F1
+const launchHeader = has('launch-header');          // TRAIN/SERVE MATCH: header = [lifecycle | subject] (no t=), exactly what the scorer rerankerMemoryIRFormat='F2' hook renders
 const holdout = flag('holdout', 'entity');          // entity (subject-disjoint) | value (answer-value-disjoint)
 const trainFrac = parseFloat(flag('train-frac', '0.6'));
 const out = flag('out', `${base}/reranker-fmt-${format}${shuffleTs ? '-tsshuf' : ''}.json`);
@@ -77,7 +78,11 @@ if (shuffleTs) {
 const tsOf = (d) => (tsOverride ? tsOverride.get(d.id) : d.timestamp);
 
 const edgesOf = (d) => (edgesBySrc.get(d.id) ?? []).slice(0, 4).map((r) => `${r.type}:${r.label}->${(nonGeneric(docById.get(r.dst)?.entityIds) ?? [])[0] ?? r.dst}`);
-const mirHeader = (d) => { const subj = nonGeneric(d.entityIds)[0] ?? '?'; return noLifecycle ? `[t=${tsOf(d)} | subject=${subj}]` : `[t=${tsOf(d)} | lifecycle=${lifecycleOf(d.id)} | subject=${subj}]`; };
+const mirHeader = (d) => {
+  const subj = nonGeneric(d.entityIds)[0] ?? '?';
+  if (launchHeader) return noLifecycle ? `[subject=${subj}]` : `[lifecycle=${lifecycleOf(d.id)} | subject=${subj}]`;  // matches scorer hook
+  return noLifecycle ? `[t=${tsOf(d)} | subject=${subj}]` : `[t=${tsOf(d)} | lifecycle=${lifecycleOf(d.id)} | subject=${subj}]`;
+};
 // F4 listwise packet: the candidate SET's compact MIR headers (lifecycle/subject/edge), as context for
 // every candidate, so the reranker scores each doc IN the list (QRRanker-style memory-aware reranking).
 function render(d, packet) {
