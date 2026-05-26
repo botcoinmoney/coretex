@@ -33,6 +33,7 @@ import { createHash } from 'node:crypto';
 import { buildV2ProductionCorpus, inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
 import { honestPatch as honestPatchLib, nextTemporalDocId, empty, hseed, mulberry32, randomPatch } from './lib/v2-patch-families.mjs';
+import { makeEpochFrontier } from './lib/epoch-frontier.mjs';
 
 const {
   scoringOptionsFromProfile, controllerParamsFromProfile, deriveQueryPack, evaluateBaseline, evaluateRetrievalBenchmarkPatch,
@@ -54,6 +55,13 @@ const targetAdvances = Number(flag('target-advances', '2'));
 const rerankerArg = flag('reranker', 'deterministic');
 const masterSeed = flag('seed', 'v2-lh-2026-05-22');
 const ownerFractions = String(flag('owner-fractions', '0.34,0.67,1.0')).split(',').map(Number);
+// ── Phase-2 frontier-churn probe (ADDITIVE, default OFF → byte-identical). mode off|C0|C1|C2 ──
+const frontierMode = flag('frontier-mode', 'off');
+const frontierWindow = Number(flag('frontier-window', '0'));      // active-frontier size K (0 = all eval_hidden)
+const frontierChurn = Number(flag('frontier-churn-rate', '4'));   // C1/C2 units retired+activated per epoch
+const frontierMaxAge = flag('frontier-max-age', 'inf') === 'inf' ? Infinity : Number(flag('frontier-max-age', 'inf'));
+const frontierSeed = flag('frontier-seed', 'frontier-2026-05-25');
+const frontierLowAdv = Number(flag('frontier-low-advances', '1'));
 const epochsPerFraction = Number(flag('epochs-per-fraction', String(Math.ceil(epochs / ownerFractions.length))));
 // Bounded-run overrides (keep A100 Qwen-pair budget tractable). 0 = use profile.
 const packSizeOverride = Number(flag('pack-size', '0'));
@@ -141,7 +149,11 @@ const reranker = rerankerArg === 'gpu' || rerankerArg === 'cpu'
 // cap override only narrows the reranker pool (compute), not substrate expressivity.
 const opts = scoringOptionsFromProfile(profile, { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT });
 if (rerankCapOverride > 0) opts.rerankerInputTopK = rerankCapOverride;
-const hiddenPack = packSizeOverride > 0 ? { ...profile.hiddenPack, packSize: packSizeOverride } : profile.hiddenPack;
+// --clear-pack-quotas: drop the profile's per-stratum hidden-pack quotas (the frontier-churn probe
+// uses a small ROTATING active window that can't satisfy fixed family quotas; default OFF → unchanged).
+const clearPackQuotas = argv.includes('--clear-pack-quotas');
+const hiddenPackBase = packSizeOverride > 0 ? { ...profile.hiddenPack, packSize: packSizeOverride } : profile.hiddenPack;
+const hiddenPack = clearPackQuotas ? { ...hiddenPackBase, quotas: [] } : hiddenPackBase;
 // Band availability in eval_hidden (for band-progression quota capping; 0 if no bands).
 const bandAvailCounts = (() => { const c = {}; for (const e of corpus.events) { if (e.split === 'eval_hidden' && e.band) c[e.band] = (c[e.band] ?? 0) + 1; } return c; })();
 if (bandProgression) console.error(`[v2-lh] band-progression ON; eval_hidden band availability: ${JSON.stringify(bandAvailCounts)}`);
@@ -173,6 +185,20 @@ function activeCorpus(frac) {
   return { ...corpus, events, byId: new Map(events.map((e) => [e.id, e])),
     evalHiddenCount: events.filter((e) => e.split === 'eval_hidden').length };
 }
+
+// ── Phase-2 frontier (built only when active; OFF → never constructed → no behavior change) ──
+let frontier = null;
+if (frontierMode !== 'off') {
+  const evalHiddenIds = corpus.events.filter((e) => e.split === 'eval_hidden').map((e) => e.id);
+  const famById = new Map(corpus.events.map((e) => [e.id, e.logicalFamily ?? e.family ?? 'unknown']));
+  frontier = makeEpochFrontier({
+    evalHiddenIds, familyOf: (id) => famById.get(id), mode: frontierMode,
+    activeWindow: frontierWindow > 0 ? frontierWindow : evalHiddenIds.length,
+    churnRate: frontierChurn, maxAge: frontierMaxAge, lowAdvancesThreshold: frontierLowAdv, seed: frontierSeed,
+  });
+  console.error(`[v2-lh] FRONTIER ${frontierMode} window=${frontier.K}/${frontier.totalUnits} churn=${frontierChurn} maxAge=${frontierMaxAge} families=[${frontier.familyOrder}]`);
+}
+let prevHonestAccepts = null;  // aggregate-only churn trigger (C2); set at each epoch's end
 
 // ── honest patch families (shared lib — same levers measured in Phase 3) ──
 // relation | temporal | mixed are GENUINE substrate compiles (proposer-visible memory
@@ -234,6 +260,15 @@ for (let epoch = startEpoch; epoch <= epochs; epoch++) {
   const fracIdx = Math.min(ownerFractions.length - 1, Math.floor((epoch - 1) / Math.max(1, epochsPerFraction)));
   const frac = ownerFractions[fracIdx] ?? 1;
   const ac = activeCorpus(frac);
+  // Phase-2 frontier: restrict eval_hidden to the epoch's ACTIVE frontier set (aggregate-only churn).
+  let frontierManifest = null;
+  if (frontier) {
+    const fr = frontier.stepEpoch(epoch, prevHonestAccepts);
+    ac.events = ac.events.filter((e) => e.split !== 'eval_hidden' || fr.activeIds.has(e.id));
+    ac.byId = new Map(ac.events.map((e) => [e.id, e]));
+    ac.evalHiddenCount = ac.events.filter((e) => e.split === 'eval_hidden').length;
+    frontierManifest = { epochId: fr.epochId, mode: frontierMode, activeEvalHiddenCount: fr.activeEvalHiddenCount, activated: fr.activated, retired: fr.retired, churnRate: fr.churnRate, reserveRemaining: fr.reserveRemaining, cumulativeActivated: fr.cumulativeActivated, cumulativeRetired: fr.cumulativeRetired, activeRoot: fr.activeRoot, reserveRoot: fr.reserveRoot, retiredRoot: fr.retiredRoot };
+  }
   const majorDeltaActive = isMajorDelta(ac.evalHiddenCount, prevEH, effMajorDelta); prevEH = ac.evalHiddenCount;
   const seedHex = '0x' + createHash('sha256').update(`${masterSeed}:${epoch}`).digest('hex');
   // Band-progression: per-epoch band quotas (harder bands as the run advances + mandatory
@@ -314,7 +349,9 @@ for (let epoch = startEpoch; epoch <= epochs; epoch++) {
     honestAccepts, honestAttempts, positiveControlDeltaPpm: pcDelta, familyStats: fstats,
     randomProbes, randomAccepts: randAccepts, randomAcceptanceRate: +(randAccepts / Math.max(1, randomProbes)).toFixed(4), randomDeltaPpmMax: randDeltas.length ? Math.max(...randDeltas) : null,
     hillclimbProbes, hillclimbAccepts: hillAccepts, hillclimbAcceptanceRate: +(hillAccepts / Math.max(1, hillclimbProbes)).toFixed(4), hillclimbDeltaPpmMax: hillDeltas.length ? Math.max(...hillDeltas) : null,
-    minImprBefore, minImprAfter: Number(current), reason });
+    minImprBefore, minImprAfter: Number(current), reason,
+    ...(frontierManifest ? { frontier: frontierManifest } : {}) });
+  prevHonestAccepts = honestAccepts;   // aggregate-only churn trigger for the NEXT epoch (C2)
   writeStateOut(epoch);
   console.error(`[v2-lh] ep ${epoch}/${epochs} frac=${frac} packN=${pack.events.length} thr=${acceptanceThresholdPpm} | honest ${honestAccepts}/${honestAttempts}(Δ${pcDelta}) rand ${randAccepts}/${randomProbes} hill ${hillAccepts}/${hillclimbProbes} | minImpr ${minImprBefore}→${Number(current)} [${reason}]`);
 }
