@@ -123,10 +123,13 @@ const splitArg = flag('split', null);
 const reexport = `node scripts/export-memoryops-training-data.mjs --corpus ${corpusPath} --from-ledger ${ledgerPath}`
   + `${splitArg ? ' --split ' + splitArg : ''} --out /tmp/memops-det2.jsonl`;
 sh(reexport, { cwd: repoRoot, stdio: 'ignore', env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=8192' } });
-const det2 = readFileSync('/tmp/memops-det2.jsonl', 'utf8').trim().split('\n').filter(Boolean);
-const sameLen = det2.length === rawLinesForCorpus.length;
-let lineEq = sameLen; for (let i = 0; sameLen && i < det2.length; i++) if (det2[i] !== rawLinesForCorpus[i]) { lineEq = false; break; }
-ok('5 determinism', lineEq, `single-corpus re-export${corpusTag ? ' (tag=' + corpusTag + ')' : ''} vs merged slice: ${rawLinesForCorpus.length} rows, ${lineEq ? 'byte-identical' : (sameLen ? 'CONTENT DIFFERS' : 'LENGTH DIFFERS ' + det2.length)}`);
+// normalize out corpus_tag (provenance: 'supplement' in the merged slice vs 'primary' in a single export).
+const norm = (l) => { const o = JSON.parse(l); delete o.corpus_tag; return JSON.stringify(o); };
+const det2 = readFileSync('/tmp/memops-det2.jsonl', 'utf8').trim().split('\n').filter(Boolean).map(norm);
+const mergedSlice = rawLinesForCorpus.map(norm);
+const sameLen = det2.length === mergedSlice.length;
+let lineEq = sameLen; for (let i = 0; sameLen && i < det2.length; i++) if (det2[i] !== mergedSlice[i]) { lineEq = false; break; }
+ok('5 determinism', lineEq, `single-corpus re-export${corpusTag ? ' (tag=' + corpusTag + ')' : ''} vs merged slice (corpus_tag-normalized): ${mergedSlice.length} rows, ${lineEq ? 'byte-identical' : (sameLen ? 'CONTENT DIFFERS' : 'LENGTH DIFFERS ' + det2.length)}`);
 
 // GATE 6 — SPLIT-safety: train/validation/heldout disjoint by the SPLIT KEY (query subject entity, the
 // entity-disjoint axis), recorded in the _split_key provenance field (NOT the doc subject_scope feature).
