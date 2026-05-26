@@ -76,17 +76,18 @@ if (shuffleTs) {
 }
 const tsOf = (d) => (tsOverride ? tsOverride.get(d.id) : d.timestamp);
 
-function render(d) {
+const edgesOf = (d) => (edgesBySrc.get(d.id) ?? []).slice(0, 4).map((r) => `${r.type}:${r.label}->${(nonGeneric(docById.get(r.dst)?.entityIds) ?? [])[0] ?? r.dst}`);
+const mirHeader = (d) => { const subj = nonGeneric(d.entityIds)[0] ?? '?'; return noLifecycle ? `[t=${tsOf(d)} | subject=${subj}]` : `[t=${tsOf(d)} | lifecycle=${lifecycleOf(d.id)} | subject=${subj}]`; };
+// F4 listwise packet: the candidate SET's compact MIR headers (lifecycle/subject/edge), as context for
+// every candidate, so the reranker scores each doc IN the list (QRRanker-style memory-aware reranking).
+function render(d, packet) {
   const text = d.text;
   if (format === 'F0') return text;
   if (format === 'F1') return `[as of ${tsOf(d)}] ${text}`;
-  const subj = nonGeneric(d.entityIds)[0] ?? '?';
-  const header = noLifecycle ? `[t=${tsOf(d)} | subject=${subj}]` : `[t=${tsOf(d)} | lifecycle=${lifecycleOf(d.id)} | subject=${subj}]`;
+  const header = mirHeader(d);
   if (format === 'F2') return `${header} ${text}`;
-  if (format === 'F3') {
-    const edges = (edgesBySrc.get(d.id) ?? []).slice(0, 4).map((r) => `${r.type}:${r.label}->${(nonGeneric(docById.get(r.dst)?.entityIds) ?? [])[0] ?? r.dst}`);
-    return `${header}${edges.length ? ' [edges: ' + edges.join('; ') + ']' : ''} ${text}`;
-  }
+  if (format === 'F3') { const e = edgesOf(d); return `${header}${e.length ? ' [edges: ' + e.join('; ') + ']' : ''} ${text}`; }
+  if (format === 'F4') { const e = edgesOf(d); return `[candidates: ${packet ?? ''}] ${header}${e.length ? ' [edges: ' + e.join('; ') + ']' : ''} ${text}`; }
   return text;
 }
 
@@ -109,12 +110,18 @@ for (const q of queries) {
   } else continue;
   if (!dMinus || dMinus.id === dPlus.id) continue;
   if (kindFilter !== 'both' && kind !== kindFilter) continue;
+  // F4 listwise packet = compact MIR headers of the query's candidate set (qrel docs + a few hard-negs).
+  let packet = '';
+  if (format === 'F4') {
+    const candIds = [...new Set([...(q.qrels ?? []).map((r) => r.docId), ...(q.hardNegatives ?? []).slice(0, 4).map((n) => n.docId)])];
+    packet = candIds.map((id) => docById.get(id)).filter(Boolean).map((d) => `{lc=${lifecycleOf(d.id)};subj=${nonGeneric(d.entityIds)[0] ?? '?'}}`).join(' ');
+  }
   const subj = nonGeneric(dPlus.entityIds)[0] ?? nonGeneric(q.entityIds ?? [])[0] ?? `q:${q.id}`;
   // value = the answer VALUE (last alphanumeric token of D+'s raw text, e.g. "maven", "Lisbon") for
   // value-disjoint holdout (detects memorizing the value rather than learning the lifecycle field).
   const valTok = (docById.get(dPlus.id)?.text ?? '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim().split(/\s+/).pop() ?? '?';
   triples.push({ qid: q.id, query: q.queryText, family: q.family, kind, subject: subj, value: valTok,
-    posId: dPlus.id, posText: render(dPlus), negId: dMinus.id, negText: render(dMinus),
+    posId: dPlus.id, posText: render(dPlus, packet), negId: dMinus.id, negText: render(dMinus, packet),
     allStaleIds: (q.qrels ?? []).filter((r) => r.role === 'stale').map((r) => r.docId) });
 }
 
