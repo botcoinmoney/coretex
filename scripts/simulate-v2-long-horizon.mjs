@@ -224,7 +224,7 @@ const deserializeState = (arr) => ({ words: arr.map((x) => BigInt(x)) });
 let current = fixedMinImprovementPpm !== undefined ? fixedMinImprovementPpm : BigInt(Number(profile.patchAcceptanceFloors.minImprovementPpm) || 5000);
 let bestState = empty();
 let prevEH = 0, clampHits = 0, maxClampWhileAdvancing = 0, baselineRecomputes = 0;
-let cachedVariance = null, cachedFrac = null;
+let cachedVariance = null, cachedFrac = null, cachedActiveRoot = null;
 let startEpoch = 1;
 // Incremental temporal mining: each accepted temporal/mixed patch claims the next
 // temporal query/record (the per-query unit is 3 words; one per patch within budget).
@@ -278,10 +278,14 @@ for (let epoch = startEpoch; epoch <= epochs; epoch++) {
     : hiddenPack;
   const pack = deriveQueryPack(epoch, seedHex, ac, epochPack);
 
-  // Baseline + variance: recompute on first epoch or major-delta (owner-growth).
-  if (cachedVariance === null || majorDeltaActive || frac !== cachedFrac) {
+  // Baseline + variance: recompute on first epoch, major-delta (owner-growth), OR a material FRONTIER
+  // delta (the active-root changed — the conveyor rotated members). Keying the baseline off the frontier
+  // activeRoot (NOT per-query success) keeps the acceptance baseline honest under churn: a rotated-in
+  // query is scored against a parent baseline that reflects the CURRENT active set, not a stale one.
+  const frontierRootChanged = frontierManifest != null && frontierManifest.activeRoot !== cachedActiveRoot;
+  if (cachedVariance === null || majorDeltaActive || frac !== cachedFrac || frontierRootChanged) {
     const base = await evaluateBaseline(bestState, ac, pack, opts, { samples: baselineSamples });
-    cachedVariance = base.variancePpm; cachedFrac = frac; baselineRecomputes++;
+    cachedVariance = base.variancePpm; cachedFrac = frac; cachedActiveRoot = frontierManifest?.activeRoot ?? cachedActiveRoot; baselineRecomputes++;
   }
   const acceptanceThresholdPpm = Number(current) + cachedVariance + replayTol;
 
