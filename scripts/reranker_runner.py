@@ -156,6 +156,13 @@ def _load_model(model_id: str, revision: str):
         trust_remote_code=True,
         torch_dtype=torch.float32,
     )
+    # Memory-IR shadow-epoch: optionally load a LoRA adapter (E1) ON TOP of the frozen base (E0).
+    # Default unset → base model unchanged. Used by the full-benchmark E0-vs-E1 comparison (step 5).
+    _adapter_dir = os.environ.get("CORETEX_RERANKER_ADAPTER_DIR")
+    if _adapter_dir:
+        from peft import PeftModel
+        model = PeftModel.from_pretrained(model, _adapter_dir)
+        print(json.dumps({"adapter": _adapter_dir}), file=sys.stderr)
     model.to("cuda" if use_cuda else "cpu")
     model.eval()
 
