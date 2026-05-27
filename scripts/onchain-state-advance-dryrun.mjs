@@ -7,17 +7,13 @@
  * artifactHash commits to, plus a field→replay-verifier-input map and exploit
  * checks. NO contract deployment — a dry-run manifest for Solidity/replay parity.
  *
- * Two-tier design (cost-optimized):
- *   ON-CHAIN (compact, roots only):
- *     CoretexPatchBytes(uint64 epochId, address miner, bytes32 patchHash,
- *                       bytes32 receiptHash, bytes patchBytes)
- *     CortexStateAdvanced(uint64 epochId, uint64 transitionIndex,
- *                       bytes32 parentStateRoot, bytes32 newStateRoot,
- *                       bytes32 patchHash, bytes32 artifactHash, uint16 wordCount)
- *   OFF-CHAIN (full receipt, served by coordinator/API; its keccak256 == artifactHash):
- *     corpusRoot, bundleHash, queryPackRoot, baselineManifestHash, minImprovementPpm,
- *     gateScorePpm, confirmScorePpm, blockhash, gate/confirm seeds,
- *     patchReceivedNoticeHash, activeFrontierRoot.
+ * Canonical CoreTexRegistry design (single wide state-advance event; CoreTex spelling):
+ *   ON-CHAIN: CoreTexEpochStarted / CoreTexStateAdvanced(... evalReportHash, coreVersionHash,
+ *     corpusRoot, activeFrontierRoot, improvementCredits, wordCount, compactPatchBytes) /
+ *     CoreTexEpochFinalized.
+ *   OFF-CHAIN (full receipt, served by coordinator/API; its keccak256 == evalReportHash):
+ *     gate/confirm scores, hidden-pack commitment, baseline manifest, screener outcome,
+ *     score breakdown, blockhash, patchReceivedNoticeHash. See ONCHAIN_STATE_COMPOSITION.md.
  *
  * The state advance is anchored to the REAL committed L4 vector
  * (mixed-relation-conflict) + the L1 launch corpusRoot + candidate bundleHash;
@@ -95,23 +91,24 @@ const receipt = {
   confirmScorePpm,
   patchReceivedNoticeHash: kjson({ epochId: 0, patchHash: adv.patchHash, receivedAtBlock: SYNTH.receivedAtBlock, miner: SYNTH.minerAddress }),
 };
-const artifactHash = kjson(receipt);     // == on-chain CortexStateAdvanced.artifactHash
+const artifactHash = kjson(receipt);     // == on-chain CoreTexStateAdvanced.evalReportHash
 const receiptHash = artifactHash;        // CoretexPatchBytes.receiptHash references the same content
 
 const dryrun = {
   schema: 'coretex-onchain-state-advance-dryrun-v1',
   note: 'Dry-run only — NO contract deployment. On-chain stores roots + content hashes; the full receipt is off-chain (served by coordinator/API) and its keccak256 == artifactHash.',
   onChain: {
-    CoretexPatchBytes: { sig: 'CoretexPatchBytes(uint64,address,bytes32,bytes32,bytes)', epochId: 0, miner: SYNTH.minerAddress, patchHash: adv.patchHash, receiptHash, patchBytesHex: adv.patchBytesHex },
-    CortexStateAdvanced: { sig: 'CortexStateAdvanced(uint64,uint64,bytes32,bytes32,bytes32,bytes32,uint16)', epochId: 0, transitionIndex: 1, parentStateRoot: adv.parentStateRoot, newStateRoot: adv.childStateRoot, patchHash: adv.patchHash, artifactHash, wordCount: patch.wordCount },
+    CoreTexEpochStarted: { sig: 'CoreTexEpochStarted(uint64,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32)', epoch: 0, parentStateRoot: tmp.parentStateRoot, coreVersionHash: manifest.bundleHash, corpusRoot, activeFrontierRoot: receipt.activeFrontierRoot, baselineManifestHash, hiddenSeedCommit: SYNTH.epochSecretCommitment },
+    CoreTexStateAdvanced: { sig: 'CoreTexStateAdvanced(uint64,uint64,address,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,uint256,uint16,bytes)', epoch: 0, transitionIndex: 1, miner: SYNTH.minerAddress, parentStateRoot: adv.parentStateRoot, newStateRoot: adv.childStateRoot, patchHash: adv.patchHash, evalReportHash: artifactHash, coreVersionHash: manifest.bundleHash, corpusRoot, activeFrontierRoot: receipt.activeFrontierRoot, improvementCredits: receipt.gateScorePpm, wordCount: patch.wordCount, compactPatchBytesHex: adv.patchBytesHex },
+    CoreTexEpochFinalized: { sig: 'CoreTexEpochFinalized(uint64,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32)', epoch: 0, parentStateRoot: tmp.parentStateRoot, finalStateRoot: adv.childStateRoot, coreVersionHash: manifest.bundleHash, corpusRoot, activeFrontierRoot: receipt.activeFrontierRoot, patchSetRoot: kjson({ patches: [tmp.patchHash, adv.patchHash] }), scoreRoot: kjson({ scores: [receipt.gateScorePpm, receipt.confirmScorePpm] }), baselineManifestHash },
   },
   offChainReceipt: receipt,
   syntheticFields: ['minerAddress', 'receivedAtBlock', 'targetBlock', 'blockhash', 'gateScorePpm', 'confirmScorePpm', 'patchReceivedNoticeHash(epochSecret-derived parts)'],
   fieldToReplayInput: {
-    'onChain.CortexStateAdvanced.parentStateRoot': 'replay: reconstruct/verify parent state continuity (must equal prior transition newStateRoot)',
-    'onChain.CortexStateAdvanced.newStateRoot': 'replay: applyPatch(parent, patchBytes) must merkleize to this',
-    'onChain.CortexStateAdvanced.patchHash': 'replay: computePatchHash(patchBytes) must equal this (domain-separated)',
-    'onChain.CortexStateAdvanced.artifactHash': 'replay: keccak256(canonical(offChainReceipt)) must equal this',
+    'onChain.CoreTexStateAdvanced.parentStateRoot': 'replay: reconstruct/verify parent state continuity (must equal prior transition newStateRoot)',
+    'onChain.CoreTexStateAdvanced.newStateRoot': 'replay: applyPatch(parent, patchBytes) must merkleize to this',
+    'onChain.CoreTexStateAdvanced.patchHash': 'replay: computePatchHash(patchBytes) must equal this (domain-separated)',
+    'onChain.CoreTexStateAdvanced.evalReportHash': 'replay: keccak256(canonical(offChainReceipt)) must equal this — binds the scoring context',
     'onChain.CoretexPatchBytes.patchBytes': 'replay: the wire bytes decoded + applied',
     'offChainReceipt.bundleHash': 'replay: pins scoring/controller/model behavior (verifyBundleManifest)',
     'offChainReceipt.corpusRoot': 'replay: pins the corpus the pack + scores were computed over',
@@ -138,8 +135,8 @@ const check = (n, ok, d = '') => { log.push(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? 
 check('parent continuity (temporal.child == advance.parent)', tmp.childStateRoot === adv.parentStateRoot, `${adv.parentStateRoot}`);
 check('newStateRoot == applyPatch(parent, patchBytes)', bytesToHex(merkleizeState(child.state)) === adv.childStateRoot);
 check('patchHash == computePatchHash(patchBytes)', computePatchHash(hexToBytes(adv.patchBytesHex)) === adv.patchHash);
-check('artifactHash recomputes from the off-chain receipt', kjson(receipt) === dryrun.onChain.CortexStateAdvanced.artifactHash);
-check('on-chain event carries roots + hashes only (full state off-chain by root)', !('words' in dryrun.onChain.CortexStateAdvanced));
+check('evalReportHash recomputes from the off-chain receipt', kjson(receipt) === dryrun.onChain.CoreTexStateAdvanced.evalReportHash);
+check('on-chain event carries roots + hashes + compact patch only (full state off-chain by root)', !('words' in dryrun.onChain.CoreTexStateAdvanced));
 
 console.log(log.join('\n'));
 console.log('────────────────────────────────────────────────────────');
