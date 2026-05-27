@@ -57,13 +57,15 @@ sh('0b disjoint substrate (dgen1-realism-g2)',
   `node scripts/emit-accepted-state-ledger.mjs --corpus ${disjointCorpus} --split train_visible --out ${disjointLedger}`,
   'NODE_OPTIONS=--max-old-space-size=8192');
 
-// 1. train adapter B (lower LR, fewer steps → reduce off-family regression). Adapter A is reused as-is.
-if (has('train-b')) {
+// 1. train adapter B (lower LR → reduce off-family regression). Adapter A is reused as-is. Reuse an
+//    existing adapter B (skip the retrain) so re-runs (e.g. after a harness fix) don't burn GPU.
+const adapterBExists = existsSync(resolve(adapterB, 'adapter_config.json'));
+if (has('train-b') && !adapterBExists) {
   sh('1 train adapter B (lr 3e-5)',
     `python3 scripts/train_memoryops.py --data ${memops} --out ${O('e1b-metrics.json')} --adapter-dir ${adapterB}`
     + ` --epochs 1 --lr 3e-5 --per-family-cap 5000 --objective combined ${GPU ? '' : '--smoke'}`,
     GPU ? gpuEnv : '');
-}
+} else if (adapterBExists) console.error(`[flywheel] reusing existing adapter B at ${adapterB}`);
 
 // 2. eval matrix. One arm per fullbench call; E0 arms are adapter-independent (once per context).
 const fb = (corpus, extra, outF, adapter) => {
@@ -77,7 +79,7 @@ const contexts = [
   { key: 'generator_or_slice_disjoint', corpus: disjointCorpus, substrate: disjointState, seed: null },
 ];
 const adapters = { A: adapterA };
-if (has('train-b')) adapters.B = adapterB;
+if (has('train-b') || adapterBExists) adapters.B = adapterB;
 
 const results = {};
 for (const ctx of contexts) {
