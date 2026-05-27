@@ -67,3 +67,33 @@ Acceptance (per-patch hidden eval): the patch is scored on a gate pack and a con
 state only if BOTH packs clear `minImprovementPpm + variancePpm + replayTolerancePpm`. Seeds
 do NOT include `minerAddress` — first submitter of a given `(parentRoot, patchBytes)` wins via
 the dedup cache.
+
+## Minimal worked examples (per launch surface)
+
+Generated + validated by `scripts/miner-patch-examples.mjs` (`--json` for full wire bytes). Each is
+encoded from PUBLIC structure only, round-trips, validates, and applies onto genesis. A deeper miner
+guide will live in a canonical skill file; these prevent format-guessing. Patch budget ≤ 4 words.
+
+### 1. temporal / lifecycle  — `MIXED (0xFF)`, 3 words
+- **Public data seen:** corpus doc IDs + temporal currency (which doc supersedes which); MemoryIndex slot layout.
+- **Patch:** indices `[32, 33, 800]` = stale MemoryIndex slot (revoked) + current slot (valid) + a TemporalRecord linking them. `wire 0xff03…`, child root `0x04d107ad…`.
+- **Forbidden:** pointing the record at qrel/answer doc IDs; > 4 words; any reserved-range index.
+- **If it fires:** `temporalBonus` on the current doc; the stale doc's nDCG credit is dropped (temporalStaleContrast) and tracked in `temporalContrastRecall`.
+
+### 2. relation-typed routing  — `RELATION_UPDATE (0x04)`, 1 word
+- **Public data seen:** public relation graph (supports/causes/supersedes/…) + the query's parsed relation-intent.
+- **Patch:** index `[799]` = one `supports` category-lens edge. `wire 0x0401…`.
+- **Forbidden:** flooding all edge types; relying on the entity-only (untyped) selector; query→answer edges.
+- **If it fires:** `categoryLensBFS` admits the matched anchor reach; bounded by `policyMaxBudgetEvidence` (beta 0.25).
+
+### 3. conflict_state (conflict_lifecycle)  — `POLICY_UPDATE (0x07)`, 1 word
+- **Public data seen:** public `contradicts` / `scope_differs` edge DIRECTION (src = resolving/asserting doc, dst = contradicted candidate); the anchor MemoryIndex slot.
+- **Patch:** index `[512]` = conflict atom `selector=CONFLICT_SET_MEMBER, evidenceFeature=CONTRADICTS_EDGE, action=boost, scope=conflict_set, targetSlot=anchor`. Add a second atom `action=suppress` for the candidate. `wire 0x0701…`.
+- **Forbidden:** using the corpus `lifecycleState` label or qrels (selector reads PUBLIC edge direction only); firing on non-conflict queries (the conflict-INTENT gate `policyConflictIntentAdmission` prevents off-family damage); wrong-direction (boost candidate) — provably HURTS.
+- **If it fires:** conflict-atom trace `boost@contradicts-src / suppress@contradicts-dst`, query-local (top-K gate), bounded `±budget/1000·spread`.
+
+### 4. guarded abstention  — `POLICY_UPDATE (0x07)`, 1 word
+- **Public data seen:** whether the query has ANY public evidence path (relation/support edge) to a candidate.
+- **Patch:** index `[640]` = abstention atom `selector=MISSING_EVIDENCE, evidenceFeature=NO_PUBLIC_EVIDENCE_PATH, action=abstain, targetSlot=NONE, flags=REQUIRE_NO_EVIDENCE_PATH`. `wire 0x0701…`.
+- **Forbidden:** `targetSlot` pointing at a real anchor (abstention uses `POLICY_TARGET_NONE`); abstaining on answerable queries — the OPERATOR gate (top1 < 0.9995 AND top1-top2 margin < 0.0003) prevents it; the miner cannot force abstention alone.
+- **If it fires:** abstention trace fires only when the miner selector matches AND the operator top1+margin gate trips.
