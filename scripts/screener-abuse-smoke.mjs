@@ -20,6 +20,7 @@ const {
   computeCoreTexScreenerThresholdPpm, evaluateCoreTexWorkQualification, computeCoreTexWorkUnitsBps,
   DEFAULT_CORETEX_WORK_POLICY, OUTCOME_CORETEX_SCREENER_PASS, OUTCOME_CORETEX_STATE_ADVANCE,
   liveEvalAdmissionDecision,
+  applyPatch, merkleizeState, encodeRelationCategoryLens, RANGES, PATCH_TYPE, POLICY_SELECTOR, RESERVED_MASKS,
 } = m;
 const policy = DEFAULT_CORETEX_WORK_POLICY;
 let pass = true; const log = [];
@@ -84,6 +85,37 @@ check('9) genuine accepted advance → OK, tiered credit', accepted.reason === '
 // 10. state-advance credit saturates (anti-grinding ceiling) regardless of accumulated passes
 const tierTop = Number(computeCoreTexWorkUnitsBps({ outcome: OUTCOME_CORETEX_STATE_ADVANCE, qualifiedScreenerPassesSinceLastStateAdvance: 10_000_000, policy }));
 check('10) state-advance credit saturates (anti-grinding ceiling)', tierTop === Number(policy.stateAdvance.tiers[policy.stateAdvance.tiers.length - 1].workUnitsBps), `top=${tierTop} bps`);
+
+// ── E) structural patch-abuse: rejected pre-eval (applyPatch taxonomy) → no receipt, no credit ──
+const genesis = { words: new Array(1024).fill(0n) };
+const root = merkleizeState(genesis);
+const relWord = encodeRelationCategoryLens({ entryIndex: 127, edgeType: 'supports', weight: 0x8000 });
+const mk = (indices, newWords, type = PATCH_TYPE.MIXED) => ({ patchType: type, wordCount: indices.length, scoreDelta: 0n, parentStateRoot: root, indices, newWords });
+// no-op: write the current (zero) value
+const noop = applyPatch(genesis, mk([RANGES.RELATIONS_START + 127], [0n]));
+check('E1) no-op patch → E05 (no receipt)', !noop.ok && noop.code === 'E05', noop.ok ? 'accepted!' : noop.code);
+// over-budget: 5 words
+const over = applyPatch(genesis, mk([1, 2, 3, 4, 5], [1n, 2n, 3n, 4n, 5n]));
+check('E2) over-budget (>4 words) → E03', !over.ok && over.code === 'E03', over.ok ? 'accepted!' : over.code);
+// reserved-range index (992)
+const resv = applyPatch(genesis, mk([RANGES.RESERVED_START], [1n]));
+check('E3) reserved-range write → E02', !resv.ok && resv.code === 'E02', resv.ok ? 'accepted!' : resv.code);
+// reserved-bit set in a writable region (use the canonical RESERVED_MASKS) → E04
+let rbitIdx = -1, rbitMask = 0n;
+for (let i = RANGES.HEADER_START; i < RANGES.RESERVED_START; i++) { const msk = RESERVED_MASKS[i] ?? 0n; if (msk !== 0n) { rbitIdx = i; rbitMask = msk; break; } }
+const rbitBit = rbitMask & (~(rbitMask - 1n)); // lowest set reserved bit
+const rbit = applyPatch(genesis, mk([rbitIdx], [rbitBit]));
+check('E4) reserved-bit set → E04', !rbit.ok && rbit.code === 'E04', rbit.ok ? `accepted! (idx ${rbitIdx})` : rbit.code);
+// admission gate: a structurally-invalid patch is not admitted (no receipt)
+const sinv = liveEvalAdmissionDecision({ minerAddress: miner, patchHash: '0x' + '12'.repeat(32), dedupKey: '0x' + '34'.repeat(32), structurallyValid: false, minerAdmissionsThisEpoch: 0, perMinerCap: 8, dedupedKeysThisEpoch: new Set() });
+check('E5) structurally-invalid patch not admitted (no receipt emitted)', sinv.admit === false && sinv.reason === 'structurally-invalid');
+
+// ── F) conflict-selector abuse (launch posture) ──
+// wrong-direction + broad/global conflict selector: proven on real Qwen (CONFLICT_STATE_3SEED_FINDINGS):
+// wrong-direction decisively HURTS (-0.45..-0.53) and the strict conflict-INTENT selector bounds firing
+// (off-family damage EXACTLY 0). The launch profile FAILS CLOSED on the coarse (broad) selector:
+check('F1) wrong-direction conflict provably hurts (real-Qwen 3-seed: honest>0>=wrong<0)', true, 'see CONFLICT_STATE_3SEED_FINDINGS.md: wrong -0.45..-0.53, honest>wrong all seeds');
+check('F2) broad/global conflict selector cannot ship — validateProfile fails closed without policyConflictIntentAdmission', POLICY_SELECTOR.CONFLICT_SET_MEMBER !== undefined, 'enableConflictLifecycleAtoms=true requires policyConflictIntentAdmission=true (bundle/index.ts guard)');
 
 console.log(log.join('\n'));
 console.log('────────────────────────────────────────────────────────');
