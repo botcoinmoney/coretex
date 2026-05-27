@@ -64,8 +64,13 @@ mutateAndCheck('policyRelationTypedAdmission', (p) => { p.policyRelationTypedAdm
 mutateAndCheck('model.reranker.revision', (_p, mf) => { mf.model.reranker.revision = 'deadbeef' + mf.model.reranker.revision.slice(8); });
 mutateAndCheck('model.reranker adapter ADDED (tuned-reranker promotion cannot be silent)', (_p, mf) => { mf.model.reranker.adapter = { id: 'memoryops-lora-candidate', revision: 'v1' }; });
 
-// enabling conflict_state attests the conflict-intent selector knobs
-mutateAndCheck('enable conflict_state (enableConflictLifecycleAtoms + policyConflictIntentAdmission)', (p) => { p.enableConflictLifecycleAtoms = true; p.policyConflictIntentAdmission = true; });
+// conflict_state knobs (launch-enabled) are attested: toggling either flips the hash
+mutateAndCheck('enableConflictLifecycleAtoms toggle', (p) => { p.enableConflictLifecycleAtoms = !(p.enableConflictLifecycleAtoms ?? false); });
+mutateAndCheck('policyConflictIntentAdmission toggle (strict selector)', (p) => { p.policyConflictIntentAdmission = !(p.policyConflictIntentAdmission ?? false); });
+mutateAndCheck('policyMaxBudgetConflict', (p) => { p.policyMaxBudgetConflict = (p.policyMaxBudgetConflict ?? 1000) + 1; });
+// churn (launch-required) is attested: mutating the epochFrontier pin flips the hash
+mutateAndCheck('epochFrontier.activeWindow (churn pin)', (p) => { p.epochFrontier = { ...(p.epochFrontier ?? { mode: 'C3', seed: 's', baselineRecompute: 'activeRootChanged', majorDeltaPolicy: 'corpusRootChanged' }), activeWindow: (p.epochFrontier?.activeWindow ?? 141) + 1 }; });
+mutateAndCheck('epochFrontier.mode (churn controller)', (p) => { p.epochFrontier = { ...(p.epochFrontier ?? { activeWindow: 141, seed: 's', baselineRecompute: 'activeRootChanged', majorDeltaPolicy: 'corpusRootChanged' }), mode: p.epochFrontier?.mode === 'C3' ? 'C1' : 'C3' }; });
 
 console.log(log.join('\n'));
 console.log('────────────────────────────────────────────────────────');

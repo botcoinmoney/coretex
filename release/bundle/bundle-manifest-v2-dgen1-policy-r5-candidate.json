@@ -247,10 +247,11 @@
       "categoryLensEvidenceBundle": true,
       "temporalStaleContrast": true,
       "enableEvidenceBundleAtoms": true,
-      "enableConflictLifecycleAtoms": false,
+      "enableConflictLifecycleAtoms": true,
       "enableAbstentionAtoms": true,
       "policyQueryConditionedAdmission": true,
       "policyRelationTypedAdmission": true,
+      "policyConflictIntentAdmission": true,
       "policyMaxBudgetEvidence": 250,
       "policyMaxBudgetConflict": 1000,
       "policyAbstentionTop1Threshold": 0.9995,
@@ -258,7 +259,8 @@
       "policyQueryLocalTopK": 24,
       "_r5PolicyNote": "★ LAUNCH-FROZEN r5 substrate (2026-05-25): TWO active honest public surfaces, validated on real Qwen — (B) RELATION-TYPED ROUTING and (A) GUARDED ABSTENTION. (B) = enableEvidenceBundleAtoms + policyQueryConditionedAdmission + policyRelationTypedAdmission: the host supplies the PUBLIC entity registry (policyEntityRegistry, runtime not signed); the scorer parses a PUBLIC relation-intent from the query text (parseQueryRelationIntent) and admits ONLY the matched anchor's reach along the intent-typed edges, injecting NOTHING when no relation intent parses. 3-seed real-Qwen launch validation (r5-relation-typed-validate-gpu.json): routing-slice +0.022..+0.038 all seeds, off-intent damage EXACTLY 0, overall +0.012..+0.021 vs no-atoms, random-selector 0, no-op==r4 (maxAbsDelta 0); ENTITY-only admission (no relation typing) is net -0.08..-0.10 (off-family -0.20). policyMaxBudgetEvidence clamped to 250 (beta 0.25 = the validated value; anti-flood). (A) = enableAbstentionAtoms SPLIT: miner carries the public no-evidence-path selector (MISSING_EVIDENCE + REQUIRE_NO_EVIDENCE_PATH); operator gates on top1<policyAbstentionTop1Threshold(0.9995) AND top1-top2 margin<policyAbstentionMarginThreshold(0.0003) — real-Qwen sweep cut false-abstention 8.9%->3.3% at 73% recall (r5-abstention-margin-gpu.json). RESERVED (format-decoded but scorer-OFF until separately validated): C conflict_lifecycle (enableConflictLifecycleAtoms=false; needs directional-supersedes corpus), D bundle-shape (needs graded corroboration), E cap/budget (needs deep 100k cap-binding corpus), F aspect, future typed selectors. Subject-scope/noise REMAIN RESERVED. r4 path identical + r5-no-atoms==r4 is a hard gate.",
       "_candidateNote": "DGEN-1 r5 PolicyAtom LAUNCH CANDIDATE (pending final baseline sign-off), derived from evaluator-profile-v2-dgen1-deep-r1.json with pipelineVersion bumped to coretex-retrieval-v2-policy-r5. ★ SUBSTRATE FROZEN (2026-05-25, commit 9fd9238): ACTIVE = (B) relation-typed routing + (A) guarded abstention, both real-Qwen launch-validated; RESERVED scorer-OFF = conflict-lifecycle/bundle-shape/cap-budget/aspect/subject/noise. r5-no-atoms==r4 verified exact (maxAbsDelta 0); profile-replay 12/12 + plumbing-gate ALL GREEN. baseline NOW PINNED on the dgen1-r5-synth genesis pack (baselineParentScorePpm 304958, real Qwen; see _baselineNote). REMAINING for final PRODUCTION sign: (1) re-pin baseline on the PRODUCTION launch corpus with samples>=3; (2) majorDeltaThreshold=10 recalibrated to ~5% of the launch corpus eval_hidden population. All r4 knobs identical to deep-r1.",
-      "majorDeltaThreshold": 10,
+      "_majorDeltaThresholdNote": "Recalibrated 2026-05-27 to 7 = ~5% of the final launch corpus eval_hidden population (dgen1-r5-synth, 141 eval_hidden). POLICY is 5% (relative); PINNED as an absolute count (7) for THIS corpus epoch and re-pinned to 5% of the new population whenever a corpus epoch materially grows eval_hidden. Triggered ONLY by corpusRootChanged (NOT activeRoot churn — distinct triggers per epochFrontier). On growth >=7 new eval_hidden, isMajorDelta -> 1-epoch difficulty grace (threshold frozen) while the baseline recomputes on the grown corpus. At the measured churn-replenishment of ~2 eval_hidden/epoch, a 7-unit (5%) delta accumulates over ~3-4 epochs so grace fires periodically, not every epoch (avoids the perpetual-grace failure mode of a too-small threshold).",
+      "majorDeltaThreshold": 7,
       "_controllerNote": "Identical launch controller calibration to deep-r1 (qualityHighThresholdMult=1, rampUpMaxRatio 1.1). Sourced via controllerParamsFromProfile().",
       "controllerParams": {
         "rampUpMaxRatio": 1.1,
@@ -267,10 +269,27 @@
         "qualityHighThresholdMult": 1
       },
       "policyAbstentionMarginThreshold": 0.0003,
-      "_baselineNote": "Re-pinned 2026-05-26 on the dgen1-r5-synth GENESIS hidden pack (epoch 0, eval seed below, packSize 53), real Qwen3-Reranker-0.6B, parent = empty substrate (r5-no-atoms == r4). samples=1 on a byte-deterministic A100 (variance 0). PRODUCTION launch MUST re-pin against the production launch corpus with samples>=3 (heterogeneous-host noise) via scripts/pin-baseline-into-bundle.mjs.",
+      "_epochFrontierNote": "LAUNCH-REQUIRED churn (2026-05-27). EpochFrontier C3 adaptive watermark controller; activeWindow=141 = the genesis eval_hidden working set (full-active at genesis, 0 reserve → C3 idles until corpus growth fills the reserve, then rotates + recomputes baseline on activeRootChanged). Aggregate-only churn (no per-query oracle); retirement by age/cohort. baselineRecompute=activeRootChanged and majorDeltaPolicy=corpusRootChanged are DISTINCT triggers. Determinism + recompute + replay reconstruction proven by scripts/churn-launch-e2e.mjs; mechanism (rotation under reserve) by scripts/frontier-determinism-smoke.mjs.",
+      "epochFrontier": {
+        "mode": "C3",
+        "activeWindow": 141,
+        "minChurn": 2,
+        "maxChurn": 12,
+        "headroomLowWatermark": 1,
+        "headroomHighWatermark": 3,
+        "ewmaHalfLife": 3,
+        "targetAccepts": 2,
+        "expectedYieldPerUnit": 0.17,
+        "maxRootDeltaPerEpoch": 24,
+        "maxAge": null,
+        "seed": "coretex-launch-frontier",
+        "baselineRecompute": "activeRootChanged",
+        "majorDeltaPolicy": "corpusRootChanged"
+      },
+      "_baselineNote": "Re-pinned 2026-05-27 on the dgen1-r5-synth GENESIS hidden pack (epoch 0, eval seed below, packSize 53), real Qwen3-Reranker-0.6B, parent = empty substrate (r5-no-atoms == r4). samples=3 on a byte-deterministic A100 → variancePpm 0 (304958 reproduced exactly; samples>=3 confirms determinism, validating samples=1+replayTolerance on a single calibrated host). Genesis activeWindow=141 = full eval_hidden so the genesis active-frontier baseline == the full-pack baseline (churn does not shift the genesis pin). conflict_state + churn ENABLED at this pin (empty-parent score unaffected: no conflict atoms present, no reserve to rotate).",
       "baselineParentScorePpm": 304958,
       "baselineVariancePpm": 0,
-      "baselineSamples": 1,
+      "baselineSamples": 3,
       "baselineEvalSeedHex": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
     },
     "files": [
@@ -283,8 +302,8 @@
       {
         "role": "evaluator",
         "path": "packages/cortex/src/eval/retrieval-benchmark.ts",
-        "sha256": "f78a6aed9257c9d7bd28ef656e4749906d3275a39b0f7f23f21cb696559b18c1",
-        "bytes": 114951
+        "sha256": "9a36f52998cf51d46e33ae79198fa91730cecb75adb7aeb19efb009bc37497e9",
+        "bytes": 124408
       },
       {
         "role": "evaluator",
@@ -349,8 +368,8 @@
       {
         "role": "evaluator",
         "path": "packages/cortex/src/replay/per-patch.ts",
-        "sha256": "c799ff2f5b8b933a7d018ca4383c0e7f7f73d78a152d86f527c3eb6f059a162c",
-        "bytes": 8759
+        "sha256": "ca46c925509400bddfd202339fbbb46ed283c5e07fef570af012af1dca4c0f1d",
+        "bytes": 9072
       },
       {
         "role": "evaluator",
@@ -635,5 +654,5 @@
     "coordinatorCacheOptional": true,
     "snapshots": []
   },
-  "bundleHash": "0x4d86598e0dc91a818aef965eefcae6973df594a3355b70c61ece85fe2f544784"
+  "bundleHash": "0x474cd8851eebd097a7f1480818c1ccdb0dd473c5da08cd6909b071ac8c101715"
 }
