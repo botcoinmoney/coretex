@@ -7,9 +7,9 @@ script      = "script"
 solc        = "0.8.26"
 optimizer   = true
 optimizer_runs = 200
-via_ir      = false
+via_ir      = true
 verbosity   = 2
-gas_reports = ["CortexRegistry", "CortexMergeBonus"]
+gas_reports = ["CoreTexRegistry"]
 
 remappings = [
   "@openzeppelin/=lib/openzeppelin-contracts/",
