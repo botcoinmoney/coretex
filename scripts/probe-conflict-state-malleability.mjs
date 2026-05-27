@@ -71,8 +71,10 @@ const optsR5 = { ...optsR5base, exposeFullRanking: true, enableConflictLifecycle
 const eventById = new Map(corpus.events.map((e) => [e.id, e]));
 const bucket = (f) => (f === 'temporal_update' ? 'temporal' : f === 'near_collision' ? 'near_collision' : 'multi_hop_relation');
 
-const seedHex = '0x' + createHash('sha256').update('conflict-state-malleability').digest('hex');
-const pack = deriveQueryPack(1, seedHex, corpus, { ...r5Profile.hiddenPack, packSize, quotas: [] });
+const seedLabel = flag('seed', 'conflict-state-malleability');
+const epochId = Number(flag('epoch', '1'));
+const seedHex = '0x' + createHash('sha256').update(seedLabel).digest('hex');
+const pack = deriveQueryPack(epochId, seedHex, corpus, { ...r5Profile.hiddenPack, packSize, quotas: [] });
 const famOf = new Map(logical.queries.map((q) => [q.id, q.family]));
 const qtextOf = new Map(logical.queries.map((q) => [q.id, q.queryText]));
 const packFams = [...new Set(pack.events.map((e) => famOf.get(e.recordId ?? e.id)))];

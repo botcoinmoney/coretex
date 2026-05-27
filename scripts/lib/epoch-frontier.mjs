@@ -140,8 +140,15 @@ export function makeEpochFrontier({
       }
     }
     rate = Math.min(rate, maxRootDeltaPerEpoch);            // replay-bounded per-epoch root delta
+    // CONVEYOR INVARIANT (launch hardening 2026-05-27): voluntary watermark churn rotates IN from
+    // reserve as it rotates OUT — it must NEVER erode the active eval set when reserve is empty
+    // (retiring coverage you can't replace shrinks the hidden eval, weakening anti-cheat). Bound the
+    // voluntary rate by available reserve so reserve==0 ⇒ rate 0 ⇒ activeRoot stable ⇒ no spurious
+    // baseline recompute on a static (non-growing) corpus. Age-cap retirement (maxAge, already applied
+    // above) is the ONLY path that may shrink the window — an intentional cohort expiry.
+    rate = Math.min(rate, Math.max(0, order.length - reservePtr));
     ret += retireOldest(rate);
-    const a = activateNext(ret, epoch);        // refill to maintain window (shrinks if reserve exhausted)
+    const a = activateNext(ret, epoch);        // refill to maintain window (only age-cap retirement can shrink)
     return snapshot(epoch, a, ret, rate);
   }
 
