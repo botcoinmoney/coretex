@@ -61,6 +61,9 @@ def main():
     ap.add_argument("--epochs", type=int, default=1)
     ap.add_argument("--per-family-cap", type=int, default=6000)
     ap.add_argument("--max-queries", type=int, default=0)        # 0 = all train queries
+    ap.add_argument("--max-cands-per-query", type=int, default=24)  # serve-time reranks a bounded pool, not 1000s
+    ap.add_argument("--micro-batch", type=int, default=12)       # chunk the per-query forward (activation memory)
+    ap.add_argument("--max-len", type=int, default=512)
     ap.add_argument("--objective", choices=["combined", "bce", "pairwise", "listwise"], default="combined")
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--seed", type=int, default=20260526)
@@ -90,12 +93,27 @@ def main():
     train_rows = [r for r in rows if r.get("split") == "train"]
     ev = [r for r in rows if r.get("split") == "validation"]
     train_rows = balanced_train(train_rows, args.per_family_cap, args.seed)
-    # group into query candidate lists (the lists the reranker ranks).
+    cap_rng = random.Random(args.seed + 7)
+
+    def cap_group(cs):
+        """Bound a query's candidate list to what the reranker ranks at serve time (top-N pool), keeping the
+        positive + label diversity (so pairwise/listwise stay well-posed)."""
+        if len(cs) <= args.max_cands_per_query:
+            return cs
+        pos = max(cs, key=lambda r: r["label"])
+        rest = [r for r in cs if r is not pos]
+        cap_rng.shuffle(rest)
+        # prefer keeping some non-zero-label siblings + some zero negatives
+        sib = [r for r in rest if r["label"] > 0][: args.max_cands_per_query // 2]
+        negs = [r for r in rest if r["label"] <= 0][: args.max_cands_per_query - 1 - len(sib)]
+        return [pos] + sib + negs
+
+    # group into query candidate lists (the lists the reranker ranks), capped.
     def group(items):
         g = defaultdict(list)
         for r in items:
             g[r["query"]].append(r)
-        return [v for v in g.values() if len(v) >= 1]
+        return [cap_group(v) for v in g.values() if len(v) >= 1]
     train_groups = group(train_rows)
     if args.max_queries > 0:
         train_groups = train_groups[:args.max_queries]
@@ -118,15 +136,18 @@ def main():
         return m.to(dev).eval()
 
     def logit_diffs(model, query, docs):
-        """Batched yes-no logit diff for one query's candidate docs (the list)."""
-        prompts = [build_prompt(query, d) for d in docs]
-        enc = tok(prompts, return_tensors="pt", truncation=True, max_length=1024, padding=True)
-        enc = {k: v.to(dev) for k, v in enc.items()}
-        logits = model(**enc).logits
-        last = enc["attention_mask"].sum(dim=1) - 1
-        idx = last.view(-1, 1, 1).expand(-1, 1, logits.size(-1))
-        lastlog = logits.gather(1, idx).squeeze(1)
-        return lastlog[:, yes_id] - lastlog[:, no_id]
+        """Yes-no logit diff for one query's candidate docs, micro-batched to bound activation memory.
+        Returns a single tensor (graph preserved across chunks for backward)."""
+        outs = []
+        for i in range(0, len(docs), args.micro_batch):
+            chunk = docs[i:i + args.micro_batch]
+            enc = tok([build_prompt(query, d) for d in chunk], return_tensors="pt", truncation=True, max_length=args.max_len, padding=True)
+            enc = {k: v.to(dev) for k, v in enc.items()}
+            logits = model(**enc).logits
+            last = enc["attention_mask"].sum(dim=1) - 1
+            lastlog = logits.gather(1, last.view(-1, 1, 1).expand(-1, 1, logits.size(-1))).squeeze(1)
+            outs.append(lastlog[:, yes_id] - lastlog[:, no_id])
+        return torch.cat(outs, dim=0)
 
     def pairwise_eval(model, items):
         byq = defaultdict(list)

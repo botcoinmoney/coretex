@@ -41,7 +41,7 @@ const O = (f) => resolve(repoRoot, outDir, f);
 mkdirSync(resolve(repoRoot, outDir), { recursive: true });
 const adapterDir = resolve(repoRoot, outDir, 'adapter');
 const GPU = rerankerArg === 'gpu';
-const gpuEnv = 'HF_HOME=/root/hf HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 CORETEX_RERANKER_ALLOW_CUDA=1 CORETEX_RERANKER_PYTHON=/usr/bin/python3 NODE_OPTIONS=--max-old-space-size=8192';
+const gpuEnv = 'HF_HOME=/root/hf HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 CORETEX_RERANKER_ALLOW_CUDA=1 CORETEX_RERANKER_PYTHON=/usr/bin/python3 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True NODE_OPTIONS=--max-old-space-size=8192';
 const run = (label, cmd, env = '') => { console.error(`\n=== ${label} ===\n${cmd}`); execSync(`${env} ${cmd}`, { cwd: repoRoot, stdio: 'inherit' }); };
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'));
 const memops = O('memoryops-training.jsonl');
