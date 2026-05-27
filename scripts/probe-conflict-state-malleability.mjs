@@ -66,7 +66,8 @@ const optsR5base = scoringOptionsFromProfile(r5Profile, rt);
 // NOT relation-typed (conflict is not relation-routing). An anchor fires only when its subject is the
 // query's subject. With an empty substrate this admits nothing → B == A no-op holds.
 const optsR5 = { ...optsR5base, exposeFullRanking: true, enableConflictLifecycleAtoms: true, policyEmitTraces: true,
-  policyMaxBudgetConflict: 300, policyQueryConditionedAdmission: true, policyEntityRegistry: entityRegistry, policyGenericEntityIds: ['e_universe'] };
+  policyMaxBudgetConflict: 300, policyQueryConditionedAdmission: true, policyEntityRegistry: entityRegistry, policyGenericEntityIds: ['e_universe'],
+  policyConflictIntentAdmission: true };   // conflict-intent-typed selector: fire only on conflict/scope-intent queries (not co-subject aspect/temporal)
 const eventById = new Map(corpus.events.map((e) => [e.id, e]));
 const bucket = (f) => (f === 'temporal_update' ? 'temporal' : f === 'near_collision' ? 'near_collision' : 'multi_hop_relation');
 
