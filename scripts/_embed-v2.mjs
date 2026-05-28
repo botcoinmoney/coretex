@@ -48,7 +48,11 @@ function decodeHex(hex, dim) {
  */
 export async function embedTexts(texts, { threads } = {}) {
   const be = bundleBiEncoder();
-  const nThreads = String(threads ?? Math.max(1, cpus().length));
+  // Honor BIENCODER_NUM_THREADS from the environment (was being silently overridden by cpus().length
+  // which causes BLAS thread contention on big-core hosts — see the 7950X / Xeon Gold investigation).
+  // Default to min(16, cpus().length) — BGE-M3 CPU scaling is sub-linear past ~16 threads.
+  const envThreads = process.env.BIENCODER_NUM_THREADS ? Number(process.env.BIENCODER_NUM_THREADS) : null;
+  const nThreads = String(threads ?? envThreads ?? Math.min(16, Math.max(1, cpus().length)));
   const payload = JSON.stringify({
     modelId: be.modelId, revision: be.revision, layout: be.layout,
     inputs: texts.map((t) => ({ text: t })),
