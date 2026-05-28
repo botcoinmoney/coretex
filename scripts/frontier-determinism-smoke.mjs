@@ -104,6 +104,14 @@ check('C4) C3 rests (churn 0) once reservoir is sustainedly healthy', healthyRes
 check('C5) baselineRecompute policy = activeRootChanged', DEFAULT_EPOCH_FRONTIER_PROFILE.baselineRecompute === 'activeRootChanged');
 check('C5) majorDelta policy = corpusRootChanged (separate from activeRoot)', DEFAULT_EPOCH_FRONTIER_PROFILE.majorDeltaPolicy === 'corpusRootChanged');
 
+// C6) bytes32 root shape. CoreTexRegistry stores activeFrontierRoot as bytes32 on-chain
+// (contracts/src/CoreTexRegistry.sol). A short prefix would mis-encode; replay would silently
+// desync. Every emitted root must be 0x + 64 hex chars across active/reserve/retired.
+const BYTES32 = /^0x[0-9a-f]{64}$/;
+const allRoots = [...offA, ...c3A].flatMap((s) => [s.activeRoot, s.reserveRoot, s.retiredRoot].filter(Boolean));
+const badRoots = allRoots.filter((r) => !BYTES32.test(r));
+check('C6) every emitted root is bytes32 (0x + 64 hex chars)', badRoots.length === 0, badRoots.length ? `first bad: ${badRoots[0]}` : `${allRoots.length} roots checked`);
+
 const report = {
   schema: 'coretex-frontier-smoke-v1',
   note: 'EpochFrontier launch-candidate determinism + baseline-recompute smoke. Churn is DEFAULT OFF at launch (scaling path, not a supply requirement). activeRoot drives active-pack baseline recompute; corpusRootChanged drives major-delta grace — separate concepts.',

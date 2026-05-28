@@ -22,7 +22,10 @@
 import { createHash } from 'node:crypto';
 
 const h12 = (s) => parseInt(createHash('sha256').update(s).digest('hex').slice(0, 12), 16);
-const rootHash = (ids) => '0x' + createHash('sha256').update([...ids].sort().join('|')).digest('hex').slice(0, 16);
+// bytes32 root: CoreTexRegistry stores activeFrontierRoot as bytes32 on-chain. Emit the full
+// 32-byte sha256 (0x + 64 hex chars). A short prefix would mis-encode on-chain and replay would
+// silently desync. Tested by scripts/frontier-determinism-smoke.mjs (bytes32-shape assertion).
+const rootHash = (ids) => '0x' + createHash('sha256').update([...ids].sort().join('|')).digest('hex');
 
 /**
  * @param {object} o

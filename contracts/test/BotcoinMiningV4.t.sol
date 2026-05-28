@@ -740,8 +740,15 @@ contract BotcoinMiningV4Test is Test {
         p[1] = bytes1(uint8(5));
         _expectPatchRevert(p, BotcoinMiningV4.InvalidCompactPatch.selector);
 
-        p = _patch(PARENT, 5, 384);
+        // 0x07 (POLICY_UPDATE) is a known r5 wire byte for indices 384–671. An out-of-range
+        // index for 0x07 must hit CompactPatchReservedWord (NOT InvalidCompactPatch).
+        p = _patch(PARENT, 5, 32);
         p[0] = bytes1(uint8(0x07));
+        _expectPatchRevert(p, BotcoinMiningV4.CompactPatchReservedWord.selector);
+
+        // 0x08 is genuinely unknown — must still hit InvalidCompactPatch.
+        p = _patch(PARENT, 5, 384);
+        p[0] = bytes1(uint8(0x08));
         _expectPatchRevert(p, BotcoinMiningV4.InvalidCompactPatch.selector);
 
         p = _patch(PARENT, 4, 384);
@@ -768,6 +775,32 @@ contract BotcoinMiningV4Test is Test {
             extra[i] = p[i];
         }
         _expectPatchRevert(extra, BotcoinMiningV4.InvalidCompactPatch.selector);
+    }
+
+    function test_compactPatchPolicyUpdate0x07AcceptedForR5PolicyRegions() public {
+        // POLICY_UPDATE (0x07) maps to indices 384–671 (evidence-bundle 384–511, conflict
+        // 512–639, abstention 640–671). Verify a 0x07 patch validates cleanly through the
+        // on-chain validator at each sub-region anchor and produces a real STATE_ADVANCE
+        // (i.e., InvalidCompactPatch / CompactPatchReservedWord NEVER fire for in-range 0x07).
+        // Three sequential advances chain off the prior live root; counter resets after each
+        // advance so workUnitsBps stays at the 0-tier (30_000).
+        uint16[3] memory anchors = [uint16(384), uint16(512), uint16(640)];
+        bytes32 cursor = PARENT;
+        for (uint256 i; i < anchors.length; ++i) {
+            bytes32 child = keccak256(abi.encodePacked("policy-child-", i));
+            bytes memory patchBytes = _patchType(cursor, 5, anchors[i], 0x07);
+            bytes32 patchHash = _patchHash(patchBytes);
+            bytes32 prev = v4.lastReceiptHash(minerB);
+            BotcoinMiningV4.CoreTexReceipt memory r = _stateAdvance(
+                minerB, uint64(i), prev, 0, cursor, child, patchHash, patchBytes, 30_000
+            );
+            _signCoreTex(r, minerB);
+            vm.prank(minerB);
+            v4.submitCoreTexReceipt(r);
+            assertEq(registry.liveStateRoot(EPOCH), child, "0x07 STATE_ADVANCE must commit");
+            cursor = child;
+        }
+        // Out-of-range 0x07 (index 32) is covered by test_compactPatchMalformedInputsReject.
     }
 
     function test_compactPatchLebAndTypeRangeRejects() public {
@@ -1226,6 +1259,10 @@ contract BotcoinMiningV4Test is Test {
     }
 
     function _patch(bytes32 parent, uint64 delta, uint16 index) internal pure returns (bytes memory out) {
+        return _patchType(parent, delta, index, 0x01);
+    }
+
+    function _patchType(bytes32 parent, uint64 delta, uint16 index, uint8 patchType) internal pure returns (bytes memory out) {
         bytes memory indexBytes;
         if (index < 128) {
             indexBytes = abi.encodePacked(uint8(index));
@@ -1233,7 +1270,7 @@ contract BotcoinMiningV4Test is Test {
             indexBytes = abi.encodePacked(uint8((index & 0x7f) | 0x80), uint8(index >> 7));
         }
         out = new bytes(42 + indexBytes.length + 32);
-        out[0] = bytes1(uint8(0x01));
+        out[0] = bytes1(patchType);
         out[1] = bytes1(uint8(0x01));
         for (uint256 i; i < 8; ++i) {
             out[2 + i] = bytes1(uint8(delta >> (8 * (7 - i))));

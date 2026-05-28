@@ -33,8 +33,8 @@ Routes (`packages/cortex/src/coordinator/endpoints.ts`):
 | `allowedPatchTypes` + `patchWordRanges` | writable patch types and their word-index ranges, per active surface |
 | `patchWordBudget` | max words per STATE_ADVANCE patch (**4**) |
 | `minImprovementPpm` / `replayTolerancePpm` | acceptance floor + replay tolerance |
-| `screenerThresholdPpm` | current dynamic screener threshold (from live baseline + noise) |
-| `perMinerCap` | per-epoch admission cap |
+| `screenerThresholdPpm` | current dynamic screener threshold (from live baseline + noise floor; recomputes after baseline/churn/corpus/reranker changes) |
+| `perMinerScreenerCap` | on-chain V4 `coreTexScreenerCapPerMinerPerEpoch` (default **50**, adjustable by owner/policyAdmin). Hard ceiling on SCREENER_PASS receipts per miner per epoch; persists across state advances within the epoch; STATE_ADVANCE receipts and standard-lane receipts are not counted. Receipts above the cap revert `CoreTexScreenerCapExceeded`. |
 | `memoryIRSchemaVersion` | the fixed Memory-IR protocol grammar version (renderer is protocol-owned) |
 | `activeSubstrateSurfaces` | the live earned surfaces: `temporal`, `relation_typed_routing`, `evidence_bundle`, `guarded_abstention` (+ `conflict_state` only when enabled) |
 | `exampleValidPatch` | a worked, structurally-valid patch encoding |
@@ -68,11 +68,46 @@ state only if BOTH packs clear `minImprovementPpm + variancePpm + replayToleranc
 do NOT include `minerAddress` — first submitter of a given `(parentRoot, patchBytes)` wins via
 the dedup cache.
 
+## On-chain protocol caps (V4 + Registry)
+
+Two explicit on-chain rules a miner sees in addition to per-patch evaluation. Both are exposed in the
+challenge payload (above) and queryable on-chain.
+
+- **`coreTexScreenerCapPerMinerPerEpoch`** (V4, default **50**): per-miner, per-epoch hard cap on
+  SCREENER_PASS receipts. Persists across state advances within an epoch — a state advance resets only
+  the *global* `qualifiedScreenerPassesSinceLastStateAdvance` (which feeds the work-multiplier tier)
+  but NOT a miner's per-epoch screener count. Exceeding reverts `CoreTexScreenerCapExceeded`.
+- **No on-chain per-epoch state-advance cap** in the registry. State-advance scarcity is enforced
+  by the coordinator's signing policy (every advance carries an EIP-712 receipt it must sign),
+  the off-chain frontier (`epochFrontier.targetAccepts` / `maxRootDeltaPerEpoch` in the signed
+  evaluator profile), and V4's per-advance work-multiplier tiers. Advances are also strictly
+  serialized on-chain (parent must equal `liveStateRoot`), so at most one advance per block.
+
+The state-advance work-multiplier tier (`30000/40000/60000/90000/120000` bps @ `0/25/100/250/500`
+since-last-advance screeners, hard cap `300000` bps = 30x) is enforced on-chain in V4
+(`computeCoreTexWorkUnitsBps`) and is the in-receipt economic control.
+
 ## Minimal worked examples (per launch surface)
 
 Generated + validated by `scripts/miner-patch-examples.mjs` (`--json` for full wire bytes). Each is
 encoded from PUBLIC structure only, round-trips, validates, and applies onto genesis. A deeper miner
 guide will live in a canonical skill file; these prevent format-guessing. Patch budget ≤ 4 words.
+
+> **Patch type names below are off-chain SEMANTIC categories (`RELATION_UPDATE`,
+> `POLICY_UPDATE`, …) that align with the on-chain wire byte.** The on-chain compact-patch
+> encoding accepts byte values `0x01–0x07` (each scoped to a specific word-index range) plus
+> `0xff` (universal/MIXED). `0x07` (POLICY_UPDATE) targets indices `384–671` (the three r5
+> PolicyAtom regions: evidence-bundle 384–511, conflict 512–639, abstention 640–671). At
+> wire-encoding time the on-chain byte is determined by the *word-index range* your patch
+> writes into — read `allowedPatchTypes[*].byte` from the live `/coretex/challenge` and pick
+> the byte whose `wordIndexRange` contains your write indices, or use `0xff` to bypass the
+> per-type range check. The `(0xNN)` annotations in the section titles below ARE the wire
+> byte you put at offset 0 of `patchBytes`.
+>
+> **MemoryIndex layout (V2 launch substrate).** Words `32–383` are 352 single-word slots,
+> stride-1 (one slot per word, slotIndex `0..351`). The legacy `decoder/index.ts` 44×8-word
+> stride is the V4 work-unit object model and is NOT the launch substrate — see
+> `specs/cortex_state.md` §Range B. Miners must target stride-1.
 
 ### 1. temporal / lifecycle  — `MIXED (0xFF)`, 3 words
 - **Public data seen:** corpus doc IDs + temporal currency (which doc supersedes which); MemoryIndex slot layout.

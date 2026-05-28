@@ -972,7 +972,7 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     }
 
     function _isKnownPatchType(uint8 patchType) internal pure returns (bool) {
-        return patchType >= 0x01 && patchType <= 0x06 || patchType == 0xff;
+        return (patchType >= 0x01 && patchType <= 0x07) || patchType == 0xff;
     }
 
     function _wordMatchesPatchType(uint8 patchType, uint16 index) internal pure returns (bool) {
@@ -983,6 +983,11 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         if (patchType == 0x04) return index >= 672 && index <= 799;
         if (patchType == 0x05) return index >= 896 && index <= 991;
         if (patchType == 0x06) return index <= 31;
+        // POLICY_UPDATE (r5): typed PolicyAtom write across the three contiguous policy regions
+        // (evidence-bundle 384–511, conflict 512–639, abstention 640–671). MUST match the TS
+        // PATCH_TYPE.POLICY_UPDATE / patchTypeRange in packages/cortex/src/state/{types,patch}.ts
+        // so real miner policy/conflict/abstention atoms pass V4 compact-patch validation.
+        if (patchType == 0x07) return index >= 384 && index <= 671;
         return false;
     }
 
