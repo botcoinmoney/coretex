@@ -294,11 +294,15 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
       const aspectOther = ASPECTS[(s + ui + 3) % ASPECTS.length];
       const wantedVal = isProject ? `${ri(80) + 20} ms p95` : `${ri(6) + 2} days`;
       const otherVal = isProject ? `$${ri(900) + 100}/month` : `${pick(DIETS)} support`;
-      const aspectDoc = addDoc({ lane: 'deep', kind: 'aspect_answer', entityIds: tagU(aspectWanted),
+      // Aspect lives in aspectTags, NOT entityIds. tagU expects an ARRAY and spreads it; the
+      // old code passed the aspect STRING and it was spread char-by-char into entityIds
+      // ("latency" → ["l","a","t","e","n","c","y"]). Aspect is the QUERY's intentAspect filter,
+      // not an entity reference; entityIds carries just universe + subject.
+      const aspectDoc = addDoc({ lane: 'deep', kind: 'aspect_answer', entityIds: tagU(),
         text: `${canonical}'s ${aspectWanted} note says the target is ${wantedVal}; the same memo also mentions ${aspectOther} only briefly.`,
         shape: 'aspect_answer_record', timestamp: ts(15 + ri(12)), currentStaleFlag: true,
         aspectTags: [aspectWanted, aspectOther] });
-      const wrongAspectDoc = addDoc({ lane: 'deep', kind: 'aspect_neighbor', entityIds: tagU(aspectOther),
+      const wrongAspectDoc = addDoc({ lane: 'deep', kind: 'aspect_neighbor', entityIds: tagU(),
         text: `${canonical}'s ${aspectOther} note says the current value is ${otherVal}, with no ${aspectWanted} decision.`,
         shape: 'aspect_partial_record', timestamp: ts(15 + ri(12)), currentStaleFlag: true,
         aspectTags: [aspectOther] });
