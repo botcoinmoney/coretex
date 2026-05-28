@@ -52,12 +52,31 @@ const famById = new Map(evalHidden.map((e) => [e.id, e.logicalFamily ?? e.family
 const familyOf = (id) => famById.get(id) ?? 'unknown';
 const frParams = { evalHiddenIds, familyOf, mode: fp.mode, activeWindow: fp.activeWindow, minChurn: fp.minChurn, maxChurn: fp.maxChurn, headroomLowWatermark: fp.headroomLowWatermark, headroomHighWatermark: fp.headroomHighWatermark, ewmaHalfLife: fp.ewmaHalfLife, targetAccepts: fp.targetAccepts, expectedYieldPerUnit: fp.expectedYieldPerUnit, maxRootDeltaPerEpoch: fp.maxRootDeltaPerEpoch, maxAge: fp.maxAge ?? Infinity, seed: fp.seed };
 
-// ── genesis: full-active (activeWindow >= total) → 0 reserve, C3 idles ──
+// ── genesis: two valid launch designs ────────────────────────────────────────
+//  (a) full-active: activeWindow >= total eval_hidden → 0 reserve, C3 idles until growth
+//      (the original 9k compact-corpus design — narrow eval, no churn headroom needed)
+//  (b) reserve-at-genesis: activeWindow < total → reserve > 0, C3 can rotate immediately
+//      (the 100k/300k design — anti-plateau churn active from epoch 1, not gated on growth)
+// Both are launch-valid; the script accepts whichever the profile pins.
 const frGen = makeEpochFrontier(frParams);
 const gen = frGen.stepEpoch(0, null, null);
-check('1) genesis active = full eval_hidden (activeWindow>=total → 0 reserve)', gen.activeEvalHiddenCount === evalHiddenIds.length && gen.reserveRemaining === 0, `active=${gen.activeEvalHiddenCount} reserve=${gen.reserveRemaining}`);
-const genStep = frGen.stepEpoch(1, 1, 3); // an advance happened; static corpus → no reserve → activeRoot stable
-check('1) static genesis (no reserve) → activeRoot stable → no baseline recompute', genStep.activeRoot === gen.activeRoot, `${gen.activeRoot}`);
+const fullActive = fp.activeWindow >= evalHiddenIds.length;
+if (fullActive) {
+  check('1a) full-active genesis (activeWindow≥total → 0 reserve, C3 idles)',
+    gen.activeEvalHiddenCount === evalHiddenIds.length && gen.reserveRemaining === 0,
+    `active=${gen.activeEvalHiddenCount} reserve=${gen.reserveRemaining}`);
+  const genStep = frGen.stepEpoch(1, 1, 3); // advance happened; no reserve → activeRoot stable
+  check('1a) static genesis (no reserve) → activeRoot stable → no baseline recompute',
+    genStep.activeRoot === gen.activeRoot, `${gen.activeRoot}`);
+} else {
+  // Reserve-at-genesis: assert correct partition + that C3 can churn from genesis without growth.
+  check('1b) reserve-at-genesis (activeWindow<total → reserve>0)',
+    gen.activeEvalHiddenCount === fp.activeWindow && gen.reserveRemaining === evalHiddenIds.length - fp.activeWindow,
+    `active=${gen.activeEvalHiddenCount} reserve=${gen.reserveRemaining} window=${fp.activeWindow} total=${evalHiddenIds.length}`);
+  const genStep = frGen.stepEpoch(1, 0, 3); // starved → C3 SHOULD rotate from the existing reserve
+  check('1b) starved C3 rotates from genesis reserve (activeRoot changes without growth)',
+    genStep.activeRoot !== gen.activeRoot, `${gen.activeRoot} → ${genStep.activeRoot} churn=${genStep.churnRate}`);
+}
 
 // ── growth scenario: corpus adds eval_hidden → reserve fills → C3 rotates ──
 const grownIds = [...evalHiddenIds, ...Array.from({ length: 60 }, (_, i) => `grown_eh_${i}`)];
