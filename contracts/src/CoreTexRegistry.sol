@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.26;
+pragma solidity ^0.8.28;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
@@ -22,23 +22,36 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
     // ── Constants ─────────────────────────────────────────────────────────
     uint256 public constant CHALLENGE_WINDOW_SECONDS = 21600; // 6h owner-revert audit window
-    uint64  public constant MAX_TRANSITIONS_PER_EPOCH = 1024;
+
+    /// @dev No on-chain per-epoch state-advance cap. Advance scarcity is enforced where it
+    ///      belongs: the coordinator's signing policy (every advance carries an EIP-712 receipt
+    ///      it must sign) + the off-chain frontier (EvaluatorProfile.epochFrontier.targetAccepts
+    ///      / maxRootDeltaPerEpoch) + V4's per-advance work multipliers. State advances are also
+    ///      strictly serialized (parent must equal liveStateRoot, so at most one per block at the
+    ///      protocol level). Replay/indexer safety is per-event streaming (each advance applies in
+    ///      O(1) and is discarded; finalize is O(1) regardless of transitionCount); there is no
+    ///      contract-internal cost that grows unboundedly with transition count, so an arbitrary
+    ///      numeric ceiling here was a fake safety rail that could only artificially block honest
+    ///      miners. transitionCount[epoch] is still tracked for indexing/replay ordering.
 
     // ── Access ────────────────────────────────────────────────────────────
     mapping(address => bool) public isCoordinator;
 
     // ── Canonical per-epoch state ─────────────────────────────────────────
     mapping(uint64 => bytes32) public epochParentStateRoot; // pinned at startEpoch
-    mapping(uint64 => bytes32) public liveStateRoot;         // advances linearly; == parent at start
-    mapping(uint64 => uint64)  public transitionCount;       // number of advances in the epoch
-    mapping(uint64 => bool)    public epochStarted;
-    mapping(uint64 => bool)    public epochFinalized;
-    mapping(uint64 => uint256) public finalizedAt;           // timestamp for the audit window
-    mapping(uint64 => bool)    public epochReverted;
+    mapping(uint64 => bytes32) public liveStateRoot; // advances linearly; == parent at start
+    mapping(uint64 => uint64) public transitionCount; // number of advances in the epoch
+    mapping(uint64 => bool) public epochStarted;
+    mapping(uint64 => bool) public epochFinalized;
+    mapping(uint64 => uint256) public finalizedAt; // timestamp for the audit window
+    mapping(uint64 => bool) public epochReverted;
 
     // scoring-context pins (set at startEpoch, re-asserted per advance)
     mapping(uint64 => bytes32) public epochCoreVersionHash;
     mapping(uint64 => bytes32) public epochCorpusRoot;
+    mapping(uint64 => bytes32) public epochActiveFrontierRoot;
+    mapping(uint64 => bytes32) public epochBaselineManifestHash;
+    mapping(uint64 => bytes32) public epochHiddenSeedCommit;
 
     // finalized header storage (for header verification / replay)
     struct EpochHeader {
@@ -65,8 +78,8 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
     );
 
     event CoreTexStateAdvanced(
-        uint64  indexed epoch,
-        uint64  indexed transitionIndex,
+        uint64 indexed epoch,
+        uint64 indexed transitionIndex,
         address indexed miner,
         bytes32 parentStateRoot,
         bytes32 newStateRoot,
@@ -76,8 +89,8 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         bytes32 corpusRoot,
         bytes32 activeFrontierRoot,
         uint256 improvementCredits,
-        uint16  wordCount,
-        bytes   compactPatchBytes
+        uint16 wordCount,
+        bytes compactPatchBytes
     );
 
     event CoreTexEpochFinalized(
@@ -104,13 +117,13 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
     error AlreadyFinalized();
     error NotFinalized();
     error EpochIsReverted();
-    error ParentRootMismatch();      // parentStateRoot != liveStateRoot[epoch]
-    error CoreVersionMismatch();     // coreVersionHash != epoch pin
-    error CorpusRootMismatch();      // corpusRoot != epoch pin
-    error TooManyTransitions();
+    error ParentRootMismatch(); // parentStateRoot != liveStateRoot[epoch]
+    error CoreVersionMismatch(); // coreVersionHash != epoch pin
+    error CorpusRootMismatch(); // corpusRoot != epoch pin
+    error ActiveFrontierMismatch(); // activeFrontierRoot != epoch pin
     error ZeroPatchHash();
-    error NoOpAdvance();             // newStateRoot == parentStateRoot
-    error FinalRootMismatch();       // finalStateRoot != liveStateRoot[epoch]
+    error NoOpAdvance(); // newStateRoot == parentStateRoot
+    error FinalRootMismatch(); // finalStateRoot != liveStateRoot[epoch]
     error AuditWindowClosed();
 
     constructor(address initialOwner, address initialCoordinator) Ownable(initialOwner) {
@@ -142,7 +155,7 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
     /// @notice Start an epoch, pinning the parent state root + scoring context. Seeds
     ///         liveStateRoot = parentStateRoot so the first advance is NOT special-cased.
     function startEpoch(
-        uint64  epoch,
+        uint64 epoch,
         bytes32 parentStateRoot,
         bytes32 coreVersionHash,
         bytes32 corpusRoot,
@@ -156,16 +169,24 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         liveStateRoot[epoch] = parentStateRoot;
         epochCoreVersionHash[epoch] = coreVersionHash;
         epochCorpusRoot[epoch] = corpusRoot;
+        epochActiveFrontierRoot[epoch] = activeFrontierRoot;
+        epochBaselineManifestHash[epoch] = baselineManifestHash;
+        epochHiddenSeedCommit[epoch] = hiddenSeedCommit;
         emit CoreTexEpochStarted(
-            epoch, parentStateRoot, coreVersionHash, corpusRoot,
-            activeFrontierRoot, baselineManifestHash, hiddenSeedCommit
+            epoch,
+            parentStateRoot,
+            coreVersionHash,
+            corpusRoot,
+            activeFrontierRoot,
+            baselineManifestHash,
+            hiddenSeedCommit
         );
     }
 
     /// @notice Record a verified state advance and move the live root forward. Single linear
     ///         transition sequence: parentStateRoot MUST equal the current liveStateRoot.
     function submitStateAdvance(
-        uint64  epoch,
+        uint64 epoch,
         address miner,
         bytes32 parentStateRoot,
         bytes32 newStateRoot,
@@ -175,16 +196,16 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         bytes32 corpusRoot,
         bytes32 activeFrontierRoot,
         uint256 improvementCredits,
-        uint16  wordCount,
+        uint16 wordCount,
         bytes calldata compactPatchBytes
     ) external onlyCoordinator whenNotPaused nonReentrant {
         if (!epochStarted[epoch]) revert EpochNotStarted();
         if (epochFinalized[epoch]) revert AlreadyFinalized();
         if (epochReverted[epoch]) revert EpochIsReverted();
-        if (transitionCount[epoch] >= MAX_TRANSITIONS_PER_EPOCH) revert TooManyTransitions();
-        if (parentStateRoot != liveStateRoot[epoch]) revert ParentRootMismatch();   // NO first-advance special case
+        if (parentStateRoot != liveStateRoot[epoch]) revert ParentRootMismatch(); // NO first-advance special case
         if (coreVersionHash != epochCoreVersionHash[epoch]) revert CoreVersionMismatch();
         if (corpusRoot != epochCorpusRoot[epoch]) revert CorpusRootMismatch();
+        if (activeFrontierRoot != epochActiveFrontierRoot[epoch]) revert ActiveFrontierMismatch();
         if (patchHash == bytes32(0)) revert ZeroPatchHash();
         if (newStateRoot == parentStateRoot) revert NoOpAdvance();
 
@@ -193,14 +214,25 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         liveStateRoot[epoch] = newStateRoot;
 
         emit CoreTexStateAdvanced(
-            epoch, idx, miner, parentStateRoot, newStateRoot, patchHash, evalReportHash,
-            coreVersionHash, corpusRoot, activeFrontierRoot, improvementCredits, wordCount, compactPatchBytes
+            epoch,
+            idx,
+            miner,
+            parentStateRoot,
+            newStateRoot,
+            patchHash,
+            evalReportHash,
+            coreVersionHash,
+            corpusRoot,
+            activeFrontierRoot,
+            improvementCredits,
+            wordCount,
+            compactPatchBytes
         );
     }
 
     /// @notice Finalize the epoch header. finalStateRoot MUST equal the current liveStateRoot.
     function finalizeEpoch(
-        uint64  epoch,
+        uint64 epoch,
         bytes32 finalStateRoot,
         bytes32 coreVersionHash,
         bytes32 corpusRoot,
@@ -215,6 +247,7 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         if (finalStateRoot != liveStateRoot[epoch]) revert FinalRootMismatch();
         if (coreVersionHash != epochCoreVersionHash[epoch]) revert CoreVersionMismatch();
         if (corpusRoot != epochCorpusRoot[epoch]) revert CorpusRootMismatch();
+        if (activeFrontierRoot != epochActiveFrontierRoot[epoch]) revert ActiveFrontierMismatch();
 
         epochFinalized[epoch] = true;
         finalizedAt[epoch] = block.timestamp;
@@ -230,8 +263,15 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         });
 
         emit CoreTexEpochFinalized(
-            epoch, epochParentStateRoot[epoch], finalStateRoot, coreVersionHash,
-            corpusRoot, activeFrontierRoot, patchSetRoot, scoreRoot, baselineManifestHash
+            epoch,
+            epochParentStateRoot[epoch],
+            finalStateRoot,
+            coreVersionHash,
+            corpusRoot,
+            activeFrontierRoot,
+            patchSetRoot,
+            scoreRoot,
+            baselineManifestHash
         );
     }
 
@@ -254,6 +294,11 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         return epochFinalized[epoch] && block.timestamp <= finalizedAt[epoch] + CHALLENGE_WINDOW_SECONDS;
     }
 
-    function pause() external onlyOwner { _pause(); }
-    function unpause() external onlyOwner { _unpause(); }
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
 }

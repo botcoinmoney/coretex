@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.26;
+pragma solidity ^0.8.28;
 
 import {Script, console2} from "forge-std/Script.sol";
 import {CoreTexRegistry} from "../src/CoreTexRegistry.sol";
@@ -22,9 +22,9 @@ contract DeployMainnet is Script {
             keccak256(bytes(vm.envString("MAINNET_CONFIRM"))) == keccak256(bytes("I-UNDERSTAND")),
             "Refusing to broadcast: set MAINNET_CONFIRM=I-UNDERSTAND"
         );
-        address owner_       = vm.envAddress("OWNER_ADDRESS");
+        address owner_ = vm.envAddress("OWNER_ADDRESS");
         address coordinator_ = vm.envAddress("COORDINATOR_ADDRESS");
-        require(owner_       != address(0), "OWNER_ADDRESS zero");
+        require(owner_ != address(0), "OWNER_ADDRESS zero");
         require(coordinator_ != address(0), "COORDINATOR_ADDRESS zero");
 
         vm.startBroadcast();
@@ -35,6 +35,6 @@ contract DeployMainnet is Script {
         console2.log("owner:", owner_);
         console2.log("coordinator:", coordinator_);
         console2.log("CHALLENGE_WINDOW_SECONDS:", registry.CHALLENGE_WINDOW_SECONDS());
-        console2.log("MAX_TRANSITIONS_PER_EPOCH:", registry.MAX_TRANSITIONS_PER_EPOCH());
+        // no on-chain per-epoch state-advance cap; scarcity is coordinator + frontier + V4 multipliers
     }
 }
