@@ -68,6 +68,10 @@ mutateAndCheck('model.reranker adapter ADDED (tuned-reranker promotion cannot be
 mutateAndCheck('enableConflictLifecycleAtoms toggle', (p) => { p.enableConflictLifecycleAtoms = !(p.enableConflictLifecycleAtoms ?? false); });
 mutateAndCheck('policyConflictIntentAdmission toggle (strict selector)', (p) => { p.policyConflictIntentAdmission = !(p.policyConflictIntentAdmission ?? false); });
 mutateAndCheck('policyMaxBudgetConflict', (p) => { p.policyMaxBudgetConflict = (p.policyMaxBudgetConflict ?? 1000) + 1; });
+// aspect_constraint EXPERIMENTAL knobs (default-off; A100 candidate) are attested: enabling the
+// experimental aspect surface or changing its boost flips the hash → it can never be silently toggled on.
+mutateAndCheck('aspect experimental enable (enableAspectConstraintAtoms+policyAspectIntentAdmission+boost)', (p) => { p.enableAspectConstraintAtoms = true; p.policyAspectIntentAdmission = true; p.policyAspectBoost = 0.1; });
+mutateAndCheck('policyAspectBoost', (p) => { p.policyAspectBoost = (p.policyAspectBoost ?? 0) + 0.05; });
 // churn (launch-required) is attested: mutating the epochFrontier pin flips the hash
 mutateAndCheck('epochFrontier.activeWindow (churn pin)', (p) => { p.epochFrontier = { ...(p.epochFrontier ?? { mode: 'C3', seed: 's', baselineRecompute: 'activeRootChanged', majorDeltaPolicy: 'corpusRootChanged' }), activeWindow: (p.epochFrontier?.activeWindow ?? 141) + 1 }; });
 mutateAndCheck('epochFrontier.mode (churn controller)', (p) => { p.epochFrontier = { ...(p.epochFrontier ?? { activeWindow: 141, seed: 's', baselineRecompute: 'activeRootChanged', majorDeltaPolicy: 'corpusRootChanged' }), mode: p.epochFrontier?.mode === 'C3' ? 'C1' : 'C3' }; });

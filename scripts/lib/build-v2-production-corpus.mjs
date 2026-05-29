@@ -55,7 +55,7 @@ export function buildV2ProductionCorpus({ corpusPath, embPath, junkEdges = 0 }) 
   for (const d of logical.docs) {
     const e = docEmb.get(d.id);
     events.push({ id: memId(d.id), family: 'near_collision', domain: d.lane, split: 'train_visible', queryText: d.text,
-      truthDocuments: [{ id: d.id, text: d.text, isCurrent: d.currentStaleFlag === false ? false : true }],
+      truthDocuments: [{ id: d.id, text: d.text, isCurrent: d.currentStaleFlag === false ? false : true, ...(Array.isArray(d.aspectTags) && d.aspectTags.length ? { aspectTags: d.aspectTags } : {}) }],
       hardNegatives: [], qrels: [{ documentId: d.id, relevance: 1.0 }], protected: false,
       relations: (relBySrc.get(d.id) ?? []).map((r) => ({ other_id: memId(r.dst), edgeType: r.type })),
       ...(Array.isArray(d.entityIds) && d.entityIds.length ? { entityIds: d.entityIds } : {}),
@@ -71,15 +71,15 @@ export function buildV2ProductionCorpus({ corpusPath, embPath, junkEdges = 0 }) 
   const queryEvents = [];
   for (const q of logical.queries) {
     if (q.abstain) {
-      const negs = (q.hardNegatives ?? []).map((n) => ({ id: n.docId, text: docById.get(n.docId).text, category: n.category, ...(docById.get(n.docId).aspectTags ? { aspectTags: docById.get(n.docId).aspectTags } : {}) }));
+      const negs = (q.hardNegatives ?? []).map((n) => ({ id: n.docId, text: docById.get(n.docId).text, category: n.category }));
       const ev = { id: q.id, family: bucket(q.family), logicalFamily: q.family, domain: q.lane, split: splitForRecord(q.id, PROD_CORPUS_EPOCH), queryText: q.queryText, truthDocuments: [], hardNegatives: negs, qrels: [], protected: false, relations: [],
         ...(q.band ? { band: q.band } : {}),
         ...(q.ownerEntityId !== undefined ? { ownerEntityId: q.ownerEntityId, ownerScoped: q.ownerScoped !== false } : {}),
         ...(q.subjectEntityId !== undefined ? { subjectEntityId: q.subjectEntityId } : {}), provenance: PROV, embeddings: mkEmb(qEmb.get(q.id), [], negs.map((n) => [n.id, docEmb.get(n.id)])) };
       events.push(ev); queryEvents.push(ev); continue;
     }
-    const truths = (q.qrels ?? []).filter((r) => r.relevance > 0).map((r) => ({ id: r.docId, text: docById.get(r.docId).text, isCurrent: docById.get(r.docId).currentStaleFlag === false ? false : true, ...(docById.get(r.docId).aspectTags ? { aspectTags: docById.get(r.docId).aspectTags } : {}) }));
-    const negs = (q.hardNegatives ?? []).map((n) => ({ id: n.docId, text: docById.get(n.docId).text, category: n.category, ...(docById.get(n.docId).aspectTags ? { aspectTags: docById.get(n.docId).aspectTags } : {}) }));
+    const truths = (q.qrels ?? []).filter((r) => r.relevance > 0).map((r) => ({ id: r.docId, text: docById.get(r.docId).text, isCurrent: docById.get(r.docId).currentStaleFlag === false ? false : true }));
+    const negs = (q.hardNegatives ?? []).map((n) => ({ id: n.docId, text: docById.get(n.docId).text, category: n.category }));
     const ev = { id: q.id, family: bucket(q.family), logicalFamily: q.family, domain: q.lane, split: splitForRecord(q.id, PROD_CORPUS_EPOCH), queryText: q.queryText,
       truthDocuments: truths, hardNegatives: negs, qrels: (q.qrels ?? []).map((r) => ({ documentId: r.docId, relevance: r.relevance })), protected: false, relations: [],
       ...(q.band ? { band: q.band } : {}),
