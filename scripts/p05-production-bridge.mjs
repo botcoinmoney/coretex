@@ -64,6 +64,15 @@ function streamReranker({ model, revision, python, allowCuda }) {
 }
 
 const argv = process.argv.slice(2);
+// HARD GUARD: this is the LEGACY P0.5 bridge. It is STALE for r5/churn/A100 — it does NOT thread public
+// aspectTags onto memory docs, carries raw q.split (not the canonical splitForRecord authority), and drops
+// continuity labels. Final r5 / churn / A100 runs MUST use buildV2ProductionCorpus
+// (scripts/lib/build-v2-production-corpus.mjs). Fail-fast unless explicitly opted into for historical P0.5
+// reproduction only.
+if (process.env.CORETEX_ALLOW_LEGACY_P05 !== '1') {
+  console.error('[p05] REFUSING TO RUN: legacy P0.5 bridge is not r5/churn/A100-safe (no aspectTags, raw q.split, no continuity labels). Use scripts/lib/build-v2-production-corpus.mjs. Set CORETEX_ALLOW_LEGACY_P05=1 only for historical P0.5 reproduction.');
+  process.exit(2);
+}
 const START_T = Date.now();
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
 const corpusPath = flag('corpus', 'release/calibration/2026-05-21-memory-corpus-v2/p0-corpus.json');

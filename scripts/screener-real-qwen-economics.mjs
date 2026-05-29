@@ -256,7 +256,7 @@ async function scoreRealQwen(patchBytesU8, parentRoot) {
   }
   let decoded;
   try { decoded = decodePatch(patchBytesU8); } catch (e) { return { kind: 'DECODE', message: String(e?.message ?? e) }; }
-  const applied = applyPatch(liveState, decoded);
+  const applied = applyPatch(liveState, decoded, scoringOptsBase.policyAtomsMode === true);
   if (!applied.ok) return { kind: applied.code, message: applied.reason ?? '' };
 
   // Evaluate via REAL retrieval-benchmark + the persistent Qwen reranker.

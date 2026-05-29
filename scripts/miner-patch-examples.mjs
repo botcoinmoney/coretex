@@ -59,6 +59,23 @@ const examples = [];
     sourceAttributionIfFires: 'categoryLensBFS admits the matched anchor reach; bounded by policyMaxBudgetEvidence (beta 0.25)',
   });
 }
+// 2b. evidence_bundle PolicyAtom (r5 384-511) — the REOPENED relation-routing slot a miner actually patches.
+//     The atom's targetSlot points at a MemoryIndex anchor; on a relation-intent query whose subject matches
+//     the anchor's public subject, the anchor's typed public-edge reach is admitted/bundled. THIS is the
+//     miner-malleable r5 routing surface (the RELATION_UPDATE edge above is the public graph it routes along).
+{
+  const idx = RANGES.POLICY_EVIDENCE_START + 0;
+  const word = encodePolicyAtom({ atomIndex: 0, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY, evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path', targetSlot: 1, budget: 250, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
+  examples.push({
+    surface: 'evidence_bundle PolicyAtom (r5 routing, words 384-511)',
+    publicDataSeen: "the anchor MemoryIndex slot's PUBLIC subject + its public out-edges; the query's parsed relation-intent + public subject grounding",
+    patchType: 'POLICY_UPDATE (0x07)', wordCount: 1,
+    intent: 'write one evidence_bundle atom whose targetSlot anchors a subject-bearing memory; on a matching relation-intent + same-subject query, admit/bundle the anchor reach along its typed public edges',
+    patch: { patchType: PATCH_TYPE.POLICY_UPDATE, wordCount: 1, scoreDelta: 0n, parentStateRoot: parentRoot, indices: [idx], newWords: [word] },
+    forbidden: 'anchoring a generic/owner entity; budget over policyMaxBudgetEvidence; firing off-intent or cross-subject; reading qrels',
+    sourceAttributionIfFires: 'policyAdmitted via evidence_bundle atom; query-local, subject-scoped, bounded by policyMaxBudgetEvidence',
+  });
+}
 // 3. conflict_state — one conflict_lifecycle atom (boost the resolving doc on conflict-intent queries)
 {
   const idx = RANGES.POLICY_CONFLICT_START + 0;
