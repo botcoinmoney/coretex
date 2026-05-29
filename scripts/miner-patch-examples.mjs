@@ -71,6 +71,7 @@ const examples = [];
     publicDataSeen: "the anchor MemoryIndex slot's PUBLIC subject + its public out-edges; the query's parsed relation-intent + public subject grounding",
     patchType: 'POLICY_UPDATE (0x07)', wordCount: 1,
     intent: 'write one evidence_bundle atom whose targetSlot anchors a subject-bearing memory; on a matching relation-intent + same-subject query, admit/bundle the anchor reach along its typed public edges',
+    prerequisite: 'NOT a standalone recipe: targetSlot (here MemoryIndex slot 1) MUST reference a real anchor — a complete advance also writes that MemoryIndex slot (see the temporal/lifecycle example) for a subject-bearing memory whose PUBLIC subject the query resolves to, with public out-edges of the parsed relation-intent type. The atom fires (policyAdmitted) ONLY when anchor-subject == query-subject AND the edge type matches; otherwise it is inert.',
     patch: { patchType: PATCH_TYPE.POLICY_UPDATE, wordCount: 1, scoreDelta: 0n, parentStateRoot: parentRoot, indices: [idx], newWords: [word] },
     forbidden: 'anchoring a generic/owner entity; budget over policyMaxBudgetEvidence; firing off-intent or cross-subject; reading qrels',
     sourceAttributionIfFires: 'policyAdmitted via evidence_bundle atom; query-local, subject-scoped, bounded by policyMaxBudgetEvidence',
