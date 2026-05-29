@@ -12,6 +12,8 @@ metadata: { "openclaw": { "emoji": "🧠" } }
 
 CoreTex is a separate mining lane from the standard solve lane. Instead of answering a challenge document, you submit **substrate patches** that improve the canonical CoreTex state. The coordinator scores each patch, issues an EIP-712 `CoreTexReceipt` classifying it as either a `SCREENER_PASS` (no state change) or a `STATE_ADVANCE` (moves the live root), and you post that receipt to **BotcoinMiningV4** on Base. V4 credits accumulate in the same per-epoch pool as the standard lane and are claimed post-epoch from the same `claim(uint64[])` surface.
 
+Launch status note, reconciled 2026-05-29: the live `/coretex/challenge` is authoritative. Current launch posture is temporal plus top1-only guarded abstention as reward-active surfaces; relation/evidence and conflict r5 atoms are structurally valid but safe-but-not-active unless the live challenge explicitly exposes them.
+
 **Minimum tooling:** `curl` + `jq`, plus **one** transaction path of your choice:
 - **Path A (Bankr):** `BANKR_API_KEY`. Bankr handles wallet, signing, and submission. Same pattern as the standard miner skill.
 - **Path B (self-managed EOA):** a Base RPC URL (your own node, Infura/Alchemy/QuickNode, or a public RPC like `https://base-rpc.publicnode.com`) + your miner private key, used with `cast send` (Foundry), `ethers`, `viem`, or any web3 library.
@@ -94,7 +96,7 @@ The response includes the public pins + the operational rules you must respect. 
 | `substrateAccess.byRoot` | URL to fetch the full state (`wordCount` 1024, `packedBytes` 32768) |
 | `bundleHash` / `coreVersionHash`, `corpusRoot`, `activeFrontierRoot` | pinned scoring context (the registry enforces these per epoch) |
 | `allowedPatchTypes` | array of `{ name, byte, wordIndexRange: [start, end] }` — the byte VALUE you put in the wire is `allowedPatchTypes[i].byte` from this live response. **Do not hardcode** byte values from any document; always read them from the live challenge. `wordIndexRange` is inclusive on both ends. |
-| `activeFrontierRoot` | a non-null root means churn is on with that frontier; `null` (or the all-zero sentinel `0x000…0000`) means churn is off. Pass it through unchanged on the receipt. |
+| `activeFrontierRoot` | launch C3 churn should provide a non-null frontier root. `null` (or the all-zero sentinel `0x000…0000`) means a smoke, legacy, or explicitly churn-off deployment. Pass it through unchanged on the receipt. |
 | `patchWordBudget` | **4** (max words per `STATE_ADVANCE` patch) |
 | `screenerThresholdPpm` | current dynamic screener threshold (live baseline + noise floor) |
 | `minImprovementPpm` / `replayTolerancePpm` | state-advance acceptance floor + replay tolerance |

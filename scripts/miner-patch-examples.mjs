@@ -60,33 +60,39 @@ const examples = [];
   });
 }
 // 2b. evidence_bundle PolicyAtom (r5 384-511) — the REOPENED relation-routing slot a miner actually patches.
-//     The atom's targetSlot points at a MemoryIndex anchor; on a relation-intent query whose subject matches
-//     the anchor's public subject, the anchor's typed public-edge reach is admitted/bundled. THIS is the
-//     miner-malleable r5 routing surface (the RELATION_UPDATE edge above is the public graph it routes along).
+//     The complete bootstrap patch writes the MemoryIndex policy anchor and the atom that points at it
+//     atomically. A later atom-only update against an existing anchor uses POLICY_UPDATE; bootstrap is MIXED.
 {
+  const anchorSlot = 5;
+  const anchorIdx = RANGES.MEMORY_INDEX_START + anchorSlot;
+  const anchorWord = encodeMemoryIndexSlot({ slotIndex: anchorSlot, recordId: stableRecordIdFor('mem_relation_anchor'), family: 'multi_hop_relation', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n })[0];
   const idx = RANGES.POLICY_EVIDENCE_START + 0;
-  const word = encodePolicyAtom({ atomIndex: 0, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY, evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path', targetSlot: 1, budget: 250, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
+  const word = encodePolicyAtom({ atomIndex: 0, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY, evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path', targetSlot: anchorSlot, budget: 250, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
   examples.push({
-    surface: 'evidence_bundle PolicyAtom (r5 routing, words 384-511)',
+    surface: 'evidence_bundle PolicyAtom bootstrap (r5 routing, MemoryIndex + words 384-511)',
     publicDataSeen: "the anchor MemoryIndex slot's PUBLIC subject + its public out-edges; the query's parsed relation-intent + public subject grounding",
-    patchType: 'POLICY_UPDATE (0x07)', wordCount: 1,
+    patchType: 'MIXED (0xFF)', wordCount: 2,
     intent: 'write one evidence_bundle atom whose targetSlot anchors a subject-bearing memory; on a matching relation-intent + same-subject query, admit/bundle the anchor reach along its typed public edges',
-    prerequisite: 'NOT a standalone recipe: targetSlot (here MemoryIndex slot 1) MUST reference a real anchor — a complete advance also writes that MemoryIndex slot (see the temporal/lifecycle example) for a subject-bearing memory whose PUBLIC subject the query resolves to, with public out-edges of the parsed relation-intent type. The atom fires (policyAdmitted) ONLY when anchor-subject == query-subject AND the edge type matches; otherwise it is inert.',
-    patch: { patchType: PATCH_TYPE.POLICY_UPDATE, wordCount: 1, scoreDelta: 0n, parentStateRoot: parentRoot, indices: [idx], newWords: [word] },
+    prerequisite: 'If the anchor already exists, update only the atom with POLICY_UPDATE. If the anchor is new, bootstrap anchor+atom as this MIXED patch.',
+    patch: { patchType: PATCH_TYPE.MIXED, wordCount: 2, scoreDelta: 0n, parentStateRoot: parentRoot, indices: [anchorIdx, idx], newWords: [anchorWord, word] },
     forbidden: 'anchoring a generic/owner entity; budget over policyMaxBudgetEvidence; firing off-intent or cross-subject; reading qrels',
     sourceAttributionIfFires: 'policyAdmitted via evidence_bundle atom; query-local, subject-scoped, bounded by policyMaxBudgetEvidence',
   });
 }
 // 3. conflict_state — one conflict_lifecycle atom (boost the resolving doc on conflict-intent queries)
 {
+  const anchorSlot = 6;
+  const anchorIdx = RANGES.MEMORY_INDEX_START + anchorSlot;
+  const anchorWord = encodeMemoryIndexSlot({ slotIndex: anchorSlot, recordId: stableRecordIdFor('mem_conflict_anchor'), family: 'multi_hop_relation', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n })[0];
   const idx = RANGES.POLICY_CONFLICT_START + 0;
-  const word = encodePolicyAtom({ atomIndex: 0, family: 'conflict_lifecycle', selector: POLICY_SELECTOR.CONFLICT_SET_MEMBER, evidenceFeature: POLICY_EVIDENCE_FEATURE.CONTRADICTS_EDGE, action: 'boost', scope: 'conflict_set', targetSlot: 1, budget: 200, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
+  const word = encodePolicyAtom({ atomIndex: 0, family: 'conflict_lifecycle', selector: POLICY_SELECTOR.CONFLICT_SET_MEMBER, evidenceFeature: POLICY_EVIDENCE_FEATURE.CONTRADICTS_EDGE, action: 'boost', scope: 'conflict_set', targetSlot: anchorSlot, budget: 200, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
   examples.push({
-    surface: 'conflict_state (conflict_lifecycle)',
+    surface: 'conflict_state bootstrap (conflict_lifecycle)',
     publicDataSeen: 'public contradicts / scope_differs edge DIRECTION (src = resolving/asserting doc, dst = contradicted candidate); the anchor MemoryIndex slot',
-    patchType: 'POLICY_UPDATE (0x07)', wordCount: 1,
+    patchType: 'MIXED (0xFF)', wordCount: 2,
     intent: 'boost the contradicts-SRC (resolved) doc on queries carrying a public conflict/scope intent (parseQueryConflictIntent gate); suppress the candidate with a second atom (action=suppress)',
-    patch: { patchType: PATCH_TYPE.POLICY_UPDATE, wordCount: 1, scoreDelta: 0n, parentStateRoot: parentRoot, indices: [idx], newWords: [word] },
+    prerequisite: 'If the anchor already exists, update only the atom with POLICY_UPDATE. If the anchor is new, bootstrap anchor+atom as this MIXED patch.',
+    patch: { patchType: PATCH_TYPE.MIXED, wordCount: 2, scoreDelta: 0n, parentStateRoot: parentRoot, indices: [anchorIdx, idx], newWords: [anchorWord, word] },
     forbidden: 'using the corpus lifecycleState label or qrels (selector reads PUBLIC edge direction only); firing on non-conflict queries (the conflict-INTENT gate prevents off-family damage); wrong-direction (boost candidate) — provably HURTS',
     sourceAttributionIfFires: 'conflict-atom trace: boost@contradicts-src / suppress@contradicts-dst, query-local (top-K gate), bounded ±budget/1000·spread',
   });
@@ -112,7 +118,7 @@ for (const ex of examples) {
   const wire = encodePatch(ex.patch);
   const dec = decodePatch(wire);
   const vt = validatePatchType(dec.patchType, dec.indices);
-  const applied = applyPatch(genesis, ex.patch);
+  const applied = applyPatch(genesis, ex.patch, true);
   const ok = vt.ok && applied.ok && dec.wordCount === ex.patch.wordCount;
   ex.wireHex = hex(wire);
   ex.childStateRoot = applied.ok ? bytesToHex(merkleizeState(applied.state)) : null;

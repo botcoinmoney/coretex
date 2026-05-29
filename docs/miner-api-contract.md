@@ -1,8 +1,18 @@
 # CoreTex Miner-Facing API Contract
 
 Public contract a miner uses to construct valid, non-oracle patches without running the
-full CoreTex stack. Validated by `scripts/miner-api-contract-gate.mjs` (route handler +
-payload contract) against the launch profile + candidate bundle + dgen1-r5-synth corpus.
+full CoreTex stack.
+
+Status note, reconciled 2026-05-29: the compact `dgen1-r5-synth` corpus and
+May 27 four-surface launch lock are historical. Current launch posture is in
+`release/calibration/LAUNCH_DOC_RECONCILIATION_2026_05_29.md`: temporal and
+top1-only abstention are reward-active; relation/evidence and conflict r5 atoms
+are safe-but-not-active unless the live challenge explicitly re-promotes them.
+The live `/coretex/challenge` is the source of truth for enabled surfaces and
+allowed patch ranges.
+
+Validation gate: `scripts/miner-api-contract-gate.mjs` must be rerun against the
+current launch profile, bundle, and corpus before signing.
 
 Routes (`packages/cortex/src/coordinator/endpoints.ts`):
 
@@ -28,15 +38,15 @@ Routes (`packages/cortex/src/coordinator/endpoints.ts`):
 | `substrateAccess.byRoot` | URL to fetch the full state by root; `wordCount` 1024, `packedBytes` 32768 |
 | `bundleHash` / `coreVersionHash` | pins the exact scoring/controller/model behavior (see `bundle-attestation-smoke.mjs`) |
 | `profileName` / `pipelineVersion` | e.g. `coretex-retrieval-v2-policy-r5` (selects r4 vs r5 atom interpretation) |
-| `corpusRoot` + `corpusMeta` | Merkle commitment over durable event primitives only (NOT qrels); bi-encoder model id/revision |
-| `activeFrontierRoot` | active-frontier root if churn is on (default **null** at launch — churn off) |
+| `corpusRoot` + `corpusMeta` | Merkle commitment over validator production events, including hidden qrels and embedding bytes; miners receive only the root/hash metadata plus bi-encoder model id/revision |
+| `activeFrontierRoot` | active-frontier root for the C3 launch frontier. Launch profiles should expose a non-null root; `null` / all-zero is only for smoke, legacy, or an explicitly churn-off deployment. |
 | `allowedPatchTypes` + `patchWordRanges` | writable patch types and their word-index ranges, per active surface |
 | `patchWordBudget` | max words per STATE_ADVANCE patch (**4**) |
 | `minImprovementPpm` / `replayTolerancePpm` | acceptance floor + replay tolerance |
 | `screenerThresholdPpm` | current dynamic screener threshold (from live baseline + noise floor; recomputes after baseline/churn/corpus/reranker changes) |
 | `perMinerScreenerCap` | on-chain V4 `coreTexScreenerCapPerMinerPerEpoch` (default **50**, adjustable by owner/policyAdmin). Hard ceiling on SCREENER_PASS receipts per miner per epoch; persists across state advances within the epoch; STATE_ADVANCE receipts and standard-lane receipts are not counted. Receipts above the cap revert `CoreTexScreenerCapExceeded`. |
 | `memoryIRSchemaVersion` | the fixed Memory-IR protocol grammar version (renderer is protocol-owned) |
-| `activeSubstrateSurfaces` | the live earned surfaces: `temporal`, `relation_typed_routing`, `evidence_bundle`, `guarded_abstention` (+ `conflict_state` only when enabled) |
+| `activeSubstrateSurfaces` | the live earned surfaces from the challenge. Current reconciled launch posture is `temporal` + `guarded_abstention_top1`; relation/evidence and conflict atoms are safe-but-not-active unless explicitly present here. |
 | `exampleValidPatch` | a worked, structurally-valid patch encoding |
 | `hiddenEvalWarning` | explicit notice that hidden qrels / eval pack / answer IDs / epochSecret are not public |
 
@@ -87,11 +97,11 @@ The state-advance work-multiplier tier (`30000/40000/60000/90000/120000` bps @ `
 since-last-advance screeners, hard cap `300000` bps = 30x) is enforced on-chain in V4
 (`computeCoreTexWorkUnitsBps`) and is the in-receipt economic control.
 
-## Minimal worked examples (per launch surface)
+## Minimal worked examples
 
 Generated + validated by `scripts/miner-patch-examples.mjs` (`--json` for full wire bytes). Each is
-encoded from PUBLIC structure only, round-trips, validates, and applies onto genesis. A deeper miner
-guide will live in a canonical skill file; these prevent format-guessing. Patch budget ≤ 4 words.
+encoded from PUBLIC structure only, round-trips, validates, and applies onto genesis. These examples
+prevent format-guessing; they are not all reward-active launch surfaces. Patch budget ≤ 4 words.
 
 > **Patch type names below are off-chain SEMANTIC categories (`RELATION_UPDATE`,
 > `POLICY_UPDATE`, …) that align with the on-chain wire byte.** The on-chain compact-patch
@@ -104,10 +114,8 @@ guide will live in a canonical skill file; these prevent format-guessing. Patch 
 > per-type range check. The `(0xNN)` annotations in the section titles below ARE the wire
 > byte you put at offset 0 of `patchBytes`.
 >
-> **MemoryIndex layout (V2 launch substrate).** Words `32–383` are 352 single-word slots,
-> stride-1 (one slot per word, slotIndex `0..351`). The legacy `decoder/index.ts` 44×8-word
-> stride is the V4 work-unit object model and is NOT the launch substrate — see
-> `specs/cortex_state.md` §Range B. Miners must target stride-1.
+> **MemoryIndex layout (launch substrate).** Words `32–383` are 352 single-word slots,
+> stride-1 (one slot per word, slotIndex `0..351`). Miners must target stride-1.
 
 ### 1. temporal / lifecycle  — `MIXED (0xFF)`, 3 words
 - **Public data seen:** corpus doc IDs + temporal currency (which doc supersedes which); MemoryIndex slot layout.
@@ -115,20 +123,28 @@ guide will live in a canonical skill file; these prevent format-guessing. Patch 
 - **Forbidden:** pointing the record at qrel/answer doc IDs; > 4 words; any reserved-range index.
 - **If it fires:** `temporalBonus` on the current doc; the stale doc's nDCG credit is dropped (temporalStaleContrast) and tracked in `temporalContrastRecall`.
 
-### 2. relation-typed routing  — `RELATION_UPDATE (0x04)`, 1 word
+### 2. relation-typed routing structural example — `RELATION_UPDATE (0x04)`, 1 word
 - **Public data seen:** public relation graph (supports/causes/supersedes/…) + the query's parsed relation-intent.
 - **Patch:** index `[799]` = one `supports` category-lens edge. `wire 0x0401…`.
 - **Forbidden:** flooding all edge types; relying on the entity-only (untyped) selector; query→answer edges.
+- **Current launch posture:** safe-but-not-active as a positive lift surface after 100k scale findings unless the live challenge explicitly enables it.
 - **If it fires:** `categoryLensBFS` admits the matched anchor reach; bounded by `policyMaxBudgetEvidence` (beta 0.25).
 
-### 3. conflict_state (conflict_lifecycle)  — `POLICY_UPDATE (0x07)`, 1 word
+### 3. evidence_bundle bootstrap structural example — `MIXED (0xFF)`, 2 words
+- **Public data seen:** the anchor MemoryIndex slot's public subject + public out-edges; the query's parsed relation intent + public subject grounding.
+- **Patch:** one MemoryIndex policy anchor plus index `[384]` = evidence atom `selector=ANSWER_DENSITY, evidenceFeature=SUPPORT_IN_DEGREE, action=bundle, scope=relation_path, targetSlot=anchor`. If the anchor already exists, an atom-only update uses `POLICY_UPDATE`; bootstrapping anchor+atom uses `MIXED`.
+- **Forbidden:** anchoring a generic/owner entity; budget over `policyMaxBudgetEvidence`; firing off-intent or cross-subject; reading qrels.
+- **If it fires:** `policyAdmitted` via the evidence atom; query-local, subject-scoped, bounded by `policyMaxBudgetEvidence`.
+
+### 4. conflict_state bootstrap structural example — `MIXED (0xFF)`, 2 words
 - **Public data seen:** public `contradicts` / `scope_differs` edge DIRECTION (src = resolving/asserting doc, dst = contradicted candidate); the anchor MemoryIndex slot.
-- **Patch:** index `[512]` = conflict atom `selector=CONFLICT_SET_MEMBER, evidenceFeature=CONTRADICTS_EDGE, action=boost, scope=conflict_set, targetSlot=anchor`. Add a second atom `action=suppress` for the candidate. `wire 0x0701…`.
+- **Patch:** one MemoryIndex policy anchor plus index `[512]` = conflict atom `selector=CONFLICT_SET_MEMBER, evidenceFeature=CONTRADICTS_EDGE, action=boost, scope=conflict_set, targetSlot=anchor`. Add a second atom `action=suppress` for the candidate. If the anchor already exists, an atom-only update uses `POLICY_UPDATE`; bootstrapping anchor+atom uses `MIXED`.
 - **Forbidden:** using the corpus `lifecycleState` label or qrels (selector reads PUBLIC edge direction only); firing on non-conflict queries (the conflict-INTENT gate `policyConflictIntentAdmission` prevents off-family damage); wrong-direction (boost candidate) — provably HURTS.
+- **Current launch posture:** safe-but-not-active as a positive lift surface after 300k scale findings unless the live challenge explicitly enables it.
 - **If it fires:** conflict-atom trace `boost@contradicts-src / suppress@contradicts-dst`, query-local (top-K gate), bounded `±budget/1000·spread`.
 
-### 4. guarded abstention  — `POLICY_UPDATE (0x07)`, 1 word
+### 5. guarded abstention  — `POLICY_UPDATE (0x07)`, 1 word
 - **Public data seen:** whether the query has ANY public evidence path (relation/support edge) to a candidate.
 - **Patch:** index `[640]` = abstention atom `selector=MISSING_EVIDENCE, evidenceFeature=NO_PUBLIC_EVIDENCE_PATH, action=abstain, targetSlot=NONE, flags=REQUIRE_NO_EVIDENCE_PATH`. `wire 0x0701…`.
-- **Forbidden:** `targetSlot` pointing at a real anchor (abstention uses `POLICY_TARGET_NONE`); abstaining on answerable queries — the OPERATOR gate (top1 < 0.9995 AND top1-top2 margin < 0.0003) prevents it; the miner cannot force abstention alone.
-- **If it fires:** abstention trace fires only when the miner selector matches AND the operator top1+margin gate trips.
+- **Forbidden:** `targetSlot` pointing at a real anchor (abstention uses `POLICY_TARGET_NONE`); abstaining on answerable queries — the OPERATOR top1 gate prevents it; the miner cannot force abstention alone.
+- **If it fires:** abstention trace fires only when the miner selector matches AND the operator top1 gate trips. The older top1+margin operating point is archived; production-scale findings support top1-only as the launch posture.

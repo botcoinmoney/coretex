@@ -102,7 +102,7 @@ const challenge = {
   corpusRoot,
   corpusMeta,
   activeFrontierRoot, // C3 launch-required: real derived genesis frontier root (non-zero)
-  allowedPatchTypes: m.buildAllowedPatchTypes({ pipelineVersion: profile.pipelineVersion }), // CANONICAL {name,byte,wordIndexRange}, pipeline-aware (r5 suppresses KEY/CODEBOOK/MIXED)
+  allowedPatchTypes: m.buildAllowedPatchTypes({ pipelineVersion: profile.pipelineVersion }), // CANONICAL {name,byte,wordIndexRange}; r5 suppresses KEY/CODEBOOK and keeps MIXED for true cross-region compiles.
   patchWordRanges: surfaces, // active candidate surfaces (subset that is reward-active this candidate)
   patchWordBudget: 4,
   minImprovementPpm,
