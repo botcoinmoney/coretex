@@ -89,7 +89,11 @@ const qId = () => `q${String(qSeq++).padStart(7, '0')}`;
 const addEntity = (id, canonicalName, aliases, lane) => { entities.push({ id, canonicalName, aliases, lane }); };
 function addDoc(d) { const id = docId(); const split = splitFor(id); docs.push({ id, split, ...d }); return id; }
 function addRel(src, dst, type, label) { relations.push({ src, dst, type, label }); }
-function addQuery(q) { const id = qId(); const split = splitFor(id); queries.push({ id, split, ownerScoped: true, ...q }); return id; }
+// PUBLIC subject grounding: the subject entity a query is ABOUT (set per-subject below). Emitted on
+// every query so the scorer resolves the subject by exact id, not by name text (canonical names
+// collide up to 112-way at 300k → name matching floods r5 policy admission = the "zero signal" bug).
+let CURRENT_SUBJECT_ID = null;
+function addQuery(q) { const id = qId(); const split = splitFor(id); queries.push({ id, split, ownerScoped: true, ...(CURRENT_SUBJECT_ID ? { subjectEntityId: CURRENT_SUBJECT_ID } : {}), ...q }); return id; }
 // continuity-label → scorer routing edge type. The categoryLens routes only on
 // supports/causes/supersedes/coreference_of, so ONLY low-fanout ANSWER-bearing labels
 // map to those; high-fanout structural labels (context_of) map to a NON-routed type
@@ -124,6 +128,7 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     const uniqIdx = s; // disambiguating index keeps canonical identity unique even on name reuse
     const isProject = s % 3 === 0; // ~1/3 projects, ~2/3 people
     const subjId = `e_${universe}_s${s}`;
+    CURRENT_SUBJECT_ID = subjId; // public grounding for every query about this subject
     const job = pick(JOBS), city = pick(CITIES);
     const projName = `${pick(TOPICS).replace(/\s/g, '-')}-svc-${uniqIdx}`;
     const canonical = isProject ? projName : `${first} ${last}`;
@@ -217,7 +222,7 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
       const nDist = 1 + ri(3);
       addQuery({ lane: 'deep', family: 'multi_session_bridge', grounding: partial ? 'partial' : 'distant',
         queryText: isProject ? `What datastore does ${canonical} depend on?` : `What is the job of ${canonical}'s sibling?`,
-        qrels: [{ docId: answerDoc, relevance: 1.0, role: 'direct' }, { docId: bridgeDoc, relevance: 0.5, role: 'bridge' }],
+        qrels: [{ docId: answerDoc, relevance: 1.0, role: 'direct' }, { docId: bridgeDoc, relevance: 0.4, role: 'bridge' }],
         hardNegatives: [{ docId: introId, category: 'relation_neighbor' }], ownerEntityId: universe, band: band(4, nDist, chance(0.15)) });
     }
 
@@ -228,7 +233,7 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
       const outcome = addDoc({ lane: 'deep', kind: 'decision_outcome', entityIds: tagU(), text: `After the migration, ${canonical} saw latency drop and incidents fall.`, shape: 'decision_outcome', timestamp: ts(8 + ri(8)), currentStaleFlag: true });
       rel(reason, decision, 'decision_reason'); rel(outcome, decision, 'decision_outcome');
       addQuery({ lane: 'deep', family: 'decision_provenance', queryText: `Why did ${canonical} migrate its datastore?`,
-        qrels: [{ docId: reason, relevance: 1.0, role: 'direct' }, { docId: decision, relevance: 0.5, role: 'bridge' }],
+        qrels: [{ docId: reason, relevance: 1.0, role: 'direct' }, { docId: decision, relevance: 0.4, role: 'bridge' }],
         hardNegatives: [{ docId: outcome, category: 'relation_neighbor' }], ownerEntityId: universe, band: band(3, 2, chance(0.2)) });
     }
 
@@ -242,7 +247,7 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
       const errDoc = addDoc({ lane: 'deep', kind: 'gotcha', entityIds: tagU(), text: `${canonical} hit a ${err} during deploys.`, shape: 'gotcha_record', timestamp: ts(6 + ri(12)), currentStaleFlag: true });
       rel(fixDoc, errDoc, 'fixes');
       addQuery({ lane: 'deep', family: 'causal_memory_chain', queryText: `How was the ${err} in ${canonical} resolved?`,
-        qrels: [{ docId: fixDoc, relevance: 1.0, role: 'direct' }, { docId: errDoc, relevance: 0.5, role: 'bridge' }],
+        qrels: [{ docId: fixDoc, relevance: 1.0, role: 'direct' }, { docId: errDoc, relevance: 0.4, role: 'bridge' }],
         hardNegatives: [{ docId: introId, category: 'relation_neighbor' }], ownerEntityId: universe, band: band(3, 1, false) });
     }
 
@@ -263,8 +268,14 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
       // but one is contradicted / scope-different / unresolved. A policy atom should reason
       // over the lifecycle edge/state rather than applying blunt temporal stale suppression.
       const conflictAttr = isProject ? 'deployment region' : 'preferred clinic';
-      const scopedA = isProject ? pick(CITIES) : `${pick(CITIES)} family clinic`;
-      const scopedB = isProject ? pick(CITIES) : `${pick(CITIES)} specialist clinic`;
+      // Distinct cities so the "corrected" value never equals the original (degenerate conflict =
+      // no contradiction to discover). Same RNG draw count as before; collision falls back to the
+      // next city deterministically.
+      const cityA = pick(CITIES);
+      let cityB = pick(CITIES);
+      if (cityB === cityA) cityB = CITIES[(CITIES.indexOf(cityA) + 1) % CITIES.length];
+      const scopedA = isProject ? cityA : `${cityA} family clinic`;
+      const scopedB = isProject ? cityB : `${cityB} specialist clinic`;
       const stableScope = isProject ? 'production' : 'weekday care';
       const conflictA = addDoc({ lane: 'deep', kind: 'lifecycle_conflict', entityIds: tagU(),
         text: `${canonical}'s ${conflictAttr} for ${stableScope} was recorded as ${scopedA}.`,

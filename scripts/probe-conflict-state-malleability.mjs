@@ -82,7 +82,10 @@ console.error(`[conflict] pack=${pack.events.length} q | families=${packFams.joi
 
 // eval subjects (public): entities mentioned by pack query text. Subjects of CONFLICT-family pack queries
 // (family is public query metadata) are prioritized when the 128-slot region can't cover every conflict set.
-const subjectsOf = (qid) => { const s = new Set(); const qt = (qtextOf.get(qid) ?? '').toLowerCase(); for (const ent of entityRegistry) { if (GENERIC.has(ent.id)) continue; if (ent.names.some((n) => n && qt.includes(n))) s.add(ent.id); } return s; };
+// PUBLIC subject grounding (exact id), not name matching — see Fix A. Collision-proof at 300k where the
+// old name parse made conflictQuerySubjects explode (1686 subjects for ~23 conflict queries).
+const subjById = new Map(logical.queries.map((q) => [q.id, q.subjectEntityId]));
+const subjectsOf = (qid) => { const sid = subjById.get(qid); return new Set(sid && !GENERIC.has(sid) ? [sid] : []); };
 const evalSubjects = new Set(); const conflictQuerySubjects = new Set();
 for (const e of pack.events) { const qid = e.recordId ?? e.id; const subs = subjectsOf(qid); for (const s of subs) { evalSubjects.add(s); if (famOf.get(qid) === 'conflict_lifecycle') conflictQuerySubjects.add(s); } }
 

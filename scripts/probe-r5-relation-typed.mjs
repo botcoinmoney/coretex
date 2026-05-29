@@ -73,11 +73,12 @@ const ROUTING_EDGES = new Set(['supports', 'causes', 'coreference_of', 'derived_
 // ── ANCHOR PLACEMENT (public): every subject-bearing event carrying ≥1 routing edge whose subject is
 //    mentioned by some eval query. Honest: subject parse + corpus edge structure; no qrels/gold. The
 //    same anchor set serves BOTH arms; only the scorer's admission filter differs.
+// PUBLIC subject grounding (exact id), not name matching — at 300k canonical names collide 112-way so
+// name parse fans a query out to 100+ subjects and floods admission. subjectEntityId is collision-proof.
+const subjById = new Map(logical.queries.map((q) => [q.id, q.subjectEntityId]));
 const evalSubjects = new Set();
-for (const e of pack.events) {
-  const qt = (qtextOf.get(e.recordId ?? e.id) ?? '').toLowerCase();
-  for (const ent of policyEntityRegistry) { if (GENERIC_ENTITY_IDS.includes(ent.id)) continue; if (ent.names.some((n) => n && qt.includes(n))) evalSubjects.add(ent.id); }
-}
+for (const e of pack.events) { const sid = subjById.get(e.recordId ?? e.id); if (sid && !GENERIC_ENTITY_IDS.includes(sid)) evalSubjects.add(sid); }
+if (evalSubjects.size === 0) console.error('[rt] WARNING: 0 eval subjects — corpus lacks subjectEntityId; regenerate before trusting this probe.');
 // The POLICY_EVIDENCE region holds 128 atom slots, so cap anchors at 128. Select GREEDILY to cover
 // as many (subject, routing-edge-type) pairs as possible → every covered query's intent has a matching
 // anchor. Honest: subject parse + corpus edge structure; no qrels/gold.

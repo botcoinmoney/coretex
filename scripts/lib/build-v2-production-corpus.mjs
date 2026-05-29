@@ -14,8 +14,14 @@ import { repoRoot, distIndex } from '../_repo-root.mjs';
 const { computeCorpusRoot, biEncoderModelIdHash } = await import(distIndex);
 
 const PROV = { source: 'synthetic_challenge', sourceHash: '0x' + '00'.repeat(32) };
-const bucket = (f) => (f === 'temporal_update' || f === 'conflict_lifecycle') ? 'temporal'
+// Families de-collapsed: conflict_lifecycle / aspect_constraint / coreference are first-class buckets
+// (NOT folded into temporal/near_collision) so per-family quotas/metrics isolate them and conflict does
+// not inherit temporal stale-suppression semantics. Scorer applies no family-specific path to these.
+const bucket = (f) => f === 'temporal_update' ? 'temporal'
   : (f === 'multi_session_bridge' || f === 'causal_memory_chain' || f === 'decision_provenance') ? 'multi_hop_relation'
+  : f === 'conflict_lifecycle' ? 'conflict_lifecycle'
+  : f === 'aspect_constraint' ? 'aspect_constraint'
+  : f === 'coreference_resolution' ? 'coreference'
   : 'near_collision';
 
 /**
@@ -63,7 +69,8 @@ export function buildV2ProductionCorpus({ corpusPath, embPath, junkEdges = 0 }) 
       const negs = (q.hardNegatives ?? []).map((n) => ({ id: n.docId, text: docById.get(n.docId).text, category: n.category }));
       const ev = { id: q.id, family: bucket(q.family), logicalFamily: q.family, domain: q.lane, split: q.split ?? 'eval_hidden', queryText: q.queryText, truthDocuments: [], hardNegatives: negs, qrels: [], protected: false, relations: [],
         ...(q.band ? { band: q.band } : {}),
-        ...(q.ownerEntityId !== undefined ? { ownerEntityId: q.ownerEntityId, ownerScoped: q.ownerScoped !== false } : {}), provenance: PROV, embeddings: mkEmb(qEmb.get(q.id), [], negs.map((n) => [n.id, docEmb.get(n.id)])) };
+        ...(q.ownerEntityId !== undefined ? { ownerEntityId: q.ownerEntityId, ownerScoped: q.ownerScoped !== false } : {}),
+        ...(q.subjectEntityId !== undefined ? { subjectEntityId: q.subjectEntityId } : {}), provenance: PROV, embeddings: mkEmb(qEmb.get(q.id), [], negs.map((n) => [n.id, docEmb.get(n.id)])) };
       events.push(ev); queryEvents.push(ev); continue;
     }
     const truths = (q.qrels ?? []).filter((r) => r.relevance > 0).map((r) => ({ id: r.docId, text: docById.get(r.docId).text, isCurrent: docById.get(r.docId).currentStaleFlag === false ? false : true }));
@@ -72,7 +79,8 @@ export function buildV2ProductionCorpus({ corpusPath, embPath, junkEdges = 0 }) 
       truthDocuments: truths, hardNegatives: negs, qrels: (q.qrels ?? []).map((r) => ({ documentId: r.docId, relevance: r.relevance })), protected: false, relations: [],
       ...(q.band ? { band: q.band } : {}),
       ...(q.grounding ? { grounding: q.grounding } : {}),
-      ...(q.ownerEntityId !== undefined ? { ownerEntityId: q.ownerEntityId, ownerScoped: q.ownerScoped !== false } : {}), provenance: PROV, embeddings: mkEmb(qEmb.get(q.id), truths.map((t) => [t.id, docEmb.get(t.id)]), negs.map((n) => [n.id, docEmb.get(n.id)])) };
+      ...(q.ownerEntityId !== undefined ? { ownerEntityId: q.ownerEntityId, ownerScoped: q.ownerScoped !== false } : {}),
+      ...(q.subjectEntityId !== undefined ? { subjectEntityId: q.subjectEntityId } : {}), provenance: PROV, embeddings: mkEmb(qEmb.get(q.id), truths.map((t) => [t.id, docEmb.get(t.id)]), negs.map((n) => [n.id, docEmb.get(n.id)])) };
     if (ev.family === 'temporal') ev.temporal = { validFromEpoch: 1, validUntilEpoch: Number.MAX_SAFE_INTEGER, currentStaleFlag: false };
     events.push(ev); queryEvents.push(ev);
   }

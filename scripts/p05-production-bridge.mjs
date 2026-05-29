@@ -110,6 +110,11 @@ const docById = new Map(logical.docs.map((d) => [d.id, d]));
 
 const bucket = (fam) => fam === 'temporal_update' ? 'temporal'
   : (fam === 'multi_session_bridge' || fam === 'causal_memory_chain' || fam === 'decision_provenance') ? 'multi_hop_relation'
+  // r5 operation families: first-class buckets (no longer collapsed into near_collision) so
+  // per-family quotas/metrics isolate them. Scorer behaviour is unchanged (no family-specific path).
+  : fam === 'conflict_lifecycle' ? 'conflict_lifecycle'
+  : fam === 'aspect_constraint' ? 'aspect_constraint'
+  : fam === 'coreference_resolution' ? 'coreference'
   : 'near_collision';
 const PROV = { source: 'synthetic_challenge', sourceHash: '0x' + '00'.repeat(32) };
 const mkEmb = (queryBytes, perTruth, perNeg) => ({ modelId: BE.modelId, revision: BE.revision, layout: LAYOUT, query: queryBytes, perTruth: new Map(perTruth), perNegative: new Map(perNeg) });
@@ -177,6 +182,8 @@ for (const q of logical.queries) {
     // PUBLIC owner scope from generation (q.ownerEntityId / q.ownerScoped) — the
     // realistic session/user store the query searches. NEVER derived from qrels.
     ...(q.ownerEntityId !== undefined ? { ownerEntityId: q.ownerEntityId, ownerScoped: q.ownerScoped !== false } : {}),
+    // PUBLIC subject grounding (exact entity id) — collision-proof selector input for r5 admission.
+    ...(q.subjectEntityId !== undefined ? { subjectEntityId: q.subjectEntityId } : {}),
     provenance: PROV, embeddings: mkEmb(qEmb.get(q.id), perTruth, perNeg),
   };
   if (fam === 'temporal') {
