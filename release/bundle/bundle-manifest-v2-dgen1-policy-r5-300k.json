@@ -83,8 +83,8 @@
       {
         "role": "substrate-impl",
         "path": "packages/cortex/src/state/patch.ts",
-        "sha256": "ee3be96ab8ca89ac4ef7b0d15c6f44b8160409547fe3b007a0d41f5b447457a9",
-        "bytes": 14078
+        "sha256": "cca20db25a09c960471e65d36c8995eafbd83dd8dc627aa36509f98f88cc8a35",
+        "bytes": 15804
       },
       {
         "role": "substrate-impl",
@@ -163,15 +163,27 @@
         "quotas": [
           {
             "stratum": "family=near_collision",
-            "minCount": 16
+            "minCount": 12
           },
           {
             "stratum": "family=temporal",
-            "minCount": 8
+            "minCount": 12
           },
           {
             "stratum": "family=multi_hop_relation",
+            "minCount": 10
+          },
+          {
+            "stratum": "family=conflict_lifecycle",
             "minCount": 8
+          },
+          {
+            "stratum": "family=aspect_constraint",
+            "minCount": 8
+          },
+          {
+            "stratum": "family=coreference",
+            "minCount": 6
           }
         ]
       },
@@ -268,8 +280,8 @@
         "baselineRecompute": "activeRootChanged",
         "majorDeltaPolicy": "corpusRootChanged"
       },
-      "_baselineNote": "Authoritative launch baseline = 153708 ppm (variance 0, samples 3) re-pinned 2026-05-29 against dgen1-r5-synth-300k-final-corpus + -final-embeddings (corpusRoot 0x29fb84c9fa…) + Qwen3-Reranker-0.6B@e61197ed, real Qwen A100. RE-CONFIRMED under the CONSERVATIVE posture (temporal + top1-only abstention; evidence/conflict/relation OFF, margin removed) — genesis baseline is posture-invariant (no policy atoms at genesis): conservative re-pin == 153708 (sidecar release/calibration/baseline-pin-300k-conservative.json). 300k is the sole canonical launch corpus.",
-      "baselineParentScorePpm": 153708,
+      "_baselineNote": "Authoritative launch baseline = 163371 ppm (variance 0, samples 3) re-pinned 2026-05-29 against dgen1-r5-synth-300k-final-corpus + -final-embeddings (corpusRoot 0x29fb84c9fa…) + Qwen3-Reranker-0.6B@e61197ed, real Qwen A100, on the CORRECTED quota-first 64-event hidden pack (all six de-collapsed families genuinely quota-satisfied: near_collision13/temporal15/multi_hop12/conflict9/aspect9/coref6; hiddenPackRoot 0x3606584d…). Sidecar: baseline-pin-300k-quotafirst.json. SUPERSEDES the earlier 153708 pin (sidecars -conservative/-quota), which was computed on the PRE-FIX 63-event pack whose quota fill was buggy (blind present++ over-counted → quotas not actually enforced → temporal-heavy pack); deriveQueryPack is now quota-first + fill-to-exact-size and the determinism gate hard-asserts coverage. Posture CONSERVATIVE (temporal + top1-only abstention; evidence/conflict/relation OFF, margin removed). 300k is the sole canonical launch corpus.",
+      "baselineParentScorePpm": 163371,
       "baselineVariancePpm": 0,
       "baselineSamples": 3,
       "baselineEvalSeedHex": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
@@ -296,8 +308,8 @@
       {
         "role": "evaluator",
         "path": "packages/cortex/src/eval/hidden-query-pack.ts",
-        "sha256": "7b4ad3c90dd41b5c997717c2465203d38d4055eee6b02821152bf298e0816912",
-        "bytes": 11752
+        "sha256": "efc834e10b2be8a5db9d5d7d6015a3b88bc3e7509b83e716e39cd7055a4f37a4",
+        "bytes": 11224
       },
       {
         "role": "evaluator",
@@ -642,5 +654,5 @@
     "coordinatorCacheOptional": true,
     "snapshots": []
   },
-  "bundleHash": "0x8858574103222871718710158444a4b5bca3d8ad75eeb0308bd689a4ff2b4ee8"
+  "bundleHash": "0x7d63caec13e720add0d5f232dea63b6fbe097ec8699901a539596ce9f98c6c65"
 }

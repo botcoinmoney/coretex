@@ -494,13 +494,19 @@ async function adminRotateChurn() {
   return { ok: true, activeFrontierRoot };
 }
 async function adminCorpusDelta() {
-  // Simulate a corpus growth delta by bumping corpusRoot. In a real run this would apply a
-  // CorpusDelta via applyCorpusDelta() against the loaded corpus.
+  // ⚠ SMOKE-ONLY / NON-AUTHORITATIVE FOR CHURN. This SYNTHETICALLY bumps corpusRoot (sha256 of a
+  // timestamp) only to exercise the stale-context REJECTION path (old-corpusRoot receipts must
+  // reject + baseline must recompute). It does NOT apply a real CorpusDelta and CANNOT bless
+  // evolveCorpus/live-update churn. Authoritative churn validation = the REAL path:
+  // scripts/evolve-corpus.mjs → embed delta docs (pinned bi-encoder) → buildCorpusDelta/
+  // applyCorpusDelta → recompute corpusRoot, proven by scripts/churn-delta-reconstruct.mjs +
+  // scripts/churn-launch-e2e.mjs. Any launch churn claim MUST cite those, never this endpoint.
+  warn('adminCorpusDelta is SMOKE-ONLY (synthetic corpusRoot bump) — NOT authoritative churn; use churn-delta-reconstruct.mjs');
   const before = corpusRoot;
   corpusRoot = '0x' + createHash('sha256').update(`corpus-${corpusRoot}-${Date.now()}`).digest('hex');
   await recomputeBaseline('corpus-delta');
-  logTransition({ t: new Date().toISOString(), kind: 'CORPUS_DELTA', beforeCorpusRoot: before, afterCorpusRoot: corpusRoot, baselineScorePpm, screenerThresholdPpm });
-  return { ok: true, corpusRoot };
+  logTransition({ t: new Date().toISOString(), kind: 'CORPUS_DELTA', smokeOnly: true, authoritativeChurn: false, beforeCorpusRoot: before, afterCorpusRoot: corpusRoot, baselineScorePpm, screenerThresholdPpm });
+  return { ok: true, corpusRoot, smokeOnly: true, authoritativeChurn: false };
 }
 async function adminBumpHash(field) {
   const map = { profileHash: () => { profileHash = '0x' + createHash('sha256').update(`profile-${Date.now()}`).digest('hex'); return profileHash; },
@@ -662,20 +668,9 @@ function deriveHiddenPackFor(epochId_, profile_, corpus_) {
   return deriveQueryPack(epochId_, evalSeed, corpus_, profile_.hiddenPack);
 }
 function defaultAllowedPatchTypes() {
-  // MUST mirror the canonical PATCH_TYPE codes + patchTypeRange() in state/types.ts + state/patch.ts.
-  // (The old table had wrong byte codes/names — RELATION as 2, bogus BRIDGE/CONFLICT/CORE — and was
-  // MISSING POLICY_UPDATE 0x07, the only r5 atom write surface; it also presented reserved 896-991 as
-  // writable. A miner following it would build rejected patches.)
-  return [
-    { name: 'KEY_UPDATE', byte: 0x01, wordIndexRange: [384, 671] },        // RETRIEVAL_KEYS
-    { name: 'SLOT_REPLACE', byte: 0x02, wordIndexRange: [32, 383] },       // MEMORY_INDEX
-    { name: 'TEMPORAL_UPDATE', byte: 0x03, wordIndexRange: [800, 895] },   // TEMPORAL
-    { name: 'RELATION_UPDATE', byte: 0x04, wordIndexRange: [672, 799] },   // RELATIONS
-    { name: 'CODEBOOK_UPDATE', byte: 0x05, wordIndexRange: [896, 991] },   // CODEBOOK (r4); r5 reserves 896-991 zero
-    { name: 'HEADER_UPDATE', byte: 0x06, wordIndexRange: [0, 31] },        // HEADER
-    { name: 'POLICY_UPDATE', byte: 0x07, wordIndexRange: [384, 671] },     // r5 PolicyAtom: evidence 384-511 / conflict 512-639 / abstention 640-671
-    { name: 'MIXED', byte: 0xFF, wordIndexRange: [0, 991] },
-  ];
+  // Delegate to the CANONICAL grammar authority (state/patch.ts buildAllowedPatchTypes via PATCH_TYPE +
+  // patchTypeRange) — no hand-mirrored table (drift hazard). Includes POLICY_UPDATE 0x07 + correct bytes/ranges.
+  return cortex.buildAllowedPatchTypes({ pipelineVersion: profile.pipelineVersion });
 }
 function structuralOnlyTemplate(parentRoot) {
   // Deliberate no-op template: zero-words at non-target indices ⇒ verbatim submit returns E05.

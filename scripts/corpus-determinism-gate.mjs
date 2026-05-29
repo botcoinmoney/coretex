@@ -36,7 +36,7 @@ import { distIndex, repoRoot } from './_repo-root.mjs';
 import { buildV2ProductionCorpus } from './lib/build-v2-production-corpus.mjs';
 
 const m = await import(distIndex);
-const { computeCorpusRoot, deriveQueryPack, verifyQueryPack, packFamilyCounts, keccak256, bytesToHex } = m;
+const { computeCorpusRoot, deriveQueryPack, verifyQueryPack, packFamilyCounts, packQuotaCoverage, keccak256, bytesToHex } = m;
 
 function flag(name, fb) { const i = argv.indexOf(`--${name}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fb; }
 const corpusPath = flag('corpus', 'release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-corpus.json');
@@ -124,6 +124,13 @@ console.log(`familyCounts     ${JSON.stringify(famCount)}`);
 console.log(`epoch ${epoch} evalSeed ${evalSeedHex}`);
 console.log(`packSize         ${ids1.length} (profile cap ${profile.hiddenPack.packSize})`);
 console.log(`packFamilyCounts ${JSON.stringify(packFamilyCounts(pack1))}`);
+// Quota COVERAGE assertion (was missing — gate previously printed family counts but never verified
+// the profile quotas were actually met, so a sub-quota pack could pass). Assert every quota satisfied
+// per the canonical eventSatisfiesStratum matcher, and that the pack is EXACTLY packSize.
+const coverage = packQuotaCoverage(pack1, profile.hiddenPack);
+for (const c of coverage) check(`pack quota satisfied: ${c.stratum} (${c.count}/${c.minCount})`, c.satisfied);
+check(`pack is exactly packSize (${pack1.events.length}/${profile.hiddenPack.packSize})`, pack1.events.length === profile.hiddenPack.packSize);
+console.log(`packQuotaCoverage  ${JSON.stringify(coverage.map((c) => `${c.stratum.replace('family=', '')}:${c.count}/${c.minCount}`))}`);
 console.log(`hiddenPackRoot   ${hiddenPackRoot}`);
 console.log('────────────────────────────────────────────────────────');
 console.log(pass ? 'RESULT: ALL PASS ✅' : 'RESULT: FAIL ❌');

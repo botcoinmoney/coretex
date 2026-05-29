@@ -39,9 +39,11 @@ import { makeLaunchFrontier } from './lib/epoch-frontier.mjs';
 
 const opt = (n, fb) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fb; };
 const base = 'release/calibration/2026-05-21-memory-corpus-v2';
-const profile = JSON.parse(readFileSync(resolve(repoRoot, opt('profile', 'release/bundle/evaluator-profile-v2-dgen1-policy-r5.json')), 'utf8'));
-const manifest = JSON.parse(readFileSync(resolve(repoRoot, opt('bundle', 'release/bundle/bundle-manifest-v2-dgen1-policy-r5-candidate.json')), 'utf8'));
-const corpusPath = opt('corpus', `${base}/dgen1-r5-synth-corpus.json`);
+// Defaults pin the CANONICAL 300k launch candidate (the sole launch corpus). Old compact/9k
+// defaults were stale (off-scale 0.5 qrels). Override with --profile/--bundle/--corpus/--emb.
+const profile = JSON.parse(readFileSync(resolve(repoRoot, opt('profile', 'release/bundle/evaluator-profile-v2-dgen1-policy-r5-300k.json')), 'utf8'));
+const manifest = JSON.parse(readFileSync(resolve(repoRoot, opt('bundle', 'release/bundle/bundle-manifest-v2-dgen1-policy-r5-300k.json')), 'utf8'));
+const corpusPath = opt('corpus', `${base}/dgen1-r5-synth-300k-final-corpus.json`);
 let corpusMeta = {};
 try {
   // API contract shape does not depend on qrels/embeddings; read raw metadata so this
@@ -100,8 +102,8 @@ const challenge = {
   corpusRoot,
   corpusMeta,
   activeFrontierRoot, // C3 launch-required: real derived genesis frontier root (non-zero)
-  allowedPatchTypes: surfaces.map((s) => s.patchType),
-  patchWordRanges: surfaces,
+  allowedPatchTypes: m.buildAllowedPatchTypes({ pipelineVersion: profile.pipelineVersion }), // CANONICAL {name,byte,wordIndexRange}, pipeline-aware (r5 suppresses KEY/CODEBOOK/MIXED)
+  patchWordRanges: surfaces, // active candidate surfaces (subset that is reward-active this candidate)
   patchWordBudget: 4,
   minImprovementPpm,
   replayTolerancePpm: profile.replayTolerancePpm,

@@ -23,7 +23,7 @@ import { distIndex, repoRoot } from './_repo-root.mjs';
 import { buildV2ProductionCorpus } from './lib/build-v2-production-corpus.mjs';
 
 const C = await import(distIndex);
-const { verifyBundleManifest, computeCorpusRoot, makeLaunchFrontier, computePatchHash, computeAcceptanceThresholdPpm, computeProfileHash } = C;
+const { verifyBundleManifest, computeCorpusRoot, makeLaunchFrontier, computePatchHash, computeAcceptanceThresholdPpm, computeProfileHash, deriveQueryPack, packQuotaCoverage } = C;
 
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
 const CORPUS = 'release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-300k-final-corpus.json';
@@ -77,6 +77,13 @@ check('baseline pinned (parentScorePpm + samples>=3)', Number(profile.baselinePa
   `parent=${profile.baselineParentScorePpm} samples=${profile.baselineSamples}`);
 check('acceptance threshold from canonical patchAcceptanceFloors + replayTolerancePpm', typeof computeAcceptanceThresholdPpm === 'function' && !!profile.patchAcceptanceFloors && typeof profile.replayTolerancePpm === 'number',
   profile.patchAcceptanceFloors ? `thr=${computeAcceptanceThresholdPpm(profile)}ppm` : 'MISSING floors');
+
+// 5b. hidden-pack quota coverage + exact packSize (so a sub-quota candidate cannot reach A100).
+const evalSeedHex = profile.baselineEvalSeedHex ?? '0x' + 'a5'.repeat(32);
+const _pack = deriveQueryPack(0, evalSeedHex, corpus, profile.hiddenPack);
+const _cov = packQuotaCoverage(_pack, profile.hiddenPack);
+for (const c of _cov) check(`hidden-pack quota satisfied: ${c.stratum} (${c.count}/${c.minCount})`, c.satisfied);
+check(`hidden-pack is exactly packSize (${_pack.events.length}/${profile.hiddenPack.packSize})`, _pack.events.length === profile.hiddenPack.packSize);
 
 // 6. r5 grammar + patch-hash domain present in the runtime.
 check('pipelineVersion pins r5 (policyAtomsMode derives true)', profile.pipelineVersion === 'coretex-retrieval-v2-policy-r5', profile.pipelineVersion);
