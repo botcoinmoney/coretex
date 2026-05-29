@@ -664,7 +664,9 @@ const gitSha = (() => { try { return execSync('git rev-parse --short HEAD', { cw
 const distHash = (() => { try { return execSync('sha256sum packages/cortex/dist/eval/retrieval-benchmark.js', { cwd: repoRoot }).toString().trim().slice(0, 16); } catch { return 'unknown'; } })();
 const dirtyTree = (() => { try { return execSync('git status --porcelain', { cwd: repoRoot }).toString().trim().length > 0; } catch { return null; } })();
 
-const gpuRunCommand = `CORETEX_RERANKER_PYTHON=/usr/bin/python3 HF_HUB_CACHE=/var/lib/coretex/model-cache HF_HUB_OFFLINE=1 \\\n  node scripts/probe-r5-a100-oracle.mjs --reranker gpu --seeds 3 --betas 0.5,1.0 --export-traces \\\n  --out release/calibration/2026-05-21-memory-corpus-v2/r5-a100-oracle-gpu.json`;
+// Real invocation provenance — reconstruct from the ACTUAL argv (do NOT hardcode seeds/betas/profile/out,
+// which misreports what was run when the campaign passes different flags).
+const gpuRunCommand = `CORETEX_RERANKER_PYTHON=/usr/bin/python3 HF_HUB_CACHE=/var/lib/coretex/model-cache HF_HUB_OFFLINE=1 node scripts/probe-r5-a100-oracle.mjs ${process.argv.slice(2).join(' ')}`;
 
 const report = {
   probe: 'r5-a100-oracle (UNIFIED, all 6 families, bounded query-local atoms)',
@@ -674,7 +676,7 @@ const report = {
   boundedAtomDesign: 'Per query q: take q\'s exposed reranked list (finalRankingFull, now carrying rerankerScore via additive opt-in). UNIT = (max-min rerankerScore) over q\'s OWN list. Atom adds +β·UNIT to its in-pool boost docs / −β·UNIT to suppress docs, RE-SORTS, recomputes nDCG@K. β·UNIT is a bounded FRACTION of q\'s own spread → NOT wholesale push-to-tail / corpus-wide dominance. β swept over ' + JSON.stringify(betas) + '.',
   provenance: {
     specVersion: logical.specVersion, phase: logical.phase, corpusRoot, gitSha, distHashRetrievalBenchmark: distHash, dirtyTree,
-    reranker: rerankerLabel, profile: 'evaluator-profile-v2-dgen1-deep-r1.json', biEncoder: BE.modelId, layout: LAYOUT,
+    reranker: rerankerLabel, profile: profilePath.replace(repoRoot + '/', ''), biEncoder: BE.modelId, layout: LAYOUT,
     corpus: corpusPath.replace(repoRoot + '/', ''), emb: embPath.replace(repoRoot + '/', ''),
     rerankerTopK: K, rerankerInputTopK: opts.rerankerInputTopK, ownerScopeMode: opts.ownerScopeMode,
     abstentionThreshold: opts.abstentionThreshold, temporalStaleContrast: opts.temporalStaleContrast,

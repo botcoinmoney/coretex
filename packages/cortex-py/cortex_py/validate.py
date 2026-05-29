@@ -77,85 +77,37 @@ _mark(10, 255, 0)  # SCORE_ROOT
 # Words 11–31: entirely reserved (all bits = 0)
 # (no _mark calls → _named[11..31] = 0 → reserved = all bits)
 
-# ---- MemoryIndex range (words 32–383): 44 slots × 8 words ----
-for _slot in range(44):
-    _base = 32 + _slot * 8
-    # Slot-word 0:
-    #   EVENT_ID[255:128] DOMAIN_CODE[127:96] OBJ_TYPE[95:80]
-    #   VALIDITY_FLAGS[79:64] — bit 0 (active), bit 1 (stale), bit 2 (revoked)
-    #   named; bits 3–15 of VALIDITY_FLAGS (= word bits 67:64+2 = 79:67) reserved
-    #   reserved_slot0[63:0]
-    _mark(_base, 255, 128)  # EVENT_ID
-    _mark(_base, 127, 96)   # DOMAIN_CODE
-    _mark(_base, 95, 80)    # OBJ_TYPE
-    # VALIDITY_FLAGS: bits 79:64 total; named sub-bits: bit0=word-bit64,
-    # bit1=word-bit65, bit2=word-bit66; bits 3–15 (word bits 79:67) reserved.
-    _mark(_base, 66, 64)    # VALIDITY_FLAGS bits 0–2 (active, stale, revoked)
-    # bits 79:67 remain reserved
-    # reserved_slot0[63:0] — reserved (no mark)
-
-    # Slot-word 1: CHECKSUM[255:128] CORPUS_EPOCH[127:64] EXPIRY_EPOCH[63:0]
-    _mark(_base + 1, 255, 0)  # fully named
-
-    # Slot-words 2–7: PAYLOAD_WORDS (bytes32 each) — fully named
-    for _sw in range(2, 8):
-        _mark(_base + _sw, 255, 0)
+# ---- MemoryIndex range (words 32–383): 352 stride-1 launch slots ----
+# Every word is a canonical MemoryIndex slot word. Semantic validation
+# (family/flags/retrievalSlot/expiry) lives in the substrate decoder; the
+# reserved-bit validator must not apply any pre-Tier-2 object mask here.
+for _w in range(32, 384):
+    _mark(_w, 255, 0)
 
 # ---- RetrievalKeys range (words 384–671): 36 slots × 8 words ----
-for _slot in range(36):
-    _base = 384 + _slot * 8
-    # Slot-word 0:
-    #   KEY_ID[255:128] KEY_TYPE[127:112] KEY_DIM[111:96]
-    #   KEY_FLAGS[95:80] — bit 0 (active); bits 1–15 (word bits 95:81) reserved
-    #   reserved_rk0[79:0] — reserved
-    _mark(_base, 255, 128)  # KEY_ID
-    _mark(_base, 127, 112)  # KEY_TYPE
-    _mark(_base, 111, 96)   # KEY_DIM
-    _mark(_base, 80, 80)    # KEY_FLAGS bit 0 only
-    # bits 95:81 are reserved within KEY_FLAGS; bits 79:0 are reserved_rk0
-
-    # Slot-words 1–7: KEY_VECTOR (bytes32 each) — fully named
-    for _sw in range(1, 8):
-        _mark(_base + _sw, 255, 0)
+# r4 reads these as RetrievalKeys; r5 reads 384–671 as typed PolicyAtoms.
+# Decode-level grammar, not reserved-bit masking, decides whether a word is
+# structurally valid for the active pipeline version.
+for _w in range(384, 672):
+    _mark(_w, 255, 0)
 
 # ---- Relations range (words 672–799): 128 entries × 1 word ----
-for _i in range(128):
-    _w = 672 + _i
-    # SRC_IDX[255:240] DST_IDX[239:224] REL_TYPE[223:208] WEIGHT[207:192]
-    # reserved_rel[191:0]
-    _mark(_w, 255, 240)  # SRC_IDX
-    _mark(_w, 239, 224)  # DST_IDX
-    _mark(_w, 223, 208)  # REL_TYPE
-    _mark(_w, 207, 192)  # WEIGHT
-    # bits 191:0 are reserved
+for _w in range(672, 800):
+    _mark(_w, 255, 0)
 
 # ---- Temporal range (words 800–895): 96 entries × 1 word ----
 for _i in range(96):
     _w = 800 + _i
-    # MEM_IDX[255:240] VALID_FROM_EPOCH[239:176] VALID_UNTIL_EPOCH[175:112]
-    # REVOKE_EPOCH[111:48] TEMPORAL_FLAGS[47:32] reserved_tmp[31:0]
-    _mark(_w, 255, 240)  # MEM_IDX
-    _mark(_w, 239, 176)  # VALID_FROM_EPOCH
-    _mark(_w, 175, 112)  # VALID_UNTIL_EPOCH
-    _mark(_w, 111, 48)   # REVOKE_EPOCH
-    # TEMPORAL_FLAGS[47:32]: bit 0 (= word bit 32) named; bits 1–15 (47:33) reserved
-    _mark(_w, 32, 32)    # TEMPORAL_FLAGS bit 0 only
-    # bits 47:33 are reserved within TEMPORAL_FLAGS; bits 31:0 are reserved_tmp
+    # memorySlot[255:248], supersededBy[247:240], validFrom[239:200],
+    # validUntil[199:160], flags[159:152]; bits 151:0 are reserved.
+    _mark(_w, 255, 152)
 
 # ---- Codebook range (words 896–991): 48 entries × 2 words ----
-for _slot in range(48):
-    _base = 896 + _slot * 2
-    # Word 0:
-    #   CODE[255:240] CODE_TYPE[239:224]
-    #   CODE_FLAGS[223:208]: bit 0 (= word bit 208) named; bits 1–15 reserved
-    #   reserved_cb0[207:0]
-    _mark(_base, 255, 240)  # CODE
-    _mark(_base, 239, 224)  # CODE_TYPE
-    _mark(_base, 208, 208)  # CODE_FLAGS bit 0 only
-    # bits 223:209 are reserved within CODE_FLAGS; bits 207:0 are reserved_cb0
-
-    # Word 1: CODE_DATA (bytes32) — fully named
-    _mark(_base + 1, 255, 0)
+# r4-compatible mask: codebook payload bits are meaningful in r4 and 896–991
+# is reserved-zero only under r5 policy validation. Keep this mask permissive;
+# the active pipeline's decoder/validator owns grammar enforcement.
+for _w in range(896, 992):
+    _mark(_w, 255, 0)
 
 # Words 992–1023: entirely reserved — no _mark calls
 
@@ -170,7 +122,7 @@ for _i in range(1024):
     # If reserved == 0 (e.g. bytes32 full-word fields), no entry needed.
 
 # Cleanup module-level temporaries
-del _w, _slot, _base, _sw, _i, _named, _FULL_256
+del _w, _i, _named, _FULL_256
 
 
 # ---------------------------------------------------------------------------

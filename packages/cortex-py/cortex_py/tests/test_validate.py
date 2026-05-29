@@ -75,70 +75,62 @@ def test_words_11_to_31_reserved():
         assert has_non_zero_reserved_bits(state), f"Word {i} not caught"
 
 
-def test_memory_index_slot0_reserved_lower_64():
-    """Bits 63:0 of each MemoryIndex slot-word 0 are reserved."""
-    # Slot 0, word 0 = index 32
+def test_memory_index_stride1_words_are_not_reserved_masked():
+    """MemoryIndex words are 352 stride-1 launch slots; semantic checks happen in the decoder."""
     state = CortexState(words=[0] * 1024)
-    state.words[32] = 1  # bit 0 is in reserved_slot0[63:0]
-    assert has_non_zero_reserved_bits(state)
+    state.words[32] = 1
+    state.words[383] = (1 << 255) | 1
+    assert not has_non_zero_reserved_bits(state)
 
 
-def test_memory_index_validity_flags_reserved():
-    """VALIDITY_FLAGS bits 3–15 (word bits 67–79) of slot-word 0 are reserved."""
+def test_memory_index_old_flag_mask_is_not_applied():
     state = CortexState(words=[0] * 1024)
-    # Set bit 67 (= VALIDITY_FLAGS bit 3) of word 32
     state.words[32] = 1 << 67
-    assert has_non_zero_reserved_bits(state)
+    assert not has_non_zero_reserved_bits(state)
 
 
-def test_retrieval_keys_flags_reserved():
-    """KEY_FLAGS bits 1–15 (word bits 81–95) of slot-word 0 are reserved."""
+def test_retrieval_keys_policy_region_is_not_reserved_masked():
+    """384–671 is r4 RetrievalKeys or r5 PolicyAtoms depending on pipelineVersion."""
     state = CortexState(words=[0] * 1024)
-    # Word 384, bit 81 (= KEY_FLAGS bit 1)
     state.words[384] = 1 << 81
-    assert has_non_zero_reserved_bits(state)
+    assert not has_non_zero_reserved_bits(state)
 
 
-def test_relations_reserved_lower_192():
-    """Bits 191:0 of each Relations word are reserved."""
+def test_relations_are_not_reserved_masked():
     state = CortexState(words=[0] * 1024)
-    state.words[672] = 1  # bit 0 is in reserved_rel[191:0]
-    assert has_non_zero_reserved_bits(state)
+    state.words[672] = 1
+    assert not has_non_zero_reserved_bits(state)
 
 
-def test_temporal_reserved_lower_32():
-    """Bits 31:0 of each Temporal word are reserved."""
+def test_temporal_reserved_lower_152():
+    """Bits 151:0 of each Temporal word are reserved."""
     state = CortexState(words=[0] * 1024)
-    state.words[800] = 1  # bit 0 is in reserved_tmp[31:0]
+    state.words[800] = 1
     assert has_non_zero_reserved_bits(state)
 
 
-def test_temporal_flags_reserved_bits():
-    """TEMPORAL_FLAGS bits 1–15 (word bits 33–47) are reserved."""
+def test_temporal_low_flag_region_reserved():
     state = CortexState(words=[0] * 1024)
-    state.words[800] = 1 << 33  # bit 33 = TEMPORAL_FLAGS bit 1
+    state.words[800] = 1 << 151
     assert has_non_zero_reserved_bits(state)
 
 
-def test_codebook_reserved_lower_207():
-    """Bits 207:0 of each Codebook entry word 0 are reserved (except bit 208)."""
+def test_temporal_named_bits_allowed():
     state = CortexState(words=[0] * 1024)
-    state.words[896] = 1  # bit 0 is in reserved_cb0
-    assert has_non_zero_reserved_bits(state)
+    state.words[800] = 1 << 152
+    assert not has_non_zero_reserved_bits(state)
 
 
-def test_codebook_code_flags_reserved():
-    """CODE_FLAGS bits 1–15 (word bits 209–223) of codebook word 0 are reserved."""
+def test_codebook_policy_reserved_region_is_not_reserved_masked_by_base_validator():
     state = CortexState(words=[0] * 1024)
-    state.words[896] = 1 << 209  # CODE_FLAGS bit 1
-    assert has_non_zero_reserved_bits(state)
+    state.words[896] = (1 << 209) | 1
+    assert not has_non_zero_reserved_bits(state)
 
 
 def test_reserved_masks_count():
     """
     RESERVED_MASKS should have entries for many words.
-    At minimum: words 0-1, 8, 11-31, 32-383 (partial), 384-671 (partial),
-    672-799, 800-895, 896-991 (partial), 992-1023.
+    At minimum: header reserved words, temporal low payload bits, and words 992-1023.
     """
     assert len(RESERVED_MASKS) > 100, f"Expected >100 entries, got {len(RESERVED_MASKS)}"
 

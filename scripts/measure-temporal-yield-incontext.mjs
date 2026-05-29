@@ -80,7 +80,17 @@ const oracleScope = argv.includes('--oracle-scope');
 if (oracleScope) opts.temporalOracleScopePerQuery = true;
 const minImpr = Number(profile.patchAcceptanceFloors.minImprovementPpm);
 const replayTol = Number(profile.replayTolerancePpm);
-const accOpts = { structuralFloor: profile.patchAcceptanceFloors.structuralFloor, minImprovementPpm: minImpr, acceptanceThresholdPpm: minImpr + replayTol };
+const baselineVar = Number(profile.baselineVariancePpm ?? 0);
+// CANONICAL acceptance floors — ALL of them (structural/protected/family) + the canonical threshold
+// (minImprovement + replayTolerance + baselineVariance). Was missing protected/family floors and
+// used minImpr+replayTol only; yield must be judged by the same evaluator acceptance production uses.
+const accOpts = {
+  structuralFloor: profile.patchAcceptanceFloors.structuralFloor,
+  protectedRegressionFloor: profile.patchAcceptanceFloors.protectedRegressionFloor,
+  familyCatastrophicFloor: profile.patchAcceptanceFloors.familyCatastrophicFloor,
+  minImprovementPpm: minImpr,
+  acceptanceThresholdPpm: minImpr + replayTol + baselineVar,
+};
 const hiddenPack = { ...profile.hiddenPack, packSize: PACK_SIZE };
 
 const directOf = (lq) => (lq.qrels ?? []).find((r) => r.role === 'direct')?.docId ?? null;
@@ -90,7 +100,7 @@ async function deltaFor(pack, chainDirectDoc, otherTemporalDirects) {
   const patch = honestPatch({ state: empty(), family: 'temporal', pack, logicalQById, recordSlot: 0, skipDocIds: skip });
   const r = await evaluateRetrievalBenchmarkPatch(empty(), patch, corpus, pack, opts, accOpts);
   return { deltaPpm: r.deltaPpm, dTemporal: r.after.temporal - r.before.temporal, dNdcg: r.after.nDCG10 - r.before.nDCG10,
-    accepted: r.deltaPpm > (minImpr + replayTol), minedDoc: patch && patch.wordCount > 0 };
+    accepted: r.accepted === true, minedDoc: patch && patch.wordCount > 0 }; // canonical evaluator acceptance, not a local deltaPpm threshold
 }
 
 const measured = [];

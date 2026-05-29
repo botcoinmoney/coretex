@@ -26,6 +26,7 @@ import { resolve } from 'node:path';
 import { argv, exit } from 'node:process';
 import { distIndex, repoRoot } from './_repo-root.mjs';
 import { buildV2ProductionCorpus } from './lib/build-v2-production-corpus.mjs';
+import { makeLaunchFrontier } from './lib/epoch-frontier.mjs';
 
 const m = await import(distIndex);
 const { merkleizeState, bytesToHex, decodePatch, applyPatch, computePatchHash, keccak256, deriveQueryPack } = m;
@@ -59,6 +60,8 @@ if (!child.ok) throw new Error('dry-run: advance patch did not apply');
 
 // public roots
 const corpusRoot = corpus.corpusRoot;
+// C3 churn is launch-required → derive the genesis activeFrontierRoot (V4 rejects bytes32(0)).
+const activeFrontierRoot = makeLaunchFrontier(profile, corpus)?.stepEpoch(0, null, null).activeRoot ?? null;
 const evalSeedHex = profile.baselineEvalSeedHex;
 const pack = deriveQueryPack(0, evalSeedHex, corpus, { ...profile.hiddenPack, packSize: 64, quotas: [] });
 const queryPackRoot = bytesToHex(keccak256(new TextEncoder().encode(pack.events.map((e) => e.id).sort().join('\n'))));
@@ -79,7 +82,7 @@ const receipt = {
   minerAddress: SYNTH.minerAddress,
   bundleHash: manifest.bundleHash,
   corpusRoot,
-  activeFrontierRoot: null,              // churn off at launch
+  activeFrontierRoot,                    // C3 launch-required: derived genesis frontier root (non-zero)
   queryPackRoot,
   baselineManifestHash,
   minImprovementPpm: Number(profile.patchAcceptanceFloors.minImprovementPpm),

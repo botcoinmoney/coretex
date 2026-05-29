@@ -82,9 +82,8 @@ export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex =
     // record→memorySlot→recordId→event and NEVER reads the slot's `retrievalSlot` field (the
     // lens path iterates decoded.retrievalKeys directly). So pin temporal slots' retrievalSlot
     // to a fixed in-range value (0) instead of the slot index, removing the artificial
-    // `retrievalSlot < 36` → 18-pair cap. The pair cap is now MemoryIndex-slot-bound:
-    // curSlot = slotBase*2+1 < MEMORY_INDEX_SLOT_COUNT(44) → 22 pairs. (Tier-2 stride-1 repack
-    // raises the slot count toward the 96-record ceiling — separate decoder change.)
+    // `retrievalSlot < 36` → 18-pair cap. Tier-2 stride-1 MemoryIndex exposes 352
+    // one-word slots, so temporal capacity is bounded by the 96-record Temporal region.
     const MEM_SLOTS = 352; // MEMORY_INDEX_SLOT_COUNT (Tier-2 stride-1 repack) — pair cap now Temporal-record-bound (slotBase<96)
     if (slotBase >= 96 || curSlot >= MEM_SLOTS) return { indices, newWords, recordsCompiled: 0, minedDocId: null, temporalQueriesAvailable: tq.length };
     for (const lq of tq) {

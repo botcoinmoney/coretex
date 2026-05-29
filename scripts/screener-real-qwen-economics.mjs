@@ -67,12 +67,13 @@ import { URL } from 'node:url';
 
 import { distIndex, repoRoot } from './_repo-root.mjs';
 import { buildV2ProductionCorpus, inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
+import { makeLaunchFrontier } from './lib/epoch-frontier.mjs';
 
 const cortex = await import(distIndex);
 const {
   // state + patches
   decodePatch, applyPatch, applyPatchOntoCurrent, merkleizeState, computePatchHash,
-  loadPackedState, decodeCortexState, keccak256,
+  loadPackedState, keccak256,
   // scoring (production path)
   evaluateRetrievalBenchmarkPatch, evaluateRetrievalBenchmarkState,
   scoringOptionsFromProfile, deriveQueryPack,
@@ -179,6 +180,21 @@ if (!existsSync(HF_CACHE)) warn(`HF cache ${HF_CACHE} does not exist; first run 
 // ─────────────────────────────────────────────────────────────────────────────
 info(`Loading launch profile: ${PROFILE_PATH}`);
 const profile = JSON.parse(readFileSync(PROFILE_PATH, 'utf8'));
+// ── Acceptance floors + replay tolerance: read from the CANONICAL profile fields, NOT a
+// non-existent `profile.stateAdvance` block. The old `profile.stateAdvance?.X ?? default`
+// reads silently fell through to WRONG hardcoded defaults (structuralFloor 0.4 vs the real
+// 0.95, replayTol 200 vs 250, regression/catastrophic floors all off) → invalid economics.
+// Mirror computeAcceptanceThresholdPpm + evaluatePatchAcceptance (retrieval-benchmark.ts).
+if (!profile.patchAcceptanceFloors || typeof profile.replayTolerancePpm !== 'number') {
+  fail('profile missing patchAcceptanceFloors / top-level replayTolerancePpm — cannot derive launch-authoritative acceptance thresholds');
+}
+const FLOORS = {
+  minImprovementPpm: Number(profile.patchAcceptanceFloors.minImprovementPpm),
+  structuralFloor: Number(profile.patchAcceptanceFloors.structuralFloor),
+  protectedRegressionFloor: Number(profile.patchAcceptanceFloors.protectedRegressionFloor),
+  familyCatastrophicFloor: Number(profile.patchAcceptanceFloors.familyCatastrophicFloor),
+};
+const REPLAY_TOL_PPM = Number(profile.replayTolerancePpm);
 info(`Loading bundle manifest: ${BUNDLE_PATH}`);
 const bundle = JSON.parse(readFileSync(BUNDLE_PATH, 'utf8'));
 // Verify bundle hash (refuses to start if drifted). Returns array of error strings ([] = OK).
@@ -225,7 +241,14 @@ const scoringOptsBase = scoringOptionsFromProfile(profile, {
 const liveState = createGenesisState();
 let liveRoot = bytesToHex(merkleizeState(liveState));
 let epochId = 1;
-let activeFrontierRoot = profile.activeFrontierRoot ?? null;
+// C3 churn is launch-required: DERIVE the genesis activeFrontierRoot from the signed
+// profile.epochFrontier + corpus (V4 rejects bytes32(0)). Was `profile.activeFrontierRoot ?? null`,
+// which is always null (profiles carry epochFrontier params, not a precomputed root).
+const launchFrontier = makeLaunchFrontier(profile, corpus);
+if (!launchFrontier) fail('profile.epochFrontier missing/off — C3 churn is launch-required; cannot derive activeFrontierRoot');
+let frontierEpoch = 0;
+let activeFrontierRoot = launchFrontier.stepEpoch(0, null, null).activeRoot;
+if (!activeFrontierRoot || /^0x0+$/.test(activeFrontierRoot)) fail('derived genesis activeFrontierRoot is zero — V4 would reject');
 let corpusRoot = corpus.corpusRoot;
 let profileHash = computeProfileHash(profile);
 let rerankerHash = bundle.rerankerHash || profileHash;
@@ -265,11 +288,12 @@ async function scoreRealQwen(patchBytesU8, parentRoot) {
     liveState, decoded, corpus, pack,
     scoringOptsBase,
     {
-      minImprovementPpm: Number(profile.stateAdvance?.minImprovementPpm ?? 2500),
-      structuralFloor: Number(profile.stateAdvance?.structuralFloor ?? 0.4),
-      protectedRegressionFloor: Number(profile.stateAdvance?.protectedRegressionFloor ?? 0.1),
-      familyCatastrophicFloor: Number(profile.stateAdvance?.familyCatastrophicFloor ?? 0.5),
-      acceptanceThresholdPpm: Number(profile.stateAdvance?.acceptanceThresholdPpm ?? 2500),
+      minImprovementPpm: FLOORS.minImprovementPpm,
+      structuralFloor: FLOORS.structuralFloor,
+      protectedRegressionFloor: FLOORS.protectedRegressionFloor,
+      familyCatastrophicFloor: FLOORS.familyCatastrophicFloor,
+      // canonical: minImprovement + replayTolerance + live baseline variance (recentNoiseFloorPpm)
+      acceptanceThresholdPpm: FLOORS.minImprovementPpm + REPLAY_TOL_PPM + recentNoiseFloorPpm,
     },
   );
   return { kind: 'SCORED', deltaPpm: result.deltaPpm, accepted: result.accepted, reason: result.reason, after: applied.state };
@@ -291,8 +315,8 @@ function challengePayload(miner) {
     substrateAccess: { byRoot: `/coretex/substrate/${liveRoot}`, wordCount: 1024, packedBytes: 32768 },
     allowedPatchTypes: profile.allowedPatchTypes ?? defaultAllowedPatchTypes(),
     patchWordBudget: 4,
-    minImprovementPpm: Number(profile.stateAdvance?.minImprovementPpm ?? 2500),
-    replayTolerancePpm: Number(profile.stateAdvance?.replayTolerancePpm ?? 200),
+    minImprovementPpm: FLOORS.minImprovementPpm,
+    replayTolerancePpm: REPLAY_TOL_PPM,
     screenerThresholdPpm,
     perMinerScreenerCap: onChainScreenerCap,
     perMinerScreenerRemaining: remaining,
@@ -341,18 +365,30 @@ async function handleSubmit(body) {
     logSubmission({ t: new Date().toISOString(), minerAddress, parentStateRoot, patchBytesHex, outcomeHint, result: out, ctx: snapshotCtx() });
     return out;
   }
-  const { deltaPpm, after } = scored;
+  const { deltaPpm, after, accepted, reason: acceptReason } = scored;
   const patchHash = computePatchHash(patchBytesU8);
   const minerL = minerAddress.toLowerCase();
-  const minImprovement = Number(profile.stateAdvance?.minImprovementPpm ?? 2500);
-  const replayTol = Number(profile.stateAdvance?.replayTolerancePpm ?? 200);
+  const minImprovement = FLOORS.minImprovementPpm;
+  const replayTol = REPLAY_TOL_PPM;
 
   // STATE_ADVANCE attempt (auto when delta crosses floor, or explicit outcomeHint)
   const wantsAdvance = outcomeHint === 'STATE_ADVANCE' || deltaPpm >= (minImprovement + recentNoiseFloorPpm + replayTol);
   if (wantsAdvance) {
+    // CANONICAL acceptance gate: a STATE_ADVANCE MUST pass evaluatePatchAcceptance
+    // (structural/protected/family floors + acceptanceThreshold), exactly as the production
+    // per-patch-evaluator requires. deltaPpm crossing the screener threshold is necessary but
+    // NOT sufficient; `accepted` (from evaluateRetrievalBenchmarkPatch) is the authority and
+    // must not be bypassed — not even by an explicit outcomeHint. Otherwise a patch that lifts
+    // the aggregate score while breaking structure or catastrophically regressing a family
+    // would advance, which production rejects.
+    if (!accepted) {
+      const out = { status: 'rejected', reason: acceptReason || 'CoreTexPatchNotAccepted', code: 'PatchAcceptanceFloor', deterministicDeltaPpm: deltaPpm };
+      logSubmission({ t: new Date().toISOString(), minerAddress, parentStateRoot, patchBytesHex, outcomeHint, result: out, ctx: snapshotCtx() });
+      return out;
+    }
     const q = evaluateCoreTexWorkQualification({
       outcome: OUTCOME_CORETEX_STATE_ADVANCE, parentMatchesLiveRoot: true,
-      baselineScorePpm, deterministicDeltaPpm: deltaPpm, liveStateAdvanced: true,
+      baselineScorePpm, recentNoiseFloorPpm, deterministicDeltaPpm: deltaPpm, liveStateAdvanced: true,
       policy: DEFAULT_CORETEX_WORK_POLICY,
       qualifiedScreenerPassesSinceLastStateAdvance,
     });
@@ -407,7 +443,7 @@ async function handleSubmit(body) {
   }
   const q = evaluateCoreTexWorkQualification({
     outcome: OUTCOME_CORETEX_SCREENER_PASS, parentMatchesLiveRoot: true,
-    baselineScorePpm, deterministicDeltaPpm: deltaPpm,
+    baselineScorePpm, recentNoiseFloorPpm, deterministicDeltaPpm: deltaPpm,
     policy: DEFAULT_CORETEX_WORK_POLICY,
   });
   if (!q.qualified) {
@@ -446,7 +482,13 @@ async function handleSubmit(body) {
 // (see scripts/churn-launch-e2e.mjs + scripts/baseline-recalibration-e2e.mjs).
 async function adminRotateChurn() {
   const before = activeFrontierRoot;
-  activeFrontierRoot = '0x' + createHash('sha256').update(`frontier-${epochId}-${Date.now()}`).digest('hex');
+  // REAL EpochFrontier rotation (deterministic, replay-reproducible) — not a synthetic random root.
+  if (launchFrontier) {
+    frontierEpoch += 1;
+    activeFrontierRoot = launchFrontier.stepEpoch(frontierEpoch, null, null).activeRoot;
+  } else {
+    activeFrontierRoot = '0x' + createHash('sha256').update(`frontier-${epochId}-${frontierEpoch}`).digest('hex');
+  }
   await recomputeBaseline('churn-rotate');
   logTransition({ t: new Date().toISOString(), kind: 'CHURN_ROTATE', beforeActiveFrontierRoot: before, afterActiveFrontierRoot: activeFrontierRoot, baselineScorePpm, screenerThresholdPpm });
   return { ok: true, activeFrontierRoot };
@@ -612,17 +654,27 @@ function deriveHiddenPackFor(epochId_, profile_, corpus_) {
   // SIGNED profile to match production exactly. We pin to bundleHash for cross-epoch determinism
   // so a single run sees consistent pack composition unless we explicitly bump the eval seed.
   const evalSeed = profile_.evalSeedHex ?? ('0x' + createHash('sha256').update(`pack-${epochId_}-${bundleHash}`).digest('hex'));
-  return deriveQueryPack(epochId_, evalSeed, corpus_, profile_);
+  // deriveQueryPack's 4th arg is the HiddenPackProfile (packSize/quotas) — the `hiddenPack`
+  // SUB-object, NOT the whole evaluator profile. Passing the full profile makes profile.packSize
+  // undefined and throws "profile.quotas is not iterable". Mirror the canonical callers
+  // (determinism gate, pin-baseline-v2-real-qwen) which pass profile.hiddenPack.
+  if (!profile_.hiddenPack) fail('profile.hiddenPack missing — cannot derive hidden query pack');
+  return deriveQueryPack(epochId_, evalSeed, corpus_, profile_.hiddenPack);
 }
 function defaultAllowedPatchTypes() {
+  // MUST mirror the canonical PATCH_TYPE codes + patchTypeRange() in state/types.ts + state/patch.ts.
+  // (The old table had wrong byte codes/names — RELATION as 2, bogus BRIDGE/CONFLICT/CORE — and was
+  // MISSING POLICY_UPDATE 0x07, the only r5 atom write surface; it also presented reserved 896-991 as
+  // writable. A miner following it would build rejected patches.)
   return [
-    { name: 'KEY_UPDATE', byte: 1, wordIndexRange: [384, 671] },
-    { name: 'RELATION_UPDATE', byte: 2, wordIndexRange: [32, 383] },
-    { name: 'TEMPORAL_UPDATE', byte: 3, wordIndexRange: [800, 895] },
-    { name: 'BRIDGE_UPDATE', byte: 4, wordIndexRange: [672, 799] },
-    { name: 'CONFLICT_UPDATE', byte: 5, wordIndexRange: [896, 991] },
-    { name: 'CORE_UPDATE', byte: 6, wordIndexRange: [0, 31] },
-    { name: 'MIXED', byte: 255, wordIndexRange: [0, 991] },
+    { name: 'KEY_UPDATE', byte: 0x01, wordIndexRange: [384, 671] },        // RETRIEVAL_KEYS
+    { name: 'SLOT_REPLACE', byte: 0x02, wordIndexRange: [32, 383] },       // MEMORY_INDEX
+    { name: 'TEMPORAL_UPDATE', byte: 0x03, wordIndexRange: [800, 895] },   // TEMPORAL
+    { name: 'RELATION_UPDATE', byte: 0x04, wordIndexRange: [672, 799] },   // RELATIONS
+    { name: 'CODEBOOK_UPDATE', byte: 0x05, wordIndexRange: [896, 991] },   // CODEBOOK (r4); r5 reserves 896-991 zero
+    { name: 'HEADER_UPDATE', byte: 0x06, wordIndexRange: [0, 31] },        // HEADER
+    { name: 'POLICY_UPDATE', byte: 0x07, wordIndexRange: [384, 671] },     // r5 PolicyAtom: evidence 384-511 / conflict 512-639 / abstention 640-671
+    { name: 'MIXED', byte: 0xFF, wordIndexRange: [0, 991] },
   ];
 }
 function structuralOnlyTemplate(parentRoot) {

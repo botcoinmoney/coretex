@@ -15,10 +15,10 @@
  *      header → matches.
  *   5. hiddenPackRoot (keccak256 over the ORDERED selected event IDs) is the
  *      on-chain-committable queryPackRoot — derivable from public inputs.
- *   6. Leak guard: corpusRoot is computed from durable event primitives only
- *      (changing a qrel relevance does NOT move corpusRoot); the served pack
- *      object carries qrels and is therefore VALIDATOR-ONLY (never the
- *      miner-facing challenge payload — that redaction is gated in L10).
+ *   6. Leak guard: corpusRoot commits the validator production events,
+ *      including qrels and embedded retrieval keys; the served pack object is
+ *      therefore VALIDATOR-ONLY (never the miner-facing challenge payload —
+ *      that redaction is gated in L10).
  *   7. Manifest/checksum: prints the sha256 of the corpus file a new validator
  *      fetches + verifies before trusting corpusRoot.
  *
@@ -82,15 +82,33 @@ const hiddenPackRoot = bytesToHex(keccak256(packIdBytes));
 const hiddenPackRoot2 = bytesToHex(keccak256(new TextEncoder().encode(ids2.join('\n'))));
 check('hiddenPackRoot deterministic (queryPackRoot)', hiddenPackRoot === hiddenPackRoot2, hiddenPackRoot);
 
-// 6. leak guard: corpusRoot is event-primitive only (qrel mutation does NOT move it)
-const mutated = a.corpus.events.map((e, i) => i === 0 && (e.qrels?.length ?? 0) > 0
-  ? { ...e, qrels: e.qrels.map((q) => ({ ...q, relevance: Math.min(1, (q.relevance ?? 0) + 0.01) })) }
-  : e);
+// 6. leak guard: corpusRoot commits validator-only scoring fields, including
+// qrels and embedding bytes. This is a hidden-eval commitment, not a
+// miner-facing payload. Miners receive only the root/hash metadata.
+// Mutate the FIRST event that actually carries qrels. (Earlier this assumed events[0]
+// had qrels; in the native-regen corpus events[0] is a memory doc with no qrels. And a
+// `+0.01` bump is a no-op when relevance is already 1.0 — so we flip to a GUARANTEED-
+// different graded value: 1.0 -> 0.0, anything else -> 1.0.)
+const qrelEvent = a.corpus.events.find((e) => (e.qrels?.length ?? 0) > 0);
+const mutated = qrelEvent
+  ? a.corpus.events.map((e) => e.id === qrelEvent.id
+    ? { ...e, qrels: e.qrels.map((q, i) => i === 0 ? { ...q, relevance: (q.relevance ?? 0) >= 1 ? 0 : 1 } : q) }
+    : e)
+  : a.corpus.events;
 const mutatedRoot = computeCorpusRoot(mutated);
-// NOTE: computeCorpusRoot hashes durable primitives; whether qrels participate is the contract under test.
-const qrelInRoot = mutatedRoot !== a.corpus.corpusRoot;
+const qrelInRoot = qrelEvent != null && mutatedRoot !== a.corpus.corpusRoot;
 check('served pack carries qrels (validator-only artifact, never miner payload)', pack1.events.every((e) => Array.isArray(e.qrels)));
-out.push(`INFO  corpusRoot depends on qrel relevance: ${qrelInRoot} (root is the Merkle commitment a validator re-verifies; miner-facing redaction gated in L10)`);
+check(`corpusRoot commits qrels (hidden labels are root-committed, not miner-served) [mutated ${qrelEvent?.id ?? 'NONE'}]`, qrelInRoot);
+const embEvent = a.corpus.events.find((e) => e.embeddings?.query?.length);
+if (embEvent) {
+  const mutatedEmb = a.corpus.events.map((e) => {
+    if (e.id !== embEvent.id) return e;
+    const query = new Uint8Array(e.embeddings.query);
+    query[query.length - 1] ^= 1;
+    return { ...e, embeddings: { ...e.embeddings, query } };
+  });
+  check('corpusRoot commits embedding bytes', computeCorpusRoot(mutatedEmb) !== a.corpus.corpusRoot);
+}
 
 // 7. fetchable manifest checksum
 const fileBytes = readFileSync(resolve(repoRoot, corpusPath));

@@ -91,15 +91,9 @@ non-zero high padding decodes as a failure (counted, slot dropped). 8-bit slot-r
 fields elsewhere (temporal `memorySlot`/`supersededBy`, relation `source`/`target`) cap
 referencible slots at 0–255 — ample for the 96-pair temporal ceiling (≤192 slots).
 
-> **Legacy V4 work-unit layout (SUPERSEDED for the substrate path).** The raw decoder
-> `decoder/index.ts:decodeMemoryIndex` and the debug CLI still read this region as **44 slots ×
-> 8 words** (slot-word 0: EVENT_ID 255:128, DOMAIN_CODE 127:96, OBJ_TYPE 95:80, VALIDITY_FLAGS
-> 79:64; slot-word 1: CHECKSUM/CORPUS_EPOCH/EXPIRY_EPOCH; words 2–7: payload). This is the
-> pre-Tier-2 on-chain V4 work-unit object model (`eval/index.ts:scoreWithLoader`), a DIFFERENT
-> track from the V2 retrieval scorer; it is NOT the canonical substrate layout above and is not
-> on the V2 launch path. Unifying the raw decoder onto the stride-1 model is a separate scoped
-> change. OBJ_TYPE enum (legacy): 0x0000 UNSET / 0x0001 MEMORY_EVENT / 0x0002 SKILL_ENTRY /
-> 0x0003 RULE_ENTRY / 0x0004 SUMMARY / 0xFFFF TOMBSTONE.
+> **Single decoder authority.** The debug CLI, eval stub, scorer, validators, and miner tooling
+> all use the canonical stride-1 substrate
+> interpretation above through `packages/cortex/src/substrate/retrieval-decoder.ts`.
 
 ### Range C: RetrievalKeys (words 384–671) — ⚠ RECLAIMED (r4): NOT a valid miner surface
 
@@ -195,12 +189,9 @@ edgeType enum:
 96 words = **96 temporal records × 1 word each**. The canonical decoder
 (`packages/cortex/src/substrate/retrieval-decoder.ts:decodeTemporal`)
 and `substrate_retrieval_semantics.md §Temporal records` are
-authoritative for the per-record layout. The raw state decoder
-(`packages/cortex/src/decoder/index.ts:decodeTemporal`) reads the SAME
-one-word layout — both layers and `state/validate.ts` agree (reserved
-bits 151:0). (Historical note: an earlier revision read records at an
-8-word stride, capping capacity at 12; that padding was an artifact and
-is removed — the payload was always a single word.)
+authoritative for the per-record layout. The canonical decoder
+and `state/validate.ts` both use the same one-word layout with reserved
+bits 151:0.
 
 **Per-record layout** (1 word per record, record `k` occupies word
 `800 + k`, for `k` ∈ [0, 95]).
@@ -230,7 +221,7 @@ Decoder failure modes (record dropped silently):
 > never `retrievalSlot`) and repacked MemoryIndex to stride-1 (352 slots), so a pair consuming
 > two one-word MemoryIndex slots (≤192 slots for 96 pairs) is no longer MemoryIndex-bound. The
 > cross-layer invariant test (`temporal-capacity-crosslayer.test.mjs`) constructs and round-trips
-> N=12/18/24/48/96 identically across the raw decoder, retrieval decoder, and validator.
+> N=12/18/24/48/96 identically across the canonical decoder and validator.
 > (Historical: the prior **18-pair** end-to-end cap was the `retrievalSlot<36` artifact, since
 > removed; beyond 96 needs a Temporal-region expansion, separately gated.)
 

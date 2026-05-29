@@ -10,7 +10,7 @@
  * Cumulative: each epoch supersedes the LATEST held fact (including prior deltas) → real growing chains.
  * Replayable: same (base, epochs, seed, churn) → byte-identical output.
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { evolveCorpusDelta } from './lib/evolve-corpus.mjs';
 
@@ -22,6 +22,7 @@ const seed = flag('seed', 'coretex-launch-frontier');
 const churn = parseFloat(flag('churn', '0.1'));
 const out = flag('out');
 const deltaDir = flag('delta-dir');
+if (deltaDir) mkdirSync(resolve(deltaDir), { recursive: true });
 
 const cur = JSON.parse(readFileSync(resolve(base), 'utf8'));
 cur.docs ??= []; cur.relations ??= []; cur.queries ??= [];

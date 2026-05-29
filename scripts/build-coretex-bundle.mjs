@@ -43,8 +43,16 @@ if (corpusPath) {
   corpusFiles = [relative(repoRoot, resolve(corpusPath)).replaceAll('\\', '/')];
 }
 
+// The evaluator-profile-*.json file IS the profile object (not a wrapper with a `.profile` key).
+// Reading `.profile` silently yielded undefined → the bundle dropped the profile. Load the object
+// itself; tolerate a legacy `{profile:{...}}` wrapper only if explicitly present.
 const evaluatorProfile = profilePath
-  ? JSON.parse(readFileSync(resolve(profilePath), 'utf8')).profile
+  ? (() => {
+      const j = JSON.parse(readFileSync(resolve(profilePath), 'utf8'));
+      const p = (j && typeof j === 'object' && j.profile && j.pipelineVersion === undefined) ? j.profile : j;
+      if (!p || typeof p !== 'object' || !p.pipelineVersion) throw new Error(`build-coretex-bundle: ${profilePath} is not a valid evaluator profile (no pipelineVersion)`);
+      return p;
+    })()
   : undefined;
 
 const manifest = buildBundleManifest({

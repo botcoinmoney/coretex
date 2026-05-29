@@ -440,7 +440,7 @@ async function probeSelectivePhaseB() {
 // COMPONENT: lens REGION generalization (the anti-bookmark test)
 // ONE lens vector at a cluster CENTROID (not equal to any exact truth) must
 // surface MANY clustered truths. If one substrate slot promotes N>1 truths, the
-// substrate generalizes past the 44-anchor bookmark cap — the core thesis.
+// substrate generalizes past direct bookmark-anchor routing — the core thesis.
 // Build: N truths near a centroid C (cos(truth,C)~0.99) but each query-orthogonal
 // (stage-1 buries them); M distractors with modest query-cosine fill the small
 // cap. Write a SINGLE lens vector = C (no anchors). Success: >=2 truths reach

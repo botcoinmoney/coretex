@@ -34,7 +34,14 @@ const outPath = resolve(repoRoot, flag('out', 'release/bundle/bundle-manifest-v2
 const evaluatorProfile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
 const { corpus } = buildV2ProductionCorpus({ corpusPath, embPath });
 const corpusRoot = corpus.corpusRoot;
-const corpusFiles = [relative(repoRoot, resolve(repoRoot, corpusPath)).replaceAll('\\', '/')];
+// Attest BOTH the logical corpus AND the embeddings file: embeddings feed the production events /
+// corpusRoot / scoring path, so the signed bundle must commit the embeddings sha256 too (not just
+// the corpus). Without this, verifyBundleManifest (which re-hashes only listed files) would not by
+// itself catch a swapped embeddings sidecar — it would only surface on a full corpusRoot re-derive.
+const corpusFiles = [
+  relative(repoRoot, resolve(repoRoot, corpusPath)).replaceAll('\\', '/'),
+  relative(repoRoot, resolve(repoRoot, embPath)).replaceAll('\\', '/'),
+];
 
 const manifest = buildBundleManifest({
   repoRoot, corpusRoot, corpusFiles,

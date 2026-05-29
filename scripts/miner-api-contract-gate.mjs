@@ -27,7 +27,6 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { argv, exit } from 'node:process';
 import { distIndex, repoRoot } from './_repo-root.mjs';
-import { buildV2ProductionCorpus } from './lib/build-v2-production-corpus.mjs';
 
 const m = await import(distIndex);
 const {
@@ -35,11 +34,39 @@ const {
   merkleizeState, bytesToHex, computeCoreTexScreenerThresholdPpm, DEFAULT_CORETEX_WORK_POLICY, applyPatch,
 } = m;
 
+import { buildV2ProductionCorpus } from './lib/build-v2-production-corpus.mjs';
+import { makeLaunchFrontier } from './lib/epoch-frontier.mjs';
+
 const opt = (n, fb) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fb; };
 const base = 'release/calibration/2026-05-21-memory-corpus-v2';
 const profile = JSON.parse(readFileSync(resolve(repoRoot, opt('profile', 'release/bundle/evaluator-profile-v2-dgen1-policy-r5.json')), 'utf8'));
 const manifest = JSON.parse(readFileSync(resolve(repoRoot, opt('bundle', 'release/bundle/bundle-manifest-v2-dgen1-policy-r5-candidate.json')), 'utf8'));
-const { corpus } = buildV2ProductionCorpus({ corpusPath: opt('corpus', `${base}/dgen1-r5-synth-corpus.json`), embPath: opt('emb', `${base}/dgen1-r5-synth-embeddings.json`) });
+const corpusPath = opt('corpus', `${base}/dgen1-r5-synth-corpus.json`);
+let corpusMeta = {};
+try {
+  // API contract shape does not depend on qrels/embeddings; read raw metadata so this
+  // gate remains useful while stale pre-regen corpora intentionally fail scorer/linter gates.
+  const raw = JSON.parse(readFileSync(resolve(repoRoot, corpusPath), 'utf8'));
+  corpusMeta = {
+    ...(Array.isArray(raw.docs) ? { docs: raw.docs.length } : {}),
+    ...(Array.isArray(raw.queries) ? { queries: raw.queries.length } : {}),
+    ...(Array.isArray(raw.events) ? { events: raw.events.length } : {}),
+    ...(raw.biEncoderModelId ? { biEncoderModelId: raw.biEncoderModelId } : {}),
+    ...(raw.biEncoderRevision ? { biEncoderRevision: raw.biEncoderRevision } : {}),
+  };
+} catch {
+  corpusMeta = { note: 'corpus metadata unavailable; contract shape only' };
+}
+const corpusRoot = manifest.corpus?.root ?? profile.corpusRoot ?? '0x' + '00'.repeat(32);
+// C3 churn is launch-required. Derive the REAL genesis activeFrontierRoot from the canonical
+// launch corpus + signed profile.epochFrontier. No fallback — V4 rejects bytes32(0), so the
+// public contract MUST carry a real non-zero root. Fail hard if it can't be produced.
+const embPath = opt('emb', `${base}/dgen1-r5-synth-300k-final-embeddings.json`);
+const { corpus: prodCorpus } = buildV2ProductionCorpus({ corpusPath, embPath });
+const launchFrontier = makeLaunchFrontier(profile, prodCorpus);
+if (!launchFrontier) { console.error('FATAL: profile.epochFrontier missing/off — C3 churn is launch-required'); exit(1); }
+const activeFrontierRoot = launchFrontier.stepEpoch(0, null, null).activeRoot;
+if (!activeFrontierRoot || /^0x0+$/.test(activeFrontierRoot)) { console.error('FATAL: derived activeFrontierRoot is zero'); exit(1); }
 
 const genesis = { words: new Array(1024).fill(0n) };
 const parentStateRoot = bytesToHex(merkleizeState(genesis));
@@ -70,16 +97,16 @@ const challenge = {
   coreVersionHash: manifest.bundleHash,
   profileName: profile.name,
   pipelineVersion: profile.pipelineVersion,
-  corpusRoot: corpus.corpusRoot,
-  corpusMeta: { events: corpus.events.length, biEncoderModelId: corpus.biEncoderModelId, biEncoderRevision: corpus.biEncoderRevision },
-  activeFrontierRoot: null, // churn default OFF at launch
+  corpusRoot,
+  corpusMeta,
+  activeFrontierRoot, // C3 launch-required: real derived genesis frontier root (non-zero)
   allowedPatchTypes: surfaces.map((s) => s.patchType),
   patchWordRanges: surfaces,
   patchWordBudget: 4,
   minImprovementPpm,
   replayTolerancePpm: profile.replayTolerancePpm,
   screenerThresholdPpm,
-  perMinerCap: 8,
+  perMinerCap: 50, // canonical V4 default coreTexScreenerCapPerMinerPerEpoch (BotcoinMiningV4.sol) — was stale 8
   memoryIRSchemaVersion: 'memory_ir.v1',
   activeSubstrateSurfaces: surfaces.map((s) => s.surface),
   exampleValidPatch: { patchType: examplePatch.patchType, wordCount: 1, indexRange: [RANGES.RELATIONS_START, RANGES.RELATIONS_END], encodedHex: '0x' + Buffer.from(encodePatch(examplePatch)).toString('hex') },

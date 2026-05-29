@@ -1,6 +1,8 @@
 # Substrate Retrieval Semantics — Packed-State Decoder
 
-Status: launch-blocking spec. Pinned by bundle hash.
+Status: legacy companion spec. The canonical range table is
+`specs/cortex_state.md`; this document describes the retrieval decoder semantics
+and has been updated for the Tier-2/r5 layout.
 
 ## Scope
 
@@ -17,11 +19,11 @@ Word-range constants are pinned in `packages/cortex/src/state/types.ts`
 | Region          | Word range  | Slots          |
 |-----------------|-------------|----------------|
 | Header          | 0..31       | 32 words       |
-| MemoryIndex     | 32..383     | 44 × 8 words   |
+| MemoryIndex     | 32..383     | 352 × 1 word   |
 | RetrievalKeys   | 384..671    | 36 × 8 words   |
 | Relations       | 672..799    | 128 × 1 word   |
-| Temporal        | 800..895    | 12 × 8 words   |
-| Codebook        | 896..991    | 48 × 2 words   |
+| Temporal        | 800..895    | 96 × 1 word    |
+| Codebook / r5 reserved | 896..991 | r4: 48 × 2 words; r5: reserved-zero |
 | Reserved        | 992..1023   | 32 words       |
 
 Header layout is unchanged from `cortex_state.md`.
@@ -29,7 +31,9 @@ Reserved-word writes are forbidden by the contract (`E04 RESERVED_BIT_SET`).
 
 ## MemoryIndex slots
 
-Each slot occupies 8 contiguous words (`MEMORY_INDEX_START + slotIndex * 8`).
+Each slot occupies one word (`MEMORY_INDEX_START + slotIndex`), slot index
+0..351. Only slots 0..255 are addressable from the current uint8 temporal and
+relation reference fields.
 
 Word 0 (the canonical header word):
 
@@ -40,9 +44,6 @@ Word 0 (the canonical header word):
 | 63..48     | flags           | bit 0 valid, bit 1 revoked, bit 2 protected|
 | 47..40     | retrievalSlot   | index into RetrievalKeys (0..35), 8 bits   |
 | 39..0      | expiryEpoch     | uint40                                     |
-
-Words 1..7 carry padding/reserved bits (must be zero; non-zero zeroes the
-slot during scoring).
 
 A slot is "active" if `recordId != 0`, `valid` flag set, `revoked` clear.
 A slot is "revoked" if `valid` and `revoked` both set; revoked slots are
@@ -62,7 +63,8 @@ Decoder failure modes (slot is zeroed during scoring):
 - `recordId == 0`
 - reserved family value
 - `retrievalSlot >= 36`
-- non-zero word at indices 1..7
+- effective references outside the uint8-addressable range cannot be reached by
+  temporal/relation edges even though the MemoryIndex slot itself may decode
 
 ## RetrievalKeys slots
 
@@ -120,13 +122,13 @@ Effective slot indices live in the low 8 bits of each 96-bit field.
 
 Decoder failure modes:
 - weight 0 with non-empty other fields → zeroed
-- source or target slot index ≥ 44 → entry dropped
+- source or target slot index does not resolve to an active MemoryIndex slot → entry dropped
 - non-zero reserved fields → entry dropped
 
 ## Temporal records
 
-Each record occupies 8 words at `TEMPORAL_START + recordIndex * 8`,
-recordIndex ∈ [0, 11]. Word 0 is the only used word per record:
+Each record occupies one word at `TEMPORAL_START + recordIndex`,
+recordIndex ∈ [0, 95]:
 
 | Bit range | Field                  | Semantics                       |
 |-----------|------------------------|---------------------------------|
@@ -137,16 +139,19 @@ recordIndex ∈ [0, 11]. Word 0 is the only used word per record:
 | 159..152  | flags                  | bit 0 currentStaleFlag          |
 | 151..0    | reserved               | zero                            |
 
-Words 1..7 of each record must be zero.
-
 Decoder failure modes:
-- `memorySlot >= 44` → record dropped
+- `memorySlot` does not resolve to a decoded MemoryIndex slot → record dropped
 - `validFromEpoch > validUntilEpoch` → record dropped
 - non-zero reserved bits → record dropped
 - `currentStaleFlag` requires the referenced MemoryIndex slot's `revoked`
   bit to be set; mismatch zeroes the record
 
 ## Codebook entries
+
+Under r5 (`coretex-retrieval-v2-policy-r5`), words 896..991 are reserved-zero
+future policy capacity and any non-zero write hard-fails r5 apply/replay.
+
+Under r4 lens profiles only:
 
 Each entry is 2 words at `CODEBOOK_START + entryIndex * 2`.
 
@@ -166,15 +171,35 @@ Decoder consumers:
 - mismatched codebook (codeType not 1 or 2, flags clear, code 0) zeroes
   the codebook slot
 
+## r5 PolicyAtom overlay
+
+When the pinned profile uses `pipelineVersion =
+coretex-retrieval-v2-policy-r5`, the reclaimed RetrievalKeys/Codebook words are
+decoded as typed one-word PolicyAtoms instead of r4 lens/codebook data:
+
+| Family | Word range | Slots |
+|---|---:|---:|
+| evidence_bundle | 384..511 | 128 |
+| conflict_lifecycle | 512..639 | 128 |
+| abstention | 640..671 | 32 |
+| reserved-zero | 896..991 | 96 |
+
+The active interpretation is profile/pipeline-version gated. r5 apply, scoring,
+and canonical replay all hard-fail reserved-region nonzero writes and malformed
+PolicyAtoms; r4 remains backward compatible with the older lens/codebook view.
+
 ## decodeSubstrate result
 
 ```
 DecodedSubstrate {
-  memoryIndex: MemoryIndexSlot[]            // length 44, holes are nulls
+  memoryIndex: MemoryIndexSlot[]            // length 352, holes are nulls
   retrievalKeys: RetrievalKeySlot[]         // length 36, holes are nulls
   relations: RelationEdge[]                 // sparse
   temporal: TemporalRecord[]                // sparse
   codebook: CodebookEntry[]                 // length 48, holes are nulls
+  evidenceBundleAtoms: PolicyAtom[]         // r5 only
+  conflictLifecycleAtoms: PolicyAtom[]      // r5 only
+  abstentionAtoms: PolicyAtom[]             // r5 only
   decodedSlots: number                      // count successfully decoded
   decodeFailures: number                    // count failed
 }
