@@ -34,8 +34,8 @@ const {
 
 const opt = (n, fb) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fb; };
 const base = 'release/calibration/2026-05-21-memory-corpus-v2';
-const profile = JSON.parse(readFileSync(resolve(repoRoot, opt('profile', 'release/bundle/evaluator-profile-v2-dgen1-policy-r5.json')), 'utf8'));
-const { corpus, LAYOUT, BE, biEncoderHash } = buildV2ProductionCorpus({ corpusPath: opt('corpus', `${base}/dgen1-r5-synth-corpus.json`), embPath: opt('emb', `${base}/dgen1-r5-synth-embeddings.json`) });
+const profile = JSON.parse(readFileSync(resolve(repoRoot, opt('profile', 'release/bundle/evaluator-profile-v2-dgen1-policy-r5-300k.json')), 'utf8'));
+const { corpus, LAYOUT, BE, biEncoderHash } = buildV2ProductionCorpus({ corpusPath: opt('corpus', `${base}/dgen1-r5-synth-300k-final-corpus.json`), embPath: opt('emb', `${base}/dgen1-r5-synth-300k-final-embeddings.json`) });
 const reranker = await createDeterministicReranker();
 const opts = scoringOptionsFromProfile(profile, { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT });
 

@@ -39,9 +39,10 @@ const m = await import(distIndex);
 const { computeCorpusRoot, deriveQueryPack, verifyQueryPack, packFamilyCounts, packQuotaCoverage, keccak256, bytesToHex } = m;
 
 function flag(name, fb) { const i = argv.indexOf(`--${name}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fb; }
-const corpusPath = flag('corpus', 'release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-corpus.json');
-const embPath = flag('emb', 'release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-embeddings.json');
-const profilePath = flag('profile', 'release/bundle/evaluator-profile-v2-dgen1-policy-r5.json');
+// Defaults pin the CANONICAL 300k launch candidate (sole launch corpus). Override with flags.
+const corpusPath = flag('corpus', 'release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-300k-final-corpus.json');
+const embPath = flag('emb', 'release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-300k-final-embeddings.json');
+const profilePath = flag('profile', 'release/bundle/evaluator-profile-v2-dgen1-policy-r5-300k.json');
 const epoch = Number(flag('epoch', '0'));
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
