@@ -21,8 +21,10 @@ const h = (s) => createHash('sha256').update(s).digest();
 const unit = (s) => h(s).readUInt32BE(0) / 4294967296; // deterministic [0,1)
 function prng(seedStr) { let st = h(seedStr).readUInt32BE(0); return () => { st = (Math.imul(st ^ (st >>> 15), 0x2c1b3c6d) + 1) >>> 0; return st / 4294967296; }; }
 
-const SPLITS = [['train_visible', 0.70], ['calibration', 0.10], ['eval_hidden', 0.15], ['canary', 0.05]];
-function splitFor(seed, id) { const r = unit(`${seed}:split:${id}`); let acc = 0; for (const [name, p] of SPLITS) { acc += p; if (r < acc) return name; } return 'canary'; }
+// NO split field is emitted on delta records. Splits are assigned downstream by the CANONICAL
+// splitForRecord(id, corpusEpoch) (in build-v2-production-corpus.mjs / the production-delta converter),
+// the single source buildCorpusDelta validates against — so a live-update delta can never carry a
+// noncanonical split into the production corpus.
 
 const CITIES = ['Oslo', 'Lagos', 'Quito', 'Hanoi', 'Cairo', 'Lima', 'Riga', 'Accra', 'Sofia', 'Tunis', 'Osaka', 'Perth'];
 const PKGS = ['pnpm', 'npm', 'yarn', 'bun', 'pip', 'poetry', 'cargo', 'maven'];
@@ -63,12 +65,12 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
       const bank = isProject ? PKGS : CITIES;
       const val = bank[Math.floor(rnd() * bank.length)];
       const docId = `d_${idBase}_t`, qid = `q_${idBase}_t`;
-      addedDocs.push({ id: docId, split: splitFor(seed, docId), lane: 'deep', kind: `temporal_${attr}`, entityIds: tagU,
+      addedDocs.push({ id: docId, lane: 'deep', kind: `temporal_${attr}`, entityIds: tagU,
         text: isProject ? `${canonical} switched its ${attr} to ${val}.` : `${canonical} updated their ${attr} to ${val}.`,
         shape: 'temporal_update_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
       const prior = priorTemporal.get(subj.id);
       if (prior) addedRelations.push({ src: docId, dst: prior, type: 'supersedes', label: 'supersedes' });
-      addedQueries.push({ id: qid, split: splitFor(seed, qid), ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
+      addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
         lane: 'deep', family: 'temporal_update', queryText: `What is ${canonical}'s current ${attr}?`,
         qrels: [{ docId, relevance: 1.0, role: 'direct' }, ...(prior ? [{ docId: prior, relevance: 0.2, role: 'stale' }] : [])],
         hardNegatives: prior ? [{ docId: prior, category: 'temporal_stale' }] : [], band: 'very_hard', liveUpdateEpoch: epoch });
@@ -81,14 +83,14 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
       const aId = `d_${idBase}_ca`, bId = `d_${idBase}_cb`, qid = `q_${idBase}_c`;
       const valA = isProject ? cityA : `${cityA} family clinic`;
       const valB = isProject ? cityB : `${cityB} specialist clinic`;
-      addedDocs.push({ id: aId, split: splitFor(seed, aId), lane: 'deep', kind: 'lifecycle_conflict', entityIds: tagU,
+      addedDocs.push({ id: aId, lane: 'deep', kind: 'lifecycle_conflict', entityIds: tagU,
         text: `${canonical}'s ${attr} for ${scope} was recorded as ${valA}.`, shape: 'lifecycle_conflict_record',
         timestamp: tsDate, currentStaleFlag: true, lifecycleState: 'conflict_candidate', lifecycleScope: scope, liveUpdateEpoch: epoch });
-      addedDocs.push({ id: bId, split: splitFor(seed, bId), lane: 'deep', kind: 'lifecycle_conflict', entityIds: tagU,
+      addedDocs.push({ id: bId, lane: 'deep', kind: 'lifecycle_conflict', entityIds: tagU,
         text: `${canonical}'s corrected ${attr} for ${scope} is ${valB}.`, shape: 'lifecycle_conflict_record',
         timestamp: tsDate, currentStaleFlag: true, lifecycleState: 'conflict_resolved', lifecycleScope: scope, liveUpdateEpoch: epoch });
       addedRelations.push({ src: bId, dst: aId, type: 'co_occurs_with', label: 'contradicts' });
-      addedQueries.push({ id: qid, split: splitFor(seed, qid), ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
+      addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
         lane: 'deep', family: 'conflict_lifecycle', queryText: `For ${scope}, what is ${canonical}'s current ${attr}?`,
         qrels: [{ docId: bId, relevance: 1.0, role: 'direct' }, { docId: aId, relevance: 0.0, role: 'conflict' }],
         hardNegatives: [{ docId: aId, category: 'temporal_stale' }], band: 'very_hard', operationFamily: 'conflict_lifecycle', liveUpdateEpoch: epoch });
