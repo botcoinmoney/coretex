@@ -1,4 +1,11 @@
 /**
+ * ⚠️ CPU-DIAGNOSTIC ONLY — NOT a launch / A100 scoring corpus path. ⚠️
+ * This derives subjectEntityId FROM qrel/gold docs, which is acceptable ONLY for "is the selector bug
+ * real?" probing. Using a qrel-derived subjectEntityId as a scorer/selector input at launch would turn a
+ * public field into HIDDEN-LABEL LEAKAGE. The launch/A100 corpus MUST emit subjectEntityId natively from
+ * the generator's PUBLIC task structure (generate-dgen1-corpus.mjs already does this) — regenerate; do
+ * NOT score launch/A100 against this grounded output. Output is tagged `_diagnosticOnly: true`.
+ *
  * Ground an EXISTING logical corpus for CPU reopen-probes WITHOUT re-embedding.
  *
  * `subjectEntityId` is query metadata (does not change query/doc TEXT), and grade clamps + family
@@ -19,7 +26,10 @@ const flag = (k, d) => { const i = argv.indexOf(`--${k}`); return i >= 0 ? argv[
 const inPath = flag('in'); const outPath = flag('out');
 if (!inPath || !outPath) { console.error('--in and --out required'); process.exit(2); }
 
+console.error('⚠️  ground-existing-corpus.mjs: CPU-DIAGNOSTIC ONLY — qrel-derived subjectEntityId. Do NOT use for launch/A100 scoring (regenerate natively instead).');
 const c = JSON.parse(readFileSync(resolve(inPath), 'utf8'));
+c._diagnosticOnly = true;
+c._diagnosticNote = 'subjectEntityId derived from qrel/gold docs — CPU probe only, NOT launch-safe (hidden-label-leakage risk). Regenerate natively for launch/A100.';
 const docs = new Map((c.docs ?? []).map((d) => [d.id, d]));
 const UNIVERSE_RE = /universe/i;
 const LEGAL = [0, 0.2, 0.4, 0.6, 0.8, 1.0];

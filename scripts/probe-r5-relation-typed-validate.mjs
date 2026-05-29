@@ -80,8 +80,11 @@ function buildPack(seed) {
 }
 
 function buildAnchors(pack) {
+  // PUBLIC exact subject grounding (subjectEntityId), NOT query-text/name matching — name matching is the
+  // exact selector-fanout bug that invalidated the prior 300k run (canonical names collide 112-way).
   const evalSubjects = new Set();
-  for (const e of pack) { const qt = (e.queryText ?? '').toLowerCase(); for (const ent of policyEntityRegistry) { if (GENERIC.includes(ent.id)) continue; if (ent.names.some((n) => n && qt.includes(n))) evalSubjects.add(ent.id); } }
+  for (const e of pack) { const sid = e.subjectEntityId; if (sid && !GENERIC.includes(sid)) evalSubjects.add(sid); }
+  if (evalSubjects.size === 0) console.error('[rt-validate] WARNING: 0 eval subjects — corpus lacks subjectEntityId; regenerate before trusting this validation.');
   const cand = [];
   for (const ev of corpus.events) {
     const ets = new Set((ev.relations ?? []).map((r) => r.edgeType).filter((t) => ROUTING_EDGES.has(t)));
