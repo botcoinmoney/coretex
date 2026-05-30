@@ -59,15 +59,20 @@ echo "resume:  $RESUME"
 # ─────────────────────────────────────────────────────────────────────────────
 REFERENCED_SCRIPTS=(
   scripts/a100-gpu-smoke.mjs
+  scripts/smoke-live-evolve-mechanics.mjs
+  scripts/smoke-screener-threshold-mechanics.mjs
   scripts/probe-r5-a100-oracle.mjs
   scripts/probe-conflict-state-malleability.mjs
   scripts/probe-r5-abstention-margin.mjs
   scripts/measure-temporal-yield-incontext.mjs
   scripts/probe-r5-relation-typed-validate.mjs
-  scripts/simulate-v2-long-horizon.mjs
-  scripts/screener-real-qwen-economics.mjs
+  scripts/simulate-v2-live-evolve-long-horizon.mjs
+  scripts/screener-threshold-calibration.mjs
   scripts/lib/stream-reranker.mjs
+  scripts/lib/evolve-corpus.mjs
+  scripts/_embed-v2.mjs
   scripts/reranker_runner.py
+  scripts/bi_encoder_runner.py
 )
 echo "=== gate1: script-presence + syntax checks ==="
 for s in "${REFERENCED_SCRIPTS[@]}"; do
@@ -109,34 +114,36 @@ TRACK_OUTPUTS=(
   "$CORPUS_DIR/r5-abstention-margin-$SCALE.json"
   "$CORPUS_DIR/temporal-yield-$SCALE.json"
   "$CORPUS_DIR/r5-relation-typed-validate-$SCALE-3seed.json"
+  "$CORPUS_DIR/churn-c3-live-evolve-$SCALE"
   "$CORPUS_DIR/churn-c3-long-horizon-$SCALE"
+  "$CORPUS_DIR/screener-threshold-calibration-$SCALE.json"
 )
-SCREENER_RUN_ID="screener-real-qwen-economics-$SCALE-${BUNDLE_TAG}"
-SCREENER_DIR="release/calibration/runs/$SCREENER_RUN_ID"
 
 BUNDLE_MTIME=$(stat -c %Y "$B")
 if [ "$RESUME" = "0" ]; then
-  echo "=== quarantine: moving any prior outputs to $QUARANTINE/ ==="
-  mkdir -p "$QUARANTINE"
-  for out in "${TRACK_OUTPUTS[@]}" "$SCREENER_DIR"; do
+  echo "=== pre-run cleanup: DELETING any prior outputs (no quarantine — stale artifacts must not linger) ==="
+  for out in "${TRACK_OUTPUTS[@]}"; do
     if [ -e "$out" ]; then
-      mv -v "$out" "$QUARANTINE/" 2>&1 | sed 's/^/  /'
+      rm -rfv "$out" 2>&1 | sed 's/^/  /'
     fi
   done
 else
-  echo "=== resume mode: keeping outputs newer than bundle ($(date -u -d @$BUNDLE_MTIME)) ==="
-  mkdir -p "$QUARANTINE"
-  for out in "${TRACK_OUTPUTS[@]}" "$SCREENER_DIR"; do
+  echo "=== resume mode: deleting outputs older than bundle ($(date -u -d @$BUNDLE_MTIME)) ==="
+  for out in "${TRACK_OUTPUTS[@]}"; do
     if [ -e "$out" ]; then
       m=$(stat -c %Y "$out")
       if [ "$m" -lt "$BUNDLE_MTIME" ]; then
-        mv -v "$out" "$QUARANTINE/" 2>&1 | sed 's/^/  /'
+        rm -rfv "$out" 2>&1 | sed 's/^/  /'
       else
         echo "  keep: $out (newer than bundle)"
       fi
     fi
   done
 fi
+# Also delete any leftover quarantine dirs from prior runs — stale artifacts must not linger in active calibration paths.
+find "$CORPUS_DIR" -maxdepth 1 -type d -name '_stale_pre_*' -exec rm -rfv {} + 2>&1 | sed 's/^/  removed /'
+# Delete obsolete screener-real-qwen-economics run dirs (out of scope for this phase).
+find release/calibration/runs -maxdepth 1 -type d -name 'screener-real-qwen-economics-*' -exec rm -rfv {} + 2>/dev/null | sed 's/^/  removed /'
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Gate 3 — mandatory GPU smoke (hard-fail on any of: init, variance, determinism, random-near-zero)
@@ -183,7 +190,7 @@ run() {
 
 run_churn() {
   local name=$1 outdir=$2; shift 2
-  if find "$outdir" -maxdepth 1 -name 'V2_LONG_HORIZON_*_qwen*.json' -size +0 2>/dev/null | grep -q .; then
+  if find "$outdir" -maxdepth 1 -name 'V2_LIVE_EVOLVE_LONG_HORIZON_*_qwen*.json' -size +0 2>/dev/null | grep -q .; then
     if [ "$RESUME" = "1" ]; then
       echo "=== SKIP $name (resume: $outdir has output newer than bundle) ==="
       return 0
@@ -200,9 +207,24 @@ run_churn() {
   echo "=== $name DONE $(date -u) === ($(tail -1 "$LOGD/$name.log"))"
 }
 
-# Track 2a — unified all-6-family oracle
+# Track 2a — unified all-6-family oracle. NOT launch-final on its own: the oracle applies
+# bounded reranker-score nudges to finalRankingFull (diagnostic), not canonical encoded
+# states/patches via evaluateRetrievalBenchmarkState/Patch. A NONFINAL sibling note is
+# written next to the artifact so downstream agents cannot mistake it for promotion evidence.
 run oracle "$CORPUS_DIR/r5-a100-oracle-gpu-$SCALE.json" \
   scripts/probe-r5-a100-oracle.mjs --reranker gpu --seeds ${ORACLE_SEEDS:-1} --betas ${ORACLE_BETAS:-1.0} --export-traces --profile "$P"
+cat > "$CORPUS_DIR/r5-a100-oracle-gpu-$SCALE.NONFINAL.md" <<EONFM
+# Oracle output is DIAGNOSTIC ONLY — not launch-final.
+
+probe-r5-a100-oracle.mjs applies bounded additive reranker-score nudges to finalRankingFull as
+a fast surface-exploration tool. It does NOT exercise canonical substrate application
+(evaluateRetrievalBenchmarkState / evaluateRetrievalBenchmarkPatch).
+
+Do not use this artifact alone for promotion / final substrate claims. Final claims require:
+  - churn_c3 (canonical live-evolve long-horizon) report
+  - screener_threshold (canonical threshold calibration) report
+  - substrate probes that hit canonical evaluators (conflict, abstention, temporal, relation_typed)
+EONFM
 
 # Track 2b — conflict_lifecycle malleability
 run conflict "$CORPUS_DIR/conflict-state-malleability-$SCALE-final.json" \
@@ -220,35 +242,55 @@ run temporal "$CORPUS_DIR/temporal-yield-$SCALE.json" \
 run relation_typed "$CORPUS_DIR/r5-relation-typed-validate-$SCALE-3seed.json" \
   scripts/probe-r5-relation-typed-validate.mjs --reranker gpu --seeds ${REL_SEEDS:-1,2,3} --route-per-fam ${REL_ROUTE_PER_FAM:-18} --off-per-fam ${REL_OFF_PER_FAM:-14} --r5-profile "$P"
 
-# Track 3 — C3 active-frontier churn (GPU scoring)
-run_churn churn_c3 "$CORPUS_DIR/churn-c3-long-horizon-$SCALE" \
-  scripts/simulate-v2-long-horizon.mjs --reranker gpu --epochs ${CHURN_EPOCHS:-12} \
+# Track 3 — Live-evolve long-horizon churn endurance (CANONICAL: evolveCorpusDelta →
+# buildCorpusDelta → applyCorpusDelta per epoch, NOT just frontier rotation on a fixed corpus).
+# Pre-track gate: CPU smoke proves the live-evolve mechanics on a small slice before any GPU time.
+echo "=== churn_pre_smoke: live-evolve mechanics smoke (CPU, no GPU spend) ==="
+if ! node scripts/smoke-live-evolve-mechanics.mjs --profile "$P" --corpus "$C" --emb "$E" --epochs 2 --churn-fraction 0.5 > "$LOGD/churn_pre_smoke.log" 2>&1; then
+  echo "HARD FAIL: live-evolve mechanics smoke (see $LOGD/churn_pre_smoke.log)" >&2
+  tail -25 "$LOGD/churn_pre_smoke.log" >&2
+  exit 1
+fi
+tail -6 "$LOGD/churn_pre_smoke.log"
+
+run_churn churn_c3 "$CORPUS_DIR/churn-c3-live-evolve-$SCALE" \
+  scripts/simulate-v2-live-evolve-long-horizon.mjs --reranker gpu --epochs ${CHURN_EPOCHS:-12} \
   --random-probes ${CHURN_RANDOM_PROBES:-12} --hillclimb-probes ${CHURN_HILLCLIMB_PROBES:-6} \
-  --honest-per-epoch ${CHURN_HONEST_PER_EPOCH:-3} --honest-family all \
+  --honest-per-epoch ${CHURN_HONEST_PER_EPOCH:-3} \
+  --churn-fraction ${CHURN_FRACTION:-0.05} \
   --frontier-mode C3 --frontier-window "$FRONTIER_WINDOW" --pack-size ${CHURN_PACK_SIZE:-64} \
   --clear-pack-quotas --target-advances ${CHURN_TARGET_ADVANCES:-3} --skip-rejected-temporal --profile "$P"
 
-# Track 4 — Screener real-Qwen economics (production-flow). Authoritative iff BASE_RPC_URL+V4_ADDRESS
-# AND a real miner wallet env are present; otherwise runs --offline-smoke and the report is marked
-# non-launch-authoritative (still useful diagnostic, but the on-chain submission gate is open).
-echo "=== screener_economics START $(date -u) ==="
-SCREENER_ARGS=( --gpu --run-id "$SCREENER_RUN_ID" --pack-size ${SCREENER_PACK_SIZE:-64} --submits-budget ${SCREENER_SUBMITS_BUDGET:-2000} --seeds ${SCREENER_SEEDS:-3} --shutdown-after-budget )
-if [ -z "${BASE_RPC_URL:-}" ] || [ -z "${V4_ADDRESS:-}" ] || [ ! -f coretex_miner_testing/.env ]; then
-  echo "  screener: on-chain config absent — running --offline-smoke (report marked non-launch-authoritative)"
-  SCREENER_ARGS+=( --offline-smoke )
-fi
-export CORETEX_LAUNCH_PROFILE="$PWD/$P"
-export CORETEX_LAUNCH_BUNDLE="$PWD/$B"
-export CORETEX_LAUNCH_CORPUS="$PWD/$C"
-export CORETEX_LAUNCH_EMBEDDINGS="$PWD/$E"
-if ! node scripts/screener-real-qwen-economics.mjs "${SCREENER_ARGS[@]}" > "$LOGD/screener_economics.log" 2>&1; then
-  echo "HARD FAIL: track screener_economics (see $LOGD/screener_economics.log)" >&2
-  tail -25 "$LOGD/screener_economics.log" >&2
+# Track 4 — CoreTex-only screener threshold calibration (NO miner driver, NO V4, NO wallet, NO chain).
+# Pre-track gate: tiny CPU smoke proves the canonical patch-class generators + canonical
+# evaluateRetrievalBenchmarkPatch + computeCoreTexScreenerThresholdPpm wiring works end-to-end
+# before any GPU spend on the full real-Qwen sweep.
+echo "=== screener_pre_smoke: screener-threshold mechanics smoke (CPU, no GPU spend) ==="
+if ! node scripts/smoke-screener-threshold-mechanics.mjs --profile "$P" --bundle "$B" --corpus "$C" --emb "$E" --per-class 1 > "$LOGD/screener_pre_smoke.log" 2>&1; then
+  echo "HARD FAIL: screener-threshold mechanics smoke (see $LOGD/screener_pre_smoke.log)" >&2
+  tail -25 "$LOGD/screener_pre_smoke.log" >&2
   exit 1
 fi
-echo "=== screener_economics DONE $(date -u) === ($(tail -1 "$LOGD/screener_economics.log"))"
+tail -6 "$LOGD/screener_pre_smoke.log"
+
+echo "=== screener_threshold START $(date -u) ==="
+SCREENER_OUT="$CORPUS_DIR/screener-threshold-calibration-$SCALE.json"
+if ! node scripts/screener-threshold-calibration.mjs --reranker gpu --profile "$P" --bundle "$B" --corpus "$C" --emb "$E" --per-class ${SCREENER_PER_CLASS:-8} --pack-size ${SCREENER_PACK_SIZE:-64} --clear-pack-quotas --out "$SCREENER_OUT" > "$LOGD/screener_threshold.log" 2>&1; then
+  echo "HARD FAIL: track screener_threshold (see $LOGD/screener_threshold.log)" >&2
+  tail -25 "$LOGD/screener_threshold.log" >&2
+  exit 1
+fi
+echo "=== screener_threshold DONE $(date -u) === ($(tail -1 "$LOGD/screener_threshold.log"))"
+
+echo "=== gate4: post-track metric-gate validator ==="
+if ! node scripts/validate-campaign-metric-gates.mjs --corpus-dir "$CORPUS_DIR" --scale "$SCALE" > "$LOGD/gate4-metrics.log" 2>&1; then
+  echo "HARD FAIL: post-track metric gates (see $LOGD/gate4-metrics.log)" >&2
+  tail -40 "$LOGD/gate4-metrics.log" >&2
+  exit 1
+fi
+tail -20 "$LOGD/gate4-metrics.log"
 
 echo "########## CAMPAIGN $SCALE DONE $(date -u) ##########"
 ls -la "$CORPUS_DIR"/*"$SCALE"*.json 2>/dev/null | grep -iE "oracle|conflict|abstention|temporal|relation" | grep -v _stale | sed 's/^/  artifact: /'
-find "$CORPUS_DIR/churn-c3-long-horizon-$SCALE" -maxdepth 1 -name 'V2_LONG_HORIZON_*_qwen*.json' -print 2>/dev/null | sed 's/^/  artifact: /'
-ls -la "$SCREENER_DIR"/run.json 2>/dev/null | sed 's/^/  artifact: /'
+find "$CORPUS_DIR/churn-c3-live-evolve-$SCALE" -maxdepth 1 -name 'V2_LIVE_EVOLVE_LONG_HORIZON_*_qwen*.json' -print 2>/dev/null | sed 's/^/  artifact: /'
+ls -la "$CORPUS_DIR/screener-threshold-calibration-$SCALE.json" 2>/dev/null | sed 's/^/  artifact: /'

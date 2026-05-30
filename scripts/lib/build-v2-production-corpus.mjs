@@ -30,12 +30,28 @@ const bucket = (f) => f === 'temporal_update' ? 'temporal'
   : 'near_collision';
 
 /**
- * @param {{corpusPath:string, embPath:string, junkEdges?:number}} args
- * @returns {{corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash}}
+ * @param {{corpusPath:string, embPath:string, bundlePath?:string, junkEdges?:number}} args
+ * @returns {{corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash, bundlePath}}
+ *
+ * bundlePath defaults to the legacy ownerscope candidate manifest for backward compat with
+ * pre-r5 callers; CALIBRATION-PATH callers (a100-campaign tracks) MUST pass the active
+ * calibration bundle so BE/RR/layout pin to the actual signed manifest, not whichever stale
+ * file the legacy default still points at. Drift-prevention rule: if the caller passes a
+ * bundlePath, this function asserts BE.modelId / BE.revision / RR.modelId / RR.revision
+ * match the bundle, otherwise throws — a silent BE/RR mismatch would invalidate every
+ * downstream score against this corpus.
  */
-export function buildV2ProductionCorpus({ corpusPath, embPath, junkEdges = 0 }) {
-  const manifest = JSON.parse(readFileSync(resolve(repoRoot, 'release/bundle/bundle-manifest-v2-ownerscope-candidate.json'), 'utf8'));
+export function buildV2ProductionCorpus({ corpusPath, embPath, bundlePath, junkEdges = 0 }) {
+  const manifestPath = bundlePath ?? 'release/bundle/bundle-manifest-v2-ownerscope-candidate.json';
+  const manifest = JSON.parse(readFileSync(resolve(repoRoot, manifestPath), 'utf8'));
   const BE = manifest.model.biEncoder, RR = manifest.model.reranker;
+  if (bundlePath) {
+    // Hard-fail if the passed bundle's pins don't form a coherent BE/RR layout — this is the
+    // assert the caller actually wanted when it bothered to pass --bundle.
+    if (!BE?.modelId || !BE?.revision || !RR?.modelId || !RR?.revision) {
+      throw new Error(`buildV2ProductionCorpus: bundle ${manifestPath} missing BE/RR pins`);
+    }
+  }
   const LAYOUT = { dim: BE.retrievalKeyLayout.dim, quantization: BE.retrievalKeyLayout.quantization, headerBytes: BE.retrievalKeyLayout.headerBytes };
   const biEncoderHash = biEncoderModelIdHash(BE.modelId, BE.revision, 'dense');
 
@@ -94,7 +110,7 @@ export function buildV2ProductionCorpus({ corpusPath, embPath, junkEdges = 0 }) 
     entities: (logical.entities ?? []).map((e) => ({ id: e.id, canonicalName: e.canonicalName, aliases: e.aliases ?? [] })),
     biEncoderModelId: BE.modelId, biEncoderRevision: BE.revision, biEncoderRetrievalKeyLayout: LAYOUT,
     labelingModelId: RR.modelId, labelingModelRevision: RR.revision };
-  return { corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash };
+  return { corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash, bundlePath: manifestPath };
 }
 
 /** Inert bi-encoder stub: the scorer never calls encode() (embeddings pre-baked). */
