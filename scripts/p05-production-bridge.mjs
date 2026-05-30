@@ -25,43 +25,13 @@
 import { distIndex, repoRoot } from './_repo-root.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { execSync, spawn } from 'node:child_process';
+import { execSync } from 'node:child_process';
+import { makeStreamReranker } from './lib/stream-reranker.mjs';
 
-// Custom PERSISTENT stream reranker — loads model + CUDA ONCE (per-spawn CUDA init is
-// ~5-8s, so one-shot-per-query times out). Drives reranker_runner.py --stream with our
-// own request/response client (the Node stream wrapper deadlocked / wouldn't engage CUDA).
-// Implements CrossEncoderReranker: score(pairs:{query,document}[]) -> Promise<number[]>.
-function streamReranker({ model, revision, python, allowCuda }) {
-  const env = { ...process.env, CORETEX_RERANKER_STREAM_MODEL_ID: model, CORETEX_RERANKER_STREAM_REVISION: revision,
-    HF_HUB_CACHE: process.env.HF_HUB_CACHE ?? '/var/lib/coretex/model-cache', HF_HUB_OFFLINE: process.env.HF_HUB_OFFLINE ?? '1' };
-  if (allowCuda) { env.CORETEX_RERANKER_ALLOW_CUDA = '1'; delete env.CUDA_VISIBLE_DEVICES; } else { env.CUDA_VISIBLE_DEVICES = ''; }
-  const proc = spawn(python, [resolve(repoRoot, 'scripts/reranker_runner.py'), '--stream'], { env, stdio: ['pipe', 'pipe', 'inherit'] });
-  let buf = '', nextId = 0; const pending = new Map(); let readyResolve; const readyP = new Promise((r) => { readyResolve = r; });
-  proc.stdout.on('data', (d) => {
-    buf += d.toString(); let nl;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
-      if (!line.trim()) continue;
-      let msg; try { msg = JSON.parse(line); } catch { continue; }
-      if (msg.ready) { readyResolve(); continue; }
-      if (msg.id !== undefined && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
-    }
-  });
-  proc.on('exit', (code) => { for (const [, r] of pending) r({ error: `reranker stream exited ${code}` }); });
-  return {
-    async score(pairs) {
-      if (!pairs || pairs.length === 0) return [];
-      await readyP;
-      const id = nextId++;
-      const p = new Promise((res) => pending.set(id, res));
-      proc.stdin.write(JSON.stringify({ id, pairs: pairs.map((x) => ({ query: x.query, document: x.document })) }) + '\n');
-      const msg = await p;
-      if (msg.error) throw new Error(msg.error);
-      return msg.scores;
-    },
-    close() { try { proc.stdin.end(); } catch { /* noop */ } },
-  };
-}
+// Stream reranker uses the shared scripts/lib/stream-reranker.mjs (fail-fast: startup
+// timeout, stderr capture, child-exit rejection, in-flight rejection). The historical
+// local copy in this file lacked all of those and was a drift hazard.
+const streamReranker = makeStreamReranker;
 
 const argv = process.argv.slice(2);
 // HARD GUARD: this is the LEGACY P0.5 bridge. It is STALE for r5/churn/A100 — it does NOT thread public

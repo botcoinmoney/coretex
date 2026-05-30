@@ -42,6 +42,7 @@ import { evolveCorpusDelta } from './lib/evolve-corpus.mjs';
 import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadMaterializedCorpus } from './lib/load-materialized-corpus.mjs';
 import { embedTexts } from './_embed-v2.mjs';
+import { relationUnits } from './lib/v2-patch-families.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
 
 const C = await import(distIndex);
@@ -156,24 +157,32 @@ function buildIdShuffledPack(pack) {
   return { ...pack, events };
 }
 
-// Honest patch generator: relation-typed admission atom targeting a NEW churn subject's
-// mem-anchor slot. Deterministic from (epoch, honestIdx).
-// Canonical parentStateRoot for genesis = merkleizeState({words: Array(1024).fill(0n)}); NOT zero bytes.
+// Honest patch generator: canonical category-lens relation patch (2 edges) — the SAME shape
+// `honestPatch({family: 'relation', edgeCount: 2})` emits in v2-patch-families, the SAME shape
+// the screener's true_state_advance class proved produces real retrieval lift on a representative
+// pack without tripping cross-family floors. The earlier bare-1-word policy atom (no MemoryIndex
+// anchor, no category-lens edges) had no substrate engaged and uniformly returned
+// no_retrieval_improvement on every CPU smoke — the same root cause the screener fixed.
+//
+// 2 edges (not 4): 4 trips family_catastrophic:temporal on small/mixed packs at small scale.
+// 2 edges gives a measurable lift on relation-family queries with low cross-family interference,
+// matching the screener's verified pattern.
+//
+// Pack-derived target docId is still recorded in fingerprint/targetDocId for provenance, even
+// though the patch body itself is anchor-free (relation edges are not per-doc keyed).
 const GENESIS_PARENT_ROOT = merkleizeState({ words: new Array(1024).fill(0n) });
 function honestPatchForEpoch(epoch, honestIdx, addedDocs) {
   const target = addedDocs[honestIdx % Math.max(1, addedDocs.length)];
   if (!target) return null;
-  const atomWord = encodePolicyAtom({
-    atomIndex: honestIdx & 0x7, family: 'evidence_bundle', selector: POLICY_SELECTOR.RELATION_PATH_PRESENT,
-    evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path',
-    targetSlot: (honestIdx + 5) & 0xff, budget: 250, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n,
-  });
-  const fingerprint = `eb:relpath:${target.id}:slot${(honestIdx + 5) & 0xff}`;
+  const rel = relationUnits(2);
+  // (honestIdx + epoch*7) keeps the fingerprint distinct across epochs so operation-reuse
+  // measurement isn't masked by every epoch emitting an identical 2-edge patch.
+  const fingerprint = `honest:relation(2):e${epoch}:h${honestIdx}:target=${target.id}`;
   return { patch: {
-    patchType: PATCH_TYPE.POLICY_UPDATE, wordCount: 1, scoreDelta: 0,
+    patchType: PATCH_TYPE.MIXED, wordCount: rel.indices.length, scoreDelta: 0,
     parentStateRoot: GENESIS_PARENT_ROOT,
-    indices: [RANGES.POLICY_EVIDENCE_START + (honestIdx & 0x7f)],
-    newWords: [atomWord],
+    indices: rel.indices,
+    newWords: rel.newWords,
   }, fingerprint, targetDocId: target.id };
 }
 
@@ -365,8 +374,10 @@ const report = {
   uniqueHonestOperations: operationReuseSet.size,
   canonicalAPIsUsed: [
     'evolveCorpusDelta(baseLogical, epoch, seed, churnFraction)',
+    'bridgeLogicalDeltaToProductionEvents({previousCorpus, logicalDelta, addedDocEmbeddings, addedQueryEmbeddings, biEncoder})',
     'buildCorpusDelta({previousCorpus, additions, removals, epoch, labelingProvenance})',
     'applyCorpusDelta(currentProd, delta)',
+    'makeLaunchFrontier(profile, prod).addReserveIds(newEvalIds, familyOf)',
     'makeLaunchFrontier(profile, prod).stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts)',
     'evaluateRetrievalBenchmarkState(state, corpus, pack, opts)',
     'evaluateRetrievalBenchmarkPatch(state, patch, corpus, pack, opts, floors)',

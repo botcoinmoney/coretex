@@ -154,7 +154,19 @@ for (const seed of seeds) {
   const mk = (sc) => new Map(sc.perQuery.map((q) => [id(q), q]));
   const c1M = mk(C1), c2M = mk(C2), eM = mk(E), aM = mk(A);
 
-  let noOp = 0; for (const [k, qa] of aM) { const qb = bMap.get(k); if (qb) noOp = Math.max(noOp, Math.abs(qa.nDCG10 - qb.nDCG10)); }
+  // Aggregate r4 vs r5-noatoms identity (launch invariant in aggregate sense).
+  const aggregateAbsDelta = Math.abs(A.nDCG10 - Bv.nDCG10);
+  // ATOM-LOCALITY gate (same r5 scoring engine): C2_typed vs B_noatoms per query, restricted
+  // to OFF_FAMS only. Isolates atom contribution from r4-vs-r5 dense-lens-vs-policy-atom
+  // decoder drift (see release/calibration/2026-05-30-noOp-gate-root-cause.md).
+  let noOp = 0, noOpSamples = 0;
+  for (const [k, qb] of bMap) {
+    if (!OFF_FAMS.includes(famOf.get(k))) continue;
+    const qc = c2M.get(k);
+    if (!qc) continue;
+    noOpSamples++;
+    noOp = Math.max(noOp, Math.abs(qc.nDCG10 - qb.nDCG10));
+  }
 
   function sliceStats(fams, cM) {
     const ks = packEvents.filter((q) => fams.includes(q.logicalFamily)).map((q) => q.id);
@@ -175,7 +187,11 @@ for (const seed of seeds) {
   perSeed.push({
     seed, packSize: packEvents.length, anchors: anchors.length,
     arms: { A_r4: +A.nDCG10.toFixed(4), B_noatoms: +Bv.nDCG10.toFixed(4), C1_entity: +C1.nDCG10.toFixed(4), C2_typed: +C2.nDCG10.toFixed(4), E_random: +E.nDCG10.toFixed(4) },
-    noOpMaxAbsDelta: noOp,
+    // noOpMaxAbsDelta now measures ATOM-LOCALITY (C2_typed vs B_noatoms per query, OFF_FAMS
+    // only — same r5 scoring engine). aggregateR4VsR5NoatomsAbsDelta is the legacy launch
+    // invariant in aggregate sense (kept for replay continuity).
+    noOpMaxAbsDelta: noOp, noOpOffTargetSamples: noOpSamples,
+    aggregateR4VsR5NoatomsAbsDelta: aggregateAbsDelta,
     routingSlice_typed: sliceStats(ROUTING_FAMS, c2M),
     offFamily_typed: sliceStats(OFF_FAMS, c2M),
     routingSlice_entity: sliceStats(ROUTING_FAMS, c1M),

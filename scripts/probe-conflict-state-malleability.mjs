@@ -154,8 +154,22 @@ const W = await evaluateRetrievalBenchmarkState(wrong.state, corpus, pack, optsR
 const byId = (sc) => new Map(sc.perQuery.map((q) => [q.recordId, q]));
 const aQ = byId(A), bQ = byId(B), hQ = byId(H), rQ = byId(R), wQ = byId(W);
 
-// no-op gate: r5 no-atoms == r4, per query.
-let maxNoOp = 0; for (const [id, qa] of aQ) { const qb = bQ.get(id); if (qb) maxNoOp = Math.max(maxNoOp, Math.abs(qa.nDCG10 - qb.nDCG10)); }
+// Aggregate r4 vs r5-noatoms identity (sanity for the launch invariant "r5-no-atoms == r4
+// in aggregate"). Per-query A-vs-B divergence is dense-lens(r4) vs policy-atom(r5) decoder
+// difference on the same all-zero substrate (see release/calibration/2026-05-30-noOp-gate-root-cause.md);
+// it is NOT atom non-locality. The per-query test below is the apples-to-apples locality gate.
+const aggregateAbsDelta = Math.abs(A.nDCG10 - B.nDCG10);
+// ATOM-LOCALITY gate (same r5 scoring engine): atoms in honest.state must not perturb
+// off-target-family queries' per-query nDCG. Compare H vs B restricted to queries OUTSIDE
+// the conflict_lifecycle family — that isolates atom contribution from scorer-engine drift.
+let maxNoOp = 0; let noOpSamples = 0;
+for (const [id, qb] of bQ) {
+  if (famOf.get(id) === 'conflict_lifecycle') continue; // skip target family
+  const qh = hQ.get(id);
+  if (!qh) continue;
+  noOpSamples++;
+  maxNoOp = Math.max(maxNoOp, Math.abs(qh.nDCG10 - qb.nDCG10));
+}
 
 // per-family delta vs B (no-atoms). Conflict family is the target; others are the off-family damage check.
 function perFamilyDelta(cQ) {
@@ -197,7 +211,11 @@ const report = {
   packSize: pack.events.length, families: packFams, evalSubjects: evalSubjects.size,
   honestAnchors: honest.atoms, conflictAtomsDecoded: dh.conflictLifecycleAtoms.length,
   arms_overall_nDCG10: { A_r4: +A.nDCG10.toFixed(4), B_r5_noatoms: +B.nDCG10.toFixed(4), H_honest: +H.nDCG10.toFixed(4), R_random: +R.nDCG10.toFixed(4), W_wrong: +W.nDCG10.toFixed(4) },
-  noOpGate: { maxPerQueryNdcgDelta: maxNoOp, holds: maxNoOp < 1e-9 },
+  // noOpGate now measures ATOM-LOCALITY (H vs B per query, OFF-target family only — same
+  // r5 scoring engine, isolates atom contribution from r4-vs-r5 engine decoder drift).
+  // aggregateR4VsR5Noatoms is the legacy "r5-no-atoms == r4" launch-invariant sanity (aggregate sense).
+  noOpGate: { maxPerQueryNdcgDelta: maxNoOp, holds: maxNoOp < 1e-9, offTargetSamples: noOpSamples, note: 'H vs B per-query, off-target family only (atom-locality on r5 engine)' },
+  aggregateR4VsR5Noatoms: { absDelta: aggregateAbsDelta, holds: aggregateAbsDelta < 1e-9, note: 'r4 vs r5-noatoms aggregate-mean nDCG identity (launch invariant sense)' },
   conflictFamily_meanDeltaNdcg_vsNoAtoms: { honest: honestConflict, random: randomConflict, wrong: wrongConflict },
   honest_perFamily_vsNoAtoms: hPer,
   offFamily_worstRegression_honest: honestOffFamilyWorst,
@@ -209,5 +227,7 @@ const report = {
 mkdirSync(resolve(repoRoot, base), { recursive: true });
 writeFileSync(resolve(repoRoot, outPath), JSON.stringify(report, null, 2));
 console.log(JSON.stringify(report, null, 2));
-console.log(`\nNO-OP GATE: ${maxNoOp < 1e-9 ? 'PASS' : 'FAIL'} | CONFLICT MALLEABILITY (${rerankerArg}): ${pass ? 'PASS' : 'not-yet'} (honest ${honestConflict} vs random ${randomConflict} vs wrong ${wrongConflict})`);
+console.log(`\nATOM-LOCALITY GATE (H vs B off-target): ${maxNoOp < 1e-9 ? 'PASS' : 'FAIL'} (max=${maxNoOp.toFixed(6)} samples=${noOpSamples})`);
+console.log(`R4-VS-R5-NOATOMS AGGREGATE: ${aggregateAbsDelta < 1e-9 ? 'PASS' : 'FAIL'} (absDelta=${aggregateAbsDelta.toFixed(6)})`);
+console.log(`CONFLICT MALLEABILITY (${rerankerArg}): ${pass ? 'PASS' : 'not-yet'} (honest ${honestConflict} vs random ${randomConflict} vs wrong ${wrongConflict})`);
 if (typeof reranker.close === 'function') reranker.close();

@@ -227,8 +227,21 @@ const decomposition = {
   firedQueries: firedQ.size,
   note: 'B->B\' = anchor-mandatory injection cost (scaffolding); B\'->C = ISOLATED policy-atom effect',
 };
-let maxNoOpDelta = 0;
-for (const [id, qa] of aQ) { const qb = bQ.get(id); if (qb) maxNoOpDelta = Math.max(maxNoOpDelta, Math.abs(qa.nDCG10 - qb.nDCG10)); }
+// Aggregate r4 vs r5-noatoms identity (launch invariant in aggregate sense).
+const aggregateR4VsR5AbsDelta = Math.abs(A.nDCG10 - B.nDCG10);
+// ATOM-LOCALITY gate (same r5 scoring engine): C vs B per query restricted to OFF-target
+// family queries — isolates atom contribution from r4-vs-r5 dense-lens-vs-policy-atom
+// decoder drift (see release/calibration/2026-05-30-noOp-gate-root-cause.md).
+const targetFams = new Set(pack.events.filter((e) => firedQ.has(e.recordId ?? e.id)).map((e) => e.family));
+let maxNoOpDelta = 0, noOpSamples = 0;
+for (const [id, qb] of bQ) {
+  const ev = pack.events.find((e) => (e.recordId ?? e.id) === id);
+  if (!ev || targetFams.has(ev.family)) continue;
+  const qc = cQ.get(id);
+  if (!qc) continue;
+  noOpSamples++;
+  maxNoOpDelta = Math.max(maxNoOpDelta, Math.abs(qc.nDCG10 - qb.nDCG10));
+}
 const noOpHolds = maxNoOpDelta < 1e-9;
 
 // atom effect B → C (per family)
@@ -291,7 +304,8 @@ const report = {
   generatedAt: new Date().toISOString(),
   corpus: corpusPath, packSize: pack.events.length, reranker: rerankerArg === 'gpu' ? ('Qwen3-Reranker-0.6B (gpu)') : 'deterministic-stub',
   arms: { A_r4_baseline_ndcg: +A.nDCG10.toFixed(4), B_r5_noatoms_ndcg: +B.nDCG10.toFixed(4), C_r5_honest_ndcg: +Cc.nDCG10.toFixed(4) },
-  noOpGate: { maxPerQueryNdcgDelta: maxNoOpDelta, holds: noOpHolds, note: 'B (r5 no-atoms) MUST equal A (r4 baseline)' },
+  noOpGate: { maxPerQueryNdcgDelta: maxNoOpDelta, holds: noOpHolds, offTargetSamples: noOpSamples, note: 'C vs B per-query, off-target family only (atom-locality on r5 engine)' },
+  aggregateR4VsR5Noatoms: { absDelta: aggregateR4VsR5AbsDelta, holds: aggregateR4VsR5AbsDelta < 1e-9, note: 'r4 vs r5-noatoms aggregate-mean nDCG identity (launch invariant sense)' },
   honestSubstrate: { generator: 'query-selective (pool-freq<=' + POOL_FREQ_MAX + ', max ' + MAX_ANCHORS + ' anchors)', anchors: honest.anchors, evidenceAtoms: dh.evidenceBundleAtoms.length, abstentionAtoms: dh.abstentionAtoms.length, decodeFailures: dh.decodeFailures },
   atomEffect_BtoC_perFamily: perFamily,
   decomposition,

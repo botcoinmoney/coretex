@@ -15,7 +15,7 @@
  *
  * Usage: node scripts/materialize-production-corpus.mjs --profile <p> --bundle <b> --corpus <c> --emb <e> [--force]
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, statSync, readdirSync, copyFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { argv, exit } from 'node:process';
@@ -83,7 +83,9 @@ const CORPUS_JSON = resolve(MAT_DIR, 'corpus.json');
 const NDJSON = `${CORPUS_JSON}.events.ndjson`;
 const MANIFEST = resolve(MAT_DIR, 'manifest.json');
 
-// ─── Cache check: reuse if existing artifact still matches inputs ───
+const profileHashLocal = computeProfileHashLocal(profile);
+
+// ─── Cache check (direct): reuse if existing artifact under THIS bundleHash matches inputs ───
 if (existsSync(MANIFEST) && !FORCE) {
   try {
     const m = JSON.parse(readFileSync(MANIFEST, 'utf8'));
@@ -101,10 +103,60 @@ if (existsSync(MANIFEST) && !FORCE) {
       console.log(`[materialize]   sizes: corpus.json=${statSync(CORPUS_JSON).size}B events.ndjson=${statSync(NDJSON).size}B`);
       exit(0);
     }
-    console.log(`[materialize] cache stale (input sha or bundle changed) — rebuilding`);
+    console.log(`[materialize] cache stale (input sha or bundle changed) — checking sibling content-equivalence ...`);
   } catch (e) {
-    console.log(`[materialize] cache manifest unreadable (${e.message}) — rebuilding`);
+    console.log(`[materialize] cache manifest unreadable (${e.message}) — checking sibling content-equivalence ...`);
   }
+}
+
+// ─── Sibling content-equivalence: if another materialized/<x>/ dir's manifest matches the
+//     CONTENT keys (sourceCorpusSha + sourceEmbSha + profileHash + corpusRoot) but its
+//     bundleHash differs (e.g. canonical-code SHA change → new bundleHash, same corpus),
+//     COPY its corpus.json + ndjson into MAT_DIR and write a new manifest with the new
+//     bundleHash. Same materialization cost as cache hit; no 16-min rebuild. Matches the
+//     "fix the design, don't reloop full rebuilds" rule.
+const ROOT_MAT = resolve(repoRoot, 'release/calibration/2026-05-21-memory-corpus-v2/materialized');
+if (existsSync(ROOT_MAT) && !FORCE) {
+  for (const sib of readdirSync(ROOT_MAT)) {
+    if (sib === bundleTag) continue;
+    const sibManifest = resolve(ROOT_MAT, sib, 'manifest.json');
+    const sibCorpus = resolve(ROOT_MAT, sib, 'corpus.json');
+    const sibNdjson = `${sibCorpus}.events.ndjson`;
+    if (!existsSync(sibManifest) || !existsSync(sibCorpus) || !existsSync(sibNdjson)) continue;
+    try {
+      const sm = JSON.parse(readFileSync(sibManifest, 'utf8'));
+      const contentMatches =
+        sm.sourceCorpusSha256 === sourceCorpusSha
+        && sm.sourceEmbSha256 === sourceEmbSha
+        && sm.profileHash === profileHashLocal
+        && sm.corpusRoot && sm.corpusRoot.startsWith('0x');
+      if (!contentMatches) continue;
+      mkdirSync(MAT_DIR, { recursive: true });
+      copyFileSync(sibCorpus, CORPUS_JSON);
+      copyFileSync(sibNdjson, NDJSON);
+      const gitCommit = (() => { try { return execSync('git rev-parse HEAD', { cwd: repoRoot }).toString().trim(); } catch { return 'unknown'; } })();
+      const newManifest = {
+        ...sm,
+        bundleHash: bundle.bundleHash,
+        profileHash: profileHashLocal,
+        sourceProfileSha256: sha256File(PROFILE_PATH),
+        sourceBundleSha256: sha256File(BUNDLE_PATH),
+        gitCommit,
+        siblingCopyFrom: { bundleTag: sib, bundleHash: sm.bundleHash, note: 'content-equivalent corpus copied from sibling; corpus content + profile + embeddings unchanged' },
+      };
+      writeFileSync(MANIFEST, JSON.stringify(newManifest, null, 2));
+      console.log(`[materialize] SIBLING COPY — content-equivalent artifact found under materialized/${sib}/`);
+      console.log(`[materialize]   sibling bundleHash: ${sm.bundleHash}`);
+      console.log(`[materialize]   new bundleHash:     ${bundle.bundleHash}`);
+      console.log(`[materialize]   corpusRoot:         ${sm.corpusRoot}`);
+      console.log(`[materialize]   eventCount:         ${sm.eventCount}`);
+      console.log(`[materialize]   path:               ${MAT_DIR}`);
+      exit(0);
+    } catch (e) {
+      console.log(`[materialize]   sibling ${sib} manifest unreadable (${e.message}) — skipping`);
+    }
+  }
+  console.log(`[materialize] no sibling content-equivalence found — rebuilding from canonical inputs`);
 }
 
 mkdirSync(MAT_DIR, { recursive: true });

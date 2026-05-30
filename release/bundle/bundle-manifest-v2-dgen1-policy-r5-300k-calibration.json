@@ -362,7 +362,7 @@
       {
         "role": "evaluator",
         "path": "packages/cortex/src/coordinator/epoch-frontier.ts",
-        "sha256": "b8dccd1285568676d7c2e70606875d869c0d51a7a581c63779a510d0079daba8",
+        "sha256": "eeef64bf9e45ed9dbaa70fbbf786788ed1d8284f399e8f91e3c7bcae30eb7e9e",
         "bytes": 9275
       },
       {
@@ -654,5 +654,5 @@
     "coordinatorCacheOptional": true,
     "snapshots": []
   },
-  "bundleHash": "0x1be65ddc1afd3c3b08e70bd0ccd7db76cb249615490e8ee43ab1f33b113f4684"
+  "bundleHash": "0x78c485410e5267e56878a3567e61830dd4a596b21cf6add4ad142dcca53a58bb"
 }

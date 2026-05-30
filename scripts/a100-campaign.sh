@@ -190,7 +190,22 @@ echo "frontier-window: $FRONTIER_WINDOW"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Track runner — fails fast on rc != 0.
+#
+# Wall-clock watchdog: each track is wrapped in `timeout` with a per-track budget so a
+# wedged GPU process can't silently sink hours of A100 time. Budgets are env-tunable
+# (TRACK_BUDGET_<NAME>_SEC, default TRACK_BUDGET_DEFAULT_SEC=14400 = 4h). Elapsed seconds
+# are recorded for every track and re-emitted in the campaign summary so multi-hour gaps
+# in the log show up as a single visible row, not as a guess from file mtimes.
 # ─────────────────────────────────────────────────────────────────────────────
+TRACK_BUDGET_DEFAULT_SEC=${TRACK_BUDGET_DEFAULT_SEC:-14400}
+declare -A TRACK_ELAPSED_SEC=()
+declare -A TRACK_BUDGET_SEC=()
+track_budget() {
+  local name=$1
+  local upper=$(echo "$name" | tr '[:lower:]' '[:upper:]')
+  local var="TRACK_BUDGET_${upper}_SEC"
+  echo "${!var:-$TRACK_BUDGET_DEFAULT_SEC}"
+}
 run() {
   local name=$1 out=$2; shift 2
   if [ -s "$out" ]; then
@@ -202,13 +217,29 @@ run() {
     echo "HARD FAIL: track $name output exists pre-run and resume not set: $out" >&2
     exit 1
   fi
-  echo "=== $name START $(date -u) ==="
-  if ! node "$@" --corpus "$C" --emb "$E" --out "$out" > "$LOGD/$name.log" 2>&1; then
-    echo "HARD FAIL: track $name (see $LOGD/$name.log)" >&2
+  local budget=$(track_budget "$name")
+  TRACK_BUDGET_SEC[$name]=$budget
+  local t0=$(date +%s)
+  echo "=== $name START $(date -u) (budget=${budget}s) ==="
+  # rc capture must use set +e to read timeout's actual exit code. `if ! cmd; then rc=$?`
+  # captures the status of `!`, not cmd — 124 (timeout) and 137 (SIGKILL after --kill-after)
+  # would be misclassified.
+  set +e
+  timeout --kill-after=30s "${budget}s" node "$@" --corpus "$C" --emb "$E" --out "$out" > "$LOGD/$name.log" 2>&1
+  local rc=$?
+  set -e
+  local elapsed=$(($(date +%s) - t0))
+  TRACK_ELAPSED_SEC[$name]=$elapsed
+  if [ "$rc" -ne 0 ]; then
+    if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+      echo "HARD FAIL: track $name WALL-CLOCK BUDGET EXCEEDED (${elapsed}s > ${budget}s, rc=$rc) — wedged process killed (see $LOGD/$name.log)" >&2
+    else
+      echo "HARD FAIL: track $name (rc=$rc, elapsed=${elapsed}s, see $LOGD/$name.log)" >&2
+    fi
     tail -20 "$LOGD/$name.log" >&2
     exit 1
   fi
-  echo "=== $name DONE $(date -u) === ($(tail -1 "$LOGD/$name.log"))"
+  echo "=== $name DONE $(date -u) elapsed=${elapsed}s (budget=${budget}s) === ($(tail -1 "$LOGD/$name.log"))"
 }
 
 run_churn() {
@@ -221,13 +252,57 @@ run_churn() {
     echo "HARD FAIL: track $name has output pre-run and resume not set: $outdir" >&2
     exit 1
   fi
-  echo "=== $name START $(date -u) ==="
-  if ! node "$@" --corpus "$C" --emb "$E" --out "$outdir" --tag "$SCALE-c3" > "$LOGD/$name.log" 2>&1; then
-    echo "HARD FAIL: track $name (see $LOGD/$name.log)" >&2
+  local budget=$(track_budget "$name")
+  TRACK_BUDGET_SEC[$name]=$budget
+  local t0=$(date +%s)
+  echo "=== $name START $(date -u) (budget=${budget}s) ==="
+  set +e
+  timeout --kill-after=30s "${budget}s" node "$@" --corpus "$C" --emb "$E" --out "$outdir" --tag "$SCALE-c3" > "$LOGD/$name.log" 2>&1
+  local rc=$?
+  set -e
+  local elapsed=$(($(date +%s) - t0))
+  TRACK_ELAPSED_SEC[$name]=$elapsed
+  if [ "$rc" -ne 0 ]; then
+    if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+      echo "HARD FAIL: track $name WALL-CLOCK BUDGET EXCEEDED (${elapsed}s > ${budget}s, rc=$rc) — wedged process killed (see $LOGD/$name.log)" >&2
+    else
+      echo "HARD FAIL: track $name (rc=$rc, elapsed=${elapsed}s, see $LOGD/$name.log)" >&2
+    fi
     tail -20 "$LOGD/$name.log" >&2
     exit 1
   fi
-  echo "=== $name DONE $(date -u) === ($(tail -1 "$LOGD/$name.log"))"
+  echo "=== $name DONE $(date -u) elapsed=${elapsed}s (budget=${budget}s) === ($(tail -1 "$LOGD/$name.log"))"
+}
+
+# Helper: wrap a one-shot command (smoke / threshold / etc.) in timeout + elapsed reporting,
+# same idiom as run()/run_churn() but for non-track shell blocks that need watchdog coverage.
+# Usage:  run_timed <name> <budget_var_name_or_default> -- <cmd ...>
+# (uses the literal '--' separator to mark end of name/budget args)
+run_timed() {
+  local name=$1
+  shift
+  # accept "-- cmd..." or "cmd ..." (no -- → name uses default budget)
+  if [ "${1:-}" = "--" ]; then shift; fi
+  local budget=$(track_budget "$name")
+  TRACK_BUDGET_SEC[$name]=$budget
+  local t0=$(date +%s)
+  echo "=== $name START $(date -u) (budget=${budget}s) ==="
+  set +e
+  timeout --kill-after=30s "${budget}s" "$@" > "$LOGD/$name.log" 2>&1
+  local rc=$?
+  set -e
+  local elapsed=$(($(date +%s) - t0))
+  TRACK_ELAPSED_SEC[$name]=$elapsed
+  if [ "$rc" -ne 0 ]; then
+    if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+      echo "HARD FAIL: $name WALL-CLOCK BUDGET EXCEEDED (${elapsed}s > ${budget}s, rc=$rc) — wedged process killed (see $LOGD/$name.log)" >&2
+    else
+      echo "HARD FAIL: $name (rc=$rc, elapsed=${elapsed}s, see $LOGD/$name.log)" >&2
+    fi
+    tail -25 "$LOGD/$name.log" >&2
+    exit 1
+  fi
+  echo "=== $name DONE $(date -u) elapsed=${elapsed}s (budget=${budget}s) === ($(tail -1 "$LOGD/$name.log"))"
 }
 
 # Track 2a — unified all-6-family oracle. NOT launch-final on its own: the oracle applies
@@ -272,11 +347,7 @@ run relation_typed "$CORPUS_DIR/r5-relation-typed-validate-$SCALE-3seed.json" \
 # buildCorpusDelta → applyCorpusDelta per epoch, NOT just frontier rotation on a fixed corpus).
 # Pre-track gate: CPU smoke proves the live-evolve mechanics on a small slice before any GPU time.
 echo "=== churn_pre_smoke: live-evolve mechanics smoke (CPU, materialized slice — fast) ==="
-if ! node scripts/smoke-live-evolve-mechanics.mjs --profile "$P" --bundle "$B" --corpus "$C" --emb "$E" --slice 512 --epochs 2 > "$LOGD/churn_pre_smoke.log" 2>&1; then
-  echo "HARD FAIL: live-evolve mechanics smoke (see $LOGD/churn_pre_smoke.log)" >&2
-  tail -25 "$LOGD/churn_pre_smoke.log" >&2
-  exit 1
-fi
+run_timed churn_pre_smoke -- node scripts/smoke-live-evolve-mechanics.mjs --profile "$P" --bundle "$B" --corpus "$C" --emb "$E" --slice 2048 --epochs 3
 tail -6 "$LOGD/churn_pre_smoke.log"
 
 run_churn churn_c3 "$CORPUS_DIR/churn-c3-live-evolve-$SCALE" \
@@ -291,31 +362,24 @@ run_churn churn_c3 "$CORPUS_DIR/churn-c3-live-evolve-$SCALE" \
 # evaluateRetrievalBenchmarkPatch + computeCoreTexScreenerThresholdPpm wiring works end-to-end
 # before any GPU spend on the full real-Qwen sweep.
 echo "=== screener_pre_smoke: screener-threshold mechanics smoke (CPU, materialized slice — fast) ==="
-if ! node scripts/smoke-screener-threshold-mechanics.mjs --profile "$P" --bundle "$B" --slice 256 > "$LOGD/screener_pre_smoke.log" 2>&1; then
-  echo "HARD FAIL: screener-threshold mechanics smoke (see $LOGD/screener_pre_smoke.log)" >&2
-  tail -25 "$LOGD/screener_pre_smoke.log" >&2
-  exit 1
-fi
+run_timed screener_pre_smoke -- node scripts/smoke-screener-threshold-mechanics.mjs --profile "$P" --bundle "$B" --slice 256
 tail -6 "$LOGD/screener_pre_smoke.log"
 
-echo "=== screener_threshold START $(date -u) ==="
 SCREENER_OUT="$CORPUS_DIR/screener-threshold-calibration-$SCALE.json"
-if ! node scripts/screener-threshold-calibration.mjs --reranker gpu --profile "$P" --bundle "$B" --corpus "$C" --emb "$E" --per-class ${SCREENER_PER_CLASS:-8} --pack-size ${SCREENER_PACK_SIZE:-64} --clear-pack-quotas --out "$SCREENER_OUT" > "$LOGD/screener_threshold.log" 2>&1; then
-  echo "HARD FAIL: track screener_threshold (see $LOGD/screener_threshold.log)" >&2
-  tail -25 "$LOGD/screener_threshold.log" >&2
-  exit 1
-fi
-echo "=== screener_threshold DONE $(date -u) === ($(tail -1 "$LOGD/screener_threshold.log"))"
+run_timed screener_threshold -- node scripts/screener-threshold-calibration.mjs --reranker gpu --profile "$P" --bundle "$B" --corpus "$C" --emb "$E" --per-class ${SCREENER_PER_CLASS:-8} --pack-size ${SCREENER_PACK_SIZE:-64} --clear-pack-quotas --out "$SCREENER_OUT"
 
-echo "=== gate4: post-track metric-gate validator ==="
-if ! node scripts/validate-campaign-metric-gates.mjs --corpus-dir "$CORPUS_DIR" --scale "$SCALE" > "$LOGD/gate4-metrics.log" 2>&1; then
-  echo "HARD FAIL: post-track metric gates (see $LOGD/gate4-metrics.log)" >&2
-  tail -40 "$LOGD/gate4-metrics.log" >&2
-  exit 1
-fi
-tail -20 "$LOGD/gate4-metrics.log"
+run_timed gate4_metrics -- node scripts/validate-campaign-metric-gates.mjs --corpus-dir "$CORPUS_DIR" --scale "$SCALE"
+tail -20 "$LOGD/gate4_metrics.log"
 
 echo "########## CAMPAIGN $SCALE DONE $(date -u) ##########"
+# Per-track timing summary: every track's wall-clock elapsed and budget. A glance reveals
+# where time actually went (vs. having to mtime-subtract log files after the fact). A 4.5h
+# track stands out as a single row; a 4.5h GAP between tracks would now be impossible (each
+# track is bounded by its budget and timeout-killed if it wedges).
+echo "=== per-track wall-clock summary ==="
+for name in "${!TRACK_ELAPSED_SEC[@]}"; do
+  printf "  %-22s elapsed=%6ss  budget=%6ss\n" "$name" "${TRACK_ELAPSED_SEC[$name]}" "${TRACK_BUDGET_SEC[$name]:-?}"
+done | sort
 ls -la "$CORPUS_DIR"/*"$SCALE"*.json 2>/dev/null | grep -iE "oracle|conflict|abstention|temporal|relation" | grep -v _stale | sed 's/^/  artifact: /'
 find "$CORPUS_DIR/churn-c3-live-evolve-$SCALE" -maxdepth 1 -name 'V2_LIVE_EVOLVE_LONG_HORIZON_*_qwen*.json' -print 2>/dev/null | sed 's/^/  artifact: /'
 ls -la "$CORPUS_DIR/screener-threshold-calibration-$SCALE.json" 2>/dev/null | sed 's/^/  artifact: /'

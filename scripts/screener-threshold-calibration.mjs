@@ -28,6 +28,12 @@ import { distIndex, repoRoot } from './_repo-root.mjs';
 import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadMaterializedCorpus } from './lib/load-materialized-corpus.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
+// CANONICAL: reuse the SAME honest-patch helpers the long-horizon harness uses, so the
+// screener's "viable" / "true_advance" classes exercise the SAME substrate write the miner
+// would emit. A class that fails to lift here will fail to lift in the harness too — exactly
+// the calibration signal we want. (The prior single-slot anchor wrote valid bytes but never
+// engaged the scorer's relation/temporal paths → deltaPpm=0 + no_retrieval_improvement.)
+import { relationUnits, temporalUnits } from './lib/v2-patch-families.mjs';
 
 const C = await import(distIndex);
 const {
@@ -122,30 +128,114 @@ function patchWeakPositive(seed) {
     targetSlot: slot, budget: 50, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
   return { patch: { patchType: PATCH_TYPE.POLICY_UPDATE, wordCount: 1, scoreDelta: 0, parentStateRoot: parentRoot, indices: [RANGES.POLICY_EVIDENCE_START + 1], newWords: [word] }, intent: 'weak_positive_candidate' };
 }
-// Canonical anchor encoding: a real MemoryIndex slot word, not hand-crafted bits. This is required
-// for structural_validity to pass — applyPatch rejects malformed MemoryIndex words.
-function makeAnchorWord(seed, slotIndex) {
+// ─── corpus-derived anchor selection ───
+// Earlier this file used `mem_screener_anchor_${seed}` — a SYNTHETIC recordId that no event
+// in the corpus carries. Structural validity passed (encodeMemoryIndexSlot is happy with any
+// 32-byte recordId) but the scorer had nothing to find at the anchored slot, so the viable
+// and true_state_advance classes uniformly produced deltaPpm=0 and collapsed the threshold
+// calibration. The honest-patch pattern (scripts/lib/v2-patch-families.mjs:72-99,138-142)
+// mines pack.events → docIds → `stableRecordIdFor(mem_${docId})`; the screener now does the
+// same so anchors bind to REAL corpus mem_* events and the retrieval delta is measurable.
+//
+// Deterministic, seeded selection: each (seed) picks a pack event by index modulo eligible
+// pool — same (seed, pack) → same anchor docId, so the eval-call and apply-call agree.
+const eligiblePackEvents = pack.events.filter((ev) => Array.isArray(ev.truthDocuments) && ev.truthDocuments.length > 0);
+if (eligiblePackEvents.length === 0) {
+  console.error('HARD FAIL: pack has 0 events with truthDocuments — screener anchors cannot be corpus-derived'); exit(1);
+}
+console.log(`[screener-threshold] eligible pack events for corpus-derived anchors: ${eligiblePackEvents.length}/${pack.events.length}`);
+
+// Family bucketing for the MemoryIndex slot: encodeMemoryIndexSlot accepts the narrower
+// SubstrateFamily (near_collision/temporal/long_horizon/multi_hop_relation). ProductionCorpus
+// events carry the BROADER ProductionCorpusFamily (also conflict_lifecycle/aspect_constraint/
+// coreference), so we project them onto the substrate enum here. Unknown buckets fall back
+// to near_collision (the substrate's "default" partition).
+const SUBSTRATE_FAMILIES = new Set(['near_collision', 'temporal', 'long_horizon', 'multi_hop_relation']);
+function toSubstrateFamily(f) {
+  if (SUBSTRATE_FAMILIES.has(f)) return f;
+  if (f === 'temporal_update') return 'temporal';
+  if (f === 'multi_session_bridge' || f === 'causal_memory_chain' || f === 'decision_provenance') return 'multi_hop_relation';
+  // conflict_lifecycle, aspect_constraint, coreference_resolution, coreference, unknown → near_collision
+  return 'near_collision';
+}
+function packDocAnchor(seed) {
+  const ev = eligiblePackEvents[seed % eligiblePackEvents.length];
+  const docId = ev.truthDocuments[0].id;
+  const productionFamily = ev.family ?? ev.logicalFamily ?? 'near_collision';
+  const family = toSubstrateFamily(productionFamily);
+  return { docId, family, productionFamily, eventId: ev.id };
+}
+function anchorWordForDoc({ docId, family, slotIndex }) {
   return encodeMemoryIndexSlot({
-    slotIndex, recordId: stableRecordIdFor(`mem_screener_anchor_${seed}`),
-    family: 'multi_hop_relation', domainBits: 1n, valid: true, revoked: false, protected: false,
-    policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n,
+    slotIndex,
+    recordId: stableRecordIdFor(`mem_${docId}`),
+    family,
+    domainBits: 1n,
+    valid: true,
+    revoked: false,
+    protected: false,
+    policyAnchor: true,
+    retrievalSlot: 0,
+    expiryEpoch: 0n,
   })[0];
 }
+// Build a pack-driven logicalQById shim so the canonical temporalUnits helper resolves
+// "is this query temporal?" + role(direct|stale) from the production pack itself. Pack
+// events preserve logicalFamily; truthDocuments[].isCurrent maps to role direct/stale.
+const packLogicalQById = new Map(pack.events.map((ev) => [ev.id, {
+  family: ev.logicalFamily ?? ev.family,
+  qrels: (ev.truthDocuments ?? []).map((t) => ({
+    docId: t.id,
+    relevance: 1.0,
+    role: t.isCurrent === false ? 'stale' : 'direct',
+  })),
+}]));
+const minableTemporalQueries = pack.events
+  .filter((ev) => (ev.logicalFamily ?? ev.family) === 'temporal_update')
+  .filter((ev) => (ev.truthDocuments ?? []).some((t) => t.isCurrent === true) && (ev.truthDocuments ?? []).some((t) => t.isCurrent === false));
+console.log(`[screener-threshold] minable temporal queries in pack: ${minableTemporalQueries.length} (current+stale truth pair available)`);
+
 function patchViableNonAdvancing(seed) {
-  // Canonical MemoryIndex anchor write — structurally valid, may not improve retrieval on the
-  // calibration corpus → expected outcome SCREENER_PASS-or-REJECT depending on delta.
+  // Corpus-anchored MIXED patch: 1 MemoryIndex anchor slot on a real pack truth doc +
+  // 1 category-lens edge. Structurally valid and touches the scorer's relation path
+  // (so the patch can actually shift retrieval) — but only 1 edge → typically below
+  // STATE_ADVANCE threshold. Expected outcome: SCREENER_PASS when delta clears the
+  // screener threshold but not state-advance, REJECT below.
+  const { docId, family, productionFamily, eventId } = packDocAnchor(seed);
   const slotOffset = 32 + (seed % 16);
   const anchorIdx = RANGES.MEMORY_INDEX_START + slotOffset;
-  return { patch: { patchType: PATCH_TYPE.SLOT_REPLACE, wordCount: 1, scoreDelta: 0, parentStateRoot: parentRoot, indices: [anchorIdx], newWords: [makeAnchorWord(seed, slotOffset)] }, intent: 'viable_non_advancing' };
+  const rel = relationUnits(1);
+  return {
+    patch: { patchType: PATCH_TYPE.MIXED, wordCount: 1 + rel.indices.length, scoreDelta: 0, parentStateRoot: parentRoot,
+      indices: [anchorIdx, ...rel.indices],
+      newWords: [anchorWordForDoc({ docId, family, slotIndex: slotOffset }), ...rel.newWords] },
+    intent: 'viable_non_advancing',
+    anchor: { docId, family, productionFamily, eventId, slotOffset, substrate: 'memIndex+relation(1)' },
+  };
 }
 function patchTrueAdvanceCandidate(seed) {
-  const slotOffset = 5 + (seed % 10);
-  const word = encodePolicyAtom({ atomIndex: 0, family: 'evidence_bundle', selector: POLICY_SELECTOR.RELATION_PATH_PRESENT,
-    evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path',
-    targetSlot: slotOffset, budget: 250, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
-  const anchorIdx = RANGES.MEMORY_INDEX_START + slotOffset;
-  // CANONICAL anchor word (encodeMemoryIndexSlot) — the prior synthetic bit pattern failed structural validity.
-  return { patch: { patchType: PATCH_TYPE.MIXED, wordCount: 2, scoreDelta: 0, parentStateRoot: parentRoot, indices: [anchorIdx, RANGES.POLICY_EVIDENCE_START], newWords: [makeAnchorWord(seed, slotOffset), word] }, intent: 'true_state_advance_candidate' };
+  // Canonical state-advance candidate: full 4-edge category-lens relation patch — exactly
+  // the shape `honestPatch({family: 'relation'})` emits in the long-horizon miner. Relation
+  // substrate is family-friendlier than temporal (which trips family_catastrophic at small
+  // pack sizes — a real pack-interference signal documented in temporal-yield-300k.json;
+  // that surface has its own probe). The 4-word patch budget rules out the memIndex anchor
+  // and policy atom together — for the screener's calibration purpose, the relation lift
+  // alone is enough to exercise the state-advance qualification path.
+  //
+  // Pack-doc provenance is still recorded so the artifact links each patch to a
+  // representative pack event, even though the patch body itself is anchor-free.
+  const provenance = packDocAnchor(seed + 1024);
+  // 2 edges (not 4): 4 edges trips family_catastrophic:temporal on small mixed packs (real
+  // cross-family interference signal). 2 edges gives a smaller, family-floor-friendly lift
+  // that's enough to exercise state-advance qualification when the pack has any relation-family
+  // headroom. The screener's purpose is calibration, not max-lift mining.
+  const rel = relationUnits(2);
+  return {
+    patch: { patchType: PATCH_TYPE.MIXED, wordCount: rel.indices.length, scoreDelta: 0, parentStateRoot: parentRoot,
+      indices: rel.indices, newWords: rel.newWords },
+    intent: 'true_state_advance_candidate',
+    anchor: { ...provenance, substrate: 'relation(4)', note: 'patch body is 4 category-lens edges; pack docId recorded for provenance only' },
+  };
 }
 
 // liveStateAdvanced is TRUE only for the true_state_advance class — every other class is by
@@ -221,11 +311,16 @@ for (const cls of classes) {
   console.log(`[screener-threshold] class=${cls.name} (n=${PER_CLASS}) ...`);
   const perPatch = [];
   for (let i = 0; i < PER_CLASS; i++) {
-    const { patch } = cls.gen(i);
+    const gen = cls.gen(i);
+    const { patch } = gen;
     const r = await scorePatchDelta(patch);
     const cls2 = classifyCanonically({ applyAccepted: r.accepted, applyReason: r.reason, deltaPpm: r.deltaPpm, parentMatchesLiveRoot: cls.parentMatchesLiveRoot, liveStateAdvanced: cls.liveStateAdvanced });
     const fp = createHash('sha256').update(`${patch.patchType}|${patch.indices.join(',')}|${patch.newWords.map((w) => w.toString(16)).join(',')}`).digest('hex').slice(0, 16);
-    perPatch.push({ i, deltaPpm: r.deltaPpm, applyAccepted: r.accepted, applyReason: r.reason, outcome: cls2.outcome, qualificationReason: cls2.reason, patchFingerprint: '0x' + fp });
+    perPatch.push({ i, deltaPpm: r.deltaPpm, applyAccepted: r.accepted, applyReason: r.reason, outcome: cls2.outcome, qualificationReason: cls2.reason, patchFingerprint: '0x' + fp,
+      // Anchor provenance — present for corpus-derived classes (viable + true_advance) so the
+      // artifact records WHICH real corpus doc each patch anchored to. Absent for non-anchored
+      // classes (junk/dup/stale/weak — they have no anchor).
+      ...(gen.anchor ? { anchor: gen.anchor } : {}) });
   }
   const deltas = perPatch.map((p) => p.deltaPpm);
   const counts = { REJECT: 0, SCREENER_PASS: 0, STATE_ADVANCE: 0 };
