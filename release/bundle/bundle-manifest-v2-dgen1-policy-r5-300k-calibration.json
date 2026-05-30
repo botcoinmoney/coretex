@@ -243,12 +243,14 @@
       "enableEvidenceBundleAtoms": true,
       "enableConflictLifecycleAtoms": true,
       "enableAbstentionAtoms": true,
-      "enableAspectConstraintAtoms": true,
+      "_aspectDisabledNote": "aspect_constraint DISABLED 2026-05-30 after the 2026-05-30 oracle showed 175/621 primary-gold-damaged + 201/621 answer-damaged + mean nDCG -0.30 on its slice. Re-enable only if a redesigned aspect surface clears the no-damage gate on the aspect-isolated profile.",
+      "enableAspectConstraintAtoms": false,
       "policyQueryConditionedAdmission": true,
       "policyRelationTypedAdmission": true,
       "policyConflictIntentAdmission": true,
-      "policyAspectIntentAdmission": true,
-      "policyAspectBoost": 0.1,
+      "policyAspectIntentAdmission": false,
+      "policyAspectBoost": 0,
+      "_noiseSuppressionNote": "noise_suppression NOT enabled in this profile (the oracle showed mean nDCG -0.04 + 57 answer-damages + 57 gold-damages + junkInTopK=16182 in its 3639-slice). No canonical flag for noise_suppression — the substrate ships off by default; this note documents the calibration-time decision NOT to candidate-enable any noise-suppression variant.",
       "policyMaxBudgetEvidence": 250,
       "policyMaxBudgetConflict": 1000,
       "policyAbstentionTop1Threshold": 0.9995,
@@ -652,5 +654,5 @@
     "coordinatorCacheOptional": true,
     "snapshots": []
   },
-  "bundleHash": "0x5b4921e86dfc8e4f922b1b14157b6f2a61d4fd20b57557a8b2f2d316611c58dd"
+  "bundleHash": "0x1be65ddc1afd3c3b08e70bd0ccd7db76cb249615490e8ee43ab1f33b113f4684"
 }

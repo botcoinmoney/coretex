@@ -134,10 +134,12 @@ function filterPackToHeldout(pack, activeIds) {
   const events = pack.events.filter((e) => !activeIds.has(e.id));
   return { ...pack, events };
 }
-// Deterministic doc-id permutation control: replace each event's truth doc IDs with a CYCLIC
-// shift of other in-pack doc IDs. If scoring is genuinely semantic (text-based via Qwen) and the
-// eval is doing real work via qrels, original-pack score should be MUCH higher than shuffled-pack.
-// doc_id_dependence ~ 1 = healthy; ~ 0 = broken (eval not using qrels) OR ID-bound (no real semantic match).
+// Permuted-qrels control. Renamed/clarified: this probe MEASURES whether the evaluator
+// uses qrels to compute nDCG (it does — that's by design). It DOES NOT measure whether
+// the scorer depends on doc IDs vs text — the scorer's reranker is text-based, so a real
+// ID-dependence probe would need to rename all mem_* event IDs and rewire references.
+// Reported as `qrel_shuffle_collapse_ratio` going forward; the legacy `doc_id_dependence`
+// field is kept for backward-compat with the v2 schema but marked DEPRECATED.
 function buildIdShuffledPack(pack) {
   const ids = pack.events.flatMap((e) => (e.truthDocuments ?? []).map((t) => t.id));
   if (!ids.length) return pack;
@@ -285,8 +287,11 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
 
   const crossFrontierLift = (activeScorePpm != null && prevActiveScorePpm != null) ? (activeScorePpm - prevActiveScorePpm) : null;
   const heldoutFrontierLift = (heldoutScorePpm != null && prevHeldoutScorePpm != null) ? (heldoutScorePpm - prevHeldoutScorePpm) : null;
-  const docIdDependence = (activeScorePpm != null && idShuffledScorePpm != null && activeScorePpm > 0)
+  // Rename: this is qrel-shuffle collapse, NOT doc-id-dependence (a true ID-dependence probe
+  // would rename mem_* events and rewire references — out of scope for this harness).
+  const qrelShuffleCollapseRatio = (activeScorePpm != null && idShuffledScorePpm != null && activeScorePpm > 0)
     ? (activeScorePpm - idShuffledScorePpm) / Math.max(1, activeScorePpm) : null;
+  const docIdDependence = qrelShuffleCollapseRatio; // DEPRECATED alias; remove after readers migrate.
 
   // Honest mining: K patches per epoch, score via canonical evaluateRetrievalBenchmarkPatch.
   let honestAcceptsThisEpoch = 0, qualityAttemptsThisEpoch = 0, honestReuseThisEpoch = 0;
@@ -332,7 +337,8 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     activeScorePpm, heldoutScorePpm, idShuffledActiveScorePpm: idShuffledScorePpm,
     cross_frontier_lift: crossFrontierLift,
     heldout_frontier_lift: heldoutFrontierLift,
-    doc_id_dependence: docIdDependence,
+    qrel_shuffle_collapse_ratio: qrelShuffleCollapseRatio,
+    doc_id_dependence: docIdDependence, // DEPRECATED: alias of qrel_shuffle_collapse_ratio
     honestAttempted: qualityAttemptsThisEpoch, honestAccepted: honestAcceptsThisEpoch,
     operation_reuse_rate: operationReuseRate,
     honestPerPatch,

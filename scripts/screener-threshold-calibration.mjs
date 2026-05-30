@@ -38,6 +38,7 @@ const {
   scoringOptionsFromProfile, deriveQueryPack, biEncoderModelIdHash,
   createDeterministicReranker,
   encodePolicyAtom, POLICY_SELECTOR, POLICY_EVIDENCE_FEATURE,
+  encodeMemoryIndexSlot, stableRecordIdFor,
   merkleizeState,
 } = C;
 
@@ -121,18 +122,30 @@ function patchWeakPositive(seed) {
     targetSlot: slot, budget: 50, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
   return { patch: { patchType: PATCH_TYPE.POLICY_UPDATE, wordCount: 1, scoreDelta: 0, parentStateRoot: parentRoot, indices: [RANGES.POLICY_EVIDENCE_START + 1], newWords: [word] }, intent: 'weak_positive_candidate' };
 }
+// Canonical anchor encoding: a real MemoryIndex slot word, not hand-crafted bits. This is required
+// for structural_validity to pass — applyPatch rejects malformed MemoryIndex words.
+function makeAnchorWord(seed, slotIndex) {
+  return encodeMemoryIndexSlot({
+    slotIndex, recordId: stableRecordIdFor(`mem_screener_anchor_${seed}`),
+    family: 'multi_hop_relation', domainBits: 1n, valid: true, revoked: false, protected: false,
+    policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n,
+  })[0];
+}
 function patchViableNonAdvancing(seed) {
-  const slot = 32 + (seed % 16);
-  const w = u64(0x1n << 60n) | u64(seed);
-  return { patch: { patchType: PATCH_TYPE.SLOT_REPLACE, wordCount: 1, scoreDelta: 0, parentStateRoot: parentRoot, indices: [slot], newWords: [w] }, intent: 'viable_non_advancing' };
+  // Canonical MemoryIndex anchor write — structurally valid, may not improve retrieval on the
+  // calibration corpus → expected outcome SCREENER_PASS-or-REJECT depending on delta.
+  const slotOffset = 32 + (seed % 16);
+  const anchorIdx = RANGES.MEMORY_INDEX_START + slotOffset;
+  return { patch: { patchType: PATCH_TYPE.SLOT_REPLACE, wordCount: 1, scoreDelta: 0, parentStateRoot: parentRoot, indices: [anchorIdx], newWords: [makeAnchorWord(seed, slotOffset)] }, intent: 'viable_non_advancing' };
 }
 function patchTrueAdvanceCandidate(seed) {
+  const slotOffset = 5 + (seed % 10);
   const word = encodePolicyAtom({ atomIndex: 0, family: 'evidence_bundle', selector: POLICY_SELECTOR.RELATION_PATH_PRESENT,
     evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path',
-    targetSlot: 5 + (seed % 10), budget: 250, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
-  const anchorIdx = RANGES.MEMORY_INDEX_START + 5 + (seed % 10);
-  const anchorWord = u64(0x1n << 63n) | u64(seed * 7);
-  return { patch: { patchType: PATCH_TYPE.MIXED, wordCount: 2, scoreDelta: 0, parentStateRoot: parentRoot, indices: [anchorIdx, RANGES.POLICY_EVIDENCE_START], newWords: [anchorWord, word] }, intent: 'true_state_advance_candidate' };
+    targetSlot: slotOffset, budget: 250, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
+  const anchorIdx = RANGES.MEMORY_INDEX_START + slotOffset;
+  // CANONICAL anchor word (encodeMemoryIndexSlot) — the prior synthetic bit pattern failed structural validity.
+  return { patch: { patchType: PATCH_TYPE.MIXED, wordCount: 2, scoreDelta: 0, parentStateRoot: parentRoot, indices: [anchorIdx, RANGES.POLICY_EVIDENCE_START], newWords: [makeAnchorWord(seed, slotOffset), word] }, intent: 'true_state_advance_candidate' };
 }
 
 // liveStateAdvanced is TRUE only for the true_state_advance class — every other class is by
