@@ -259,7 +259,8 @@ run_churn churn_c3 "$CORPUS_DIR/churn-c3-live-evolve-$SCALE" \
   --honest-per-epoch ${CHURN_HONEST_PER_EPOCH:-3} \
   --churn-fraction ${CHURN_FRACTION:-0.05} \
   --frontier-mode C3 --frontier-window "$FRONTIER_WINDOW" --pack-size ${CHURN_PACK_SIZE:-64} \
-  --clear-pack-quotas --target-advances ${CHURN_TARGET_ADVANCES:-3} --skip-rejected-temporal --profile "$P"
+  --clear-pack-quotas --target-advances ${CHURN_TARGET_ADVANCES:-3} --skip-rejected-temporal \
+  --profile "$P" --bundle "$B"
 
 # Track 4 — CoreTex-only screener threshold calibration (NO miner driver, NO V4, NO wallet, NO chain).
 # Pre-track gate: tiny CPU smoke proves the canonical patch-class generators + canonical

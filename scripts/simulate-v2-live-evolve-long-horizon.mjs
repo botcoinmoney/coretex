@@ -52,6 +52,7 @@ const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 
 const has = (n) => argv.includes(`--${n}`);
 const RERANKER = flag('reranker', 'gpu'); // 'gpu' | 'deterministic'
 const PROFILE_PATH = flag('profile');
+const BUNDLE_PATH = flag('bundle'); // optional but recommended; pins BE/RR to active calibration bundle
 const CORPUS_PATH = flag('corpus');
 const EMB_PATH = flag('emb');
 const OUTDIR = flag('out');
@@ -82,7 +83,7 @@ console.log(`[live-evolve] epochs=${EPOCHS} churn=${CHURN_FRACTION} seed=${front
 
 // ─── 1. base production corpus (real embeddings) ───
 console.log('[live-evolve] building base production corpus ...');
-const baseBundle = buildV2ProductionCorpus({ corpusPath: CORPUS_PATH, embPath: EMB_PATH });
+const baseBundle = buildV2ProductionCorpus({ corpusPath: CORPUS_PATH, embPath: EMB_PATH, ...(BUNDLE_PATH ? { bundlePath: BUNDLE_PATH } : {}) });
 let currentProd = baseBundle.corpus;
 const { BE, RR, LAYOUT } = baseBundle;
 const labelingProvenance = {
