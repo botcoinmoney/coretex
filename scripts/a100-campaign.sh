@@ -1,77 +1,254 @@
 #!/usr/bin/env bash
-# CoreTex final-r5 real-Qwen campaign — runs ON the A100 under /workspace/cortex.
-# One GPU reranker stream at a time; each probe logs + writes its own JSON; resumable (skips
-# a track whose --out already exists). Launch detached: setsid bash scripts/a100-campaign.sh <scale> &
-set -uo pipefail
-SCALE=${1:?usage: a100-campaign.sh <100k|300k>}
+# CoreTex real-Qwen calibration campaign — runs ON the A100 under /workspace/cortex.
+# Fail-fast (set -euo pipefail): any track failure stops the campaign IMMEDIATELY.
+# By default every track is fresh (existing outputs are quarantined to _stale_pre_<bundle>/);
+# pass --resume to skip tracks whose outputs are newer than the bundle's mtime.
+#
+# Pre-flight gates (must all pass before any long GPU work):
+#   1. Every referenced script + lib import exists and parses (node --check / bash -n).
+#   2. Calibration bundle + profile are present and verifyBundleManifest is clean.
+#   3. GPU smoke gate (a100-gpu-smoke.mjs) passes — init, variance, determinism, random-near-zero.
+#
+# Tracks (calibration profile enables ALL reclaimed substrates — every surface is measured):
+#   2a oracle              — all-6-family no-op/random/off-family/locality safety + bounded magnitude
+#   2b conflict             — conflict_lifecycle malleability (honest/random/wrong, no-op gate)
+#   2c abstention           — top1 + margin sweep, false-abstention rate
+#   2d temporal             — temporal yield in-context
+#   2e relation_typed       — relation-typed routing / evidence-bundle reclaim
+#   3  churn_c3             — C3 active-frontier churn long-horizon
+#   4  screener_economics   — production-flow real-Qwen screener economics
+#
+# Usage:
+#   bash scripts/a100-campaign.sh <100k|300k> [--profile <p>] [--bundle <b>] [--resume]
+#   setsid nohup bash scripts/a100-campaign.sh 300k > /workspace/campaign-300k/_driver.log 2>&1 < /dev/null &
+
+set -euo pipefail
+
+SCALE=""
+PROFILE_OVERRIDE=""
+BUNDLE_OVERRIDE=""
+RESUME=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    100k|300k) SCALE="$1"; shift ;;
+    --profile) PROFILE_OVERRIDE="$2"; shift 2 ;;
+    --bundle)  BUNDLE_OVERRIDE="$2";  shift 2 ;;
+    --resume)  RESUME=1; shift ;;
+    *) echo "HARD FAIL: unknown arg '$1' (usage: a100-campaign.sh <100k|300k> [--profile p] [--bundle b] [--resume])" >&2; exit 1 ;;
+  esac
+done
+[ -z "$SCALE" ] && { echo "HARD FAIL: scale required (100k|300k)" >&2; exit 1; }
+
 cd /workspace/cortex
-CORPUS=release/calibration/2026-05-21-memory-corpus-v2
-C=$CORPUS/dgen1-r5-synth-$SCALE-final-corpus.json
-E=$CORPUS/dgen1-r5-synth-$SCALE-final-embeddings.json
-P=release/bundle/evaluator-profile-v2-dgen1-policy-r5-$SCALE.json
-LOGD=/workspace/campaign-$SCALE; mkdir -p "$LOGD"
-FRONTIER_WINDOW=${CHURN_FRONTIER_WINDOW:-$(node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); console.log(p.epochFrontier?.activeWindow ?? 0)" "$P")}
+CORPUS_DIR=release/calibration/2026-05-21-memory-corpus-v2
+C=$CORPUS_DIR/dgen1-r5-synth-$SCALE-final-corpus.json
+E=$CORPUS_DIR/dgen1-r5-synth-$SCALE-final-embeddings.json
+P=${PROFILE_OVERRIDE:-release/bundle/evaluator-profile-v2-dgen1-policy-r5-$SCALE-calibration.json}
+B=${BUNDLE_OVERRIDE:-release/bundle/bundle-manifest-v2-dgen1-policy-r5-$SCALE-calibration.json}
+LOGD=/workspace/campaign-$SCALE
+mkdir -p "$LOGD"
+
+echo "########## CAMPAIGN $SCALE START $(date -u) ##########"
+echo "profile: $P"
+echo "bundle:  $B"
+echo "corpus:  $C"
+echo "resume:  $RESUME"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Gate 1 — every referenced script + lib import exists and parses
+# ─────────────────────────────────────────────────────────────────────────────
+REFERENCED_SCRIPTS=(
+  scripts/a100-gpu-smoke.mjs
+  scripts/probe-r5-a100-oracle.mjs
+  scripts/probe-conflict-state-malleability.mjs
+  scripts/probe-r5-abstention-margin.mjs
+  scripts/measure-temporal-yield-incontext.mjs
+  scripts/probe-r5-relation-typed-validate.mjs
+  scripts/simulate-v2-long-horizon.mjs
+  scripts/screener-real-qwen-economics.mjs
+  scripts/lib/stream-reranker.mjs
+  scripts/reranker_runner.py
+)
+echo "=== gate1: script-presence + syntax checks ==="
+for s in "${REFERENCED_SCRIPTS[@]}"; do
+  [ -f "$s" ] || { echo "HARD FAIL: referenced script missing: $s" >&2; exit 1; }
+  case "$s" in
+    *.mjs) node --check "$s" 2>&1 | grep -v '^$' || true; node --check "$s" >/dev/null 2>&1 || { echo "HARD FAIL: node --check failed: $s" >&2; exit 1; } ;;
+    *.py)  python3 -c "import ast,sys; ast.parse(open('$s').read())" >/dev/null 2>&1 || { echo "HARD FAIL: python parse failed: $s" >&2; exit 1; } ;;
+  esac
+  echo "  ok: $s"
+done
+
+[ -f "$C" ] || { echo "HARD FAIL: corpus missing: $C" >&2; exit 1; }
+[ -f "$E" ] || { echo "HARD FAIL: embeddings missing: $E" >&2; exit 1; }
+[ -f "$P" ] || { echo "HARD FAIL: profile missing: $P" >&2; exit 1; }
+[ -f "$B" ] || { echo "HARD FAIL: bundle missing: $B" >&2; exit 1; }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Gate 2 — bundle/profile coherence via parity-mode preflight (cheap, no corpus rebuild)
+# ─────────────────────────────────────────────────────────────────────────────
+echo "=== gate2: parity-mode preflight (bundle attestation + fingerprint roots) ==="
+node scripts/launch-preflight.mjs --mode=parity \
+  --profile "$P" --bundle "$B" --corpus "$C" --emb "$E" \
+  --emit "$LOGD/preflight-parity.json" > "$LOGD/gate2.log" 2>&1 || {
+  echo "HARD FAIL: gate2 parity preflight (see $LOGD/gate2.log)" >&2
+  tail -20 "$LOGD/gate2.log" >&2
+  exit 1
+}
+tail -3 "$LOGD/gate2.log"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stale-quarantine pre-sweep (deterministic). Unless --resume, every existing output
+# is moved aside so no track silently reuses pre-fix bytes.
+# ─────────────────────────────────────────────────────────────────────────────
+BUNDLE_TAG=$(node -e "const j=JSON.parse(require('fs').readFileSync('$B','utf8')); console.log((j.bundleHash||'unknown').slice(2,10))")
+QUARANTINE="$CORPUS_DIR/_stale_pre_${BUNDLE_TAG}"
+TRACK_OUTPUTS=(
+  "$CORPUS_DIR/r5-a100-oracle-gpu-$SCALE.json"
+  "$CORPUS_DIR/conflict-state-malleability-$SCALE-final.json"
+  "$CORPUS_DIR/r5-abstention-margin-$SCALE.json"
+  "$CORPUS_DIR/temporal-yield-$SCALE.json"
+  "$CORPUS_DIR/r5-relation-typed-validate-$SCALE-3seed.json"
+  "$CORPUS_DIR/churn-c3-long-horizon-$SCALE"
+)
+SCREENER_RUN_ID="screener-real-qwen-economics-$SCALE-${BUNDLE_TAG}"
+SCREENER_DIR="release/calibration/runs/$SCREENER_RUN_ID"
+
+BUNDLE_MTIME=$(stat -c %Y "$B")
+if [ "$RESUME" = "0" ]; then
+  echo "=== quarantine: moving any prior outputs to $QUARANTINE/ ==="
+  mkdir -p "$QUARANTINE"
+  for out in "${TRACK_OUTPUTS[@]}" "$SCREENER_DIR"; do
+    if [ -e "$out" ]; then
+      mv -v "$out" "$QUARANTINE/" 2>&1 | sed 's/^/  /'
+    fi
+  done
+else
+  echo "=== resume mode: keeping outputs newer than bundle ($(date -u -d @$BUNDLE_MTIME)) ==="
+  mkdir -p "$QUARANTINE"
+  for out in "${TRACK_OUTPUTS[@]}" "$SCREENER_DIR"; do
+    if [ -e "$out" ]; then
+      m=$(stat -c %Y "$out")
+      if [ "$m" -lt "$BUNDLE_MTIME" ]; then
+        mv -v "$out" "$QUARANTINE/" 2>&1 | sed 's/^/  /'
+      else
+        echo "  keep: $out (newer than bundle)"
+      fi
+    fi
+  done
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Gate 3 — mandatory GPU smoke (hard-fail on any of: init, variance, determinism, random-near-zero)
+# ─────────────────────────────────────────────────────────────────────────────
 export CORETEX_RERANKER_PYTHON=/usr/bin/python3
 export CORETEX_RERANKER_ALLOW_CUDA=1
 export HF_HUB_CACHE=/var/lib/coretex/model-cache
 export HF_HUB_OFFLINE=1
 export NODE_OPTIONS=--max-old-space-size=16384
 
-run() { # name  out  args...
-  local name=$1 out=$2; shift 2
-  if [ -s "$out" ]; then echo "=== SKIP $name (exists: $out) ==="; return 0; fi
-  echo "=== $name START $(date -u) ==="
-  node "$@" --corpus "$C" --emb "$E" --out "$out" > "$LOGD/$name.log" 2>&1
-  local rc=$?
-  echo "=== $name DONE rc=$rc $(date -u) === ($(tail -1 "$LOGD/$name.log"))"
-  return $rc
+echo "=== gate3: GPU reranker smoke (init/variance/determinism/random) ==="
+node scripts/a100-gpu-smoke.mjs > "$LOGD/gate3-smoke.log" 2>&1 || {
+  echo "HARD FAIL: gate3 GPU smoke (see $LOGD/gate3-smoke.log)" >&2
+  tail -30 "$LOGD/gate3-smoke.log" >&2
+  exit 1
 }
-run_churn() { # name outdir args...
-  local name=$1 outdir=$2; shift 2
-  if find "$outdir" -maxdepth 1 -name 'V2_LONG_HORIZON_*_qwen*.json' -size +0 2>/dev/null | grep -q .; then
-    echo "=== SKIP $name (exists: $outdir) ==="; return 0
+tail -6 "$LOGD/gate3-smoke.log"
+
+FRONTIER_WINDOW=${CHURN_FRONTIER_WINDOW:-$(node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); console.log(p.epochFrontier?.activeWindow ?? 0)" "$P")}
+echo "frontier-window: $FRONTIER_WINDOW"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Track runner — fails fast on rc != 0.
+# ─────────────────────────────────────────────────────────────────────────────
+run() {
+  local name=$1 out=$2; shift 2
+  if [ -s "$out" ]; then
+    if [ "$RESUME" = "1" ]; then
+      echo "=== SKIP $name (resume: $out exists newer than bundle) ==="
+      return 0
+    fi
+    # Should not happen (quarantine cleared it), but treat as hard fail rather than silent skip.
+    echo "HARD FAIL: track $name output exists pre-run and resume not set: $out" >&2
+    exit 1
   fi
   echo "=== $name START $(date -u) ==="
-  node "$@" --corpus "$C" --emb "$E" --out "$outdir" --tag "$SCALE-c3" > "$LOGD/$name.log" 2>&1
-  local rc=$?
-  echo "=== $name DONE rc=$rc $(date -u) === ($(tail -1 "$LOGD/$name.log"))"
-  return $rc
+  if ! node "$@" --corpus "$C" --emb "$E" --out "$out" > "$LOGD/$name.log" 2>&1; then
+    echo "HARD FAIL: track $name (see $LOGD/$name.log)" >&2
+    tail -20 "$LOGD/$name.log" >&2
+    exit 1
+  fi
+  echo "=== $name DONE $(date -u) === ($(tail -1 "$LOGD/$name.log"))"
 }
 
-echo "########## CAMPAIGN $SCALE START $(date -u) ##########"
+run_churn() {
+  local name=$1 outdir=$2; shift 2
+  if find "$outdir" -maxdepth 1 -name 'V2_LONG_HORIZON_*_qwen*.json' -size +0 2>/dev/null | grep -q .; then
+    if [ "$RESUME" = "1" ]; then
+      echo "=== SKIP $name (resume: $outdir has output newer than bundle) ==="
+      return 0
+    fi
+    echo "HARD FAIL: track $name has output pre-run and resume not set: $outdir" >&2
+    exit 1
+  fi
+  echo "=== $name START $(date -u) ==="
+  if ! node "$@" --corpus "$C" --emb "$E" --out "$outdir" --tag "$SCALE-c3" > "$LOGD/$name.log" 2>&1; then
+    echo "HARD FAIL: track $name (see $LOGD/$name.log)" >&2
+    tail -20 "$LOGD/$name.log" >&2
+    exit 1
+  fi
+  echo "=== $name DONE $(date -u) === ($(tail -1 "$LOGD/$name.log"))"
+}
 
-# Track 2a — unified all-6-family oracle (no-op/random/off-family/locality safety + bounded atom magnitude)
-# Cost-conscious launch pass: 1 seed + launch beta 1.0. Re-run a marginal surface with more seeds if needed.
-run oracle "$CORPUS/r5-a100-oracle-gpu-$SCALE.json" \
+# Track 2a — unified all-6-family oracle
+run oracle "$CORPUS_DIR/r5-a100-oracle-gpu-$SCALE.json" \
   scripts/probe-r5-a100-oracle.mjs --reranker gpu --seeds ${ORACLE_SEEDS:-1} --betas ${ORACLE_BETAS:-1.0} --export-traces --profile "$P"
 
-# Track 2b — conflict_lifecycle malleability (honest/random/wrong-direction, no-op gate)
-run conflict "$CORPUS/conflict-state-malleability-$SCALE-final.json" \
+# Track 2b — conflict_lifecycle malleability
+run conflict "$CORPUS_DIR/conflict-state-malleability-$SCALE-final.json" \
   scripts/probe-conflict-state-malleability.mjs --reranker gpu --pack-size 200 --r5-profile "$P"
 
-# Track 2c — abstention margin (top1/margin sweep, false-abstention rate)
-run abstention "$CORPUS/r5-abstention-margin-$SCALE.json" \
+# Track 2c — abstention margin
+run abstention "$CORPUS_DIR/r5-abstention-margin-$SCALE.json" \
   scripts/probe-r5-abstention-margin.mjs --reranker gpu --pack-size 300 --r5-profile "$P"
 
 # Track 2d — temporal yield in-context
-run temporal "$CORPUS/temporal-yield-$SCALE.json" \
+run temporal "$CORPUS_DIR/temporal-yield-$SCALE.json" \
   scripts/measure-temporal-yield-incontext.mjs --reranker gpu --pack-size 12 --target 60 --seeds a5,b7,c3 --profile "$P"
 
-# Track 2e — relation-typed routing / evidence-bundle reclaim. Run at every final scale;
-# a small or negative 300k result is a verdict, not a reason to skip the surface.
-run relation_typed "$CORPUS/r5-relation-typed-validate-$SCALE-3seed.json" \
+# Track 2e — relation-typed routing / evidence-bundle reclaim
+run relation_typed "$CORPUS_DIR/r5-relation-typed-validate-$SCALE-3seed.json" \
   scripts/probe-r5-relation-typed-validate.mjs --reranker gpu --seeds ${REL_SEEDS:-1,2,3} --route-per-fam ${REL_ROUTE_PER_FAM:-18} --off-per-fam ${REL_OFF_PER_FAM:-14} --r5-profile "$P"
 
-# Track 3 — C3 active-frontier churn, baseline recompute, and multi-epoch patch scoring.
-# This is the GPU campaign arm for plateau/churn soundness; CPU root/delta reconstruction remains
-# covered by churn-launch-e2e.mjs and churn-delta-reconstruct.mjs.
-run_churn churn_c3 "$CORPUS/churn-c3-long-horizon-$SCALE" \
+# Track 3 — C3 active-frontier churn (GPU scoring)
+run_churn churn_c3 "$CORPUS_DIR/churn-c3-long-horizon-$SCALE" \
   scripts/simulate-v2-long-horizon.mjs --reranker gpu --epochs ${CHURN_EPOCHS:-12} \
   --random-probes ${CHURN_RANDOM_PROBES:-12} --hillclimb-probes ${CHURN_HILLCLIMB_PROBES:-6} \
   --honest-per-epoch ${CHURN_HONEST_PER_EPOCH:-3} --honest-family all \
   --frontier-mode C3 --frontier-window "$FRONTIER_WINDOW" --pack-size ${CHURN_PACK_SIZE:-64} \
   --clear-pack-quotas --target-advances ${CHURN_TARGET_ADVANCES:-3} --skip-rejected-temporal --profile "$P"
 
+# Track 4 — Screener real-Qwen economics (production-flow). Authoritative iff BASE_RPC_URL+V4_ADDRESS
+# AND a real miner wallet env are present; otherwise runs --offline-smoke and the report is marked
+# non-launch-authoritative (still useful diagnostic, but the on-chain submission gate is open).
+echo "=== screener_economics START $(date -u) ==="
+SCREENER_ARGS=( --gpu --run-id "$SCREENER_RUN_ID" --pack-size ${SCREENER_PACK_SIZE:-64} --submits-budget ${SCREENER_SUBMITS_BUDGET:-2000} --seeds ${SCREENER_SEEDS:-3} --shutdown-after-budget )
+if [ -z "${BASE_RPC_URL:-}" ] || [ -z "${V4_ADDRESS:-}" ] || [ ! -f coretex_miner_testing/.env ]; then
+  echo "  screener: on-chain config absent — running --offline-smoke (report marked non-launch-authoritative)"
+  SCREENER_ARGS+=( --offline-smoke )
+fi
+export CORETEX_LAUNCH_PROFILE="$PWD/$P"
+export CORETEX_LAUNCH_BUNDLE="$PWD/$B"
+export CORETEX_LAUNCH_CORPUS="$PWD/$C"
+export CORETEX_LAUNCH_EMBEDDINGS="$PWD/$E"
+if ! node scripts/screener-real-qwen-economics.mjs "${SCREENER_ARGS[@]}" > "$LOGD/screener_economics.log" 2>&1; then
+  echo "HARD FAIL: track screener_economics (see $LOGD/screener_economics.log)" >&2
+  tail -25 "$LOGD/screener_economics.log" >&2
+  exit 1
+fi
+echo "=== screener_economics DONE $(date -u) === ($(tail -1 "$LOGD/screener_economics.log"))"
+
 echo "########## CAMPAIGN $SCALE DONE $(date -u) ##########"
-ls -la "$CORPUS"/*"$SCALE"*.json | grep -iE "oracle|conflict|abstention|temporal|relation" | sed 's/^/  artifact: /'
-find "$CORPUS"/churn-c3-long-horizon-"$SCALE" -maxdepth 1 -name 'V2_LONG_HORIZON_*_qwen*.json' -print 2>/dev/null | sed 's/^/  artifact: /'
+ls -la "$CORPUS_DIR"/*"$SCALE"*.json 2>/dev/null | grep -iE "oracle|conflict|abstention|temporal|relation" | grep -v _stale | sed 's/^/  artifact: /'
+find "$CORPUS_DIR/churn-c3-long-horizon-$SCALE" -maxdepth 1 -name 'V2_LONG_HORIZON_*_qwen*.json' -print 2>/dev/null | sed 's/^/  artifact: /'
+ls -la "$SCREENER_DIR"/run.json 2>/dev/null | sed 's/^/  artifact: /'
