@@ -41,7 +41,6 @@ const {
   scoringOptionsFromProfile, deriveQueryPack, biEncoderModelIdHash,
   createDeterministicReranker,
   encodePolicyAtom, POLICY_SELECTOR, POLICY_EVIDENCE_FEATURE,
-  computePatchHash,
 } = C;
 
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
@@ -87,8 +86,14 @@ const floors = { ...profile.patchAcceptanceFloors, acceptanceThresholdPpm: profi
 const baseline = BigInt(profile.baselineParentScorePpm ?? 0);
 const recentNoise = 0n; // first cut: no measured noise floor; canonical formula uses minDelta and headroom
 const screenerThresholdPpm = computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baseline, recentNoiseFloorPpm: recentNoise });
-const minStateAdvancePpm = BigInt(DEFAULT_CORETEX_WORK_POLICY.stateAdvance.minDeterministicDeltaPpm ?? screenerThresholdPpm);
-console.log(`[screener-threshold] baseline=${baseline}ppm screenerThreshold=${screenerThresholdPpm}ppm stateAdvanceMin=${minStateAdvancePpm}ppm`);
+// In the canonical policy the SCREENER_PASS vs STATE_ADVANCE distinction is the outcome STRING
+// the submitter declares (+ a liveStateAdvance flag), NOT a delta band; both share the same
+// minDeterministic floor (max(stateAdvance.minDeterministicDeltaPpm=1ppm, screenerThreshold)).
+// For threshold-CALIBRATION we want a delta band so the report shows where each patch class
+// lands; we use profile.patchAcceptanceFloors.minImprovementPpm (the operator-pinned
+// "meaningful improvement" floor for this corpus) as the SCREENER_PASS → STATE_ADVANCE band.
+const minStateAdvancePpm = BigInt(profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500);
+console.log(`[screener-threshold] baseline=${baseline}ppm screenerThreshold=${screenerThresholdPpm}ppm stateAdvanceBand>=${minStateAdvancePpm}ppm (profile.minImprovementPpm)`);
 
 // ─── Patch generators (each returns {patch, intent}) ───
 const zero = () => ({ words: new Array(1024).fill(0n) });
@@ -106,7 +111,7 @@ function patchStructValidIrrelevant(seed) {
   // structurally valid (POLICY_UPDATE with a real PolicyAtom that targets nothing useful) — no scoring lift expected.
   const word = encodePolicyAtom({ atomIndex: 0, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY,
     evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path',
-    targetSlot: 1023, budget: 1, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
+    targetSlot: 200, budget: 1, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
   const idx = RANGES.POLICY_EVIDENCE_START;
   return { patch: { patchType: PATCH_TYPE.POLICY_UPDATE, wordCount: 1, scoreDelta: 0, parentStateRoot: parentRoot, indices: [idx], newWords: [word] }, intent: 'structurally_valid_irrelevant' };
 }
@@ -130,7 +135,7 @@ function patchWeakPositive(seed) {
   // a real reclaimed-substrate touch: relation-typed admission atom targeting an existing MemoryIndex
   // slot. Expected delta: small, often below screener threshold on the calibration corpus.
   const slot = 5 + (seed % 10);
-  const word = encodePolicyAtom({ atomIndex: 1, family: 'evidence_bundle', selector: POLICY_SELECTOR.RELATION_INTENT,
+  const word = encodePolicyAtom({ atomIndex: 1, family: 'evidence_bundle', selector: POLICY_SELECTOR.RELATION_PATH_PRESENT,
     evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path',
     targetSlot: slot, budget: 50, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
   return { patch: { patchType: PATCH_TYPE.POLICY_UPDATE, wordCount: 1, scoreDelta: 0, parentStateRoot: parentRoot, indices: [RANGES.POLICY_EVIDENCE_START + 1], newWords: [word] }, intent: 'weak_positive_candidate' };
@@ -144,7 +149,7 @@ function patchViableNonAdvancing(seed) {
 function patchTrueAdvanceCandidate(seed) {
   // best-known live surface: relation-typed admission + a temporal pair companion (MIXED).
   // Whether this lands as STATE_ADVANCE is the calibration question; classifier output is the truth.
-  const word = encodePolicyAtom({ atomIndex: 0, family: 'evidence_bundle', selector: POLICY_SELECTOR.RELATION_INTENT,
+  const word = encodePolicyAtom({ atomIndex: 0, family: 'evidence_bundle', selector: POLICY_SELECTOR.RELATION_PATH_PRESENT,
     evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path',
     targetSlot: 5 + (seed % 10), budget: 250, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
   const anchorIdx = RANGES.MEMORY_INDEX_START + 5 + (seed % 10);
@@ -189,7 +194,11 @@ for (const cls of classes) {
       deltaPpm = 0;
       reason = `eval_error:${e.message?.slice(0, 80) ?? 'unknown'}`;
     }
-    perPatchOutcomes.push({ i, deltaPpm, outcome, reason, intent, patchHash: '0x' + Buffer.from(computePatchHash(patch)).toString('hex').slice(0, 16) });
+    // Cheap structural fingerprint for the per-patch row (not the canonical computePatchHash,
+    // which needs serialized normalizedPatchBytes; that lives downstream in screener submit).
+    const fingerprintBytes = `${patch.patchType}|${patch.indices.join(',')}|${patch.newWords.map((w) => w.toString(16)).join(',')}`;
+    const patchFp = '0x' + createHash('sha256').update(fingerprintBytes).digest('hex').slice(0, 16);
+    perPatchOutcomes.push({ i, deltaPpm, outcome, reason, intent, patchFingerprint: patchFp });
   }
   const deltas = perPatchOutcomes.map((p) => p.deltaPpm);
   const outcomeCounts = { REJECT: 0, SCREENER_PASS: 0, STATE_ADVANCE: 0 };
