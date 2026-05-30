@@ -94,7 +94,10 @@ const accOpts = {
   minImprovementPpm: minImpr,
   acceptanceThresholdPpm: minImpr + replayTol + baselineVar,
 };
-const hiddenPack = { ...profile.hiddenPack, packSize: PACK_SIZE };
+// Clear quotas: profile.hiddenPack has 6 quotas summing to 56 minCounts, but PACK_SIZE=12 can't
+// satisfy them. The probe filters for temporal_update events inside the loop anyway, so per-family
+// quotas are not needed at pack-derive time.
+const hiddenPack = { ...profile.hiddenPack, packSize: PACK_SIZE, quotas: [] };
 
 const directOf = (lq) => (lq.qrels ?? []).find((r) => r.role === 'direct')?.docId ?? null;
 async function deltaFor(pack, chainDirectDoc, otherTemporalDirects) {
