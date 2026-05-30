@@ -171,6 +171,7 @@ find release/calibration/runs -maxdepth 1 -type d -name 'screener-real-qwen-econ
 # Gate 3 — mandatory GPU smoke (hard-fail on any of: init, variance, determinism, random-near-zero)
 # ─────────────────────────────────────────────────────────────────────────────
 export CORETEX_RERANKER_PYTHON=/usr/bin/python3
+export CORETEX_BIENCODER_PYTHON=/usr/bin/python3
 export CORETEX_RERANKER_ALLOW_CUDA=1
 export HF_HUB_CACHE=/var/lib/coretex/model-cache
 export HF_HUB_OFFLINE=1
