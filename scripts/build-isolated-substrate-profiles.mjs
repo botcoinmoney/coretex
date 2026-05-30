@@ -38,8 +38,14 @@ const EMB = 'release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-300k
 
 const base = JSON.parse(readFileSync(resolve(repoRoot, BASE_PROFILE), 'utf8'));
 
-// All reclaimed-substrate knobs we toggle. Resetting these on each isolation guarantees a
-// clean per-surface measurement.
+// Every reclaimed-substrate knob plus any non-r5 boost/category knob that independently
+// changes scoring. Resetting these guarantees a clean per-surface measurement (the prior
+// version left categoryLensEvidenceBundle + temporalCurrentBoost + temporalStaleSuppression
+// active across isolations, contaminating non-temporal/non-evidence profiles' baselines).
+//
+// Classification decision (treated as RECLAIMED, off-by-default outside isolation):
+//   temporalCurrentBoost  / temporalStaleSuppression  — part of temporal currency substrate
+//   categoryLensEvidenceBundle                        — bundles into evidence-bundle surface
 const ALL_OFF = {
   enableEvidenceBundleAtoms: false,
   enableConflictLifecycleAtoms: false,
@@ -50,6 +56,9 @@ const ALL_OFF = {
   policyConflictIntentAdmission: false,
   policyAspectIntentAdmission: false,
   policyAspectBoost: 0,
+  temporalCurrentBoost: 0,
+  temporalStaleSuppression: 0,
+  categoryLensEvidenceBundle: false,
   // temporalStaleContrast stays unless explicitly disabled (probe semantics)
   // policyAbstentionMarginThreshold removed unless explicitly set
 };
@@ -73,8 +82,8 @@ function makeIsolated(name, overrides, note) {
 const SURFACES = [
   {
     name: 'temporal',
-    overrides: {},
-    note: 'TEMPORAL-ONLY isolation. temporalStaleContrast on; every other reclaimed substrate off. Use to measure pack-interference vs isolated yield for the temporal currency substrate.',
+    overrides: { temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1 },
+    note: 'TEMPORAL-ONLY isolation. temporalStaleContrast=true + temporalCurrentBoost=0.1 + temporalStaleSuppression=0.1 (the full temporal substrate); every other reclaimed substrate off including categoryLensEvidenceBundle. Use to measure pack-interference vs isolated yield for the temporal currency substrate.',
   },
   {
     name: 'abstention',
@@ -83,8 +92,8 @@ const SURFACES = [
   },
   {
     name: 'evidence_bundle',
-    overrides: { enableEvidenceBundleAtoms: true, policyQueryConditionedAdmission: true, policyRelationTypedAdmission: true, _tempBaseOff: true },
-    note: 'EVIDENCE_BUNDLE-ONLY isolation. enableEvidenceBundleAtoms + relation-typed query-conditioned admission; every other reclaimed substrate off. Use to measure clean evidence-bundle lift without contamination from temporal/abstention/conflict.',
+    overrides: { enableEvidenceBundleAtoms: true, policyQueryConditionedAdmission: true, policyRelationTypedAdmission: true, categoryLensEvidenceBundle: true, _tempBaseOff: true },
+    note: 'EVIDENCE_BUNDLE-ONLY isolation. enableEvidenceBundleAtoms + relation-typed query-conditioned admission + categoryLensEvidenceBundle (the category-lens bundle path); every other reclaimed substrate off. Use to measure clean evidence-bundle lift without contamination from temporal/abstention/conflict.',
   },
   {
     name: 'relation_typed',

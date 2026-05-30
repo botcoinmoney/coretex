@@ -118,7 +118,7 @@
   "categoryLensScoreInheritance": 0.3,
   "categoryLensSeedTopK": 2,
   "categoryLensHopBudget": 1,
-  "categoryLensEvidenceBundle": true,
+  "categoryLensEvidenceBundle": false,
   "temporalStaleContrast": true,
   "enableEvidenceBundleAtoms": false,
   "enableConflictLifecycleAtoms": false,
@@ -161,5 +161,5 @@
   "baselineVariancePpm": 0,
   "baselineSamples": 3,
   "baselineEvalSeedHex": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
-  "_isolatedProfileNote": "TEMPORAL-ONLY isolation. temporalStaleContrast on; every other reclaimed substrate off. Use to measure pack-interference vs isolated yield for the temporal currency substrate."
+  "_isolatedProfileNote": "TEMPORAL-ONLY isolation. temporalStaleContrast=true + temporalCurrentBoost=0.1 + temporalStaleSuppression=0.1 (the full temporal substrate); every other reclaimed substrate off including categoryLensEvidenceBundle. Use to measure pack-interference vs isolated yield for the temporal currency substrate."
 }

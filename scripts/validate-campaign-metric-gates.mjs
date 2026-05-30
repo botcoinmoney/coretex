@@ -151,6 +151,9 @@ else {
       const reserveDrains = churn.perEpoch.length >= 3 && churn.perEpoch[churn.perEpoch.length - 1].frontierRotation.reserveRemaining < churn.perEpoch[0].frontierRotation.reserveRemaining;
       gate('churn_c3', 'reserveRemaining drained from first to last epoch (real C3 rotation)', reserveDrains,
         `first=${churn.perEpoch[0].frontierRotation.reserveRemaining} last=${churn.perEpoch[churn.perEpoch.length - 1].frontierRotation.reserveRemaining}`);
+      const totalInjected = churn.perEpoch.reduce((a, e) => a + (e.frontierRotation.newEvalIdsInjectedThisEpoch ?? 0), 0);
+      gate('churn_c3', 'live-update eval ids injected into frontier reserve (real live churn, not just genesis rotation)',
+        totalInjected > 0, `${totalInjected} live evals injected across ${churn.perEpoch.length} epochs`);
     }
   }
 }

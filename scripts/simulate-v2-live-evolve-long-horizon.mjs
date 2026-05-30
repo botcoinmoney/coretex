@@ -175,15 +175,17 @@ function honestPatchForEpoch(epoch, honestIdx, addedDocs) {
 }
 
 // ─── Genesis frontier (BUILD ONCE, step every epoch on the SAME instance) ───
-// The prior version called makeLaunchFrontier(profile, newProd) each epoch and threw away
-// the rotation state — reservePtr/cumulativeActivated/cumulativeRetired reset to genesis on
-// every call, so every epoch looked like a first-step activation. Now we build the frontier
-// ONCE from the genesis corpus and call stepEpoch on the persisted instance, so C3 rotation
-// observes the real accept/attempt history and reserveRemaining drains over time.
-//
-// Note: evolveCorpusDelta adds new eval_hidden events each epoch but those are NOT injected
-// into this frontier's reserve (no package-level API for that yet). For long-horizon churn
-// the genesis reserve (1324 events @ activeWindow=3072) is sufficient to exercise rotation.
+// Build the frontier from the genesis corpus and call stepEpoch on the persisted instance,
+// so C3 rotation observes the real accept/attempt history and reserveRemaining drains over
+// time. Each epoch's evolveCorpusDelta-generated eval_hidden ids are then INJECTED into the
+// frontier's reserve via frontier.addReserveIds(...) so live-update churn is exercised
+// (new evals get priority — spliced in at reservePtr, drained before remaining genesis reserve).
+const bucketFamily = (f) => f === 'temporal_update' ? 'temporal'
+  : (f === 'multi_session_bridge' || f === 'causal_memory_chain' || f === 'decision_provenance') ? 'multi_hop_relation'
+  : f === 'conflict_lifecycle' ? 'conflict_lifecycle'
+  : f === 'aspect_constraint' ? 'aspect_constraint'
+  : f === 'coreference_resolution' ? 'coreference'
+  : 'near_collision';
 const frontier = makeLaunchFrontier(profile, currentProd);
 if (!frontier) {
   console.error('HARD FAIL: profile has no epochFrontier — cannot run live-evolve harness'); exit(1);
@@ -265,6 +267,18 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   console.log(`[live-evolve] delta: ${delta.previousRoot.slice(0, 18)} → ${delta.nextRoot.slice(0, 18)} (+${delta.addedIds.length} events)`);
 
   const corpusRootChanged = newProd.corpusRoot !== currentProd.corpusRoot;
+  // INJECT new eval_hidden ids from this epoch's evolveCorpusDelta into frontier reserve
+  // BEFORE stepping. New ids land at reservePtr → next activation drains live evals first.
+  // ld.addedQueries are the new eval_hidden queries; the canonical query-event id is q.id.
+  // Note: ALL evolveCorpusDelta-added queries get assigned a split via splitForRecord at
+  // production-event build time; many will be eval_hidden. Filter to those whose canonical
+  // split is eval_hidden using the same splitForRecord the bridge uses.
+  const newEvalIds = additions.filter((ev) => ev.split === 'eval_hidden').map((ev) => ev.id);
+  const newEvalAdded = newEvalIds.length > 0 ? frontier.addReserveIds(newEvalIds, (id) => {
+    const ev = newProd.byId.get(id);
+    return ev ? bucketFamily(ev.logicalFamily ?? ev.family ?? 'unknown') : 'unknown';
+  }) : 0;
+  if (newEvalAdded > 0) console.log(`[live-evolve] frontier.addReserveIds: injected ${newEvalAdded} new eval_hidden ids into reserve`);
   // CANONICAL stepEpoch: NUMERIC honest-accepts + quality-attempts (NEVER roots).
   // Step the PERSISTED frontier instance — preserves reservePtr / cumulative counts.
   const frontierSnap = frontier.stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts);
@@ -328,6 +342,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
       reserveRemaining: frontierSnap.reserveRemaining,
       cumulativeActivated: frontierSnap.cumulativeActivated,
       cumulativeRetired: frontierSnap.cumulativeRetired,
+      newEvalIdsInjectedThisEpoch: newEvalAdded,
     },
     activePackSize: activePack.events.length, heldoutPackSize: heldoutPack.events.length,
     addedDocs: ld.addedDocs.length, addedQueries: ld.addedQueries.length,

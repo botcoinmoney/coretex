@@ -223,8 +223,8 @@
       "anchorWeight": 0.6,
       "relationExpansionBudget": 50,
       "categoryLensExpansionBudget": 50,
-      "temporalCurrentBoost": 0.1,
-      "temporalStaleSuppression": 0.1,
+      "temporalCurrentBoost": 0,
+      "temporalStaleSuppression": 0,
       "lensDiversityFloor": 0.7,
       "corpusDocDedupe": "canonical-doc-id",
       "firstStageTopKSelection": {
@@ -281,7 +281,7 @@
       "baselineVariancePpm": 0,
       "baselineSamples": 3,
       "baselineEvalSeedHex": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
-      "_isolatedProfileNote": "EVIDENCE_BUNDLE-ONLY isolation. enableEvidenceBundleAtoms + relation-typed query-conditioned admission; every other reclaimed substrate off. Use to measure clean evidence-bundle lift without contamination from temporal/abstention/conflict."
+      "_isolatedProfileNote": "EVIDENCE_BUNDLE-ONLY isolation. enableEvidenceBundleAtoms + relation-typed query-conditioned admission + categoryLensEvidenceBundle (the category-lens bundle path); every other reclaimed substrate off. Use to measure clean evidence-bundle lift without contamination from temporal/abstention/conflict."
     },
     "files": [
       {
@@ -359,8 +359,8 @@
       {
         "role": "evaluator",
         "path": "packages/cortex/src/coordinator/epoch-frontier.ts",
-        "sha256": "b8dccd1285568676d7c2e70606875d869c0d51a7a581c63779a510d0079daba8",
-        "bytes": 9275
+        "sha256": "6fb5c7b4e8de2d2b9928d4ddca1f074d3701e091d997485573cce233dd36f663",
+        "bytes": 11379
       },
       {
         "role": "evaluator",
@@ -651,5 +651,5 @@
     "coordinatorCacheOptional": true,
     "snapshots": []
   },
-  "bundleHash": "0x3dd47e1c6e9723a0c40b77b10db5042f468d7b6008ee38b1a78dc1d24cab519b"
+  "bundleHash": "0xb195f0c9262fa92a8c32fc8ff915d433d5b6a0685cbde57c5991ec98e0b99b1f"
 }

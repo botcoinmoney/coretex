@@ -104,8 +104,8 @@
   "anchorWeight": 0.6,
   "relationExpansionBudget": 50,
   "categoryLensExpansionBudget": 50,
-  "temporalCurrentBoost": 0.1,
-  "temporalStaleSuppression": 0.1,
+  "temporalCurrentBoost": 0,
+  "temporalStaleSuppression": 0,
   "lensDiversityFloor": 0.7,
   "corpusDocDedupe": "canonical-doc-id",
   "firstStageTopKSelection": {
@@ -161,5 +161,5 @@
   "baselineVariancePpm": 0,
   "baselineSamples": 3,
   "baselineEvalSeedHex": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
-  "_isolatedProfileNote": "EVIDENCE_BUNDLE-ONLY isolation. enableEvidenceBundleAtoms + relation-typed query-conditioned admission; every other reclaimed substrate off. Use to measure clean evidence-bundle lift without contamination from temporal/abstention/conflict."
+  "_isolatedProfileNote": "EVIDENCE_BUNDLE-ONLY isolation. enableEvidenceBundleAtoms + relation-typed query-conditioned admission + categoryLensEvidenceBundle (the category-lens bundle path); every other reclaimed substrate off. Use to measure clean evidence-bundle lift without contamination from temporal/abstention/conflict."
 }

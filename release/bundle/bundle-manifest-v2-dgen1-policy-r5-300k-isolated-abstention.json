@@ -223,8 +223,8 @@
       "anchorWeight": 0.6,
       "relationExpansionBudget": 50,
       "categoryLensExpansionBudget": 50,
-      "temporalCurrentBoost": 0.1,
-      "temporalStaleSuppression": 0.1,
+      "temporalCurrentBoost": 0,
+      "temporalStaleSuppression": 0,
       "lensDiversityFloor": 0.7,
       "corpusDocDedupe": "canonical-doc-id",
       "firstStageTopKSelection": {
@@ -238,7 +238,7 @@
       "categoryLensScoreInheritance": 0.3,
       "categoryLensSeedTopK": 2,
       "categoryLensHopBudget": 1,
-      "categoryLensEvidenceBundle": true,
+      "categoryLensEvidenceBundle": false,
       "temporalStaleContrast": false,
       "enableEvidenceBundleAtoms": false,
       "enableConflictLifecycleAtoms": false,
@@ -360,8 +360,8 @@
       {
         "role": "evaluator",
         "path": "packages/cortex/src/coordinator/epoch-frontier.ts",
-        "sha256": "b8dccd1285568676d7c2e70606875d869c0d51a7a581c63779a510d0079daba8",
-        "bytes": 9275
+        "sha256": "6fb5c7b4e8de2d2b9928d4ddca1f074d3701e091d997485573cce233dd36f663",
+        "bytes": 11379
       },
       {
         "role": "evaluator",
@@ -652,5 +652,5 @@
     "coordinatorCacheOptional": true,
     "snapshots": []
   },
-  "bundleHash": "0xfdf3644514fc6336180a16203c59861bee8f9aa6b456e732e2965e28f72b4868"
+  "bundleHash": "0xf8d064aa007461c089b93e7dfd30f4187da41b74203df9df4dc94291f04f02df"
 }
