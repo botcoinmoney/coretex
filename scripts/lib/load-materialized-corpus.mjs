@@ -95,6 +95,40 @@ function hydrateEvent(e) {
   return out;
 }
 
+/**
+ * Stream up to `target` total events, biased so the result contains at least `minEvalHidden`
+ * eval_hidden events. Reads NDJSON in order: keeps every eval_hidden, keeps train_visible up to
+ * target - minEvalHidden, then keeps additional eval_hidden until target hit or stream ends.
+ * Stops early when both quotas satisfied.
+ */
+function streamEventsSplitBalanced(ndjsonPath, target, minEvalHidden) {
+  const fd = openSync(ndjsonPath, 'r');
+  const trainVis = [], evalHidden = [];
+  try {
+    const buf = Buffer.alloc(16 * 1024 * 1024);
+    let pending = '';
+    while (true) {
+      if (evalHidden.length >= minEvalHidden && trainVis.length + evalHidden.length >= target) break;
+      const r = readSync(fd, buf, 0, buf.length, null);
+      if (r <= 0) break;
+      pending += buf.toString('utf8', 0, r);
+      let nl;
+      while ((nl = pending.indexOf('\n')) >= 0) {
+        const line = pending.slice(0, nl); pending = pending.slice(nl + 1);
+        if (!line) continue;
+        const parsed = JSON.parse(line);
+        if (parsed.split === 'eval_hidden') {
+          if (trainVis.length + evalHidden.length < target || evalHidden.length < minEvalHidden) evalHidden.push(hydrateEvent(parsed));
+        } else if (parsed.split === 'train_visible') {
+          if (trainVis.length + evalHidden.length < target) trainVis.push(hydrateEvent(parsed));
+        }
+        if (evalHidden.length >= minEvalHidden && trainVis.length + evalHidden.length >= target) break;
+      }
+    }
+  } finally { closeSync(fd); }
+  return [...trainVis, ...evalHidden];
+}
+
 function streamEventsFiltered(ndjsonPath, maxN, filterFn) {
   const fd = openSync(ndjsonPath, 'r');
   const events = [];
@@ -205,10 +239,11 @@ export function loadMaterializedCorpusSlice(bundlePath, n, opts = {}) {
   const { bundle, manifest, ndjson } = resolveArtifactPaths(bundlePath);
   const m = assertManifest(manifest, bundle.bundleHash);
   if (!existsSync(ndjson)) throw new Error(`HARD FAIL: ndjson sidecar missing: ${ndjson}`);
-  // splitFilter lets smokes ensure the slice includes at least some eval_hidden events.
-  const events = opts.splitFilter
-    ? streamEventsFiltered(ndjson, n, opts.splitFilter)
-    : streamEvents(ndjson, n);
+  // minEvalHidden guarantees at least M eval_hidden events in the slice (needed for frontier);
+  // splitFilter is a less-common arbitrary predicate.
+  const events = (opts.minEvalHidden && opts.minEvalHidden > 0)
+    ? streamEventsSplitBalanced(ndjson, n, opts.minEvalHidden)
+    : (opts.splitFilter ? streamEventsFiltered(ndjson, n, opts.splitFilter) : streamEvents(ndjson, n));
   const idsInSlice = new Set(events.map((e) => e.id));
   // Drop events whose truth/neg doc ids are not in-slice — keeps the slice self-consistent
   // for evaluators that lookup truth docs by id.

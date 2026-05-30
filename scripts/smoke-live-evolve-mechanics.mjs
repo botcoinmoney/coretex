@@ -19,10 +19,6 @@ import { distIndex, repoRoot } from './_repo-root.mjs';
 import { evolveCorpusDelta } from './lib/evolve-corpus.mjs';
 import { loadMaterializedCorpusSlice } from './lib/load-materialized-corpus.mjs';
 
-// Slice must include eval_hidden events so frontier rebuild has non-empty activeIds — without
-// this the smoke "passes" with size=0 (empty hash) which masks a real wiring break.
-const SPLIT_FILTER = (e) => e.split === 'train_visible' || e.split === 'eval_hidden';
-
 const C = await import(distIndex);
 const { buildCorpusDelta, applyCorpusDelta, makeLaunchFrontier, splitForRecord } = C;
 
@@ -40,11 +36,12 @@ function pass(m) { console.log(`SMOKE PASS: ${m}`); }
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, PROFILE), 'utf8'));
 
-console.log(`smoke: loading materialized slice (n=${SLICE_N}, train_visible + eval_hidden) ...`);
-const sliced = loadMaterializedCorpusSlice(BUNDLE, SLICE_N, { splitFilter: SPLIT_FILTER });
+console.log(`smoke: loading materialized slice (n=${SLICE_N}, biased to include eval_hidden) ...`);
+const t0 = Date.now();
+const sliced = loadMaterializedCorpusSlice(BUNDLE, SLICE_N, { minEvalHidden: Math.max(32, Math.floor(SLICE_N * 0.1)) });
 const { corpus: baseProd, BE, RR, LAYOUT } = sliced;
 const evalHiddenCount = baseProd.events.filter((e) => e.split === 'eval_hidden').length;
-pass(`slice loaded — events=${baseProd.events.length} eval_hidden=${evalHiddenCount} root=${baseProd.corpusRoot.slice(0, 18)} (kept ${sliced.sliced.kept}/${sliced.sliced.requested})`);
+pass(`slice loaded — events=${baseProd.events.length} eval_hidden=${evalHiddenCount} root=${baseProd.corpusRoot.slice(0, 18)} (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
 if (evalHiddenCount === 0) fail(`slice has 0 eval_hidden events — frontier would be empty (mechanics check would degenerate)`);
 
 let prevHonestAccepts = 0, prevQualityAttempts = 0;
