@@ -90,6 +90,8 @@ if (existsSync(MANIFEST) && !FORCE) {
     if (m.bundleHash === bundle.bundleHash
         && m.sourceCorpusSha256 === sourceCorpusSha
         && m.sourceEmbSha256 === sourceEmbSha
+        && m.profileHash && m.profileHash.startsWith('0x')   // reject pre-fix artifacts that had null profileHash
+        && m.sourceProfileSha256 && m.sourceBundleSha256     // require post-fix manifest shape
         && existsSync(CORPUS_JSON) && existsSync(NDJSON)) {
       console.log(`[materialize] CACHE HIT — artifact matches inputs; skipping rebuild`);
       console.log(`[materialize]   path: ${MAT_DIR}`);
