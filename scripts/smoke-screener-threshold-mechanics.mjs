@@ -30,6 +30,7 @@ const {
   scoringOptionsFromProfile, deriveQueryPack, biEncoderModelIdHash,
   createDeterministicReranker,
   encodePolicyAtom, POLICY_SELECTOR, POLICY_EVIDENCE_FEATURE,
+  merkleizeState,
 } = C;
 
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
@@ -65,14 +66,15 @@ pass(`pack derived — ${pack.events.length} events`);
 const baseline = BigInt(profile.baselineParentScorePpm ?? 0);
 
 // Tiny noise-floor measurement (just to prove the canonical path; production uses N>=6).
+const zero = () => ({ words: new Array(1024).fill(0n) });
+const GENESIS_PARENT_ROOT = merkleizeState(zero());
 const noisePatch = {
-  patchType: PATCH_TYPE.POLICY_UPDATE, wordCount: 1, scoreDelta: 0, parentStateRoot: new Uint8Array(32),
+  patchType: PATCH_TYPE.POLICY_UPDATE, wordCount: 1, scoreDelta: 0, parentStateRoot: GENESIS_PARENT_ROOT,
   indices: [RANGES.POLICY_EVIDENCE_START], newWords: [encodePolicyAtom({
     atomIndex: 0, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY,
     evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path',
     targetSlot: 200, budget: 1, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n })],
 };
-const zero = () => ({ words: new Array(1024).fill(0n) });
 let noiseAbs = 0;
 try { const r = await evaluateRetrievalBenchmarkPatch(zero(), noisePatch, corpus, pack, opts, floors); noiseAbs = Math.abs(r.deltaPpm ?? 0); }
 catch (e) { fail(`noise-floor eval threw: ${e.message?.slice(0, 120)}`); }

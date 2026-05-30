@@ -38,6 +38,7 @@ const {
   scoringOptionsFromProfile, deriveQueryPack, biEncoderModelIdHash,
   createDeterministicReranker,
   encodePolicyAtom, POLICY_SELECTOR, POLICY_EVIDENCE_FEATURE,
+  merkleizeState,
 } = C;
 
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
@@ -85,7 +86,12 @@ const OUTCOME_SCREENER = POLICY.screenerPass.outcome;
 const OUTCOME_STATE_ADVANCE = POLICY.stateAdvance.outcome;
 
 const zero = () => ({ words: new Array(1024).fill(0n) });
-const parentRoot = new Uint8Array(32); // genesis state root
+// Canonical parentStateRoot is merkleizeState(state), NOT literal zero bytes.
+// merkleizeState of 1024 zero words is a real keccak hash; applyPatch hard-fails E01
+// (WRONG_PARENT_ROOT) if patch.parentStateRoot !== merkleizeState(state). The prior
+// `new Uint8Array(32)` silently rejected every patch at the apply layer, collapsing
+// the screener-threshold report to "everything REJECT for the wrong reason".
+const parentRoot = merkleizeState(zero());
 const u64 = (n) => BigInt.asUintN(64, BigInt(n));
 
 // ─── patch generators (deterministic; class label = construction intent) ───

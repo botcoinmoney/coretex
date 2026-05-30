@@ -53,6 +53,7 @@ const {
   evaluateRetrievalBenchmarkState, evaluateRetrievalBenchmarkPatch,
   createDeterministicReranker,
   encodePolicyAtom, POLICY_SELECTOR, POLICY_EVIDENCE_FEATURE,
+  merkleizeState,
 } = C;
 
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
@@ -152,6 +153,8 @@ function buildIdShuffledPack(pack) {
 
 // Honest patch generator: relation-typed admission atom targeting a NEW churn subject's
 // mem-anchor slot. Deterministic from (epoch, honestIdx).
+// Canonical parentStateRoot for genesis = merkleizeState({words: Array(1024).fill(0n)}); NOT zero bytes.
+const GENESIS_PARENT_ROOT = merkleizeState({ words: new Array(1024).fill(0n) });
 function honestPatchForEpoch(epoch, honestIdx, addedDocs) {
   const target = addedDocs[honestIdx % Math.max(1, addedDocs.length)];
   if (!target) return null;
@@ -163,7 +166,7 @@ function honestPatchForEpoch(epoch, honestIdx, addedDocs) {
   const fingerprint = `eb:relpath:${target.id}:slot${(honestIdx + 5) & 0xff}`;
   return { patch: {
     patchType: PATCH_TYPE.POLICY_UPDATE, wordCount: 1, scoreDelta: 0,
-    parentStateRoot: new Uint8Array(32),
+    parentStateRoot: GENESIS_PARENT_ROOT,
     indices: [RANGES.POLICY_EVIDENCE_START + (honestIdx & 0x7f)],
     newWords: [atomWord],
   }, fingerprint, targetDocId: target.id };
