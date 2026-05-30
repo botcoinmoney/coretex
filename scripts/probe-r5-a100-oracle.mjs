@@ -43,9 +43,10 @@
 import { distIndex, repoRoot } from './_repo-root.mjs';
 import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadV2CompatBundle } from './lib/load-materialized-corpus.mjs';
+import { makeStreamReranker } from './lib/stream-reranker.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { execSync, spawn } from 'node:child_process';
+import { execSync } from 'node:child_process';
 
 const {
   scoringOptionsFromProfile, evaluateRetrievalBenchmarkState, createDeterministicReranker,
@@ -73,42 +74,10 @@ const tracePath = outPath.replace(/\.json$/, '') + '.traces.jsonl';
 const START_T = Date.now();
 const profile = JSON.parse(readFileSync(profilePath, 'utf8'));
 
-// ── GPU/CPU reranker (faithful: same stream contract as the sibling Qwen probes) ──
-function streamReranker({ model, revision, python, allowCuda }) {
-  const env = { ...process.env, CORETEX_RERANKER_STREAM_MODEL_ID: model, CORETEX_RERANKER_STREAM_REVISION: revision,
-    HF_HUB_CACHE: process.env.HF_HUB_CACHE ?? '/var/lib/coretex/model-cache', HF_HUB_OFFLINE: process.env.HF_HUB_OFFLINE ?? '1' };
-  if (allowCuda) { env.CORETEX_RERANKER_ALLOW_CUDA = '1'; delete env.CUDA_VISIBLE_DEVICES; } else { env.CUDA_VISIBLE_DEVICES = ''; }
-  const proc = spawn(python, [resolve(repoRoot, 'scripts/reranker_runner.py'), '--stream'], { env, stdio: ['pipe', 'pipe', 'inherit'] });
-  let buf = '', nextId = 0; const pending = new Map(); let readyResolve; const readyP = new Promise((r) => { readyResolve = r; });
-  proc.stdout.on('data', (d) => {
-    buf += d.toString(); let nl;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
-      if (!line.trim()) continue;
-      let msg; try { msg = JSON.parse(line); } catch { continue; }
-      if (msg.ready) { readyResolve(); continue; }
-      if (msg.id !== undefined && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
-    }
-  });
-  proc.on('exit', (code) => { for (const [, r] of pending) r({ error: `reranker stream exited ${code}` }); });
-  return {
-    async score(pairs) {
-      if (!pairs || pairs.length === 0) return [];
-      await readyP;
-      const id = nextId++;
-      const p = new Promise((res) => pending.set(id, res));
-      proc.stdin.write(JSON.stringify({ id, pairs: pairs.map((x) => ({ query: x.query, document: x.document })) }) + '\n');
-      const msg = await p;
-      if (msg.error) throw new Error(msg.error);
-      return msg.scores;
-    },
-    close() { try { proc.stdin.end(); } catch { /* noop */ } },
-  };
-}
-
+// Use the shared canonical stream reranker — was previously a local clone here (drift hazard).
 const { corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash } = loadV2CompatBundle(bundlePath, flag('corpus'), flag('emb'));
 const reranker = (rerankerArg === 'gpu' || rerankerArg === 'cpu')
-  ? streamReranker({ model: RR.modelId, revision: RR.revision, python: process.env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: rerankerArg === 'gpu' })
+  ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: process.env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: rerankerArg === 'gpu' })
   : await createDeterministicReranker();
 const rerankerLabel = rerankerArg === 'gpu' ? `Qwen/${RR.modelId}@${RR.revision} (gpu)` : (rerankerArg === 'cpu' ? 'qwen (cpu)' : 'deterministic-stub');
 

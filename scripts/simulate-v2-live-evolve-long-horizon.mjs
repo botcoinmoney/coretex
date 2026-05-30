@@ -54,6 +54,9 @@ const {
   createDeterministicReranker,
   encodePolicyAtom, POLICY_SELECTOR, POLICY_EVIDENCE_FEATURE,
   merkleizeState,
+  // CANONICAL: live-update logical-delta → production additions bridge. The harness used to
+  // inline this 50-line mapping; it now lives in packages/cortex/src/corpus/logical-delta-bridge.ts.
+  bridgeLogicalDeltaToProductionEvents,
 } = C;
 
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
@@ -218,46 +221,22 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
 
   if (!ld.addedDocs.length) { console.warn(`[live-evolve] epoch ${epoch}: no churn signal at fraction=${CHURN_FRACTION}; skipping`); continue; }
 
+  // CANONICAL: bridge the logical delta into production additions via
+  // bridgeLogicalDeltaToProductionEvents (packages/cortex/src/corpus/logical-delta-bridge.ts).
+  // The harness owns ONLY the Python embedding step; the package owns the mapping.
   const docVecs = await embedTexts(ld.addedDocs.map((d) => d.text));
   const qVecs = ld.addedQueries.length ? await embedTexts(ld.addedQueries.map((q) => q.queryText)) : [];
   for (const d of ld.addedDocs) docTextById.set(d.id, d);
-
-  const memEmb = new Map(); ld.addedDocs.forEach((d, i) => memEmb.set(d.id, int8Bytes(docVecs[i])));
-  const additions = [];
-  const relsBySrc = new Map();
-  for (const r of ld.addedRelations) { if (!relsBySrc.has(r.src)) relsBySrc.set(r.src, []); relsBySrc.get(r.src).push(r); }
-
-  ld.addedDocs.forEach((d) => {
-    const e = memEmb.get(d.id);
-    additions.push({
-      id: memId(d.id), family: 'near_collision', domain: d.lane, split: 'train_visible',
-      queryText: d.text,
-      truthDocuments: [{ id: d.id, text: d.text, isCurrent: d.currentStaleFlag === false ? false : true, ...(d.aspectTags ? { aspectTags: d.aspectTags } : {}) }],
-      hardNegatives: [], qrels: [{ documentId: d.id, relevance: 1.0 }], protected: false,
-      relations: (relsBySrc.get(d.id) ?? []).map((r) => ({ other_id: memId(r.dst), edgeType: r.type, ...(r.label ? { label: r.label } : {}) })),
-      ...(Array.isArray(d.entityIds) && d.entityIds.length ? { entityIds: d.entityIds } : {}),
-      provenance: PROV,
-      embeddings: { modelId: BE.modelId, revision: BE.revision, layout: LAYOUT, query: e, perTruth: new Map([[d.id, e]]), perNegative: new Map() },
-    });
-  });
-  ld.addedQueries.forEach((q, i) => {
-    const qe = int8Bytes(qVecs[i]);
-    const lookup = (id) => memEmb.get(id) ?? currentProd.byId.get(memId(id))?.embeddings?.perTruth?.get(id);
-    const truths = (q.qrels ?? []).filter((r) => r.relevance > 0).map((r) => { const d = docTextById.get(r.docId); if (!d) throw new Error(`live-evolve: missing truth doc ${r.docId} for query ${q.id}`); return { id: r.docId, text: d.text, isCurrent: d.currentStaleFlag === false ? false : true }; });
-    const negs = (q.hardNegatives ?? []).map((n) => { const d = docTextById.get(n.docId); if (!d) throw new Error(`live-evolve: missing hard-neg doc ${n.docId} for query ${q.id}`); return { id: n.docId, text: d.text, category: n.category }; });
-    const ev = {
-      id: q.id, family: bucket(q.family), logicalFamily: q.family, domain: q.lane,
-      split: splitForRecord(q.id, currentProd.corpusEpoch),
-      queryText: q.queryText, truthDocuments: truths, hardNegatives: negs,
-      qrels: (q.qrels ?? []).map((r) => ({ documentId: r.docId, relevance: r.relevance })), protected: false, relations: [],
-      ...(q.band ? { band: q.band } : {}), ...(q.subjectEntityId !== undefined ? { subjectEntityId: q.subjectEntityId } : {}),
-      ...(q.ownerEntityId !== undefined ? { ownerEntityId: q.ownerEntityId, ownerScoped: q.ownerScoped !== false } : {}),
-      provenance: PROV,
-      embeddings: { modelId: BE.modelId, revision: BE.revision, layout: LAYOUT, query: qe,
-        perTruth: new Map(truths.map((t) => [t.id, lookup(t.id)])), perNegative: new Map(negs.map((n) => [n.id, lookup(n.id)])) },
-    };
-    if (ev.family === 'temporal') ev.temporal = { validFromEpoch: 1, validUntilEpoch: Number.MAX_SAFE_INTEGER, currentStaleFlag: false };
-    additions.push(ev);
+  const addedDocEmbeddings = new Map();
+  ld.addedDocs.forEach((d, i) => addedDocEmbeddings.set(d.id, int8Bytes(docVecs[i])));
+  const addedQueryEmbeddings = new Map();
+  ld.addedQueries.forEach((q, i) => addedQueryEmbeddings.set(q.id, int8Bytes(qVecs[i])));
+  const additions = bridgeLogicalDeltaToProductionEvents({
+    previousCorpus: currentProd,
+    logicalDelta: ld,
+    addedDocEmbeddings,
+    addedQueryEmbeddings,
+    biEncoder: { modelId: BE.modelId, revision: BE.revision, layout: LAYOUT },
   });
 
   const delta = buildCorpusDelta({ previousCorpus: currentProd, additions, removals: [], epoch, labelingProvenance });

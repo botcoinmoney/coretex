@@ -45,9 +45,10 @@ pass(`slice loaded — events=${baseProd.events.length} eval_hidden=${evalHidden
 if (evalHiddenCount === 0) fail(`slice has 0 eval_hidden events — frontier would be empty (mechanics check would degenerate)`);
 
 let prevHonestAccepts = 0, prevQualityAttempts = 0;
-const fr0 = makeLaunchFrontier(profile, baseProd);
-if (!fr0) fail('profile has no epochFrontier — smoke cannot validate frontier mechanics; use the calibration profile (epochFrontier C3)');
-const fr0snap = fr0.stepEpoch(0, null, null);
+// CANONICAL: build the frontier ONCE and step the persisted instance every epoch.
+const frontier = makeLaunchFrontier(profile, baseProd);
+if (!frontier) fail('profile has no epochFrontier — smoke cannot validate frontier mechanics; use the calibration profile (epochFrontier C3)');
+const fr0snap = frontier.stepEpoch(0, null, null);
 if (!fr0snap.activeRoot || /^0x0+$/.test(fr0snap.activeRoot)) fail(`genesis activeRoot zero: ${fr0snap.activeRoot}`);
 if (!(fr0snap.activeIds instanceof Set) || fr0snap.activeIds.size === 0) fail(`genesis frontier.activeIds is EMPTY — empty-set keccak ${fr0snap.activeRoot} is NOT a valid active frontier`);
 pass(`genesis activeRoot non-zero ${fr0snap.activeRoot.slice(0, 18)} (size=${fr0snap.activeIds.size})`);
@@ -130,7 +131,10 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   pass(`epoch ${epoch} applyCorpusDelta: ${currentProd.corpusRoot.slice(0, 18)} → ${newProd.corpusRoot.slice(0, 18)}`);
 
   // CANONICAL stepEpoch: numeric/null only (never roots)
-  const fr = makeLaunchFrontier(profile, newProd).stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts);
+  // CANONICAL: step the PERSISTED frontier instance, NOT a fresh makeLaunchFrontier per epoch.
+  // The prior `makeLaunchFrontier(profile, newProd).stepEpoch(...)` pattern resets reservePtr
+  // every epoch — every step looks like genesis activation, masking real rotation bugs.
+  const fr = frontier.stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts);
   if (!fr.activeRoot || /^0x0+$/.test(fr.activeRoot)) fail(`epoch ${epoch} frontier activeRoot zero`);
   if (!(fr.activeIds instanceof Set) || fr.activeIds.size === 0) fail(`epoch ${epoch} frontier.activeIds EMPTY — empty-set hash is NOT a valid active frontier`);
   pass(`epoch ${epoch} frontier rebuild on newProd: activeRoot=${fr.activeRoot.slice(0, 18)} active=${fr.activeIds.size}`);
