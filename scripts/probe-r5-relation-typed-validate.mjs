@@ -20,7 +20,8 @@
 import { distIndex, repoRoot } from './_repo-root.mjs';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { buildV2ProductionCorpus, inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
+import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
+import { loadV2CompatBundle } from './lib/load-materialized-corpus.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
 
 const C = await import(distIndex);
@@ -43,10 +44,12 @@ const routePerFam = Number(flag('route-per-fam', '18'));
 const offPerFam = Number(flag('off-per-fam', '14'));
 const outPath = flag('out', `${base}/r5-relation-typed-validate.json`);
 const rerankerArg = flag('reranker', 'deterministic');
+const bundlePath = flag('bundle');
+if (!bundlePath) { console.error('HARD FAIL: --bundle <path> required (calibration uses materialized corpus)'); process.exit(1); }
 
 const r4Profile = JSON.parse(readFileSync(resolve(repoRoot, r4ProfilePath), 'utf8'));
 const r5Profile = JSON.parse(readFileSync(resolve(repoRoot, r5ProfilePath), 'utf8'));
-const { corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath });
+const { corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash } = loadV2CompatBundle(bundlePath, corpusPath, embPath);
 const reranker = rerankerArg === 'gpu'
   ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: process.env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: true })
   : await createDeterministicReranker();

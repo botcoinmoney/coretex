@@ -24,7 +24,8 @@ import { distIndex, repoRoot } from './_repo-root.mjs';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
-import { buildV2ProductionCorpus, inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
+import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
+import { loadV2CompatBundle } from './lib/load-materialized-corpus.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
 import { honestPatch, empty } from './lib/v2-patch-families.mjs';
 
@@ -42,6 +43,8 @@ const TARGET = num('target', 80);                // distinct chains to measure
 const MAX_PACKS = num('max-packs', 40);
 const SEEDS = flag('seeds', 'a5,b7,c3').split(',');
 const rerankerArg = flag('reranker', 'deterministic');
+const bundlePath = flag('bundle');
+if (!bundlePath) { console.error('HARD FAIL: --bundle <path> required (calibration uses materialized corpus)'); process.exit(1); }
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
 // ── ZERO-SUBSTRATE-CHANGE profile/qrel experiment (yield-recovery test) ──
@@ -56,7 +59,7 @@ if (wTemporalOverride !== undefined) {
 }
 const retrievalFloorOk = profile.compositeWeights.w_retrieval >= 0.70 - 1e-9;
 
-const { corpus, logical, LAYOUT, BE, RR, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath });
+const { corpus, logical, LAYOUT, BE, RR, biEncoderHash } = loadV2CompatBundle(bundlePath, corpusPath, embPath);
 const logicalQById = new Map(logical.queries.map((q) => [q.id, q]));
 // --stale-relevance R : TEMPORAL-SPECIFIC qrel treatment — set temporal_update stale docs' nDCG
 // relevance to R (contrast role, not strongly rewarded). NOT a global qrel change; temporal queries only.

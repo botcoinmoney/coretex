@@ -19,6 +19,10 @@ import { distIndex, repoRoot } from './_repo-root.mjs';
 import { evolveCorpusDelta } from './lib/evolve-corpus.mjs';
 import { loadMaterializedCorpusSlice } from './lib/load-materialized-corpus.mjs';
 
+// Slice must include eval_hidden events so frontier rebuild has non-empty activeIds — without
+// this the smoke "passes" with size=0 (empty hash) which masks a real wiring break.
+const SPLIT_FILTER = (e) => e.split === 'train_visible' || e.split === 'eval_hidden';
+
 const C = await import(distIndex);
 const { buildCorpusDelta, applyCorpusDelta, makeLaunchFrontier, splitForRecord } = C;
 
@@ -36,21 +40,19 @@ function pass(m) { console.log(`SMOKE PASS: ${m}`); }
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, PROFILE), 'utf8'));
 
-console.log(`smoke: loading materialized slice (n=${SLICE_N}) from artifact ...`);
-const sliced = loadMaterializedCorpusSlice(BUNDLE, SLICE_N);
+console.log(`smoke: loading materialized slice (n=${SLICE_N}, train_visible + eval_hidden) ...`);
+const sliced = loadMaterializedCorpusSlice(BUNDLE, SLICE_N, { splitFilter: SPLIT_FILTER });
 const { corpus: baseProd, BE, RR, LAYOUT } = sliced;
-pass(`slice loaded — events=${baseProd.events.length} root=${baseProd.corpusRoot.slice(0, 18)} (kept ${sliced.sliced.kept}/${sliced.sliced.requested})`);
+const evalHiddenCount = baseProd.events.filter((e) => e.split === 'eval_hidden').length;
+pass(`slice loaded — events=${baseProd.events.length} eval_hidden=${evalHiddenCount} root=${baseProd.corpusRoot.slice(0, 18)} (kept ${sliced.sliced.kept}/${sliced.sliced.requested})`);
+if (evalHiddenCount === 0) fail(`slice has 0 eval_hidden events — frontier would be empty (mechanics check would degenerate)`);
 
-// Active frontier on slice
 let prevHonestAccepts = 0, prevQualityAttempts = 0;
 const fr0 = makeLaunchFrontier(profile, baseProd);
-if (!fr0) {
-  pass('smoke: profile has no epochFrontier (frontier off) — skipping frontier mechanics validation');
-  console.log('SMOKE: ALL PASS ✅ (corpus-load + slice integrity confirmed; full mechanics need an epochFrontier profile)');
-  exit(0);
-}
+if (!fr0) fail('profile has no epochFrontier — smoke cannot validate frontier mechanics; use the calibration profile (epochFrontier C3)');
 const fr0snap = fr0.stepEpoch(0, null, null);
 if (!fr0snap.activeRoot || /^0x0+$/.test(fr0snap.activeRoot)) fail(`genesis activeRoot zero: ${fr0snap.activeRoot}`);
+if (!(fr0snap.activeIds instanceof Set) || fr0snap.activeIds.size === 0) fail(`genesis frontier.activeIds is EMPTY — empty-set keccak ${fr0snap.activeRoot} is NOT a valid active frontier`);
 pass(`genesis activeRoot non-zero ${fr0snap.activeRoot.slice(0, 18)} (size=${fr0snap.activeIds.size})`);
 
 // Mechanics: evolveCorpusDelta on a small synthetic baseLogical. Since the slice corpus has no
@@ -133,6 +135,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   // CANONICAL stepEpoch: numeric/null only (never roots)
   const fr = makeLaunchFrontier(profile, newProd).stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts);
   if (!fr.activeRoot || /^0x0+$/.test(fr.activeRoot)) fail(`epoch ${epoch} frontier activeRoot zero`);
+  if (!(fr.activeIds instanceof Set) || fr.activeIds.size === 0) fail(`epoch ${epoch} frontier.activeIds EMPTY — empty-set hash is NOT a valid active frontier`);
   pass(`epoch ${epoch} frontier rebuild on newProd: activeRoot=${fr.activeRoot.slice(0, 18)} active=${fr.activeIds.size}`);
 
   currentLogical = { ...currentLogical, docs: [...currentLogical.docs, ...ld.addedDocs], relations: [...currentLogical.relations, ...ld.addedRelations], queries: [...currentLogical.queries, ...ld.addedQueries] };

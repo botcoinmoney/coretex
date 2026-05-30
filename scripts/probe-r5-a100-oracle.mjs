@@ -41,7 +41,8 @@
  *       --out release/calibration/2026-05-21-memory-corpus-v2/r5-a100-oracle-gpu.json
  */
 import { distIndex, repoRoot } from './_repo-root.mjs';
-import { buildV2ProductionCorpus, inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
+import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
+import { loadV2CompatBundle } from './lib/load-materialized-corpus.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { execSync, spawn } from 'node:child_process';
@@ -58,6 +59,8 @@ const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 
 const has = (n) => argv.includes(`--${n}`);
 const corpusPath = resolve(repoRoot, flag('corpus', 'release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-corpus.json'));
 const embPath = resolve(repoRoot, flag('emb', 'release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-embeddings.json'));
+const bundlePath = flag('bundle');
+if (!bundlePath) { console.error('HARD FAIL: --bundle <path> required (calibration uses materialized corpus, NEVER per-probe rebuild)'); process.exit(1); }
 const profilePath = resolve(repoRoot, flag('profile', 'release/bundle/evaluator-profile-v2-dgen1-deep-r1.json'));
 const rerankerArg = flag('reranker', 'deterministic');          // 'gpu' | 'deterministic'
 const seedsN = Number(flag('seeds', '1'));                       // CPU smoke: 1; GPU: 3
@@ -103,7 +106,7 @@ function streamReranker({ model, revision, python, allowCuda }) {
   };
 }
 
-const { corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath });
+const { corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash } = loadV2CompatBundle(bundlePath, flag('corpus'), flag('emb'));
 const reranker = (rerankerArg === 'gpu' || rerankerArg === 'cpu')
   ? streamReranker({ model: RR.modelId, revision: RR.revision, python: process.env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: rerankerArg === 'gpu' })
   : await createDeterministicReranker();

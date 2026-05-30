@@ -129,15 +129,19 @@ function patchTrueAdvanceCandidate(seed) {
   return { patch: { patchType: PATCH_TYPE.MIXED, wordCount: 2, scoreDelta: 0, parentStateRoot: parentRoot, indices: [anchorIdx, RANGES.POLICY_EVIDENCE_START], newWords: [anchorWord, word] }, intent: 'true_state_advance_candidate' };
 }
 
+// liveStateAdvanced is TRUE only for the true_state_advance class — every other class is by
+// construction either rejected (junk/dup/stale/irrelevant) or at-most a screener_pass candidate
+// (weak/viable non-advancing). Passing liveStateAdvanced=true uniformly would wrongly let a
+// viable_non_advancing patch qualify as STATE_ADVANCE on any sufficient delta.
 const classes = [
-  { name: 'junk_random', gen: patchJunk, expected: 'REJECT', parentMatchesLiveRoot: true },
-  { name: 'structurally_valid_irrelevant', gen: patchStructValidIrrelevant, expected: 'REJECT', parentMatchesLiveRoot: true },
-  { name: 'exact_duplicate', gen: patchExactDuplicate, expected: 'REJECT', parentMatchesLiveRoot: true },
-  { name: 'near_duplicate', gen: patchNearDuplicate, expected: 'REJECT', parentMatchesLiveRoot: true },
-  { name: 'stale_parent', gen: patchStaleParent, expected: 'REJECT', parentMatchesLiveRoot: false },
-  { name: 'weak_positive', gen: patchWeakPositive, expected: 'REJECT_or_SCREENER_PASS', parentMatchesLiveRoot: true },
-  { name: 'viable_non_advancing', gen: patchViableNonAdvancing, expected: 'SCREENER_PASS', parentMatchesLiveRoot: true },
-  { name: 'true_state_advance_candidate', gen: patchTrueAdvanceCandidate, expected: 'STATE_ADVANCE_or_SCREENER_PASS', parentMatchesLiveRoot: true },
+  { name: 'junk_random', gen: patchJunk, expected: 'REJECT', parentMatchesLiveRoot: true, liveStateAdvanced: false },
+  { name: 'structurally_valid_irrelevant', gen: patchStructValidIrrelevant, expected: 'REJECT', parentMatchesLiveRoot: true, liveStateAdvanced: false },
+  { name: 'exact_duplicate', gen: patchExactDuplicate, expected: 'REJECT', parentMatchesLiveRoot: true, liveStateAdvanced: false },
+  { name: 'near_duplicate', gen: patchNearDuplicate, expected: 'REJECT', parentMatchesLiveRoot: true, liveStateAdvanced: false },
+  { name: 'stale_parent', gen: patchStaleParent, expected: 'REJECT', parentMatchesLiveRoot: false, liveStateAdvanced: false },
+  { name: 'weak_positive', gen: patchWeakPositive, expected: 'REJECT_or_SCREENER_PASS', parentMatchesLiveRoot: true, liveStateAdvanced: false },
+  { name: 'viable_non_advancing', gen: patchViableNonAdvancing, expected: 'SCREENER_PASS', parentMatchesLiveRoot: true, liveStateAdvanced: false },
+  { name: 'true_state_advance_candidate', gen: patchTrueAdvanceCandidate, expected: 'STATE_ADVANCE_or_SCREENER_PASS', parentMatchesLiveRoot: true, liveStateAdvanced: true },
 ];
 
 async function scorePatchDelta(patch) {
@@ -166,8 +170,13 @@ const screenerThresholdPpm = computeCoreTexScreenerThresholdPpm({ baselineScoreP
 console.log(`[screener-threshold] baseline=${baseline}ppm measured noiseFloor(p90)=${recentNoiseFloorPpm}ppm → screenerThreshold=${screenerThresholdPpm}ppm`);
 
 // ─── CANONICAL classification via evaluateCoreTexWorkQualification ───
-function classifyCanonically({ deltaPpm, parentMatchesLiveRoot }) {
-  // Try STATE_ADVANCE first (stricter), fall back to SCREENER_PASS, else REJECT.
+function classifyCanonically({ applyAccepted, applyReason, deltaPpm, parentMatchesLiveRoot, liveStateAdvanced }) {
+  // The evaluator must accept the patch shape (structural / protected / family floors) before any
+  // qualification can fire. A patch rejected by evaluateRetrievalBenchmarkPatch is REJECT
+  // regardless of its delta — propagate the apply reason so the report row is informative.
+  if (!applyAccepted) {
+    return { outcome: 'REJECT', reason: `apply_rejected:${applyReason ?? 'unknown'}` };
+  }
   const baseInput = {
     baselineScorePpm: baseline,
     recentNoiseFloorPpm: BigInt(recentNoiseFloorPpm),
@@ -175,11 +184,14 @@ function classifyCanonically({ deltaPpm, parentMatchesLiveRoot }) {
     localModelDeltaPpm: 0n,
     parentMatchesLiveRoot,
   };
-  const sa = evaluateCoreTexWorkQualification({ ...baseInput, outcome: OUTCOME_STATE_ADVANCE, liveStateAdvanced: true });
-  if (sa.qualified) return { outcome: 'STATE_ADVANCE', reason: sa.reason };
+  // Only try STATE_ADVANCE qualification when the class is a real state-advance candidate.
+  // Other classes (viable non-advancing, weak, etc.) cannot pre-claim a state advance.
+  if (liveStateAdvanced === true) {
+    const sa = evaluateCoreTexWorkQualification({ ...baseInput, outcome: OUTCOME_STATE_ADVANCE, liveStateAdvanced: true });
+    if (sa.qualified) return { outcome: 'STATE_ADVANCE', reason: sa.reason };
+  }
   const sp = evaluateCoreTexWorkQualification({ ...baseInput, outcome: OUTCOME_SCREENER });
   if (sp.qualified) return { outcome: 'SCREENER_PASS', reason: sp.reason };
-  // Use the screener-pass reason as the canonical reject reason (more informative than state-advance's).
   return { outcome: 'REJECT', reason: sp.reason };
 }
 
@@ -192,7 +204,7 @@ for (const cls of classes) {
   for (let i = 0; i < PER_CLASS; i++) {
     const { patch } = cls.gen(i);
     const r = await scorePatchDelta(patch);
-    const cls2 = classifyCanonically({ deltaPpm: r.deltaPpm, parentMatchesLiveRoot: cls.parentMatchesLiveRoot });
+    const cls2 = classifyCanonically({ applyAccepted: r.accepted, applyReason: r.reason, deltaPpm: r.deltaPpm, parentMatchesLiveRoot: cls.parentMatchesLiveRoot, liveStateAdvanced: cls.liveStateAdvanced });
     const fp = createHash('sha256').update(`${patch.patchType}|${patch.indices.join(',')}|${patch.newWords.map((w) => w.toString(16)).join(',')}`).digest('hex').slice(0, 16);
     perPatch.push({ i, deltaPpm: r.deltaPpm, applyAccepted: r.accepted, applyReason: r.reason, outcome: cls2.outcome, qualificationReason: cls2.reason, patchFingerprint: '0x' + fp });
   }

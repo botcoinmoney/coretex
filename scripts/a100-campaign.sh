@@ -237,7 +237,7 @@ run_churn() {
 # is captured in the campaign log line below + recorded by gate2 parity and gate4 metric validator.
 echo "  active-bundle (recorded for static probes that do not yet accept --bundle): bundleHash=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$B','utf8')).bundleHash)") path=$B"
 run oracle "$CORPUS_DIR/r5-a100-oracle-gpu-$SCALE.json" \
-  scripts/probe-r5-a100-oracle.mjs --reranker gpu --seeds ${ORACLE_SEEDS:-1} --betas ${ORACLE_BETAS:-1.0} --export-traces --profile "$P"
+  scripts/probe-r5-a100-oracle.mjs --reranker gpu --seeds ${ORACLE_SEEDS:-1} --betas ${ORACLE_BETAS:-1.0} --export-traces --profile "$P" --bundle "$B"
 cat > "$CORPUS_DIR/r5-a100-oracle-gpu-$SCALE.NONFINAL.md" <<EONFM
 # Oracle output is DIAGNOSTIC ONLY — not launch-final.
 
@@ -253,19 +253,19 @@ EONFM
 
 # Track 2b — conflict_lifecycle malleability
 run conflict "$CORPUS_DIR/conflict-state-malleability-$SCALE-final.json" \
-  scripts/probe-conflict-state-malleability.mjs --reranker gpu --pack-size 200 --r5-profile "$P"
+  scripts/probe-conflict-state-malleability.mjs --reranker gpu --pack-size 200 --r5-profile "$P" --bundle "$B"
 
 # Track 2c — abstention margin
 run abstention "$CORPUS_DIR/r5-abstention-margin-$SCALE.json" \
-  scripts/probe-r5-abstention-margin.mjs --reranker gpu --pack-size 300 --r5-profile "$P"
+  scripts/probe-r5-abstention-margin.mjs --reranker gpu --pack-size 300 --r5-profile "$P" --bundle "$B"
 
 # Track 2d — temporal yield in-context
 run temporal "$CORPUS_DIR/temporal-yield-$SCALE.json" \
-  scripts/measure-temporal-yield-incontext.mjs --reranker gpu --pack-size 12 --target 60 --seeds a5,b7,c3 --profile "$P"
+  scripts/measure-temporal-yield-incontext.mjs --reranker gpu --pack-size 12 --target 60 --seeds a5,b7,c3 --profile "$P" --bundle "$B"
 
 # Track 2e — relation-typed routing / evidence-bundle reclaim
 run relation_typed "$CORPUS_DIR/r5-relation-typed-validate-$SCALE-3seed.json" \
-  scripts/probe-r5-relation-typed-validate.mjs --reranker gpu --seeds ${REL_SEEDS:-1,2,3} --route-per-fam ${REL_ROUTE_PER_FAM:-18} --off-per-fam ${REL_OFF_PER_FAM:-14} --r5-profile "$P"
+  scripts/probe-r5-relation-typed-validate.mjs --reranker gpu --seeds ${REL_SEEDS:-1,2,3} --route-per-fam ${REL_ROUTE_PER_FAM:-18} --off-per-fam ${REL_OFF_PER_FAM:-14} --r5-profile "$P" --bundle "$B"
 
 # Track 3 — Live-evolve long-horizon churn endurance (CANONICAL: evolveCorpusDelta →
 # buildCorpusDelta → applyCorpusDelta per epoch, NOT just frontier rotation on a fixed corpus).
@@ -279,12 +279,10 @@ fi
 tail -6 "$LOGD/churn_pre_smoke.log"
 
 run_churn churn_c3 "$CORPUS_DIR/churn-c3-live-evolve-$SCALE" \
-  scripts/simulate-v2-live-evolve-long-horizon.mjs --reranker gpu --epochs ${CHURN_EPOCHS:-12} \
-  --random-probes ${CHURN_RANDOM_PROBES:-12} --hillclimb-probes ${CHURN_HILLCLIMB_PROBES:-6} \
+  scripts/simulate-v2-live-evolve-long-horizon.mjs --reranker gpu \
+  --epochs ${CHURN_EPOCHS:-12} --churn-fraction ${CHURN_FRACTION:-0.05} \
   --honest-per-epoch ${CHURN_HONEST_PER_EPOCH:-3} \
-  --churn-fraction ${CHURN_FRACTION:-0.05} \
-  --frontier-mode C3 --frontier-window "$FRONTIER_WINDOW" --pack-size ${CHURN_PACK_SIZE:-64} \
-  --clear-pack-quotas --target-advances ${CHURN_TARGET_ADVANCES:-3} --skip-rejected-temporal \
+  --pack-size ${CHURN_PACK_SIZE:-64} --clear-pack-quotas \
   --profile "$P" --bundle "$B"
 
 # Track 4 — CoreTex-only screener threshold calibration (NO miner driver, NO V4, NO wallet, NO chain).

@@ -24,7 +24,19 @@ import { distIndex, repoRoot } from './_repo-root.mjs';
 import { buildV2ProductionCorpus } from './lib/build-v2-production-corpus.mjs';
 
 const C = await import(distIndex);
-const { computeProfileHash, computeCorpusRoot } = C;
+const { computeCorpusRoot } = C;
+
+// Local profileHash: keccak/sha256 over a deterministic JSON of the profile (sorted keys).
+// No canonical export exists; this gives a stable per-profile identity for the artifact manifest.
+function canonicalJsonSorted(v) {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)) return `[${v.map(canonicalJsonSorted).join(',')}]`;
+  const keys = Object.keys(v).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJsonSorted(v[k])}`).join(',')}}`;
+}
+function computeProfileHashLocal(profile) {
+  return '0x' + createHash('sha256').update(canonicalJsonSorted(profile)).digest('hex');
+}
 
 const u8ToHex = (u8) => Buffer.from(u8.buffer ?? u8, u8.byteOffset ?? 0, u8.byteLength ?? u8.length).toString('hex');
 // Materialized event = the in-memory ProductionCorpusEvent verbatim, with embeddings hex-encoded.
@@ -136,7 +148,7 @@ const manifest = {
   materializedAtNote: 'stamp externally — replay path is deterministic from (sourceCorpusSha256, sourceEmbSha256, bundleHash, profileHash)',
   gitCommit,
   bundleHash: bundle.bundleHash,
-  profileHash: typeof computeProfileHash === 'function' ? computeProfileHash(profile) : null,
+  profileHash: computeProfileHashLocal(profile),
   corpusRoot: corpus.corpusRoot,
   biEncoder: { modelId: BE.modelId, revision: BE.revision, layout: LAYOUT },
   labelingModel: { modelId: RR.modelId, revision: RR.revision },
@@ -144,6 +156,8 @@ const manifest = {
   sourceCorpusSha256: sourceCorpusSha,
   sourceEmbPath: EMB_PATH,
   sourceEmbSha256: sourceEmbSha,
+  sourceProfileSha256: sha256File(PROFILE_PATH),
+  sourceBundleSha256: sha256File(BUNDLE_PATH),
   bundlePath: BUNDLE_PATH,
   profilePath: PROFILE_PATH,
   eventCount: corpus.events.length,
