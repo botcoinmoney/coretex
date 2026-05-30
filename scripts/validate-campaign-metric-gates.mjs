@@ -136,6 +136,22 @@ else {
     }
     const haveReuseMetric = churn.perEpoch.some((e) => typeof e.operation_reuse_rate === 'number');
     gate('churn_c3', 'operation_reuse_rate computed (honest mining ran)', haveReuseMetric);
+    // Frontier rotation state must persist across epochs — every epoch can't be re-genesis.
+    // Genesis activation has activated > 0, retired == 0, churnRate == 0. Subsequent epochs
+    // under C3 must show cumulativeRetired strictly increasing and reserveRemaining strictly
+    // decreasing (frontier rotation actually consuming the reserve).
+    const haveRotation = churn.perEpoch.every((e) => e.frontierRotation && typeof e.frontierRotation.cumulativeRetired === 'number');
+    gate('churn_c3', 'every epoch reports frontierRotation provenance', haveRotation);
+    if (haveRotation && churn.perEpoch.length >= 2) {
+      const genesisEpochs = churn.perEpoch.filter((e) => e.frontierRotation.retired === 0 && e.frontierRotation.churnRate === 0).length;
+      gate('churn_c3', 'at most 1 epoch is genesis (frontier state persisted across epochs)',
+        genesisEpochs <= 1, `${genesisEpochs} genesis-shaped epochs / ${churn.perEpoch.length}`);
+      const cumRetiredMono = churn.perEpoch.every((e, i, arr) => i === 0 || e.frontierRotation.cumulativeRetired >= arr[i - 1].frontierRotation.cumulativeRetired);
+      gate('churn_c3', 'cumulativeRetired monotonically non-decreasing across epochs', cumRetiredMono);
+      const reserveDrains = churn.perEpoch.length >= 3 && churn.perEpoch[churn.perEpoch.length - 1].frontierRotation.reserveRemaining < churn.perEpoch[0].frontierRotation.reserveRemaining;
+      gate('churn_c3', 'reserveRemaining drained from first to last epoch (real C3 rotation)', reserveDrains,
+        `first=${churn.perEpoch[0].frontierRotation.reserveRemaining} last=${churn.perEpoch[churn.perEpoch.length - 1].frontierRotation.reserveRemaining}`);
+    }
   }
 }
 

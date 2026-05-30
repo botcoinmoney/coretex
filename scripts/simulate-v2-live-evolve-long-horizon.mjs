@@ -172,8 +172,21 @@ function honestPatchForEpoch(epoch, honestIdx, addedDocs) {
   }, fingerprint, targetDocId: target.id };
 }
 
-// ─── Genesis frontier step (CANONICAL: numeric/null) ───
-const fr0 = makeLaunchFrontier(profile, currentProd).stepEpoch(0, null, null);
+// ─── Genesis frontier (BUILD ONCE, step every epoch on the SAME instance) ───
+// The prior version called makeLaunchFrontier(profile, newProd) each epoch and threw away
+// the rotation state — reservePtr/cumulativeActivated/cumulativeRetired reset to genesis on
+// every call, so every epoch looked like a first-step activation. Now we build the frontier
+// ONCE from the genesis corpus and call stepEpoch on the persisted instance, so C3 rotation
+// observes the real accept/attempt history and reserveRemaining drains over time.
+//
+// Note: evolveCorpusDelta adds new eval_hidden events each epoch but those are NOT injected
+// into this frontier's reserve (no package-level API for that yet). For long-horizon churn
+// the genesis reserve (1324 events @ activeWindow=3072) is sufficient to exercise rotation.
+const frontier = makeLaunchFrontier(profile, currentProd);
+if (!frontier) {
+  console.error('HARD FAIL: profile has no epochFrontier — cannot run live-evolve harness'); exit(1);
+}
+const fr0 = frontier.stepEpoch(0, null, null);
 let prevActiveRoot = fr0.activeRoot;
 let prevHonestAccepts = 0;
 let prevQualityAttempts = 0;
@@ -251,14 +264,15 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
 
   const corpusRootChanged = newProd.corpusRoot !== currentProd.corpusRoot;
   // CANONICAL stepEpoch: NUMERIC honest-accepts + quality-attempts (NEVER roots).
-  const frontier = makeLaunchFrontier(profile, newProd).stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts);
-  const activeRootChanged = frontier.activeRoot !== prevActiveRoot;
+  // Step the PERSISTED frontier instance — preserves reservePtr / cumulative counts.
+  const frontierSnap = frontier.stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts);
+  const activeRootChanged = frontierSnap.activeRoot !== prevActiveRoot;
   const baselineRecomputedBecause = corpusRootChanged ? 'corpusRootChanged' : (activeRootChanged ? 'activeRootChanged' : null);
 
   const fullPack = deriveQueryPack(0, evalSeedHex, newProd, hiddenPackProfile);
-  const activePack = filterPackToActive(fullPack, frontier.activeIds);
-  const heldoutPack = filterPackToHeldout(fullPack, frontier.activeIds);
-  for (const ev of activePack.events) if (!frontier.activeIds.has(ev.id)) { console.error(`HARD FAIL: epoch ${epoch} activePack contains id ${ev.id} not in frontier.activeIds`); exit(1); }
+  const activePack = filterPackToActive(fullPack, frontierSnap.activeIds);
+  const heldoutPack = filterPackToHeldout(fullPack, frontierSnap.activeIds);
+  for (const ev of activePack.events) if (!frontierSnap.activeIds.has(ev.id)) { console.error(`HARD FAIL: epoch ${epoch} activePack contains id ${ev.id} not in frontierSnap.activeIds`); exit(1); }
   const idShuffledActivePack = buildIdShuffledPack(activePack);
 
   let activeScorePpm = null, heldoutScorePpm = null, idShuffledScorePpm = null;
@@ -299,8 +313,17 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   perEpoch.push({
     epoch,
     previousCorpusRoot: currentProd.corpusRoot, deltaNextRoot: delta.nextRoot, currentCorpusRoot: newProd.corpusRoot,
-    activeRoot: frontier.activeRoot, activeRootChanged, corpusRootChanged,
-    activeFrontierSize: frontier.activeIds.size,
+    activeRoot: frontierSnap.activeRoot, activeRootChanged, corpusRootChanged,
+    activeFrontierSize: frontierSnap.activeIds.size,
+    // Frontier rotation provenance (proves real C3 rotation, not re-genesis each epoch).
+    frontierRotation: {
+      activated: frontierSnap.activated,
+      retired: frontierSnap.retired,
+      churnRate: frontierSnap.churnRate,
+      reserveRemaining: frontierSnap.reserveRemaining,
+      cumulativeActivated: frontierSnap.cumulativeActivated,
+      cumulativeRetired: frontierSnap.cumulativeRetired,
+    },
     activePackSize: activePack.events.length, heldoutPackSize: heldoutPack.events.length,
     addedDocs: ld.addedDocs.length, addedQueries: ld.addedQueries.length,
     addedMemDocs: ld.addedDocs.length, addedRelations: ld.addedRelations.length,
@@ -322,7 +345,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
 
   currentLogical = { ...currentLogical, docs: [...currentLogical.docs, ...ld.addedDocs], relations: [...currentLogical.relations, ...ld.addedRelations], queries: [...currentLogical.queries, ...ld.addedQueries] };
   currentProd = newProd;
-  prevActiveRoot = frontier.activeRoot;
+  prevActiveRoot = frontierSnap.activeRoot;
   prevActiveScorePpm = activeScorePpm ?? prevActiveScorePpm;
   prevHeldoutScorePpm = heldoutScorePpm ?? prevHeldoutScorePpm;
   prevHonestAccepts = honestAcceptsThisEpoch;        // feed to next epoch's stepEpoch
