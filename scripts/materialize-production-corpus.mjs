@@ -1,0 +1,170 @@
+#!/usr/bin/env node
+/**
+ * Build the canonical production corpus ONCE from pinned (corpus, embeddings, bundle, profile)
+ * and write it to a materialized artifact pair (CorpusFileShape JSON header + NDJSON sidecar).
+ * Every downstream harness (smokes + tracks) loads from this artifact via canonical
+ * `loadProductionCorpus`, NEVER re-runs the 16-minute buildV2ProductionCorpus.
+ *
+ * Artifact layout:
+ *   release/calibration/2026-05-21-memory-corpus-v2/materialized/<bundleHash8>/corpus.json
+ *   release/calibration/2026-05-21-memory-corpus-v2/materialized/<bundleHash8>/corpus.json.events.ndjson
+ *   release/calibration/2026-05-21-memory-corpus-v2/materialized/<bundleHash8>/manifest.json
+ *
+ * Manifest fields: gitCommit, bundleHash, profileHash, corpusRoot, BE/RR/layout pins,
+ * sourceCorpusSha256, sourceEmbSha256, eventCount, materializedAtNote.
+ *
+ * Usage: node scripts/materialize-production-corpus.mjs --profile <p> --bundle <b> --corpus <c> --emb <e> [--force]
+ */
+import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, statSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { createHash } from 'node:crypto';
+import { argv, exit } from 'node:process';
+import { execSync } from 'node:child_process';
+import { distIndex, repoRoot } from './_repo-root.mjs';
+import { buildV2ProductionCorpus } from './lib/build-v2-production-corpus.mjs';
+
+const C = await import(distIndex);
+const { computeProfileHash, computeCorpusRoot } = C;
+
+const u8ToHex = (u8) => Buffer.from(u8.buffer ?? u8, u8.byteOffset ?? 0, u8.byteLength ?? u8.length).toString('hex');
+// Materialized event = the in-memory ProductionCorpusEvent verbatim, with embeddings hex-encoded.
+// PRESERVES every field including logicalFamily + band — the canonical serializer
+// (serializeProductionCorpus) drops those, so its round-trip does NOT match the in-memory
+// computeCorpusRoot. This calibration-internal artifact preserves bytes exactly so the round-trip
+// recomputes the SAME corpusRoot as the original buildV2ProductionCorpus build.
+function eventOnDisk(e) {
+  const out = {};
+  // Copy every own enumerable property as-is, EXCEPT embeddings which we hex-encode.
+  for (const k of Object.keys(e)) {
+    if (k === 'embeddings') continue;
+    out[k] = e[k];
+  }
+  out.embeddings = {
+    modelId: e.embeddings.modelId, revision: e.embeddings.revision, layout: e.embeddings.layout,
+    query: u8ToHex(e.embeddings.query),
+    perTruth: Object.fromEntries(Array.from(e.embeddings.perTruth.entries()).map(([k, v]) => [k, u8ToHex(v)])),
+    perNegative: Object.fromEntries(Array.from(e.embeddings.perNegative.entries()).map(([k, v]) => [k, u8ToHex(v)])),
+  };
+  return out;
+}
+
+const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
+const has = (n) => argv.includes(`--${n}`);
+const PROFILE_PATH = flag('profile');
+const BUNDLE_PATH = flag('bundle');
+const CORPUS_PATH = flag('corpus');
+const EMB_PATH = flag('emb');
+const FORCE = has('force');
+if (!PROFILE_PATH || !BUNDLE_PATH || !CORPUS_PATH || !EMB_PATH) {
+  console.error('HARD FAIL: --profile, --bundle, --corpus, --emb required'); exit(1);
+}
+
+const profile = JSON.parse(readFileSync(resolve(repoRoot, PROFILE_PATH), 'utf8'));
+const bundle = JSON.parse(readFileSync(resolve(repoRoot, BUNDLE_PATH), 'utf8'));
+const sha256File = (p) => '0x' + createHash('sha256').update(readFileSync(resolve(repoRoot, p))).digest('hex');
+const sourceCorpusSha = sha256File(CORPUS_PATH);
+const sourceEmbSha = sha256File(EMB_PATH);
+const bundleTag = (bundle.bundleHash ?? '0xunknown').slice(2, 10);
+
+const MAT_DIR = resolve(repoRoot, 'release/calibration/2026-05-21-memory-corpus-v2/materialized', bundleTag);
+const CORPUS_JSON = resolve(MAT_DIR, 'corpus.json');
+const NDJSON = `${CORPUS_JSON}.events.ndjson`;
+const MANIFEST = resolve(MAT_DIR, 'manifest.json');
+
+// ─── Cache check: reuse if existing artifact still matches inputs ───
+if (existsSync(MANIFEST) && !FORCE) {
+  try {
+    const m = JSON.parse(readFileSync(MANIFEST, 'utf8'));
+    if (m.bundleHash === bundle.bundleHash
+        && m.sourceCorpusSha256 === sourceCorpusSha
+        && m.sourceEmbSha256 === sourceEmbSha
+        && existsSync(CORPUS_JSON) && existsSync(NDJSON)) {
+      console.log(`[materialize] CACHE HIT — artifact matches inputs; skipping rebuild`);
+      console.log(`[materialize]   path: ${MAT_DIR}`);
+      console.log(`[materialize]   bundleHash: ${m.bundleHash}`);
+      console.log(`[materialize]   corpusRoot: ${m.corpusRoot}`);
+      console.log(`[materialize]   eventCount: ${m.eventCount}`);
+      console.log(`[materialize]   sizes: corpus.json=${statSync(CORPUS_JSON).size}B events.ndjson=${statSync(NDJSON).size}B`);
+      exit(0);
+    }
+    console.log(`[materialize] cache stale (input sha or bundle changed) — rebuilding`);
+  } catch (e) {
+    console.log(`[materialize] cache manifest unreadable (${e.message}) — rebuilding`);
+  }
+}
+
+mkdirSync(MAT_DIR, { recursive: true });
+
+console.log(`[materialize] building production corpus from canonical inputs ...`);
+const t0 = Date.now();
+const { corpus, BE, RR, LAYOUT } = buildV2ProductionCorpus({ corpusPath: CORPUS_PATH, embPath: EMB_PATH, bundlePath: BUNDLE_PATH });
+const buildSec = ((Date.now() - t0) / 1000).toFixed(1);
+console.log(`[materialize] built ${corpus.events.length} events in ${buildSec}s root=${corpus.corpusRoot.slice(0, 18)}…`);
+
+// Write header JSON with EMPTY events array — readCorpusJsonHeader pulls meta from head/tail.
+// Build it from the corpus directly (avoid serializeProductionCorpus which holds all events in memory).
+const headerOnly = {
+  schemaVersion: 'coretex.production-corpus.v1',
+  corpusEpoch: corpus.corpusEpoch,
+  biEncoder: { modelId: corpus.biEncoderModelId, revision: corpus.biEncoderRevision, layout: corpus.biEncoderRetrievalKeyLayout },
+  labelingModel: { modelId: corpus.labelingModelId, revision: corpus.labelingModelRevision },
+  events: [],
+  ...(corpus.entities ? { entities: corpus.entities } : {}),
+  corpusRoot: corpus.corpusRoot,
+};
+writeFileSync(CORPUS_JSON, JSON.stringify(headerOnly, null, 2));
+
+// Stream NDJSON sidecar: serialize event-by-event so we never hold all on-disk events in memory.
+const t1 = Date.now();
+const stream = createWriteStream(NDJSON, { flags: 'w', highWaterMark: 16 * 1024 * 1024 });
+let writes = 0;
+async function writeLine(line) {
+  if (!stream.write(line)) await new Promise((res) => stream.once('drain', res));
+}
+for (const e of corpus.events) {
+  await writeLine(JSON.stringify(eventOnDisk(e)) + '\n');
+  writes++;
+  if (writes % 50_000 === 0) console.log(`[materialize] ndjson progress: ${writes}/${corpus.events.length}`);
+}
+await new Promise((res, rej) => { stream.end((err) => err ? rej(err) : res()); });
+const ndjsonSec = ((Date.now() - t1) / 1000).toFixed(1);
+console.log(`[materialize] wrote ${writes} events to NDJSON in ${ndjsonSec}s`);
+
+const gitCommit = (() => { try { return execSync('git rev-parse HEAD', { cwd: repoRoot }).toString().trim(); } catch { return 'unknown'; } })();
+const manifest = {
+  schema: 'coretex.materialized-production-corpus.v1',
+  materializedAtNote: 'stamp externally — replay path is deterministic from (sourceCorpusSha256, sourceEmbSha256, bundleHash, profileHash)',
+  gitCommit,
+  bundleHash: bundle.bundleHash,
+  profileHash: typeof computeProfileHash === 'function' ? computeProfileHash(profile) : null,
+  corpusRoot: corpus.corpusRoot,
+  biEncoder: { modelId: BE.modelId, revision: BE.revision, layout: LAYOUT },
+  labelingModel: { modelId: RR.modelId, revision: RR.revision },
+  sourceCorpusPath: CORPUS_PATH,
+  sourceCorpusSha256: sourceCorpusSha,
+  sourceEmbPath: EMB_PATH,
+  sourceEmbSha256: sourceEmbSha,
+  bundlePath: BUNDLE_PATH,
+  profilePath: PROFILE_PATH,
+  eventCount: corpus.events.length,
+  materializedCorpusJson: CORPUS_JSON.replace(repoRoot + '/', ''),
+  materializedEventsNdjson: NDJSON.replace(repoRoot + '/', ''),
+};
+writeFileSync(MANIFEST, JSON.stringify(manifest, null, 2));
+console.log(`[materialize] manifest: ${MANIFEST}`);
+
+// Round-trip verify: load via the calibration-internal loader and re-compute corpusRoot.
+console.log('[materialize] round-trip verify: loading materialized artifact (custom loader) ...');
+const { loadMaterializedCorpus } = await import('./lib/load-materialized-corpus.mjs');
+const reloaded = loadMaterializedCorpus(BUNDLE_PATH, { sourceCorpusPath: CORPUS_PATH, sourceEmbPath: EMB_PATH, verifyCorpusRoot: true });
+if (reloaded.corpus.corpusRoot.toLowerCase() !== corpus.corpusRoot.toLowerCase()) {
+  console.error(`HARD FAIL: round-trip corpusRoot mismatch — built=${corpus.corpusRoot} reloaded=${reloaded.corpus.corpusRoot}`);
+  exit(1);
+}
+if (reloaded.corpus.events.length !== corpus.events.length) {
+  console.error(`HARD FAIL: round-trip event-count mismatch — built=${corpus.events.length} reloaded=${reloaded.corpus.events.length}`);
+  exit(1);
+}
+console.log(`[materialize] ROUND-TRIP OK — events=${reloaded.corpus.events.length} root=${reloaded.corpus.corpusRoot.slice(0, 18)}…`);
+console.log(`[materialize] DONE — artifact: ${MAT_DIR}`);
+exit(0);

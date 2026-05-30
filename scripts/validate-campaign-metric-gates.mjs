@@ -102,6 +102,9 @@ if (existsSync(churnDir)) {
 if (!churn) gate('churn_c3', 'live-evolve report exists', false);
 else {
   gate('churn_c3', 'report parses', !churn.__parse_error, churn.__parse_error ?? '');
+  gate('churn_c3', 'schema v2 (live-evolve, not v1 deferred-metrics shell)', churn.schema === 'coretex.live-evolve-long-horizon.v2', churn.schema ?? 'missing');
+  gate('churn_c3', 'canonicalAPIsUsed includes 4-arg evaluateRetrievalBenchmarkState', (churn.canonicalAPIsUsed ?? []).some((s) => /evaluateRetrievalBenchmarkState\(state, corpus, pack, opts\)/.test(s)));
+  gate('churn_c3', 'canonicalAPIsUsed includes numeric-args stepEpoch', (churn.canonicalAPIsUsed ?? []).some((s) => /stepEpoch\(epoch, prevHonestAccepts, prevQualityAttempts\)/.test(s)));
   gate('churn_c3', 'epochsRun > 0', (churn.epochsRun ?? 0) > 0, `${churn.epochsRun}`);
   if (churn.perEpoch?.length) {
     const roots = churn.perEpoch.map((e) => e.currentCorpusRoot);
@@ -112,6 +115,27 @@ else {
     gate('churn_c3', 'every epoch: deltaNextRoot === currentCorpusRoot (replayable)', replayable);
     const corpusChanges = churn.perEpoch.filter((e) => e.baselineRecomputedBecause === 'corpusRootChanged').length;
     gate('churn_c3', 'baseline recomputed on corpusRootChanged at least once', corpusChanges > 0, `${corpusChanges} epochs`);
+    // CANONICAL stepEpoch inputs MUST be numeric/null — never roots.
+    const badStepEpoch = churn.perEpoch.find((e) => {
+      const x = e.stepEpochInputs ?? {};
+      const numericOrNull = (v) => v === null || typeof v === 'number';
+      return !(numericOrNull(x.prevHonestAccepts) && numericOrNull(x.prevQualityAttempts));
+    });
+    gate('churn_c3', 'every epoch: stepEpoch inputs numeric/null (NOT roots)', !badStepEpoch, badStepEpoch ? `epoch ${badStepEpoch.epoch} has ${JSON.stringify(badStepEpoch.stepEpochInputs)}` : 'all numeric');
+    // Active pack scoring must have run AT LEAST once with non-zero active pack size.
+    const activeScored = churn.perEpoch.filter((e) => e.activeScorePpm != null && e.activePackSize > 0).length;
+    gate('churn_c3', 'active-pack scoring ran at least once with non-empty active pack', activeScored > 0, `${activeScored} epochs scored`);
+    // Required metrics MUST be numeric on at least one epoch where scoring ran (the first epoch may
+    // legitimately have null cross_frontier_lift because there is no prior; require coverage on the
+    // post-genesis epochs that scored).
+    const scoredEpochs = churn.perEpoch.filter((e) => e.activeScorePpm != null);
+    if (scoredEpochs.length >= 2) {
+      const haveAllMetrics = scoredEpochs.slice(1).some((e) =>
+        typeof e.cross_frontier_lift === 'number' && typeof e.heldout_frontier_lift === 'number' && typeof e.doc_id_dependence === 'number');
+      gate('churn_c3', 'cross_frontier_lift / heldout_frontier_lift / doc_id_dependence numeric on at least one post-genesis scored epoch', haveAllMetrics);
+    }
+    const haveReuseMetric = churn.perEpoch.some((e) => typeof e.operation_reuse_rate === 'number');
+    gate('churn_c3', 'operation_reuse_rate computed (honest mining ran)', haveReuseMetric);
   }
 }
 
@@ -127,6 +151,11 @@ else {
     gate('screener_threshold', 'viable_screener_recall is numeric (signal present, value reported)', typeof s.viable_screener_recall === 'number', `${s.viable_screener_recall}`);
     gate('screener_threshold', 'state_advance_acceptance_rate is numeric', typeof s.state_advance_acceptance_rate === 'number', `${s.state_advance_acceptance_rate}`);
     gate('screener_threshold', 'screenerThresholdPpm > 0', (s.threshold_inputs?.screenerThresholdPpm ?? 0) > 0, `${s.threshold_inputs?.screenerThresholdPpm}`);
+    // CANONICAL qualification path used (not manual delta bands).
+    gate('screener_threshold', 'canonical evaluateCoreTexWorkQualification used', /evaluateCoreTexWorkQualification/.test(s.threshold_inputs?.canonical_qualification ?? ''));
+    // Noise floor MEASURED (not hardcoded 0n).
+    gate('screener_threshold', 'noise floor measured (not hardcoded)', typeof s.threshold_inputs?.measuredRecentNoiseFloorPpm === 'number' && (scr.noise_floor_samples ?? []).length > 0);
+    gate('screener_threshold', 'schema v2 (canonical qualification path)', scr.schema === 'coretex.screener-threshold-calibration.v2', scr.schema ?? 'missing');
   } else gate('screener_threshold', 'summary block present', false);
 }
 

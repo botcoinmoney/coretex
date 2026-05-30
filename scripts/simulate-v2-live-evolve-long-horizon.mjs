@@ -1,110 +1,102 @@
 #!/usr/bin/env node
 /**
- * CANONICAL LIVE-EVOLVE LONG-HORIZON CHURN HARNESS.
+ * CANONICAL LIVE-EVOLVE LONG-HORIZON CHURN HARNESS (v2).
  *
- * Replaces the deprecated `simulate-v2-long-horizon.mjs` for launch calibration. The deprecated
- * harness froze the corpus at startup and only rotated frontier slices — useful as a frontier
- * diagnostic but NOT a live-update churn calibration. This harness drives the canonical chain
- * the production pipeline must run each epoch:
- *
- *   evolveCorpusDelta(currentLogical, epoch, seed, churnFraction)
- *     → embed addedDocs + addedQueries with the pinned BGE-M3 (real, CPU one-shot)
- *     → convert to production additions (mem_* train_visible + query events, splits by splitForRecord)
- *     → buildCorpusDelta({previousCorpus: currentProd, additions, removals: [], epoch, labelingProvenance})
- *     → applyCorpusDelta(currentProd, delta)
- *     → assert newProd.corpusRoot === delta.nextRoot === delta.previousRoot⇒ currentProd.corpusRoot
- *     → frontier = makeLaunchFrontier(profile, newProd).stepEpoch(epoch, prevCorpusRoot, prevActiveRoot)
- *     → baseline recompute (real Qwen GPU on the active pack) when corpusRootChanged OR activeRootChanged
- *
- * Each epoch report includes per the calibration handoff:
- *   epoch, previousCorpusRoot, delta.nextRoot, current corpusRoot, activeRoot,
- *   liveChurnRate, addedDocs, addedQueries, addedMemDocs,
- *   baselineRecomputedBecause, baselineParentScorePpm,
- *   operation_reuse_rate, cross_frontier_lift, heldout_frontier_lift, doc_id_dependence.
+ * Per epoch:
+ *   1. evolveCorpusDelta(currentLogical, epoch, seed, churnFraction)
+ *   2. embed addedDocs + addedQueries with pinned BGE-M3 (CPU)
+ *   3. convert to production additions via same bridge as buildV2ProductionCorpus
+ *      (mem_* train_visible + query events; splits via splitForRecord)
+ *   4. delta = buildCorpusDelta({previousCorpus: currentProd, additions, removals: [], epoch, labelingProvenance})
+ *   5. newProd = applyCorpusDelta(currentProd, delta);
+ *      assert newProd.corpusRoot === delta.nextRoot
+ *   6. frontier = makeLaunchFrontier(profile, newProd).stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts)
+ *      — CANONICAL: stepEpoch takes NUMERIC honest-accepts + quality-attempts (aggregate counters),
+ *        NOT roots. The activeRoot + activeIds come from the snapshot.
+ *   7. activePack  = events in pack ∩ frontier.activeIds (with hard assertion of subset)
+ *      heldoutPack = events in pack \ frontier.activeIds (the reserve slice)
+ *      idShuffledPack = activePack with truth-doc IDs permuted within pack (control)
+ *   8. baseline recompute on corpusRootChanged OR activeRootChanged via real-Qwen
+ *      evaluateRetrievalBenchmarkState(GENESIS, newProd, activePack, opts) — 4-arg canonical.
+ *   9. honest mining: K patches per epoch, scored via evaluateRetrievalBenchmarkPatch.
+ *      Each accepted honest patch contributes a structural fingerprint to operationReuseSet;
+ *      operation_reuse_rate = #accepted-this-epoch-with-fingerprint-seen-prior / #accepted-this-epoch.
+ *      prevHonestAccepts + prevQualityAttempts fed into NEXT epoch's stepEpoch.
+ *  10. cross_frontier_lift = activeScoreThisEpoch - activeScorePrevEpoch (ppm)
+ *      heldout_frontier_lift = heldoutScoreThisEpoch - heldoutScorePrevEpoch (ppm)
+ *      doc_id_dependence = (activeScore - idShuffledActiveScore) / max(1, activeScore)
+ *                          — high (~1) ⇒ scoring is real semantic match; low (~0) ⇒ ID-bound or broken eval
  *
  * Usage:
  *   node scripts/simulate-v2-live-evolve-long-horizon.mjs --reranker gpu
- *     --profile <profile.json> --corpus <base-corpus.json> --emb <base-embeddings.json>
- *     --out <outdir> --tag <tag> [--epochs 12] [--churn-fraction 0.05] [--seed coretex-launch-frontier]
- *     [--honest-per-epoch 3] [--random-probes 12] [--hillclimb-probes 6]
- *     [--pack-size 64] [--clear-pack-quotas] [--target-advances 3] [--skip-rejected-temporal]
- *     [--frontier-mode C3] [--frontier-window 3072]
+ *     --profile <p> --bundle <b> --corpus <c> --emb <e> --out <outdir> --tag <tag>
+ *     [--epochs 12] [--churn-fraction 0.05] [--seed <s>] [--honest-per-epoch 3]
+ *     [--pack-size 64] [--clear-pack-quotas]
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { argv, env, exit } from 'node:process';
+import { createHash } from 'node:crypto';
 import { distIndex, repoRoot } from './_repo-root.mjs';
 import { evolveCorpusDelta } from './lib/evolve-corpus.mjs';
-import { buildV2ProductionCorpus, inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
+import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
+import { loadMaterializedCorpus } from './lib/load-materialized-corpus.mjs';
 import { embedTexts } from './_embed-v2.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
 
 const C = await import(distIndex);
 const {
-  buildCorpusDelta, applyCorpusDelta, computeCorpusRoot, makeLaunchFrontier,
-  splitForRecord, expectedSplitForRecord, biEncoderModelIdHash,
-  scoringOptionsFromProfile, deriveQueryPack, evaluateRetrievalBenchmarkState,
-  createDeterministicReranker, qwen3Reranker06BManifest,
+  RANGES, PATCH_TYPE,
+  buildCorpusDelta, applyCorpusDelta, makeLaunchFrontier,
+  splitForRecord, biEncoderModelIdHash,
+  scoringOptionsFromProfile, deriveQueryPack,
+  evaluateRetrievalBenchmarkState, evaluateRetrievalBenchmarkPatch,
+  createDeterministicReranker,
+  encodePolicyAtom, POLICY_SELECTOR, POLICY_EVIDENCE_FEATURE,
 } = C;
 
-// ─── arg parsing ───
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
 const has = (n) => argv.includes(`--${n}`);
-const RERANKER = flag('reranker', 'gpu'); // 'gpu' | 'deterministic'
+const RERANKER = flag('reranker', 'gpu');
 const PROFILE_PATH = flag('profile');
-const BUNDLE_PATH = flag('bundle'); // optional but recommended; pins BE/RR to active calibration bundle
+const BUNDLE_PATH = flag('bundle');
 const CORPUS_PATH = flag('corpus');
 const EMB_PATH = flag('emb');
 const OUTDIR = flag('out');
 const TAG = flag('tag', 'live-evolve');
 const EPOCHS = Number(flag('epochs', '12'));
 const CHURN_FRACTION = Number(flag('churn-fraction', '0.05'));
-const SEED = flag('seed', null);
+const SEED_OVERRIDE = flag('seed', null);
 const HONEST_PER_EPOCH = Number(flag('honest-per-epoch', '3'));
-const RANDOM_PROBES = Number(flag('random-probes', '12'));
-const HILLCLIMB_PROBES = Number(flag('hillclimb-probes', '6'));
 const PACK_SIZE = Number(flag('pack-size', '64'));
 const CLEAR_PACK_QUOTAS = has('clear-pack-quotas');
-const TARGET_ADVANCES = Number(flag('target-advances', '3'));
-const SKIP_REJECTED_TEMPORAL = has('skip-rejected-temporal');
 
-if (!PROFILE_PATH || !CORPUS_PATH || !EMB_PATH || !OUTDIR) {
-  console.error('HARD FAIL: --profile, --corpus, --emb, --out are required');
+if (!PROFILE_PATH || !BUNDLE_PATH || !CORPUS_PATH || !EMB_PATH || !OUTDIR) {
+  console.error('HARD FAIL: --profile, --bundle, --corpus, --emb, --out required');
   exit(1);
 }
 
 mkdirSync(resolve(repoRoot, OUTDIR), { recursive: true });
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, PROFILE_PATH), 'utf8'));
-const frontierSeed = SEED ?? profile.epochFrontier?.seed ?? 'coretex-launch-frontier';
-console.log(`[live-evolve] profile=${PROFILE_PATH}`);
-console.log(`[live-evolve] corpus=${CORPUS_PATH} emb=${EMB_PATH}`);
-console.log(`[live-evolve] epochs=${EPOCHS} churn=${CHURN_FRACTION} seed=${frontierSeed}`);
+const frontierSeed = SEED_OVERRIDE ?? profile.epochFrontier?.seed ?? 'coretex-launch-frontier';
+console.log(`[live-evolve] profile=${PROFILE_PATH} bundle=${BUNDLE_PATH}`);
+console.log(`[live-evolve] corpus=${CORPUS_PATH} epochs=${EPOCHS} churn=${CHURN_FRACTION} seed=${frontierSeed}`);
 
-// ─── 1. base production corpus (real embeddings) ───
-console.log('[live-evolve] building base production corpus ...');
-const baseBundle = buildV2ProductionCorpus({ corpusPath: CORPUS_PATH, embPath: EMB_PATH, ...(BUNDLE_PATH ? { bundlePath: BUNDLE_PATH } : {}) });
+console.log('[live-evolve] loading materialized base production corpus (NO rebuild) ...');
+const baseBundle = loadMaterializedCorpus(BUNDLE_PATH, { sourceCorpusPath: CORPUS_PATH, sourceEmbPath: EMB_PATH });
 let currentProd = baseBundle.corpus;
 const { BE, RR, LAYOUT } = baseBundle;
-const labelingProvenance = {
-  modelId: RR.modelId, revision: RR.revision,
-  runtime: 'coretex-retrieval-v2-policy-r5', batchHash: '0x' + '00'.repeat(32),
-};
-console.log(`[live-evolve] base corpus events=${currentProd.events.length} root=${currentProd.corpusRoot.slice(0, 18)}…`);
+console.log(`[live-evolve] materialized manifest bundleHash=${baseBundle.manifest.bundleHash} corpusRoot=${baseBundle.manifest.corpusRoot.slice(0, 18)}…`);
+const labelingProvenance = { modelId: RR.modelId, revision: RR.revision, runtime: 'coretex-retrieval-v2-policy-r5', batchHash: '0x' + '00'.repeat(32) };
+console.log(`[live-evolve] base events=${currentProd.events.length} root=${currentProd.corpusRoot.slice(0, 18)}…`);
 
-// Working logical corpus (mutated each epoch with the evolve delta)
 let currentLogical = JSON.parse(readFileSync(resolve(repoRoot, CORPUS_PATH), 'utf8'));
-// docId → text for truth-doc resolution (includes BOTH original + evolve-added docs as we grow)
 const docTextById = new Map(currentLogical.docs.map((d) => [d.id, d]));
 
 const PROV = { source: 'synthetic_challenge', sourceHash: '0x' + '00'.repeat(32) };
 const memId = (id) => `mem_${id}`;
-const bucket = (f) => f === 'temporal_update' ? 'temporal'
-  : (f === 'multi_session_bridge' || f === 'causal_memory_chain' || f === 'decision_provenance') ? 'multi_hop_relation'
-  : f === 'conflict_lifecycle' ? 'conflict_lifecycle'
-  : f === 'aspect_constraint' ? 'aspect_constraint'
-  : f === 'coreference_resolution' ? 'coreference'
-  : 'near_collision';
+const bucket = (f) => f === 'temporal_update' ? 'temporal' : (f === 'multi_session_bridge' || f === 'causal_memory_chain' || f === 'decision_provenance') ? 'multi_hop_relation' : f === 'conflict_lifecycle' ? 'conflict_lifecycle' : f === 'aspect_constraint' ? 'aspect_constraint' : f === 'coreference_resolution' ? 'coreference' : 'near_collision';
 
 function int8Bytes(vec) {
   let m = 0; for (const v of vec) m = Math.max(m, Math.abs(v));
@@ -115,63 +107,108 @@ function int8Bytes(vec) {
   return o;
 }
 
-// ─── 2. reranker init (GPU stream or deterministic) ───
 const reranker = RERANKER === 'gpu'
   ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: true })
   : await createDeterministicReranker();
-
 const biEncoderHash = biEncoderModelIdHash(BE.modelId, BE.revision, 'dense');
 
-async function scoreActivePack(prod, frontierProfile) {
-  const hiddenPack = CLEAR_PACK_QUOTAS
-    ? { packSize: PACK_SIZE, quotas: [] }
-    : { ...(profile.hiddenPack || { packSize: PACK_SIZE, quotas: [] }), packSize: PACK_SIZE };
-  const evalSeedHex = profile.baselineEvalSeedHex ?? '0x' + 'a5'.repeat(32);
-  const pack = deriveQueryPack(0, evalSeedHex, prod, hiddenPack);
-  const rt = { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT };
-  const opts = scoringOptionsFromProfile({ ...profile, ...frontierProfile }, rt);
-  const result = await evaluateRetrievalBenchmarkState(prod, pack, opts);
-  return { pack, result, scorePpm: Math.round((result.compositeScore ?? 0) * 1_000_000) };
+const evalSeedHex = profile.baselineEvalSeedHex ?? '0x' + 'a5'.repeat(32);
+const hiddenPackProfile = CLEAR_PACK_QUOTAS ? { packSize: PACK_SIZE, quotas: [] } : { ...(profile.hiddenPack ?? { packSize: PACK_SIZE, quotas: [] }), packSize: PACK_SIZE };
+
+function makeGenesisState() { return { words: new Array(1024).fill(0n) }; }
+function rt() { return { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT }; }
+function optsForProd() { return scoringOptionsFromProfile(profile, rt()); }
+
+async function scoreOnPack(prod, pack) {
+  const opts = optsForProd();
+  const res = await evaluateRetrievalBenchmarkState(makeGenesisState(), prod, pack, opts);
+  return Math.round((res.compositeScore ?? res.composite ?? 0) * 1_000_000);
 }
 
-let prevCorpusRoot = currentProd.corpusRoot;
+function filterPackToActive(pack, activeIds) {
+  const events = pack.events.filter((e) => activeIds.has(e.id));
+  return { ...pack, events };
+}
+function filterPackToHeldout(pack, activeIds) {
+  const events = pack.events.filter((e) => !activeIds.has(e.id));
+  return { ...pack, events };
+}
+// Deterministic doc-id permutation control: replace each event's truth doc IDs with a CYCLIC
+// shift of other in-pack doc IDs. If scoring is genuinely semantic (text-based via Qwen) and the
+// eval is doing real work via qrels, original-pack score should be MUCH higher than shuffled-pack.
+// doc_id_dependence ~ 1 = healthy; ~ 0 = broken (eval not using qrels) OR ID-bound (no real semantic match).
+function buildIdShuffledPack(pack) {
+  const ids = pack.events.flatMap((e) => (e.truthDocuments ?? []).map((t) => t.id));
+  if (!ids.length) return pack;
+  const shifted = ids.map((_, i) => ids[(i + Math.max(1, Math.floor(ids.length / 2))) % ids.length]);
+  const map = new Map(ids.map((src, i) => [src, shifted[i]]));
+  const events = pack.events.map((e) => ({
+    ...e,
+    truthDocuments: (e.truthDocuments ?? []).map((t) => ({ ...t, id: map.get(t.id) ?? t.id })),
+    qrels: (e.qrels ?? []).map((q) => ({ ...q, documentId: map.get(q.documentId) ?? q.documentId })),
+  }));
+  return { ...pack, events };
+}
+
+// Honest patch generator: relation-typed admission atom targeting a NEW churn subject's
+// mem-anchor slot. Deterministic from (epoch, honestIdx).
+function honestPatchForEpoch(epoch, honestIdx, addedDocs) {
+  const target = addedDocs[honestIdx % Math.max(1, addedDocs.length)];
+  if (!target) return null;
+  const atomWord = encodePolicyAtom({
+    atomIndex: honestIdx & 0x7, family: 'evidence_bundle', selector: POLICY_SELECTOR.RELATION_PATH_PRESENT,
+    evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'bundle', scope: 'relation_path',
+    targetSlot: (honestIdx + 5) & 0xff, budget: 250, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n,
+  });
+  const fingerprint = `eb:relpath:${target.id}:slot${(honestIdx + 5) & 0xff}`;
+  return { patch: {
+    patchType: PATCH_TYPE.POLICY_UPDATE, wordCount: 1, scoreDelta: 0,
+    parentStateRoot: new Uint8Array(32),
+    indices: [RANGES.POLICY_EVIDENCE_START + (honestIdx & 0x7f)],
+    newWords: [atomWord],
+  }, fingerprint, targetDocId: target.id };
+}
+
+// ─── Genesis frontier step (CANONICAL: numeric/null) ───
 const fr0 = makeLaunchFrontier(profile, currentProd).stepEpoch(0, null, null);
 let prevActiveRoot = fr0.activeRoot;
-let baselineParentScorePpm = Number(profile.baselineParentScorePpm) || null;
+let prevHonestAccepts = 0;
+let prevQualityAttempts = 0;
+console.log(`[live-evolve] genesis activeRoot=${prevActiveRoot.slice(0, 18)}… active=${fr0.activeIds.size}`);
 
-console.log(`[live-evolve] genesis activeRoot=${prevActiveRoot.slice(0, 18)}…`);
-console.log(`[live-evolve] starting baseline=${baselineParentScorePpm}ppm`);
+// score genesis active + heldout
+let basePack = deriveQueryPack(0, evalSeedHex, currentProd, hiddenPackProfile);
+let prevActivePack = filterPackToActive(basePack, fr0.activeIds);
+let prevHeldoutPack = filterPackToHeldout(basePack, fr0.activeIds);
+// Hard subset assertion: every activePack id MUST be in frontier.activeIds.
+for (const ev of prevActivePack.events) if (!fr0.activeIds.has(ev.id)) { console.error(`HARD FAIL: activePack contains id ${ev.id} not in frontier.activeIds`); exit(1); }
 
+let prevActiveScorePpm = prevActivePack.events.length ? await scoreOnPack(currentProd, prevActivePack) : null;
+let prevHeldoutScorePpm = prevHeldoutPack.events.length ? await scoreOnPack(currentProd, prevHeldoutPack) : null;
+console.log(`[live-evolve] genesis activeScore=${prevActiveScorePpm}ppm heldoutScore=${prevHeldoutScorePpm}ppm`);
+
+const operationReuseSet = new Set();
 const perEpoch = [];
-const allHonestPatches = [];
-const honestPatchKeys = new Set();
+const baselineFloors = { ...profile.patchAcceptanceFloors, acceptanceThresholdPpm: profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500 };
 
 for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   console.log(`\n[live-evolve] ===== EPOCH ${epoch} =====`);
   const ld = evolveCorpusDelta({ baseLogical: currentLogical, epoch, seed: frontierSeed, churnFraction: CHURN_FRACTION });
-  console.log(`[live-evolve] evolveCorpusDelta: +${ld.addedDocs.length} docs, +${ld.addedRelations.length} rels, +${ld.addedQueries.length} queries, churnRate=${ld.liveChurnRate.toFixed(4)}`);
+  console.log(`[live-evolve] evolveCorpusDelta: +${ld.addedDocs.length} docs / +${ld.addedRelations.length} rels / +${ld.addedQueries.length} queries / churnRate=${ld.liveChurnRate.toFixed(4)}`);
 
-  // Embed added docs + queries with pinned BGE-M3 (CPU)
-  const docTexts = ld.addedDocs.map((d) => d.text);
-  const qTexts = ld.addedQueries.map((q) => q.queryText);
-  const docVecs = docTexts.length ? await embedTexts(docTexts) : [];
-  const qVecs = qTexts.length ? await embedTexts(qTexts) : [];
+  if (!ld.addedDocs.length) { console.warn(`[live-evolve] epoch ${epoch}: no churn signal at fraction=${CHURN_FRACTION}; skipping`); continue; }
 
-  // Update docTextById index BEFORE building query events (queries may reference newly-added docs in qrels)
+  const docVecs = await embedTexts(ld.addedDocs.map((d) => d.text));
+  const qVecs = ld.addedQueries.length ? await embedTexts(ld.addedQueries.map((q) => q.queryText)) : [];
   for (const d of ld.addedDocs) docTextById.set(d.id, d);
 
-  // Per-doc int8 embedding cache (mem_* event uses both query slot + perTruth)
-  const memEmbCache = new Map();
-  ld.addedDocs.forEach((d, i) => { memEmbCache.set(d.id, int8Bytes(docVecs[i])); });
-
+  const memEmb = new Map(); ld.addedDocs.forEach((d, i) => memEmb.set(d.id, int8Bytes(docVecs[i])));
+  const additions = [];
   const relsBySrc = new Map();
   for (const r of ld.addedRelations) { if (!relsBySrc.has(r.src)) relsBySrc.set(r.src, []); relsBySrc.get(r.src).push(r); }
 
-  const additions = [];
-
-  // mem_* docs (train_visible)
-  ld.addedDocs.forEach((d, i) => {
-    const e = memEmbCache.get(d.id);
+  ld.addedDocs.forEach((d) => {
+    const e = memEmb.get(d.id);
     additions.push({
       id: memId(d.id), family: 'near_collision', domain: d.lane, split: 'train_visible',
       queryText: d.text,
@@ -183,150 +220,136 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
       embeddings: { modelId: BE.modelId, revision: BE.revision, layout: LAYOUT, query: e, perTruth: new Map([[d.id, e]]), perNegative: new Map() },
     });
   });
-
-  // query events — note: split = splitForRecord(q.id, currentProd.corpusEpoch)
   ld.addedQueries.forEach((q, i) => {
     const qe = int8Bytes(qVecs[i]);
-    const truths = (q.qrels ?? []).filter((r) => r.relevance > 0).map((r) => {
-      const d = docTextById.get(r.docId);
-      if (!d) throw new Error(`live-evolve: missing truth doc ${r.docId} for query ${q.id}`);
-      return { id: r.docId, text: d.text, isCurrent: d.currentStaleFlag === false ? false : true };
-    });
-    const negs = (q.hardNegatives ?? []).map((n) => {
-      const d = docTextById.get(n.docId);
-      if (!d) throw new Error(`live-evolve: missing hard-neg doc ${n.docId} for query ${q.id}`);
-      return { id: n.docId, text: d.text, category: n.category };
-    });
-    // perTruth + perNegative embeddings — use memEmbCache if the doc is in the current delta, else
-    // pull the int8 bytes from currentProd's mem_<docId> event (already int8-encoded with same layout).
-    const lookupDocEmb = (docId) => {
-      if (memEmbCache.has(docId)) return memEmbCache.get(docId);
-      const memEv = currentProd.byId.get(memId(docId));
-      if (memEv?.embeddings?.perTruth?.get(docId)) return memEv.embeddings.perTruth.get(docId);
-      throw new Error(`live-evolve: missing doc embedding for ${docId} (mem_${docId} not in currentProd and not in epoch delta)`);
-    };
+    const lookup = (id) => memEmb.get(id) ?? currentProd.byId.get(memId(id))?.embeddings?.perTruth?.get(id);
+    const truths = (q.qrels ?? []).filter((r) => r.relevance > 0).map((r) => { const d = docTextById.get(r.docId); if (!d) throw new Error(`live-evolve: missing truth doc ${r.docId} for query ${q.id}`); return { id: r.docId, text: d.text, isCurrent: d.currentStaleFlag === false ? false : true }; });
+    const negs = (q.hardNegatives ?? []).map((n) => { const d = docTextById.get(n.docId); if (!d) throw new Error(`live-evolve: missing hard-neg doc ${n.docId} for query ${q.id}`); return { id: n.docId, text: d.text, category: n.category }; });
     const ev = {
       id: q.id, family: bucket(q.family), logicalFamily: q.family, domain: q.lane,
       split: splitForRecord(q.id, currentProd.corpusEpoch),
-      queryText: q.queryText,
-      truthDocuments: truths, hardNegatives: negs,
-      qrels: (q.qrels ?? []).map((r) => ({ documentId: r.docId, relevance: r.relevance })),
-      protected: false, relations: [],
-      ...(q.band ? { band: q.band } : {}),
+      queryText: q.queryText, truthDocuments: truths, hardNegatives: negs,
+      qrels: (q.qrels ?? []).map((r) => ({ documentId: r.docId, relevance: r.relevance })), protected: false, relations: [],
+      ...(q.band ? { band: q.band } : {}), ...(q.subjectEntityId !== undefined ? { subjectEntityId: q.subjectEntityId } : {}),
       ...(q.ownerEntityId !== undefined ? { ownerEntityId: q.ownerEntityId, ownerScoped: q.ownerScoped !== false } : {}),
-      ...(q.subjectEntityId !== undefined ? { subjectEntityId: q.subjectEntityId } : {}),
       provenance: PROV,
       embeddings: { modelId: BE.modelId, revision: BE.revision, layout: LAYOUT, query: qe,
-        perTruth: new Map(truths.map((t) => [t.id, lookupDocEmb(t.id)])),
-        perNegative: new Map(negs.map((n) => [n.id, lookupDocEmb(n.id)])) },
+        perTruth: new Map(truths.map((t) => [t.id, lookup(t.id)])), perNegative: new Map(negs.map((n) => [n.id, lookup(n.id)])) },
     };
     if (ev.family === 'temporal') ev.temporal = { validFromEpoch: 1, validUntilEpoch: Number.MAX_SAFE_INTEGER, currentStaleFlag: false };
     additions.push(ev);
   });
 
-  // Canonical buildCorpusDelta + applyCorpusDelta — replay validates against this same chain.
   const delta = buildCorpusDelta({ previousCorpus: currentProd, additions, removals: [], epoch, labelingProvenance });
-  if (delta.previousRoot.toLowerCase() !== currentProd.corpusRoot.toLowerCase()) {
-    console.error(`HARD FAIL: delta.previousRoot != currentProd.corpusRoot at epoch ${epoch}`);
-    exit(1);
-  }
+  if (delta.previousRoot.toLowerCase() !== currentProd.corpusRoot.toLowerCase()) { console.error(`HARD FAIL: delta.previousRoot != currentProd.corpusRoot epoch=${epoch}`); exit(1); }
   const newProd = applyCorpusDelta(currentProd, delta);
-  if (newProd.corpusRoot.toLowerCase() !== delta.nextRoot.toLowerCase()) {
-    console.error(`HARD FAIL: applyCorpusDelta nextRoot mismatch at epoch ${epoch}: applied=${newProd.corpusRoot} delta=${delta.nextRoot}`);
-    exit(1);
-  }
-  console.log(`[live-evolve] buildCorpusDelta OK: previousRoot=${delta.previousRoot.slice(0, 18)}… nextRoot=${delta.nextRoot.slice(0, 18)}… added=${delta.addedIds.length}`);
+  if (newProd.corpusRoot.toLowerCase() !== delta.nextRoot.toLowerCase()) { console.error(`HARD FAIL: applyCorpusDelta root mismatch epoch=${epoch}`); exit(1); }
+  console.log(`[live-evolve] delta: ${delta.previousRoot.slice(0, 18)} → ${delta.nextRoot.slice(0, 18)} (+${delta.addedIds.length} events)`);
 
   const corpusRootChanged = newProd.corpusRoot !== currentProd.corpusRoot;
-  // Rebuild frontier from the NEW production corpus — frontier is a function of current prod.
-  const frontier = makeLaunchFrontier(profile, newProd).stepEpoch(epoch, prevCorpusRoot, prevActiveRoot);
+  // CANONICAL stepEpoch: NUMERIC honest-accepts + quality-attempts (NEVER roots).
+  const frontier = makeLaunchFrontier(profile, newProd).stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts);
   const activeRootChanged = frontier.activeRoot !== prevActiveRoot;
+  const baselineRecomputedBecause = corpusRootChanged ? 'corpusRootChanged' : (activeRootChanged ? 'activeRootChanged' : null);
 
-  let baselineRecomputedBecause = null;
-  let scorePpm = null;
-  if (corpusRootChanged) baselineRecomputedBecause = 'corpusRootChanged';
-  else if (activeRootChanged) baselineRecomputedBecause = 'activeRootChanged';
+  const fullPack = deriveQueryPack(0, evalSeedHex, newProd, hiddenPackProfile);
+  const activePack = filterPackToActive(fullPack, frontier.activeIds);
+  const heldoutPack = filterPackToHeldout(fullPack, frontier.activeIds);
+  for (const ev of activePack.events) if (!frontier.activeIds.has(ev.id)) { console.error(`HARD FAIL: epoch ${epoch} activePack contains id ${ev.id} not in frontier.activeIds`); exit(1); }
+  const idShuffledActivePack = buildIdShuffledPack(activePack);
 
+  let activeScorePpm = null, heldoutScorePpm = null, idShuffledScorePpm = null;
   if (baselineRecomputedBecause) {
-    console.log(`[live-evolve] baseline recompute (${baselineRecomputedBecause}) — scoring active pack with real Qwen ...`);
-    const { scorePpm: spm } = await scoreActivePack(newProd, { epochFrontier: profile.epochFrontier });
-    scorePpm = spm;
-    baselineParentScorePpm = spm;
-    console.log(`[live-evolve] new baselineParentScorePpm = ${spm}`);
+    console.log(`[live-evolve] scoring active(${activePack.events.length}) + heldout(${heldoutPack.events.length}) + idShuffled control ...`);
+    activeScorePpm = activePack.events.length ? await scoreOnPack(newProd, activePack) : null;
+    heldoutScorePpm = heldoutPack.events.length ? await scoreOnPack(newProd, heldoutPack) : null;
+    idShuffledScorePpm = idShuffledActivePack.events.length ? await scoreOnPack(newProd, idShuffledActivePack) : null;
   }
 
-  // Honest mining attempt — simple structural fingerprint (subject+family) so we can compute
-  // operation_reuse_rate across epochs without needing the full screener pipeline.
-  const honestThisEpoch = ld.addedQueries.slice(0, HONEST_PER_EPOCH).map((q) => ({
-    subjectId: q.subjectEntityId ?? null, family: q.family, epoch,
-    fingerprint: `subj:${q.subjectEntityId ?? 'none'}|fam:${q.family}`,
-  }));
-  let reuseCount = 0;
-  for (const h of honestThisEpoch) { if (honestPatchKeys.has(h.fingerprint)) reuseCount++; else honestPatchKeys.add(h.fingerprint); }
-  const operationReuseRate = honestThisEpoch.length ? reuseCount / honestThisEpoch.length : 0;
-  allHonestPatches.push(...honestThisEpoch);
+  const crossFrontierLift = (activeScorePpm != null && prevActiveScorePpm != null) ? (activeScorePpm - prevActiveScorePpm) : null;
+  const heldoutFrontierLift = (heldoutScorePpm != null && prevHeldoutScorePpm != null) ? (heldoutScorePpm - prevHeldoutScorePpm) : null;
+  const docIdDependence = (activeScorePpm != null && idShuffledScorePpm != null && activeScorePpm > 0)
+    ? (activeScorePpm - idShuffledScorePpm) / Math.max(1, activeScorePpm) : null;
+
+  // Honest mining: K patches per epoch, score via canonical evaluateRetrievalBenchmarkPatch.
+  let honestAcceptsThisEpoch = 0, qualityAttemptsThisEpoch = 0, honestReuseThisEpoch = 0;
+  const honestPerPatch = [];
+  for (let h = 0; h < HONEST_PER_EPOCH; h++) {
+    const hp = honestPatchForEpoch(epoch, h, ld.addedDocs);
+    if (!hp) break;
+    qualityAttemptsThisEpoch++;
+    try {
+      const r = await evaluateRetrievalBenchmarkPatch(makeGenesisState(), hp.patch, newProd, activePack, optsForProd(), baselineFloors);
+      const accepted = !!r.accepted;
+      if (accepted) {
+        honestAcceptsThisEpoch++;
+        if (operationReuseSet.has(hp.fingerprint)) honestReuseThisEpoch++;
+        else operationReuseSet.add(hp.fingerprint);
+      }
+      honestPerPatch.push({ h, accepted, deltaPpm: r.deltaPpm ?? 0, reason: r.reason ?? null, fingerprint: hp.fingerprint, targetDocId: hp.targetDocId });
+    } catch (e) {
+      honestPerPatch.push({ h, accepted: false, deltaPpm: 0, reason: `eval_error:${e.message?.slice(0, 80)}`, fingerprint: hp.fingerprint, targetDocId: hp.targetDocId });
+    }
+  }
+  const operationReuseRate = honestAcceptsThisEpoch ? honestReuseThisEpoch / honestAcceptsThisEpoch : 0;
 
   perEpoch.push({
     epoch,
-    previousCorpusRoot: currentProd.corpusRoot,
-    deltaNextRoot: delta.nextRoot,
-    currentCorpusRoot: newProd.corpusRoot,
-    activeRoot: frontier.activeRoot,
+    previousCorpusRoot: currentProd.corpusRoot, deltaNextRoot: delta.nextRoot, currentCorpusRoot: newProd.corpusRoot,
+    activeRoot: frontier.activeRoot, activeRootChanged, corpusRootChanged,
+    activeFrontierSize: frontier.activeIds.size,
+    activePackSize: activePack.events.length, heldoutPackSize: heldoutPack.events.length,
+    addedDocs: ld.addedDocs.length, addedQueries: ld.addedQueries.length,
+    addedMemDocs: ld.addedDocs.length, addedRelations: ld.addedRelations.length,
     liveChurnRate: ld.liveChurnRate,
-    addedDocs: ld.addedDocs.length,
-    addedQueries: ld.addedQueries.length,
-    addedMemDocs: ld.addedDocs.length, // every added doc becomes a mem_* train_visible event
-    addedRelations: ld.addedRelations.length,
     baselineRecomputedBecause,
-    baselineParentScorePpm,
-    scoredPackPpm: scorePpm,
+    activeScorePpm, heldoutScorePpm, idShuffledActiveScorePpm: idShuffledScorePpm,
+    cross_frontier_lift: crossFrontierLift,
+    heldout_frontier_lift: heldoutFrontierLift,
+    doc_id_dependence: docIdDependence,
+    honestAttempted: qualityAttemptsThisEpoch, honestAccepted: honestAcceptsThisEpoch,
     operation_reuse_rate: operationReuseRate,
-    honestPatchesAttempted: honestThisEpoch.length,
-    // Per-handoff metrics that require dedicated probe design — recorded as null with reason rather
-    // than silently omitted. Follow-up commit will add: split active vs heldout pack scoring, and the
-    // doc-id-mangled control probe.
-    cross_frontier_lift: null,
-    heldout_frontier_lift: null,
-    doc_id_dependence: null,
-    _deferredMetricsReason: 'cross_frontier_lift / heldout_frontier_lift / doc_id_dependence require dedicated active-vs-reserve scoring + id-shuffled control; deferred to a follow-up commit so the canonical live-evolve loop ships now.',
+    honestPerPatch,
+    stepEpochInputs: { prevHonestAccepts, prevQualityAttempts },
   });
 
-  // Advance state for next epoch
-  currentLogical = {
-    ...currentLogical,
-    docs: [...currentLogical.docs, ...ld.addedDocs],
-    relations: [...currentLogical.relations, ...ld.addedRelations],
-    queries: [...currentLogical.queries, ...ld.addedQueries],
-  };
+  console.log(`[live-evolve] activeScore=${activeScorePpm}ppm heldoutScore=${heldoutScorePpm}ppm idShuffledScore=${idShuffledScorePpm}ppm`);
+  console.log(`[live-evolve] cross_frontier_lift=${crossFrontierLift} heldout_frontier_lift=${heldoutFrontierLift} doc_id_dependence=${docIdDependence}`);
+  console.log(`[live-evolve] honest: ${honestAcceptsThisEpoch}/${qualityAttemptsThisEpoch} accepted, operation_reuse_rate=${operationReuseRate.toFixed(3)}`);
+
+  currentLogical = { ...currentLogical, docs: [...currentLogical.docs, ...ld.addedDocs], relations: [...currentLogical.relations, ...ld.addedRelations], queries: [...currentLogical.queries, ...ld.addedQueries] };
   currentProd = newProd;
-  prevCorpusRoot = newProd.corpusRoot;
   prevActiveRoot = frontier.activeRoot;
+  prevActiveScorePpm = activeScorePpm ?? prevActiveScorePpm;
+  prevHeldoutScorePpm = heldoutScorePpm ?? prevHeldoutScorePpm;
+  prevHonestAccepts = honestAcceptsThisEpoch;        // feed to next epoch's stepEpoch
+  prevQualityAttempts = qualityAttemptsThisEpoch;
 }
 
 const report = {
-  schema: 'coretex.live-evolve-long-horizon.v1',
+  schema: 'coretex.live-evolve-long-horizon.v2',
   tag: TAG,
   reranker: RERANKER === 'gpu' ? `Qwen/${RR.modelId}@${RR.revision}` : 'deterministic',
-  profile: PROFILE_PATH,
-  corpus: CORPUS_PATH,
-  embeddings: EMB_PATH,
-  epochsRun: perEpoch.length,
-  churnFraction: CHURN_FRACTION,
-  seed: frontierSeed,
-  baseCorpusRoot: baseBundle.corpus.corpusRoot,
-  finalCorpusRoot: currentProd.corpusRoot,
+  profile: PROFILE_PATH, bundle: BUNDLE_PATH, corpus: CORPUS_PATH, embeddings: EMB_PATH,
+  bundleHash: JSON.parse(readFileSync(resolve(repoRoot, BUNDLE_PATH), 'utf8')).bundleHash,
+  baseCorpusRoot: baseBundle.corpus.corpusRoot, finalCorpusRoot: currentProd.corpusRoot,
   finalActiveRoot: prevActiveRoot,
+  epochsRun: perEpoch.length, churnFraction: CHURN_FRACTION, seed: frontierSeed,
   perEpoch,
-  honestPatchesSeen: allHonestPatches.length,
-  honestPatchesUnique: honestPatchKeys.size,
-  generatedAtNote: 'stamp externally — replay path is deterministic from (seed, profile, base, embeddings)',
+  uniqueHonestOperations: operationReuseSet.size,
+  canonicalAPIsUsed: [
+    'evolveCorpusDelta(baseLogical, epoch, seed, churnFraction)',
+    'buildCorpusDelta({previousCorpus, additions, removals, epoch, labelingProvenance})',
+    'applyCorpusDelta(currentProd, delta)',
+    'makeLaunchFrontier(profile, prod).stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts)',
+    'evaluateRetrievalBenchmarkState(state, corpus, pack, opts)',
+    'evaluateRetrievalBenchmarkPatch(state, patch, corpus, pack, opts, floors)',
+  ],
 };
 const outPath = resolve(repoRoot, OUTDIR, `V2_LIVE_EVOLVE_LONG_HORIZON_${TAG}_qwen.json`);
 writeFileSync(outPath, JSON.stringify(report, null, 2));
 console.log(`\n[live-evolve] wrote ${outPath}`);
-console.log(`[live-evolve] base→final corpusRoot: ${baseBundle.corpus.corpusRoot.slice(0, 18)} → ${currentProd.corpusRoot.slice(0, 18)}`);
-console.log(`[live-evolve] epochs with corpusRoot advance: ${perEpoch.filter((e) => e.baselineRecomputedBecause === 'corpusRootChanged').length}/${perEpoch.length}`);
-console.log(`[live-evolve] epochs with activeRoot-only advance: ${perEpoch.filter((e) => e.baselineRecomputedBecause === 'activeRootChanged').length}/${perEpoch.length}`);
+console.log(`[live-evolve] epochsRun=${perEpoch.length} uniqueHonestOps=${operationReuseSet.size}`);
 
 await reranker.close?.();
 exit(0);

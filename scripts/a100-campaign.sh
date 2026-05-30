@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # CoreTex real-Qwen calibration campaign — runs ON the A100 under /workspace/cortex.
 # Fail-fast (set -euo pipefail): any track failure stops the campaign IMMEDIATELY.
-# By default every track is fresh (existing outputs are quarantined to _stale_pre_<bundle>/);
-# pass --resume to skip tracks whose outputs are newer than the bundle's mtime.
+# By default every track is fresh — existing prior outputs are DELETED (NOT quarantined) so no
+# stale artifact can be mistaken for current-bundle evidence. Pass --resume to keep outputs
+# whose mtime is newer than the active bundle.
 #
 # Pre-flight gates (must all pass before any long GPU work):
 #   1. Every referenced script + lib import exists and parses (node --check / bash -n).
@@ -10,13 +11,18 @@
 #   3. GPU smoke gate (a100-gpu-smoke.mjs) passes — init, variance, determinism, random-near-zero.
 #
 # Tracks (calibration profile enables ALL reclaimed substrates — every surface is measured):
-#   2a oracle              — all-6-family no-op/random/off-family/locality safety + bounded magnitude
+#   2a oracle               — all-6-family no-op/random/off-family/locality safety + bounded magnitude
+#                             (DIAGNOSTIC ONLY — sibling NONFINAL.md is written; oracle uses bounded
+#                             reranker-score nudges, not canonical encoded states)
 #   2b conflict             — conflict_lifecycle malleability (honest/random/wrong, no-op gate)
 #   2c abstention           — top1 + margin sweep, false-abstention rate
 #   2d temporal             — temporal yield in-context
 #   2e relation_typed       — relation-typed routing / evidence-bundle reclaim
-#   3  churn_c3             — C3 active-frontier churn long-horizon
-#   4  screener_economics   — production-flow real-Qwen screener economics
+#   3  churn_c3             — CoreTex live-update churn long-horizon (canonical
+#                             evolveCorpusDelta → buildCorpusDelta → applyCorpusDelta per epoch;
+#                             4-arg evaluateRetrievalBenchmarkState; numeric-args stepEpoch)
+#   4  screener_threshold   — CoreTex-only screener threshold calibration (NO miner/V4/wallet/chain;
+#                             canonical evaluateCoreTexWorkQualification; measured noise floor)
 #
 # Usage:
 #   bash scripts/a100-campaign.sh <100k|300k> [--profile <p>] [--bundle <b>] [--resume]
@@ -61,6 +67,7 @@ REFERENCED_SCRIPTS=(
   scripts/a100-gpu-smoke.mjs
   scripts/smoke-live-evolve-mechanics.mjs
   scripts/smoke-screener-threshold-mechanics.mjs
+  scripts/materialize-production-corpus.mjs
   scripts/probe-r5-a100-oracle.mjs
   scripts/probe-conflict-state-malleability.mjs
   scripts/probe-r5-abstention-margin.mjs
@@ -70,6 +77,7 @@ REFERENCED_SCRIPTS=(
   scripts/screener-threshold-calibration.mjs
   scripts/lib/stream-reranker.mjs
   scripts/lib/evolve-corpus.mjs
+  scripts/lib/load-materialized-corpus.mjs
   scripts/_embed-v2.mjs
   scripts/reranker_runner.py
   scripts/bi_encoder_runner.py
@@ -90,6 +98,21 @@ done
 [ -f "$B" ] || { echo "HARD FAIL: bundle missing: $B" >&2; exit 1; }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Gate 0 — one-shot production-corpus materialization. After this, EVERY downstream harness
+# loads the corpus from the materialized artifact via canonical loadProductionCorpus — none
+# re-runs the 16-minute buildV2ProductionCorpus. The materialize step is idempotent: if the
+# artifact already matches (bundleHash + sourceCorpusSha256 + sourceEmbSha256), it is a cache
+# hit and exits immediately.
+# ─────────────────────────────────────────────────────────────────────────────
+echo "=== gate0: production-corpus materialization (one-shot, idempotent) ==="
+if ! node scripts/materialize-production-corpus.mjs --profile "$P" --bundle "$B" --corpus "$C" --emb "$E" > "$LOGD/gate0-materialize.log" 2>&1; then
+  echo "HARD FAIL: gate0 materialization (see $LOGD/gate0-materialize.log)" >&2
+  tail -25 "$LOGD/gate0-materialize.log" >&2
+  exit 1
+fi
+tail -8 "$LOGD/gate0-materialize.log"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Gate 2 — bundle/profile coherence via parity-mode preflight (cheap, no corpus rebuild)
 # ─────────────────────────────────────────────────────────────────────────────
 echo "=== gate2: parity-mode preflight (bundle attestation + fingerprint roots) ==="
@@ -107,7 +130,6 @@ tail -3 "$LOGD/gate2.log"
 # is moved aside so no track silently reuses pre-fix bytes.
 # ─────────────────────────────────────────────────────────────────────────────
 BUNDLE_TAG=$(node -e "const j=JSON.parse(require('fs').readFileSync('$B','utf8')); console.log((j.bundleHash||'unknown').slice(2,10))")
-QUARANTINE="$CORPUS_DIR/_stale_pre_${BUNDLE_TAG}"
 TRACK_OUTPUTS=(
   "$CORPUS_DIR/r5-a100-oracle-gpu-$SCALE.json"
   "$CORPUS_DIR/conflict-state-malleability-$SCALE-final.json"
@@ -211,6 +233,9 @@ run_churn() {
 # bounded reranker-score nudges to finalRankingFull (diagnostic), not canonical encoded
 # states/patches via evaluateRetrievalBenchmarkState/Patch. A NONFINAL sibling note is
 # written next to the artifact so downstream agents cannot mistake it for promotion evidence.
+# Static probes that already accept --r5-profile do NOT accept --bundle today; the active bundle
+# is captured in the campaign log line below + recorded by gate2 parity and gate4 metric validator.
+echo "  active-bundle (recorded for static probes that do not yet accept --bundle): bundleHash=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$B','utf8')).bundleHash)") path=$B"
 run oracle "$CORPUS_DIR/r5-a100-oracle-gpu-$SCALE.json" \
   scripts/probe-r5-a100-oracle.mjs --reranker gpu --seeds ${ORACLE_SEEDS:-1} --betas ${ORACLE_BETAS:-1.0} --export-traces --profile "$P"
 cat > "$CORPUS_DIR/r5-a100-oracle-gpu-$SCALE.NONFINAL.md" <<EONFM
@@ -245,8 +270,8 @@ run relation_typed "$CORPUS_DIR/r5-relation-typed-validate-$SCALE-3seed.json" \
 # Track 3 — Live-evolve long-horizon churn endurance (CANONICAL: evolveCorpusDelta →
 # buildCorpusDelta → applyCorpusDelta per epoch, NOT just frontier rotation on a fixed corpus).
 # Pre-track gate: CPU smoke proves the live-evolve mechanics on a small slice before any GPU time.
-echo "=== churn_pre_smoke: live-evolve mechanics smoke (CPU, no GPU spend) ==="
-if ! node scripts/smoke-live-evolve-mechanics.mjs --profile "$P" --corpus "$C" --emb "$E" --epochs 2 --churn-fraction 0.5 > "$LOGD/churn_pre_smoke.log" 2>&1; then
+echo "=== churn_pre_smoke: live-evolve mechanics smoke (CPU, materialized slice — fast) ==="
+if ! node scripts/smoke-live-evolve-mechanics.mjs --profile "$P" --bundle "$B" --corpus "$C" --emb "$E" --slice 512 --epochs 2 > "$LOGD/churn_pre_smoke.log" 2>&1; then
   echo "HARD FAIL: live-evolve mechanics smoke (see $LOGD/churn_pre_smoke.log)" >&2
   tail -25 "$LOGD/churn_pre_smoke.log" >&2
   exit 1
@@ -266,8 +291,8 @@ run_churn churn_c3 "$CORPUS_DIR/churn-c3-live-evolve-$SCALE" \
 # Pre-track gate: tiny CPU smoke proves the canonical patch-class generators + canonical
 # evaluateRetrievalBenchmarkPatch + computeCoreTexScreenerThresholdPpm wiring works end-to-end
 # before any GPU spend on the full real-Qwen sweep.
-echo "=== screener_pre_smoke: screener-threshold mechanics smoke (CPU, no GPU spend) ==="
-if ! node scripts/smoke-screener-threshold-mechanics.mjs --profile "$P" --bundle "$B" --corpus "$C" --emb "$E" --per-class 1 > "$LOGD/screener_pre_smoke.log" 2>&1; then
+echo "=== screener_pre_smoke: screener-threshold mechanics smoke (CPU, materialized slice — fast) ==="
+if ! node scripts/smoke-screener-threshold-mechanics.mjs --profile "$P" --bundle "$B" --slice 256 > "$LOGD/screener_pre_smoke.log" 2>&1; then
   echo "HARD FAIL: screener-threshold mechanics smoke (see $LOGD/screener_pre_smoke.log)" >&2
   tail -25 "$LOGD/screener_pre_smoke.log" >&2
   exit 1
