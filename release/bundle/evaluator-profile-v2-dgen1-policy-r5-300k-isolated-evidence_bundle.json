@@ -1,0 +1,165 @@
+{
+  "name": "coretex-evaluator-v2-dgen1-policy-r5-isolated-evidence_bundle",
+  "version": "r5-isolated-evidence_bundle-2026-05-30",
+  "scoreScale": "ppm",
+  "scorePpmEncoding": "uint32-0-to-1000000",
+  "patchScoreDeltaEncoding": "int64-ppm",
+  "primaryMetric": "ndcg@10",
+  "acceleratorPolicy": "cpu_only",
+  "runtimePin": {
+    "flavor": "torch-transformers",
+    "versions": {
+      "torch": "2.6.*",
+      "transformers": "4.55.*",
+      "huggingface_hub": "0.36.*",
+      "tokenizers": "0.21.*"
+    },
+    "buildFlags": [
+      "cpu-only"
+    ]
+  },
+  "replayTolerancePpm": 250,
+  "compositeWeights": {
+    "w_retrieval": 0.7,
+    "w_temporal": 0.13,
+    "w_relation_recall": 0.07,
+    "w_abstention": 0.05,
+    "w_structural_sanity": 0.05
+  },
+  "patchAcceptanceFloors": {
+    "minImprovementPpm": 2500,
+    "structuralFloor": 0.95,
+    "protectedRegressionFloor": 0.05,
+    "familyCatastrophicFloor": 0.85
+  },
+  "splitRatios": {
+    "trainVisiblePct": 70,
+    "calibrationPct": 10,
+    "evalHiddenPct": 15,
+    "canaryPct": 5
+  },
+  "hiddenPack": {
+    "packSize": 64,
+    "quotas": [
+      {
+        "stratum": "family=near_collision",
+        "minCount": 12
+      },
+      {
+        "stratum": "family=temporal",
+        "minCount": 12
+      },
+      {
+        "stratum": "family=multi_hop_relation",
+        "minCount": 10
+      },
+      {
+        "stratum": "family=conflict_lifecycle",
+        "minCount": 8
+      },
+      {
+        "stratum": "family=aspect_constraint",
+        "minCount": 8
+      },
+      {
+        "stratum": "family=coreference",
+        "minCount": 6
+      }
+    ]
+  },
+  "relationHopBudget": 3,
+  "abstentionThreshold": 0.001,
+  "rerankerTopK": 10,
+  "retrievalKeyTopK": 50,
+  "relationEdgeTypes": [
+    "supports",
+    "supersedes",
+    "coreference_of",
+    "causes",
+    "derived_from",
+    "co_occurs_with"
+  ],
+  "revealGracePeriodSeconds": 21600,
+  "negCategoryRelevanceMap": {
+    "near_collision_attribute": 0.4,
+    "near_collision_entity": 0.2,
+    "temporal_stale": 0.4,
+    "trap": 0,
+    "lexical_distractor": 0.2,
+    "relation_neighbor": 0.4,
+    "unrelated": 0
+  },
+  "baseRpcConfig": {
+    "chainId": 8453,
+    "blockTimeSeconds": 2,
+    "targetBlockOffset": 30,
+    "replayBlockhashLookbackBlocks": 50000
+  },
+  "pipelineVersion": "coretex-retrieval-v2-policy-r5",
+  "firstStageTopK": 3200,
+  "rerankerInputTopK": 64,
+  "_reclaimedRegionsNote": "r5 PROTOCOL EPOCH: RetrievalKeys (384-671) + Codebook (896-991) WORDS are reclaimed for typed PolicyAtoms. Under r5 pin, 384-671 reads as evidence_bundle(384-511)/conflict_lifecycle(512-639)/abstention(640-671) atoms; 896-991 reserved.",
+  "lensTopK": 36,
+  "lensWeight": 0.4,
+  "anchorWeight": 0.6,
+  "relationExpansionBudget": 50,
+  "categoryLensExpansionBudget": 50,
+  "temporalCurrentBoost": 0.1,
+  "temporalStaleSuppression": 0.1,
+  "lensDiversityFloor": 0.7,
+  "corpusDocDedupe": "canonical-doc-id",
+  "firstStageTopKSelection": {
+    "method": "worst-stratum-target",
+    "reason": "inherited from deep-r1; calibration unchanged for the r5 epoch.",
+    "calibrationReport": "release/calibration/first-stage-topk-sweep.json"
+  },
+  "ownerScopeMode": "restrict",
+  "categoryLensFinalBonusWeight": 0,
+  "categoryLensScoreInheritance": 0.3,
+  "categoryLensSeedTopK": 2,
+  "categoryLensHopBudget": 1,
+  "categoryLensEvidenceBundle": true,
+  "temporalStaleContrast": false,
+  "enableEvidenceBundleAtoms": true,
+  "enableConflictLifecycleAtoms": false,
+  "enableAbstentionAtoms": false,
+  "enableAspectConstraintAtoms": false,
+  "policyQueryConditionedAdmission": true,
+  "policyRelationTypedAdmission": true,
+  "policyConflictIntentAdmission": false,
+  "policyAspectIntentAdmission": false,
+  "policyAspectBoost": 0,
+  "policyMaxBudgetEvidence": 250,
+  "policyMaxBudgetConflict": 1000,
+  "policyAbstentionTop1Threshold": 0.9995,
+  "policyEmitTraces": true,
+  "policyQueryLocalTopK": 24,
+  "majorDeltaThreshold": 220,
+  "controllerParams": {
+    "rampUpMaxRatio": 1.1,
+    "decayRatio": 0.8,
+    "smallDriftRatio": 1.05,
+    "qualityHighThresholdMult": 1
+  },
+  "epochFrontier": {
+    "mode": "C3",
+    "activeWindow": 3072,
+    "minChurn": 2,
+    "maxChurn": 12,
+    "headroomLowWatermark": 1,
+    "headroomHighWatermark": 3,
+    "ewmaHalfLife": 3,
+    "targetAccepts": 2,
+    "expectedYieldPerUnit": 0.17,
+    "maxRootDeltaPerEpoch": 24,
+    "maxAge": null,
+    "seed": "coretex-launch-frontier",
+    "baselineRecompute": "activeRootChanged",
+    "majorDeltaPolicy": "corpusRootChanged"
+  },
+  "baselineParentScorePpm": 163371,
+  "baselineVariancePpm": 0,
+  "baselineSamples": 3,
+  "baselineEvalSeedHex": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "_isolatedProfileNote": "EVIDENCE_BUNDLE-ONLY isolation. enableEvidenceBundleAtoms + relation-typed query-conditioned admission; every other reclaimed substrate off. Use to measure clean evidence-bundle lift without contamination from temporal/abstention/conflict."
+}
