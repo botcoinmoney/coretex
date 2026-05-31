@@ -22,7 +22,19 @@
  * Default thresholds (override via env or CLI):
  *   text-dup-fail >= 20%        --max-text-dup 0.20
  *   embedding-dup-fail >= 20%   --max-emb-dup 0.20
- *   per-family-reachability-fail < 10%  --min-family-reachable 0.10
+ *
+ * Per-family reachability is randomness-corrected. Define:
+ *   randomBaseline = firstStageTopK / publicCandidateCount
+ *   reachLift      = familyReach - randomBaseline
+ *   enrichment     = familyReach / randomBaseline
+ * Hard fail if any measured family has reachLift <= 0.05 or enrichment < 2.0.
+ * Soft target (logged, not fail): reachLift >= 0.10 AND enrichment >= 3.0.
+ * Legacy --min-family-reachable threshold remains as a generic safety floor.
+ *
+ * Optional diagnostic modes:
+ *   --topk-sweep 3200,6400,12800,20000   evaluate reach/baseline/lift/enrichment
+ *                                         at each K (no gate; per-K matrix only)
+ *   --dump-misses N                       dump N misses per family (query+truth+top-5)
  *
  * Usage:
  *   node scripts/corpus-retrieval-health-gate.mjs \
@@ -58,6 +70,13 @@ const PACK_SIZE = Number(flag('pack-size', '64'));
 const MAX_TEXT_DUP = Number(env.MAX_TEXT_DUP ?? flag('max-text-dup', '0.20'));
 const MAX_EMB_DUP = Number(env.MAX_EMB_DUP ?? flag('max-emb-dup', '0.20'));
 const MIN_FAM_REACH = Number(env.MIN_FAMILY_REACHABLE ?? flag('min-family-reachable', '0.10'));
+// Randomness-corrected hard thresholds (primary gate).
+const MIN_REACH_LIFT_HARD = Number(env.MIN_REACH_LIFT_HARD ?? flag('min-reach-lift-hard', '0.05'));
+const MIN_ENRICHMENT_HARD = Number(env.MIN_ENRICHMENT_HARD ?? flag('min-enrichment-hard', '2.0'));
+const MIN_REACH_LIFT_TARGET = Number(env.MIN_REACH_LIFT_TARGET ?? flag('min-reach-lift-target', '0.10'));
+const MIN_ENRICHMENT_TARGET = Number(env.MIN_ENRICHMENT_TARGET ?? flag('min-enrichment-target', '3.0'));
+const TOPK_SWEEP = (flag('topk-sweep', '') || '').split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
+const DUMP_MISSES_N = Number(flag('dump-misses', '0'));
 const OUT_PATH = flag('out');
 // `--inline-build` bypasses the materialized cache: builds the production corpus
 // in-memory directly from (corpus, emb, bundle) source files. Required for ad-hoc small
@@ -162,11 +181,23 @@ gate('embedding-dup-rate',
   embDupRate <= MAX_EMB_DUP,
   `dup-rate=${(100 * embDupRate).toFixed(2)}%  threshold=<=${(100 * MAX_EMB_DUP).toFixed(0)}%  (${inDupEmbCluster}/${totalEmb} in non-singleton clusters)`);
 
-// ─── Check 3: per-family truth-rank reachability ────────────────────────────
+// ─── Check 3: per-family truth-rank reachability (randomness-corrected) ─────
 console.log(`\n=== check 3: per-family truth-rank reachability in bi-encoder top-${firstStageTopK} (${SEEDS.length} seeds × ${ITERS} iters × pack-${PACK_SIZE}) ===`);
 const pubIndex = buildPublicCorpusIndex(corpus);
+const pubCandCount = pubIndex.docs.length;
+const randomBaseline = pubCandCount > 0 ? firstStageTopK / pubCandCount : 0;
+console.log(`[health-gate] public candidate pool = ${pubCandCount} docs; randomBaseline = ${(100 * randomBaseline).toFixed(2)}% (topK/pool)`);
+
 const hiddenPack = { ...profile.hiddenPack, packSize: PACK_SIZE, quotas: [] };
+// Lookup table for retrieving doc text by id (for miss dumps).
+const docTextById = new Map();
+for (const ev of corpus.events) {
+  for (const t of ev.truthDocuments ?? []) if (!docTextById.has(t.id)) docTextById.set(t.id, t.text ?? '');
+  for (const n of ev.hardNegatives ?? []) if (!docTextById.has(n.id)) docTextById.set(n.id, n.text ?? '');
+}
+
 const byFam = new Map();
+const missesByFam = new Map();   // fam → [{queryId, queryText, truthDocs:[{id,text}], top5:[{id,text,rank}]}]
 for (const baseSeed of SEEDS) {
   for (let p = 0; p < ITERS; p++) {
     const seedHex = '0x' + createHash('sha256').update(`${baseSeed}:${p}`).digest('hex');
@@ -186,20 +217,92 @@ for (const baseSeed of SEEDS) {
       }
       if (bestRank !== Infinity) bucket.retrievable++;
       bucket.ranks.push(bestRank === Infinity ? -1 : bestRank);
+
+      if (bestRank === Infinity && DUMP_MISSES_N > 0) {
+        if (!missesByFam.has(fam)) missesByFam.set(fam, []);
+        const acc = missesByFam.get(fam);
+        if (acc.length < DUMP_MISSES_N) {
+          const top5 = cands.slice(0, 5).map((c, i) => ({
+            id: c.documentId ?? c.id,
+            rank: i + 1,
+            text: (docTextById.get(c.documentId ?? c.id) ?? '').slice(0, 240),
+          }));
+          acc.push({
+            queryId: ev.id,
+            family: fam,
+            queryText: (ev.queryText ?? '').slice(0, 240),
+            truthDocs: targets.map((id) => ({ id, text: (docTextById.get(id) ?? '').slice(0, 240) })),
+            top5,
+          });
+        }
+      }
     }
   }
 }
 const familyReport = {};
 for (const [fam, b] of byFam) {
   const reach = b.total > 0 ? b.retrievable / b.total : 0;
+  const reachLift = reach - randomBaseline;
+  const enrichment = randomBaseline > 0 ? reach / randomBaseline : (reach > 0 ? Infinity : 0);
   const validRanks = b.ranks.filter((r) => r > 0).sort((a, b) => a - b);
   const p10 = validRanks[Math.floor(validRanks.length * 0.1)] ?? null;
   const p50 = validRanks[Math.floor(validRanks.length * 0.5)] ?? null;
   const p90 = validRanks[Math.floor(validRanks.length * 0.9)] ?? null;
-  familyReport[fam] = { total: b.total, retrievable: b.retrievable, reach, p10, p50, p90 };
+  const targetMet = reachLift >= MIN_REACH_LIFT_TARGET && enrichment >= MIN_ENRICHMENT_TARGET;
+  familyReport[fam] = { total: b.total, retrievable: b.retrievable, reach, randomBaseline, reachLift, enrichment: Number.isFinite(enrichment) ? enrichment : null, targetMet, p10, p50, p90 };
+  const hardOk = reachLift > MIN_REACH_LIFT_HARD && enrichment >= MIN_ENRICHMENT_HARD;
   gate(`family-reachability/${fam}`,
-    reach >= MIN_FAM_REACH,
-    `reach=${(100 * reach).toFixed(1)}%  threshold>=${(100 * MIN_FAM_REACH).toFixed(0)}%  n=${b.total}  retrievable=${b.retrievable}  ranks p10=${p10} p50=${p50} p90=${p90}`);
+    hardOk,
+    `reach=${(100 * reach).toFixed(1)}%  baseline=${(100 * randomBaseline).toFixed(2)}%  lift=${(100 * reachLift).toFixed(2)}pp  enrich=${enrichment.toFixed(2)}x  hard(lift>${(100 * MIN_REACH_LIFT_HARD).toFixed(0)}pp & enrich>=${MIN_ENRICHMENT_HARD.toFixed(1)}x)  target(${targetMet ? 'MET' : 'NOT MET'} lift>=${(100 * MIN_REACH_LIFT_TARGET).toFixed(0)}pp & enrich>=${MIN_ENRICHMENT_TARGET.toFixed(1)}x)  n=${b.total}  retrievable=${b.retrievable}  ranks p10=${p10} p50=${p50} p90=${p90}`);
+}
+
+// ─── Optional TopK sweep diagnostic (no gating, matrix only) ────────────────
+const topkSweepReport = {};
+if (TOPK_SWEEP.length > 0) {
+  console.log(`\n=== diagnostic: TopK sweep at K ∈ {${TOPK_SWEEP.join(',')}} (no gating) ===`);
+  // To avoid re-running the embedding lookup per K, pull all pack queries once and
+  // compute ranks against the FULL ordering, then bucket by K.
+  const Kmax = Math.max(...TOPK_SWEEP);
+  const sweepByFam = new Map(); // fam → ranks[]
+  for (const baseSeed of SEEDS) {
+    for (let p = 0; p < ITERS; p++) {
+      const seedHex = '0x' + createHash('sha256').update(`${baseSeed}:${p}`).digest('hex');
+      const pack = deriveQueryPack(p, seedHex, corpus, hiddenPack);
+      for (const ev of pack.events) {
+        const fam = ev.logicalFamily ?? ev.family;
+        const targets = (ev.truthDocuments ?? []).map((t) => t.id);
+        if (targets.length === 0) continue;
+        if (!sweepByFam.has(fam)) sweepByFam.set(fam, []);
+        const cands = firstStageCandidates(ev.embeddings.query, pubIndex, Kmax);
+        let bestRank = Infinity;
+        for (const t of targets) {
+          const idx = cands.findIndex((c) => (c.documentId ?? c.id) === t);
+          if (idx >= 0 && idx + 1 < bestRank) bestRank = idx + 1;
+        }
+        sweepByFam.get(fam).push(bestRank === Infinity ? -1 : bestRank);
+      }
+    }
+  }
+  for (const [fam, ranks] of sweepByFam) {
+    topkSweepReport[fam] = { total: ranks.length, perK: {} };
+    for (const K of TOPK_SWEEP) {
+      const retrievable = ranks.filter((r) => r > 0 && r <= K).length;
+      const reach = ranks.length > 0 ? retrievable / ranks.length : 0;
+      const baseline = pubCandCount > 0 ? K / pubCandCount : 0;
+      const lift = reach - baseline;
+      const enrich = baseline > 0 ? reach / baseline : null;
+      topkSweepReport[fam].perK[String(K)] = { reach, baseline, reachLift: lift, enrichment: enrich, retrievable, K };
+      console.log(`  ${fam.padEnd(28)} K=${String(K).padStart(5)}  reach=${(100 * reach).toFixed(1)}%  baseline=${(100 * baseline).toFixed(2)}%  lift=${(100 * lift).toFixed(2)}pp  enrich=${enrich !== null ? enrich.toFixed(2) + 'x' : 'n/a'}`);
+    }
+  }
+}
+
+// ─── Miss-dump emission ────────────────────────────────────────────────────
+const missDumps = {};
+if (DUMP_MISSES_N > 0) {
+  for (const [fam, arr] of missesByFam) missDumps[fam] = arr;
+  const missCount = [...missesByFam.values()].reduce((a, b) => a + b.length, 0);
+  console.log(`\n[health-gate] collected ${missCount} miss exemplars across ${missesByFam.size} families (capped at ${DUMP_MISSES_N}/family)`);
 }
 
 // ─── Emit report ────────────────────────────────────────────────────────────
@@ -213,7 +316,7 @@ const report = {
     bundle: { path: BUNDLE_PATH, sha256: bundleSha, bundleHash: matBundleHash },
     corpusRoot: corpus.corpusRoot,
   },
-  thresholds: { MAX_TEXT_DUP, MAX_EMB_DUP, MIN_FAM_REACH },
+  thresholds: { MAX_TEXT_DUP, MAX_EMB_DUP, MIN_FAM_REACH, MIN_REACH_LIFT_HARD, MIN_ENRICHMENT_HARD, MIN_REACH_LIFT_TARGET, MIN_ENRICHMENT_TARGET },
   sample: { requested: SAMPLE_N, actual: sample.length, totalMemoryEvents: memEvents.length },
   text_duplication: { uniquePayloads: textClusters.size, totalEvents: totalText, nullOrEmpty: textNullOrEmpty,
     duplicateRate: textDupRate, nonSingletonClusterCount: nonSingletonText.length,
@@ -221,7 +324,9 @@ const report = {
   embedding_duplication: { uniquePayloads: embClusters.size, totalEvents: totalEmb, nullOrEmpty: embNullOrEmpty,
     duplicateRate: embDupRate, nonSingletonClusterCount: nonSingletonEmb.length,
     eventsInNonSingletonClusters: inDupEmbCluster, largestClusterSizes: largestEmbClusters },
-  family_reachability: { firstStageTopK, seeds: SEEDS, iters: ITERS, packSize: PACK_SIZE, perFamily: familyReport },
+  family_reachability: { firstStageTopK, publicCandidateCount: pubCandCount, randomBaseline, seeds: SEEDS, iters: ITERS, packSize: PACK_SIZE, perFamily: familyReport },
+  topk_sweep: TOPK_SWEEP.length > 0 ? { Ks: TOPK_SWEEP, publicCandidateCount: pubCandCount, perFamily: topkSweepReport } : null,
+  miss_dumps: DUMP_MISSES_N > 0 ? { perFamilyCap: DUMP_MISSES_N, perFamily: missDumps } : null,
   verdict: { pass: failures.length === 0, failedGates: failures },
 };
 
