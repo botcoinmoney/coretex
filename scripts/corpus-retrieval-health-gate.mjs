@@ -41,6 +41,7 @@ import { createHash } from 'node:crypto';
 import { argv, env, exit } from 'node:process';
 import { distIndex, repoRoot } from './_repo-root.mjs';
 import { loadMaterializedCorpus } from './lib/load-materialized-corpus.mjs';
+import { buildV2ProductionCorpus } from './lib/build-v2-production-corpus.mjs';
 
 const C = await import(distIndex);
 const { buildPublicCorpusIndex, firstStageCandidates, deriveQueryPack } = C;
@@ -58,6 +59,11 @@ const MAX_TEXT_DUP = Number(env.MAX_TEXT_DUP ?? flag('max-text-dup', '0.20'));
 const MAX_EMB_DUP = Number(env.MAX_EMB_DUP ?? flag('max-emb-dup', '0.20'));
 const MIN_FAM_REACH = Number(env.MIN_FAMILY_REACHABLE ?? flag('min-family-reachable', '0.10'));
 const OUT_PATH = flag('out');
+// `--inline-build` bypasses the materialized cache: builds the production corpus
+// in-memory directly from (corpus, emb, bundle) source files. Required for ad-hoc small
+// candidate corpora that don't yet have a bundle/materialization. Bundle is still required
+// as the biEncoder pin source.
+const INLINE_BUILD = argv.includes('--inline-build');
 if (!PROFILE_PATH || !BUNDLE_PATH || !CORPUS_PATH || !EMB_PATH) {
   console.error('HARD FAIL: --profile, --bundle, --corpus, --emb required'); exit(2);
 }
@@ -80,10 +86,20 @@ console.log(`[health-gate]    emb sha256=${embSha}`);
 console.log(`[health-gate]profile sha256=${profileSha}`);
 console.log(`[health-gate] bundle sha256=${bundleSha}`);
 
-// ─── Load materialized corpus ───
-console.log('[health-gate] loading materialized corpus ...');
-const { corpus, BE, LAYOUT, manifest: matManifest } = loadMaterializedCorpus(BUNDLE_PATH, { sourceCorpusPath: CORPUS_PATH, sourceEmbPath: EMB_PATH });
-console.log(`[health-gate] materialized bundleHash=${matManifest.bundleHash} corpusRoot=${corpus.corpusRoot.slice(0, 18)}…  events=${corpus.events.length}`);
+// ─── Load corpus (materialized cache OR inline-build) ───
+let corpus, BE, LAYOUT, matBundleHash;
+if (INLINE_BUILD) {
+  console.log('[health-gate] inline-build mode: building production corpus in-memory (no materialized cache) ...');
+  const built = buildV2ProductionCorpus({ corpusPath: CORPUS_PATH, embPath: EMB_PATH, bundlePath: BUNDLE_PATH });
+  corpus = built.corpus; BE = built.BE; LAYOUT = built.LAYOUT;
+  matBundleHash = '(none — inline-build)';
+} else {
+  console.log('[health-gate] loading materialized corpus ...');
+  const loaded = loadMaterializedCorpus(BUNDLE_PATH, { sourceCorpusPath: CORPUS_PATH, sourceEmbPath: EMB_PATH });
+  corpus = loaded.corpus; BE = loaded.BE; LAYOUT = loaded.LAYOUT;
+  matBundleHash = loaded.manifest.bundleHash;
+}
+console.log(`[health-gate] bundleHash=${matBundleHash} corpusRoot=${corpus.corpusRoot.slice(0, 18)}…  events=${corpus.events.length}`);
 const profile = JSON.parse(readFileSync(resolve(repoRoot, PROFILE_PATH), 'utf8'));
 const firstStageTopK = profile.firstStageTopK ?? 3200;
 console.log(`[health-gate] firstStageTopK from profile = ${firstStageTopK}`);
@@ -194,7 +210,7 @@ const report = {
     corpus: { path: CORPUS_PATH, sha256: corpusSha, size: statSync(resolve(repoRoot, CORPUS_PATH)).size },
     embeddings: { path: EMB_PATH, sha256: embSha, size: statSync(resolve(repoRoot, EMB_PATH)).size },
     profile: { path: PROFILE_PATH, sha256: profileSha },
-    bundle: { path: BUNDLE_PATH, sha256: bundleSha, bundleHash: matManifest.bundleHash },
+    bundle: { path: BUNDLE_PATH, sha256: bundleSha, bundleHash: matBundleHash },
     corpusRoot: corpus.corpusRoot,
   },
   thresholds: { MAX_TEXT_DUP, MAX_EMB_DUP, MIN_FAM_REACH },
