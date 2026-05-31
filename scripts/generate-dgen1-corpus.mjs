@@ -93,6 +93,13 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 
 const PETS = ['Pepper', 'Mochi', 'Nala', 'Ziggy', 'Biscuit', 'Juno', 'Pixel', 'Saffron', 'Tofu', 'Marble', 'Ember', 'Onyx'];
 const PROFESSIONALS = ['nutritionist', 'cardiologist', 'sports physiologist', 'family GP', 'naturopath', 'dietitian'];
 const CAUSES = ['a flaky cron', 'a stale TLS chain', 'a queue saturation', 'a misconfigured retry', 'a hidden N+1', 'a dropped feature flag'];
+// Session-noise vocabulary: kept DISJOINT from DIETS/PROFESSIONALS/ASPECTS so session distractor
+// docs don't share lexical neighborhoods with truth docs (the 2026-05-31 retrieval-health
+// miss-dumps showed top-5 returns for "Maya Chen current diet" were all session docs sharing
+// "sports physiologist" + "routine" + DIETS overlap — bi-encoder anchored on shared template
+// boilerplate instead of subject name).
+const SESSION_ACTIVITIES = ['standup notes', 'a Friday writeup', 'a Monday huddle', 'a sprint retro', 'a planning sync', 'a backlog grooming'];
+const SESSION_OUTCOMES = ['action items logged', 'follow-ups assigned', 'a doc updated', 'tickets filed', 'a ticket closed', 'a new note created'];
 // Per-subject token derivation. Uses subject index `s` + SEED for byte-deterministic uniqueness.
 // codename / infraTag namespaces are ENORMOUS (20*20*99*hex6) so cross-subject collisions are
 // vanishingly rare even at 300k subjects. None of these tokens duplicate the subject's canonical
@@ -177,32 +184,41 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     // Per-subject stable semantic tokens (see subjectTokens definition near banks).
     const tok = subjectTokens(s, SEED);
 
-    // intro / coreference anchor doc
+    // intro / coreference anchor doc. Canonical repeated 2x for embedding upweight; alias
+    // pair (first / canonical) carried so coreference queries can link.
     const introId = addDoc({ lane: 'deep', kind: 'intro', entityIds: tagU(),
       text: isProject
-        ? `Project ${canonical} is ${role} in ${tok.region}, codename ${tok.codename}, owned by the platform team since ${tok.quarter} (infra ${tok.infraTag}).`
-        : `${canonical} is a ${job} based in ${city} (region ${tok.region}); people sometimes call them ${first}. Account ${tok.codename}.`,
+        ? `Project ${canonical} is ${role} in ${tok.region}. ${canonical}'s codename is ${tok.codename}; the platform team has owned ${canonical} since ${tok.quarter}.`
+        : `${canonical} is a ${job} based in ${city}. Friends and colleagues sometimes call ${canonical} just "${first}" — ${first} the ${job} and ${canonical} refer to the same person. Account ${tok.codename}.`,
       shape: 'intro_record', timestamp: ts(0), currentStaleFlag: true });
 
-    // ── deep session filler (repeated topic revisits + same-universe distractors) ──
-    const nSessions = DEPTH + ri(Math.floor(DEPTH * 1.5)); // 25-100+ when DEPTH~30-60
+    // ── deep session filler (same-universe distractors) ──
+    // 2026-05-31 v5 retrieval-health fix:
+    //  - Halve session count (DEPTH/2 + small jitter) — sessions were ~50% of corpus, drowning
+    //    truth docs in top-K via shared phrasal patterns.
+    //  - Use per-subject UNIQUE codename + infraTag + sessTag as the dominant lex content;
+    //    keep filler phrases minimal so no phrasal pattern repeats heavily across subjects.
+    //  - Canonical NOT repeated: sessions are distractors, not truth.
+    const nSessions = Math.max(4, Math.floor(DEPTH / 2)) + ri(Math.max(2, Math.floor(DEPTH / 4)));
     const sessionDocIds = [];
     for (let k = 0; k < nSessions; k++) {
       const topic = pick(TOPICS);
-      // Per-session index k makes every session text unique even when topic+DB combos repeat
-      // for the same subject (DEPTH=25 sessions per subject easily collide on 6 topics × 7 DBs).
       const sessTag = `s${(k + 1).toString().padStart(3, '0')}`;
       const sessMonth = MONTHS[(s + k * 5) % MONTHS.length];
       const did = addDoc({ lane: 'deep', kind: 'session', entityIds: tagU(),
         text: isProject
-          ? `In a ${canonical} review (${tok.quarter}, ${tok.version}, session ${sessTag}, ${sessMonth}) we discussed ${topic} and tuned the ${pick(DBS)} layer in ${tok.region} (infra ${tok.infraTag}).`
-          : `${first} mentioned a ${sessMonth} ${tok.year} session ${sessTag} about ${topic} and their ${pick(DIETS)} routine with their ${tok.professional} (case ${tok.codename}).`,
+          ? `Note ${sessTag} (${tok.codename}, ${sessMonth} ${tok.year}): ${topic} log entry, infra ${tok.infraTag}.`
+          : `Note ${sessTag} (${tok.codename}, ${sessMonth} ${tok.year}): ${topic} reminder.`,
         shape: 'session_memory', timestamp: ts(1 + ri(36)), currentStaleFlag: true });
       sessionDocIds.push(did);
       if (chance(0.5)) rel(did, introId, 'context_of');
     }
 
     // ── FAMILY 1: temporal_update (3-10 revisions, supersedes chain) ──
+    // 2026-05-31 retrieval-health fix: natural past/present tense distinguishes current truth
+    // from stale (the QUERY says "current X" — the truth naturally says "X's current Y is Z";
+    // stale says "X's Y was Z previously"). Subject name repeated 2x per doc to upweight
+    // against shared boilerplate. Per-subject codename retained for uniqueness.
     {
       const nRev = 3 + ri(8); // 3-10
       const attr = isProject ? 'package manager' : 'city';
@@ -211,13 +227,16 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
       for (let r = 0; r < nRev; r++) {
         const isCurrent = r === nRev - 1;
         const val = valBank[(s + r) % valBank.length];
-        // Per-revision month+year ensures each revision is distinct text (not just `${val}` swap).
         const revMonth = MONTHS[(s + r * 3) % MONTHS.length];
         const revYear = tok.year + Math.floor(r / 4); // multi-year chain
         const did = addDoc({ lane: 'deep', kind: `temporal_${attr}`, entityIds: tagU(),
           text: isProject
-            ? `${canonical} switched its ${attr} to ${val} in ${revMonth} ${revYear} (${tok.codename}, infra ${tok.infraTag}).`
-            : `${canonical} updated their ${attr} to ${val} starting ${revMonth} ${revYear} (account ${tok.codename}).`,
+            ? (isCurrent
+                ? `${canonical}'s current ${attr} is ${val}. ${canonical} switched to ${val} in ${revMonth} ${revYear} (codename ${tok.codename}).`
+                : `${canonical}'s ${attr} was previously ${val} (set in ${revMonth} ${revYear}, since superseded). Codename ${tok.codename}.`)
+            : (isCurrent
+                ? `${canonical}'s current ${attr} is ${val}. ${canonical} moved to ${val} in ${revMonth} ${revYear} (account ${tok.codename}).`
+                : `${canonical}'s ${attr} was previously ${val} (between ${revMonth} ${revYear} and a later move). Account ${tok.codename}.`),
           shape: 'temporal_update_record', timestamp: ts(2 + r * 3), currentStaleFlag: isCurrent });
         chain.push({ did, val, isCurrent });
         if (prev) rel(did, prev.did, 'supersedes');
@@ -233,6 +252,8 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     }
 
     // ── FAMILY 2: preference_evolution (temporal bucket; many sessions then current pref) ──
+    // 2026-05-31 fix: strip "after consulting their ${tok.professional}" — that shared 4-token
+    // clause was a top bi-encoder anchor against subject name. Natural past/present tense.
     if (!isProject) {
       const nRev = 3 + ri(6);
       let prev = null; const chain = [];
@@ -242,7 +263,9 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
         const revMonth = MONTHS[(s * 2 + r * 5) % MONTHS.length];
         const revYear = tok.year + Math.floor(r / 3);
         const did = addDoc({ lane: 'deep', kind: 'temporal_diet', entityIds: tagU(),
-          text: `${canonical} said they moved to a ${diet} diet in ${revMonth} ${revYear} after consulting their ${tok.professional} (case ${tok.codename}).`,
+          text: isCurrent
+            ? `${canonical} currently follows a ${diet} diet. ${canonical} switched to ${diet} in ${revMonth} ${revYear} (case ${tok.codename}).`
+            : `${canonical} previously followed a ${diet} diet (between ${revMonth} ${revYear} and a later switch). Case ${tok.codename}.`,
           shape: 'temporal_update_record', timestamp: ts(3 + r * 4), currentStaleFlag: isCurrent });
         chain.push({ did, isCurrent }); if (prev) rel(did, prev.did, 'supersedes'); prev = { did };
       }
@@ -273,16 +296,18 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
       const answerDoc = addDoc({ lane: 'deep', kind: 'bridge_answer', entityIds: tagU(),
         text: isProject
           ? (partial
-              ? `The ${canonical} service's data layer at ${tok.codename} runs on a ${attrVal} cluster (${tok.region}, ${tok.version}), managed by infra ${tok.infraTag}.`
-              : `The ${tok.codename} platform layer runs on a ${attrVal} cluster in ${tok.region} (${tok.version}), managed by infra ${tok.infraTag}.`)
+              ? `${canonical}'s data layer runs on a ${attrVal} cluster (${tok.region}, ${tok.version}); ${canonical} owns that ${attrVal} backend.`
+              : `The ${tok.codename} platform layer runs on a ${attrVal} cluster (${tok.region}, ${tok.version}); infra ${tok.infraTag}.`)
           : (partial
-              ? `${sibName}, ${canonical}'s sibling, works as a ${attrVal} out of the ${tok.region} ${pick(STACKS)} crew (id ${tok.infraTag}).`
-              : `${sibName} works as a ${attrVal} on the ${pick(STACKS)} crew (${tok.codename}, ${tok.region}), team id ${tok.infraTag}.`),
+              ? `${sibName}, ${canonical}'s sibling, works as a ${attrVal} (${tok.region} crew, id ${tok.infraTag}).`
+              : `${sibName} works as a ${attrVal} (${tok.codename}, ${tok.region}); team id ${tok.infraTag}.`),
         shape: 'bridge_record', timestamp: ts(5 + ri(20)), currentStaleFlag: true });
+      // Bridge SEED names canonical 2x — it's the routing-anchor that lets a subject-named
+      // query connect to the answer doc via the supports/depends_on edge.
       const bridgeDoc = addDoc({ lane: 'deep', kind: 'bridge_seed', entityIds: tagU(),
         text: isProject
-          ? `${canonical} owns the data layer for the ${tok.codename} platform service in ${tok.region} (${tok.version}).`
-          : `${canonical}'s sibling is ${sibName}, contact ${tok.infraTag} on the ${tok.region} roster.`,
+          ? `${canonical} depends on a primary data layer at the ${tok.codename} platform. ${canonical}'s ${tok.region} deployment uses that backend (${tok.version}).`
+          : `${canonical}'s sibling is ${sibName}. ${canonical} keeps ${sibName}'s contact ${tok.infraTag} on the ${tok.region} roster.`,
         shape: 'bridge_seed', timestamp: ts(4 + ri(10)), currentStaleFlag: true });
       rel(bridgeDoc, answerDoc, isProject ? 'depends_on' : 'supports');
       const nDist = 1 + ri(3);
@@ -295,16 +320,17 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     // ── FAMILY 4: decision_provenance (reason → outcome) ──
     if (isProject) {
       const fromDb = pick(DBS), incident = pick(ERRORS);
+      // Decision doc: canonical 2x — primary anchor for the subject-named query.
       const decision = addDoc({ lane: 'deep', kind: 'decision', entityIds: tagU(),
-        text: `${canonical} decided to migrate ${tok.codename}'s datastore off ${fromDb} after the ${tok.quarter} planning review in ${tok.region}.`,
+        text: `${canonical} decided to migrate off ${fromDb}. The ${tok.quarter} planning review approved ${canonical}'s migration plan (region ${tok.region}, codename ${tok.codename}).`,
         shape: 'decision_record', timestamp: ts(6 + ri(10)), currentStaleFlag: true });
-      // Reason is the DISTANT doc (no canonical); per-subject codename + infraTag + quarter
+      // Reason is the DISTANT doc (no canonical); per-subject codename + infraTag + cause
       // keep it unique while remaining routing-required (canonical only via decision_reason edge).
       const reason = addDoc({ lane: 'deep', kind: 'decision_reason', entityIds: tagU(),
-        text: `The ${tok.codename} migration was driven by repeated ${incident} incidents traced to ${tok.infraTag}, escalating through ${tok.quarter} on ${tok.cause}.`,
+        text: `Repeated ${incident} incidents traced to ${tok.infraTag} drove the ${tok.codename} migration; root cause was ${tok.cause}, escalating through ${tok.quarter}.`,
         shape: 'decision_reason', timestamp: ts(6 + ri(10)), currentStaleFlag: true });
       const outcome = addDoc({ lane: 'deep', kind: 'decision_outcome', entityIds: tagU(),
-        text: `After the ${tok.codename} migration in ${tok.month} ${tok.year}, ${canonical} saw latency drop and ${incident}-class incidents fall to weekly checks (${tok.region}).`,
+        text: `After the migration in ${tok.month} ${tok.year}, ${canonical} saw latency drop; ${incident}-class incidents on ${canonical}'s stack fell to weekly checks (${tok.region}, codename ${tok.codename}).`,
         shape: 'decision_outcome', timestamp: ts(8 + ri(8)), currentStaleFlag: true });
       rel(reason, decision, 'decision_reason'); rel(outcome, decision, 'decision_outcome');
       addQuery({ lane: 'deep', family: 'decision_provenance', queryText: `Why did ${canonical} migrate its datastore?`,
@@ -321,10 +347,11 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
       // Fix is the DISTANT doc; per-subject codename + deployId + region preserve uniqueness
       // while the canonical-bearing gotcha SEED stays the only anchor query can match.
       const fixDoc = addDoc({ lane: 'deep', kind: 'fix', entityIds: tagU(),
-        text: `For the ${tok.codename} ${tok.deployId} in ${tok.region}, setting ${envv} correctly before warmup resolved the deploy failure (root cause ${tok.cause}, infra ${tok.infraTag}).`,
+        text: `Setting ${envv} correctly before warmup resolved the deploy failure on the ${tok.codename} ${tok.deployId} (${tok.region}); root cause was ${tok.cause}, infra ${tok.infraTag}.`,
         shape: 'fix_record', timestamp: ts(7 + ri(12)), currentStaleFlag: true });
+      // Gotcha seed: canonical 2x, error verbatim from query, codename for uniqueness.
       const errDoc = addDoc({ lane: 'deep', kind: 'gotcha', entityIds: tagU(),
-        text: `${canonical} hit a ${err} during ${tok.codename} deploys in ${tok.quarter} (${tok.deployId}, infra ${tok.infraTag}).`,
+        text: `${canonical} hit a ${err} during the ${tok.codename} deploys in ${tok.quarter}; ${canonical}'s team filed the incident under ${tok.deployId}.`,
         shape: 'gotcha_record', timestamp: ts(6 + ri(12)), currentStaleFlag: true });
       rel(fixDoc, errDoc, 'fixes');
       addQuery({ lane: 'deep', family: 'causal_memory_chain', queryText: `How was the ${err} in ${canonical} resolved?`,
@@ -333,9 +360,12 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     }
 
     // ── FAMILY 6: coreference_resolution (alias/role → canonical) ──
+    // 2026-05-31 v5b: tighten — earlier 4×-name repetition flooded top-K across other
+    // families' queries (coref docs were top-1 for temporal/conflict misses). Carry alias
+    // + canonical exactly once each in a single short sentence.
     if (!isProject) {
       const corefDoc = addDoc({ lane: 'deep', kind: 'coref_fact', entityIds: tagU(),
-        text: `${canonical} adopted a rescue dog named ${tok.pet} at the ${city} shelter in ${tok.month} ${tok.year}; the dog now lives with them (case ${tok.codename}).`,
+        text: `${first} the ${job} (also known as ${canonical}) has a rescue dog named ${tok.pet} (case ${tok.codename}).`,
         shape: 'coref_record', timestamp: ts(9 + ri(6)), currentStaleFlag: true });
       rel(corefDoc, introId, 'coreference_of');
       addQuery({ lane: 'deep', family: 'coreference_resolution', queryText: `What pet does ${first} the ${job} have?`,
@@ -360,17 +390,22 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
       const scopedA = isProject ? cityA : `${cityA} family clinic`;
       const scopedB = isProject ? cityB : `${cityB} specialist clinic`;
       const stableScope = isProject ? 'production' : 'weekday care';
+      // 2026-05-31 v5 fix: condense conflict docs to ONE distinctive sentence each.
+      // v4 had 2-sentence templates that all shared "${canonical}'s current X for Y is Z"
+      // structure — same-subject Yuki Nadar's conflict doc top-2 for export-job-svc-123 query
+      // because the "X's current ... for ... is" structural template embedded similarly across
+      // ALL 300 subjects. One sentence with per-subject codename keeps lex content distinctive.
       const conflictA = addDoc({ lane: 'deep', kind: 'lifecycle_conflict', entityIds: tagU(),
-        text: `${canonical}'s ${conflictAttr} for ${stableScope} was recorded as ${scopedA} in ${tok.quarter} (case ${tok.codename}, ref ${tok.infraTag}).`,
+        text: `Historically, ${canonical}'s ${stableScope} ${conflictAttr} was ${scopedA}, recorded in ${tok.quarter} (codename ${tok.codename}).`,
         shape: 'lifecycle_conflict_record', timestamp: ts(12 + ri(12)), currentStaleFlag: true,
         lifecycleState: 'conflict_candidate', lifecycleScope: stableScope });
       const conflictB = addDoc({ lane: 'deep', kind: 'lifecycle_conflict', entityIds: tagU(),
-        text: `${canonical}'s corrected ${conflictAttr} for ${stableScope} is ${scopedB} as of ${tok.month} ${tok.year}; supersedes ${tok.codename} ${scopedA} entry.`,
+        text: `${canonical} uses ${scopedB} as its ${stableScope} ${conflictAttr}, switched from ${scopedA} in ${tok.month} ${tok.year} (codename ${tok.codename}).`,
         shape: 'lifecycle_conflict_record', timestamp: ts(13 + ri(12)), currentStaleFlag: true,
         lifecycleState: 'conflict_resolved', lifecycleScope: stableScope });
       const otherScope = isProject ? 'staging' : 'weekend care';
       const scopeDoc = addDoc({ lane: 'deep', kind: 'lifecycle_scope', entityIds: tagU(),
-        text: `${canonical}'s ${conflictAttr} for ${otherScope} remains ${scopedA} per the ${tok.quarter} note (${tok.codename}, ${tok.region}).`,
+        text: `${canonical}'s ${otherScope} ${conflictAttr} remains ${scopedA}, kept separate from the ${stableScope} setup (codename ${tok.codename}).`,
         shape: 'lifecycle_scope_record', timestamp: ts(14 + ri(12)), currentStaleFlag: true,
         lifecycleState: 'scope_differs', lifecycleScope: otherScope });
       rel(conflictB, conflictA, 'contradicts');
@@ -387,17 +422,23 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
       const aspectWanted = ASPECTS[(s + ui) % ASPECTS.length];
       const aspectOther = ASPECTS[(s + ui + 3) % ASPECTS.length];
       const wantedVal = isProject ? `${ri(80) + 20} ms p95` : `${ri(6) + 2} days`;
-      const otherVal = isProject ? `$${ri(900) + 100}/month` : `${pick(DIETS)} support`;
+      // v5b: don't use DIETS as aspect-other value for people — collided with temporal_diet
+      // queries (top-2 for "Diego Reyes diet" was Omar Mensah's aspect doc saying "DASH support").
+      const otherVal = isProject ? `$${ri(900) + 100}/month` : `${ri(2) + 1} hours/week`;
       // Aspect lives in aspectTags, NOT entityIds. tagU expects an ARRAY and spreads it; the
       // old code passed the aspect STRING and it was spread char-by-char into entityIds
       // ("latency" → ["l","a","t","e","n","c","y"]). Aspect is the QUERY's intentAspect filter,
       // not an entity reference; entityIds carries just universe + subject.
+      // 2026-05-31 v5 fix: revert "For X, ..." prefix (shared template across aspect+conflict
+      // was a top bi-encoder anchor). Keep canonical as natural sentence subject; carry the
+      // aspect word + value as the discriminative content. Drop the second sentence — fewer
+      // tokens means more weight on subject + aspect.
       const aspectDoc = addDoc({ lane: 'deep', kind: 'aspect_answer', entityIds: tagU(),
-        text: `${canonical}'s ${aspectWanted} note (${tok.codename}, ${tok.version}) says the target is ${wantedVal} as of ${tok.quarter}; the same memo also mentions ${aspectOther} only briefly.`,
+        text: `${canonical}'s ${aspectWanted} measurement is ${wantedVal} as of ${tok.quarter} (codename ${tok.codename}, ${tok.version}).`,
         shape: 'aspect_answer_record', timestamp: ts(15 + ri(12)), currentStaleFlag: true,
         aspectTags: [aspectWanted, aspectOther] });
       const wrongAspectDoc = addDoc({ lane: 'deep', kind: 'aspect_neighbor', entityIds: tagU(),
-        text: `${canonical}'s ${aspectOther} note (${tok.codename}, ${tok.region}) says the current value is ${otherVal} per the ${tok.month} ${tok.year} review, with no ${aspectWanted} decision.`,
+        text: `${canonical}'s ${aspectOther} measurement is ${otherVal} per the ${tok.month} ${tok.year} review (codename ${tok.codename}).`,
         shape: 'aspect_partial_record', timestamp: ts(15 + ri(12)), currentStaleFlag: true,
         aspectTags: [aspectOther] });
       rel(aspectDoc, introId, 'aspect_of');
@@ -411,12 +452,16 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
       // FAMILY 5: abstention/no-answer. The query is plausible and has hard same-subject
       // distractors, but the direct answer memory is intentionally absent from the corpus.
       // This lets abstain/no-evidence-path atoms be evaluated without query-specific oracle labels.
+      // 2026-05-31 v5 fix: the v4 "but the final value was not recorded in this memory" tail
+      // was a magnet for any "What is X's Y?" query — top-3 across temporal/conflict misses
+      // were abstain docs for unrelated subjects. Keep the per-subject anchor, drop the
+      // open-ended denial phrase that pattern-matched too many queries.
       const missingTopic = isProject ? 'rollback owner' : 'emergency contact';
       const distractA = addDoc({ lane: 'deep', kind: 'abstain_distractor', entityIds: tagU(),
-        text: `${canonical} discussed ${missingTopic} planning in ${tok.month} ${tok.year} (case ${tok.codename}, region ${tok.region}), but the final value was not recorded in this memory.`,
+        text: `${canonical} planning note from ${tok.month} ${tok.year} touched ${missingTopic} only in passing (codename ${tok.codename}).`,
         shape: 'abstain_context_record', timestamp: ts(16 + ri(12)), currentStaleFlag: true });
       const distractB = addDoc({ lane: 'deep', kind: 'abstain_distractor', entityIds: tagU(),
-        text: `${canonical} mentioned adjacent ${pick(TOPICS)} notes around ${tok.quarter} (${tok.codename}, infra ${tok.infraTag}) without naming the ${missingTopic}.`,
+        text: `${canonical} adjacent ${pick(TOPICS)} notes around ${tok.quarter} did not cover ${missingTopic} (codename ${tok.codename}, infra ${tok.infraTag}).`,
         shape: 'abstain_context_record', timestamp: ts(16 + ri(12)), currentStaleFlag: true });
       addQuery({ lane: 'deep', family: 'abstention_missing', queryText: `What is ${canonical}'s ${missingTopic}?`,
         qrels: [], abstain: true,
