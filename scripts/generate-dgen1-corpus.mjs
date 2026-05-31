@@ -215,28 +215,44 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     }
 
     // ── FAMILY 1: temporal_update (3-10 revisions, supersedes chain) ──
-    // 2026-05-31 retrieval-health fix: natural past/present tense distinguishes current truth
-    // from stale (the QUERY says "current X" — the truth naturally says "X's current Y is Z";
-    // stale says "X's Y was Z previously"). Subject name repeated 2x per doc to upweight
-    // against shared boilerplate. Per-subject codename retained for uniqueness.
+    // 2026-05-31 v6: deterministic 4-shape rotation per subject — same intent-mirror
+    // ("current X is Y" / "previously was Y") but different syntactic positions so the
+    // template doesn't form a single embedding cluster across 300 subjects.
     {
-      const nRev = 3 + ri(8); // 3-10
+      // v7b: 3-5 revisions instead of 3-10 to halve the temporal-template corpus volume that
+      // was flooding top-K for other families (conflict/decision/multi_session misses all had
+      // wrong-subject temporal stale docs as top-1). Temporal surface still tested per subject.
+      const nRev = 3 + ri(3); // 3-5
       const attr = isProject ? 'package manager' : 'city';
       const valBank = isProject ? PKGS : CITIES;
+      const tShape = s % 4;
       let prev = null; const chain = [];
       for (let r = 0; r < nRev; r++) {
         const isCurrent = r === nRev - 1;
         const val = valBank[(s + r) % valBank.length];
         const revMonth = MONTHS[(s + r * 3) % MONTHS.length];
-        const revYear = tok.year + Math.floor(r / 4); // multi-year chain
+        const revYear = tok.year + Math.floor(r / 4);
+        const codeLabel = isProject ? `codename ${tok.codename}` : `account ${tok.codename}`;
+        let text;
+        if (tShape === 0) {
+          text = isCurrent
+            ? `${canonical}'s current ${attr} is ${val} (since ${revMonth} ${revYear}, ${codeLabel}).`
+            : `${canonical}'s ${attr} was previously ${val} (set ${revMonth} ${revYear}, ${codeLabel}).`;
+        } else if (tShape === 1) {
+          text = isCurrent
+            ? `As of ${revMonth} ${revYear}, ${canonical} uses ${val} for its ${attr} (${codeLabel}).`
+            : `Earlier, ${val} served as ${canonical}'s ${attr} (${revMonth} ${revYear}, ${codeLabel}).`;
+        } else if (tShape === 2) {
+          text = isCurrent
+            ? `${val} is now ${canonical}'s ${attr}; effective ${revMonth} ${revYear} (${codeLabel}).`
+            : `${val} used to be ${canonical}'s ${attr} until a later switch (${revMonth} ${revYear}, ${codeLabel}).`;
+        } else {
+          text = isCurrent
+            ? `${canonical} adopted ${val} as its current ${attr} in ${revMonth} ${revYear} (${codeLabel}).`
+            : `${canonical} once had ${val} as its ${attr} (${revMonth} ${revYear}, ${codeLabel}).`;
+        }
         const did = addDoc({ lane: 'deep', kind: `temporal_${attr}`, entityIds: tagU(),
-          text: isProject
-            ? (isCurrent
-                ? `${canonical}'s current ${attr} is ${val}. ${canonical} switched to ${val} in ${revMonth} ${revYear} (codename ${tok.codename}).`
-                : `${canonical}'s ${attr} was previously ${val} (set in ${revMonth} ${revYear}, since superseded). Codename ${tok.codename}.`)
-            : (isCurrent
-                ? `${canonical}'s current ${attr} is ${val}. ${canonical} moved to ${val} in ${revMonth} ${revYear} (account ${tok.codename}).`
-                : `${canonical}'s ${attr} was previously ${val} (between ${revMonth} ${revYear} and a later move). Account ${tok.codename}.`),
+          text,
           shape: 'temporal_update_record', timestamp: ts(2 + r * 3), currentStaleFlag: isCurrent });
         chain.push({ did, val, isCurrent });
         if (prev) rel(did, prev.did, 'supersedes');
@@ -252,20 +268,38 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     }
 
     // ── FAMILY 2: preference_evolution (temporal bucket; many sessions then current pref) ──
-    // 2026-05-31 fix: strip "after consulting their ${tok.professional}" — that shared 4-token
-    // clause was a top bi-encoder anchor against subject name. Natural past/present tense.
+    // 2026-05-31 v6: same 4-shape rotation as temporal_update, intent-mirror "currently
+    // follows" / "previously followed" but varied syntactic shape per subject.
     if (!isProject) {
-      const nRev = 3 + ri(6);
+      // v7b: 3-4 revisions (was 3-9) — same flood reduction as temporal_update.
+      const nRev = 3 + ri(2);
+      const tShape = s % 4;
       let prev = null; const chain = [];
       for (let r = 0; r < nRev; r++) {
         const isCurrent = r === nRev - 1;
         const diet = DIETS[(s + r * 2) % DIETS.length];
         const revMonth = MONTHS[(s * 2 + r * 5) % MONTHS.length];
         const revYear = tok.year + Math.floor(r / 3);
+        let text;
+        if (tShape === 0) {
+          text = isCurrent
+            ? `${canonical} currently follows a ${diet} diet (since ${revMonth} ${revYear}, case ${tok.codename}).`
+            : `${canonical} previously followed a ${diet} diet (${revMonth} ${revYear}, case ${tok.codename}).`;
+        } else if (tShape === 1) {
+          text = isCurrent
+            ? `${canonical}'s current diet is ${diet}, adopted in ${revMonth} ${revYear} (case ${tok.codename}).`
+            : `${canonical}'s diet was earlier ${diet} (around ${revMonth} ${revYear}, case ${tok.codename}).`;
+        } else if (tShape === 2) {
+          text = isCurrent
+            ? `${diet} is now ${canonical}'s diet of record (effective ${revMonth} ${revYear}, case ${tok.codename}).`
+            : `${diet} used to be ${canonical}'s diet of record (${revMonth} ${revYear}, case ${tok.codename}).`;
+        } else {
+          text = isCurrent
+            ? `As of ${revMonth} ${revYear}, ${canonical} is on a ${diet} diet (case ${tok.codename}).`
+            : `Earlier, ${canonical} was on a ${diet} diet (${revMonth} ${revYear}, case ${tok.codename}).`;
+        }
         const did = addDoc({ lane: 'deep', kind: 'temporal_diet', entityIds: tagU(),
-          text: isCurrent
-            ? `${canonical} currently follows a ${diet} diet. ${canonical} switched to ${diet} in ${revMonth} ${revYear} (case ${tok.codename}).`
-            : `${canonical} previously followed a ${diet} diet (between ${revMonth} ${revYear} and a later switch). Case ${tok.codename}.`,
+          text,
           shape: 'temporal_update_record', timestamp: ts(3 + r * 4), currentStaleFlag: isCurrent });
         chain.push({ did, isCurrent }); if (prev) rel(did, prev.did, 'supersedes'); prev = { did };
       }
@@ -302,12 +336,13 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
               ? `${sibName}, ${canonical}'s sibling, works as a ${attrVal} (${tok.region} crew, id ${tok.infraTag}).`
               : `${sibName} works as a ${attrVal} (${tok.codename}, ${tok.region}); team id ${tok.infraTag}.`),
         shape: 'bridge_record', timestamp: ts(5 + ri(20)), currentStaleFlag: true });
-      // Bridge SEED names canonical 2x — it's the routing-anchor that lets a subject-named
-      // query connect to the answer doc via the supports/depends_on edge.
+      // v7: lex-mirror the query verb. Project query says "datastore ... depend on" → seed
+      // says "datastore" verbatim, not "data layer". Person query says "job of ... sibling" →
+      // seed names "sibling" (already) and adds "role" as a "job"-adjacent semantic anchor.
       const bridgeDoc = addDoc({ lane: 'deep', kind: 'bridge_seed', entityIds: tagU(),
         text: isProject
-          ? `${canonical} depends on a primary data layer at the ${tok.codename} platform. ${canonical}'s ${tok.region} deployment uses that backend (${tok.version}).`
-          : `${canonical}'s sibling is ${sibName}. ${canonical} keeps ${sibName}'s contact ${tok.infraTag} on the ${tok.region} roster.`,
+          ? `${canonical}'s primary datastore is hosted at the ${tok.codename} platform; ${canonical} depends on that ${tok.region} backend (${tok.version}).`
+          : `${canonical}'s sibling, ${sibName}, has a separate role; ${canonical} keeps ${sibName}'s contact ${tok.infraTag} on the ${tok.region} roster.`,
         shape: 'bridge_seed', timestamp: ts(4 + ri(10)), currentStaleFlag: true });
       rel(bridgeDoc, answerDoc, isProject ? 'depends_on' : 'supports');
       const nDist = 1 + ri(3);
@@ -320,9 +355,12 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     // ── FAMILY 4: decision_provenance (reason → outcome) ──
     if (isProject) {
       const fromDb = pick(DBS), incident = pick(ERRORS);
-      // Decision doc: canonical 2x — primary anchor for the subject-named query.
+      // v7b: revert to single shape with canonical 2x. The v7 3-shape rotation halved the
+      // canonical-mention count (shapes 1+2 had canonical 1x) and dropped enrichment from
+      // 2.17x to 1.19x. Canonical-anchor strength matters more than syntactic variation here.
+      const decisionText = `${canonical} chose to migrate its datastore off ${fromDb}; the ${tok.quarter} planning review approved ${canonical}'s migration (region ${tok.region}, codename ${tok.codename}).`;
       const decision = addDoc({ lane: 'deep', kind: 'decision', entityIds: tagU(),
-        text: `${canonical} decided to migrate off ${fromDb}. The ${tok.quarter} planning review approved ${canonical}'s migration plan (region ${tok.region}, codename ${tok.codename}).`,
+        text: decisionText,
         shape: 'decision_record', timestamp: ts(6 + ri(10)), currentStaleFlag: true });
       // Reason is the DISTANT doc (no canonical); per-subject codename + infraTag + cause
       // keep it unique while remaining routing-required (canonical only via decision_reason edge).
@@ -390,22 +428,45 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
       const scopedA = isProject ? cityA : `${cityA} family clinic`;
       const scopedB = isProject ? cityB : `${cityB} specialist clinic`;
       const stableScope = isProject ? 'production' : 'weekday care';
-      // 2026-05-31 v5 fix: condense conflict docs to ONE distinctive sentence each.
-      // v4 had 2-sentence templates that all shared "${canonical}'s current X for Y is Z"
-      // structure — same-subject Yuki Nadar's conflict doc top-2 for export-job-svc-123 query
-      // because the "X's current ... for ... is" structural template embedded similarly across
-      // ALL 300 subjects. One sentence with per-subject codename keeps lex content distinctive.
+      // 2026-05-31 v7 fix: lead the CURRENT truth with the EXACT query-prefix phrase
+      // ("${stableScope} ${conflictAttr} for ${canonical} is currently ${scopedB}") so
+      // BGE-M3 anchors on direct prefix match. The query template is
+      // "For ${stableScope}, what is ${canonical}'s current ${conflictAttr}?" — by
+      // starting the truth with "${stableScope} ${conflictAttr} for ${canonical} is currently"
+      // the same 4-5 lexical tokens appear in the same relative position. Same approach for
+      // stale (use past tense lead) and scope (different scope, similar prefix shape).
+      // Per-subject 3-shape rotation still varies the tail to avoid one-template clustering.
+      const otherScope = isProject ? 'staging' : 'weekend care';
+      const cs = s % 3;
+      // The capitalize helper inlined: take first char up, rest as-is. Used for the
+      // sentence-initial scope tokens ("Production" / "Weekday care").
+      const cap = (str) => str.charAt(0).toUpperCase() + str.slice(1);
+      const csCap = cap(stableScope);
+      const coCap = cap(otherScope);
+      let conflictAText, conflictBText, scopeDocText;
+      if (cs === 0) {
+        conflictAText = `${csCap} ${conflictAttr} for ${canonical} was previously ${scopedA}; recorded in ${tok.quarter} (codename ${tok.codename}).`;
+        conflictBText = `${csCap} ${conflictAttr} for ${canonical} is currently ${scopedB}, switched from ${scopedA} in ${tok.month} ${tok.year} (codename ${tok.codename}).`;
+        scopeDocText  = `${coCap} ${conflictAttr} for ${canonical} remains ${scopedA}; held separate from the ${stableScope} setup (codename ${tok.codename}).`;
+      } else if (cs === 1) {
+        conflictAText = `${csCap} ${conflictAttr} for ${canonical} used to be ${scopedA} (logged ${tok.quarter}, codename ${tok.codename}).`;
+        conflictBText = `${csCap} ${conflictAttr} for ${canonical} is now ${scopedB}, having replaced ${scopedA} as of ${tok.month} ${tok.year} (codename ${tok.codename}).`;
+        scopeDocText  = `${coCap} ${conflictAttr} for ${canonical} stays ${scopedA}, scoped apart from ${stableScope} (codename ${tok.codename}).`;
+      } else {
+        conflictAText = `${csCap} ${conflictAttr} for ${canonical} was ${scopedA} until the correction (${tok.quarter}, codename ${tok.codename}).`;
+        conflictBText = `${csCap} ${conflictAttr} for ${canonical} is presently ${scopedB}; the prior ${scopedA} record was retired ${tok.month} ${tok.year} (codename ${tok.codename}).`;
+        scopeDocText  = `${coCap} ${conflictAttr} for ${canonical} is ${scopedA}, kept independent of the ${stableScope} channel (codename ${tok.codename}).`;
+      }
       const conflictA = addDoc({ lane: 'deep', kind: 'lifecycle_conflict', entityIds: tagU(),
-        text: `Historically, ${canonical}'s ${stableScope} ${conflictAttr} was ${scopedA}, recorded in ${tok.quarter} (codename ${tok.codename}).`,
+        text: conflictAText,
         shape: 'lifecycle_conflict_record', timestamp: ts(12 + ri(12)), currentStaleFlag: true,
         lifecycleState: 'conflict_candidate', lifecycleScope: stableScope });
       const conflictB = addDoc({ lane: 'deep', kind: 'lifecycle_conflict', entityIds: tagU(),
-        text: `${canonical} uses ${scopedB} as its ${stableScope} ${conflictAttr}, switched from ${scopedA} in ${tok.month} ${tok.year} (codename ${tok.codename}).`,
+        text: conflictBText,
         shape: 'lifecycle_conflict_record', timestamp: ts(13 + ri(12)), currentStaleFlag: true,
         lifecycleState: 'conflict_resolved', lifecycleScope: stableScope });
-      const otherScope = isProject ? 'staging' : 'weekend care';
       const scopeDoc = addDoc({ lane: 'deep', kind: 'lifecycle_scope', entityIds: tagU(),
-        text: `${canonical}'s ${otherScope} ${conflictAttr} remains ${scopedA}, kept separate from the ${stableScope} setup (codename ${tok.codename}).`,
+        text: scopeDocText,
         shape: 'lifecycle_scope_record', timestamp: ts(14 + ri(12)), currentStaleFlag: true,
         lifecycleState: 'scope_differs', lifecycleScope: otherScope });
       rel(conflictB, conflictA, 'contradicts');

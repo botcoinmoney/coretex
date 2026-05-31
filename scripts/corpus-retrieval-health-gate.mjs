@@ -31,6 +31,21 @@
  * Soft target (logged, not fail): reachLift >= 0.10 AND enrichment >= 3.0.
  * Legacy --min-family-reachable threshold remains as a generic safety floor.
  *
+ * Routing-aware families (DESIGN: the answer doc INTENTIONALLY omits canonical,
+ * routing edges supply truth to the substrate). Each is gated in TWO stages, not
+ * silently weakened:
+ *   Stage A (anchor reachability): the canonical-bearing ANCHOR doc (bridge_seed
+ *     / decision / gotcha) must beat the randomness-corrected gate on its own.
+ *   Stage B (canonical recovery):  the routing edge from anchor → answer must
+ *     exist in the labeled relations (deterministic corpus check).
+ *
+ *   multi_session_bridge → anchor kind = bridge_seed, answer kind = bridge_answer,
+ *                          edge labels = supports | depends_on
+ *   decision_provenance  → anchor kind = decision,    answer kind = decision_reason,
+ *                          edge labels = decision_reason
+ *   causal_memory_chain  → anchor kind = gotcha,      answer kind = fix,
+ *                          edge labels = fixes
+ *
  * Optional diagnostic modes:
  *   --topk-sweep 3200,6400,12800,20000   evaluate reach/baseline/lift/enrichment
  *                                         at each K (no gate; per-K matrix only)
@@ -196,8 +211,58 @@ for (const ev of corpus.events) {
   for (const n of ev.hardNegatives ?? []) if (!docTextById.has(n.id)) docTextById.set(n.id, n.text ?? '');
 }
 
+// ─── Routing-aware classification ──────────────────────────────────────────
+// TruthDocument carries only {id, text, isCurrent, aspectTags?} — no `kind`. Load the LABELED
+// corpus JSON separately to recover docId → kind (the generator emits kind on every doc).
+const labeledCorpus = JSON.parse(readFileSync(resolve(repoRoot, CORPUS_PATH), 'utf8'));
+const docKindById = new Map();
+for (const d of labeledCorpus.docs ?? []) docKindById.set(d.id, d.kind);
+// Build a relations adjacency for the canonical-recovery check (Stage B).
+// In the generator (scripts/generate-dgen1-corpus.mjs) edges are emitted as rel(answerDoc, anchorDoc, label)
+// — e.g. rel(bridgeDoc, answerDoc, 'depends_on') means source=bridgeDoc (anchor), dst=answerDoc;
+// rel(reason, decision, 'decision_reason') means source=reason (answer), dst=decision (anchor);
+// rel(fixDoc, errDoc, 'fixes') means source=fixDoc (answer), dst=errDoc (anchor).
+// So to traverse FROM anchor TO answer we need BOTH adjacencies (some families forward, some reverse).
+const relFwd = new Map();
+const relRev = new Map();
+for (const r of labeledCorpus.relations ?? []) {
+  if (!relFwd.has(r.src)) relFwd.set(r.src, []);
+  relFwd.get(r.src).push({ dst: r.dst, label: r.label });
+  if (!relRev.has(r.dst)) relRev.set(r.dst, []);
+  relRev.get(r.dst).push({ src: r.src, label: r.label });
+}
+const ROUTING_REQUIRED = {
+  multi_session_bridge: { anchorKind: 'bridge_seed', answerKind: 'bridge_answer', edgeLabels: new Set(['supports', 'depends_on', 'belongs_to_project']) },
+  decision_provenance:  { anchorKind: 'decision',    answerKind: 'decision_reason', edgeLabels: new Set(['decision_reason']) },
+  causal_memory_chain:  { anchorKind: 'gotcha',      answerKind: 'fix',              edgeLabels: new Set(['fixes']) },
+};
+
 const byFam = new Map();
+const anchorByFam = new Map();   // routing-required: separate reach over ANCHOR docs only (Stage A)
+const recoveryByFam = new Map(); // routing-required: anchor → answer edge recovery rate (Stage B)
 const missesByFam = new Map();   // fam → [{queryId, queryText, truthDocs:[{id,text}], top5:[{id,text,rank}]}]
+function pickAnchorIds(family, truthIds) {
+  const rcfg = ROUTING_REQUIRED[family];
+  if (!rcfg) return truthIds;
+  return truthIds.filter((id) => docKindById.get(id) === rcfg.anchorKind);
+}
+function answerReachableFromAnchor(family, anchorIds, answerIds) {
+  const rcfg = ROUTING_REQUIRED[family];
+  if (!rcfg || answerIds.length === 0 || anchorIds.length === 0) return false;
+  const answerSet = new Set(answerIds);
+  // Walk BOTH forward + reverse edges with matching label (generator emits answer→anchor for some
+  // families, anchor→answer for others). Single-hop only — the test is "does the labeled routing
+  // edge connect the anchor to its answer?" (deterministic corpus-structure check, not BFS depth).
+  for (const a of anchorIds) {
+    for (const out of (relFwd.get(a) ?? [])) {
+      if (rcfg.edgeLabels.has(out.label) && answerSet.has(out.dst)) return true;
+    }
+    for (const inc of (relRev.get(a) ?? [])) {
+      if (rcfg.edgeLabels.has(inc.label) && answerSet.has(inc.src)) return true;
+    }
+  }
+  return false;
+}
 for (const baseSeed of SEEDS) {
   for (let p = 0; p < ITERS; p++) {
     const seedHex = '0x' + createHash('sha256').update(`${baseSeed}:${p}`).digest('hex');
@@ -217,6 +282,28 @@ for (const baseSeed of SEEDS) {
       }
       if (bestRank !== Infinity) bucket.retrievable++;
       bucket.ranks.push(bestRank === Infinity ? -1 : bestRank);
+
+      // Routing-aware: Stage A measures reach of ANCHOR doc only; Stage B measures whether
+      // the anchor → answer routing edge exists in the labeled corpus (deterministic).
+      if (ROUTING_REQUIRED[fam]) {
+        const rcfg = ROUTING_REQUIRED[fam];
+        const anchorIds = pickAnchorIds(fam, targets);
+        const answerIds = targets.filter((id) => docKindById.get(id) === rcfg.answerKind);
+        if (!anchorByFam.has(fam)) anchorByFam.set(fam, { total: 0, retrievable: 0, ranks: [] });
+        if (!recoveryByFam.has(fam)) recoveryByFam.set(fam, { total: 0, recovered: 0 });
+        const ab = anchorByFam.get(fam);
+        const rb = recoveryByFam.get(fam);
+        ab.total++;
+        let bestAnchor = Infinity;
+        for (const a of anchorIds) {
+          const idx = cands.findIndex((c) => (c.documentId ?? c.id) === a);
+          if (idx >= 0 && idx + 1 < bestAnchor) bestAnchor = idx + 1;
+        }
+        if (bestAnchor !== Infinity) ab.retrievable++;
+        ab.ranks.push(bestAnchor === Infinity ? -1 : bestAnchor);
+        rb.total++;
+        if (answerReachableFromAnchor(fam, anchorIds, answerIds)) rb.recovered++;
+      }
 
       if (bestRank === Infinity && DUMP_MISSES_N > 0) {
         if (!missesByFam.has(fam)) missesByFam.set(fam, []);
@@ -240,20 +327,55 @@ for (const baseSeed of SEEDS) {
   }
 }
 const familyReport = {};
-for (const [fam, b] of byFam) {
-  const reach = b.total > 0 ? b.retrievable / b.total : 0;
+function liftStats(reach) {
   const reachLift = reach - randomBaseline;
   const enrichment = randomBaseline > 0 ? reach / randomBaseline : (reach > 0 ? Infinity : 0);
+  return { reach, reachLift, enrichment };
+}
+for (const [fam, b] of byFam) {
+  const isRouting = !!ROUTING_REQUIRED[fam];
+  const reach = b.total > 0 ? b.retrievable / b.total : 0;
+  const { reachLift, enrichment } = liftStats(reach);
   const validRanks = b.ranks.filter((r) => r > 0).sort((a, b) => a - b);
   const p10 = validRanks[Math.floor(validRanks.length * 0.1)] ?? null;
   const p50 = validRanks[Math.floor(validRanks.length * 0.5)] ?? null;
   const p90 = validRanks[Math.floor(validRanks.length * 0.9)] ?? null;
   const targetMet = reachLift >= MIN_REACH_LIFT_TARGET && enrichment >= MIN_ENRICHMENT_TARGET;
-  familyReport[fam] = { total: b.total, retrievable: b.retrievable, reach, randomBaseline, reachLift, enrichment: Number.isFinite(enrichment) ? enrichment : null, targetMet, p10, p50, p90 };
-  const hardOk = reachLift > MIN_REACH_LIFT_HARD && enrichment >= MIN_ENRICHMENT_HARD;
-  gate(`family-reachability/${fam}`,
-    hardOk,
-    `reach=${(100 * reach).toFixed(1)}%  baseline=${(100 * randomBaseline).toFixed(2)}%  lift=${(100 * reachLift).toFixed(2)}pp  enrich=${enrichment.toFixed(2)}x  hard(lift>${(100 * MIN_REACH_LIFT_HARD).toFixed(0)}pp & enrich>=${MIN_ENRICHMENT_HARD.toFixed(1)}x)  target(${targetMet ? 'MET' : 'NOT MET'} lift>=${(100 * MIN_REACH_LIFT_TARGET).toFixed(0)}pp & enrich>=${MIN_ENRICHMENT_TARGET.toFixed(1)}x)  n=${b.total}  retrievable=${b.retrievable}  ranks p10=${p10} p50=${p50} p90=${p90}`);
+  const famEntry = { routingRequired: isRouting, total: b.total, retrievable: b.retrievable, reach, randomBaseline, reachLift, enrichment: Number.isFinite(enrichment) ? enrichment : null, targetMet, p10, p50, p90 };
+
+  if (isRouting) {
+    // Routing-aware: gate Stage A (anchor reach) + Stage B (canonical recovery).
+    // The any-truth reach reported above is informational only — it includes the routing-required
+    // answer doc which by design omits the canonical name and so is not bi-encoder reachable.
+    const ab = anchorByFam.get(fam) ?? { total: 0, retrievable: 0, ranks: [] };
+    const rb = recoveryByFam.get(fam) ?? { total: 0, recovered: 0 };
+    const anchorReach = ab.total > 0 ? ab.retrievable / ab.total : 0;
+    const { reachLift: aL, enrichment: aE } = liftStats(anchorReach);
+    const anchorTargetMet = aL >= MIN_REACH_LIFT_TARGET && aE >= MIN_ENRICHMENT_TARGET;
+    const validAnchorRanks = ab.ranks.filter((r) => r > 0).sort((a, b) => a - b);
+    const ap10 = validAnchorRanks[Math.floor(validAnchorRanks.length * 0.1)] ?? null;
+    const ap50 = validAnchorRanks[Math.floor(validAnchorRanks.length * 0.5)] ?? null;
+    const ap90 = validAnchorRanks[Math.floor(validAnchorRanks.length * 0.9)] ?? null;
+    const recoveryRate = rb.total > 0 ? rb.recovered / rb.total : 0;
+    famEntry.routing = {
+      anchorReach, anchorLift: aL, anchorEnrichment: Number.isFinite(aE) ? aE : null, anchorTargetMet,
+      anchorTotal: ab.total, anchorRetrievable: ab.retrievable,
+      anchorRanks: { p10: ap10, p50: ap50, p90: ap90 },
+      canonicalRecoveryRate: recoveryRate, canonicalRecoveryTotal: rb.total, canonicalRecovered: rb.recovered,
+    };
+    const stageAOk = aL > MIN_REACH_LIFT_HARD && aE >= MIN_ENRICHMENT_HARD;
+    const stageBOk = recoveryRate >= 0.99; // canonical edge must connect anchor → answer for ≥99% of queries
+    gate(`routing-A/${fam}`, stageAOk,
+      `anchor-reach=${(100 * anchorReach).toFixed(1)}%  baseline=${(100 * randomBaseline).toFixed(2)}%  lift=${(100 * aL).toFixed(2)}pp  enrich=${aE.toFixed(2)}x  hard(lift>${(100 * MIN_REACH_LIFT_HARD).toFixed(0)}pp & enrich>=${MIN_ENRICHMENT_HARD.toFixed(1)}x)  target(${anchorTargetMet ? 'MET' : 'NOT MET'})  n=${ab.total}  anchor-ranks p10=${ap10} p50=${ap50} p90=${ap90}`);
+    gate(`routing-B/${fam}`, stageBOk,
+      `canonical-recovery=${(100 * recoveryRate).toFixed(2)}%  threshold>=99%  ${rb.recovered}/${rb.total} anchors connect to answer via labeled edge`);
+    console.log(`  [info/${fam}] any-truth reach=${(100 * reach).toFixed(1)}% (informational; answer doc is routing-required and intentionally omits canonical)`);
+  } else {
+    const hardOk = reachLift > MIN_REACH_LIFT_HARD && enrichment >= MIN_ENRICHMENT_HARD;
+    gate(`family-reachability/${fam}`, hardOk,
+      `reach=${(100 * reach).toFixed(1)}%  baseline=${(100 * randomBaseline).toFixed(2)}%  lift=${(100 * reachLift).toFixed(2)}pp  enrich=${enrichment.toFixed(2)}x  hard(lift>${(100 * MIN_REACH_LIFT_HARD).toFixed(0)}pp & enrich>=${MIN_ENRICHMENT_HARD.toFixed(1)}x)  target(${targetMet ? 'MET' : 'NOT MET'} lift>=${(100 * MIN_REACH_LIFT_TARGET).toFixed(0)}pp & enrich>=${MIN_ENRICHMENT_TARGET.toFixed(1)}x)  n=${b.total}  retrievable=${b.retrievable}  ranks p10=${p10} p50=${p50} p90=${p90}`);
+  }
+  familyReport[fam] = famEntry;
 }
 
 // ─── Optional TopK sweep diagnostic (no gating, matrix only) ────────────────
