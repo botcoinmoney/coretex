@@ -43,6 +43,7 @@ export function makeStreamReranker({ model, revision, python, allowCuda }) {
   const pending = new Map();
   let exited = false;
   let exitErr = null;
+  let ready = false;
 
   let readyResolve, readyReject;
   const readyP = new Promise((res, rej) => { readyResolve = res; readyReject = rej; });
@@ -69,7 +70,14 @@ export function makeStreamReranker({ model, revision, python, allowCuda }) {
       if (!line.trim()) continue;
       let m;
       try { m = JSON.parse(line); } catch { continue; }
-      if (m.ready) { clearTimeout(startupTimer); readyResolve(); continue; }
+      if (!ready && m.error) {
+        exitErr = new Error(`reranker startup error: ${m.error} — stderr tail: ${stderrBuf.slice(-1024)}`);
+        clearTimeout(startupTimer);
+        readyReject(exitErr);
+        try { proc.kill('SIGTERM'); } catch { /* noop */ }
+        continue;
+      }
+      if (m.ready) { ready = true; clearTimeout(startupTimer); readyResolve(); continue; }
       if (m.id !== undefined && pending.has(m.id)) {
         pending.get(m.id)(m);
         pending.delete(m.id);

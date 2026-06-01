@@ -16,7 +16,7 @@
  *   stale_parent, weak_positive, viable_non_advancing, true_state_advance_candidate.
  *
  * Usage:
- *   node scripts/screener-threshold-calibration.mjs --reranker gpu
+ *   node scripts/screener-threshold-calibration.mjs --reranker gpu|qwen-cpu|cpu|deterministic
  *     --profile <p> --bundle <b> --corpus <c> --emb <e> --out <outfile>
  *     [--per-class 8] [--pack-size 64] [--clear-pack-quotas] [--noise-samples 6]
  */
@@ -64,6 +64,9 @@ const CLEAR_PACK_QUOTAS = has('clear-pack-quotas');
 if (!PROFILE_PATH || !BUNDLE_PATH || !CORPUS_PATH || !EMB_PATH || !OUT_PATH) {
   console.error('HARD FAIL: --profile, --bundle, --corpus, --emb, --out required'); exit(1);
 }
+if (!['gpu', 'qwen-cpu', 'cpu', 'deterministic'].includes(RERANKER)) {
+  console.error('HARD FAIL: --reranker must be one of: gpu, qwen-cpu, cpu, deterministic'); exit(1);
+}
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, PROFILE_PATH), 'utf8'));
 const bundle = JSON.parse(readFileSync(resolve(repoRoot, BUNDLE_PATH), 'utf8'));
@@ -80,8 +83,8 @@ const hiddenPack = CLEAR_PACK_QUOTAS ? { packSize: PACK_SIZE, quotas: [] } : { .
 const pack = deriveQueryPack(0, evalSeedHex, corpus, hiddenPack);
 console.log(`[screener-threshold] hidden pack derived: ${pack.events.length} events`);
 
-const reranker = RERANKER === 'gpu'
-  ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: true })
+const reranker = (RERANKER === 'gpu' || RERANKER === 'qwen-cpu')
+  ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: RERANKER === 'gpu' })
   : await createDeterministicReranker();
 const biEncoderHash = biEncoderModelIdHash(BE.modelId, BE.revision, 'dense');
 const rt = { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT };
@@ -196,18 +199,18 @@ const minableTemporalQueries = pack.events
 console.log(`[screener-threshold] minable temporal queries in pack: ${minableTemporalQueries.length} (current+stale truth pair available)`);
 
 function patchViableNonAdvancing(seed) {
-  // A100 v15 probe result: relation(1) is a no-op at 300k, while relation(2-4)
-  // produces accepted retrieval lift. This class intentionally uses a real relation
-  // patch but sets liveStateAdvanced=false in classification, so it calibrates the
-  // screener middle band (useful work, no live state advancement).
+  // Deterministic CPU gate result: relation(1) is a no-op and relation(3) can trip
+  // family_catastrophic:temporal on the small mixed pack. relation(2) produces an
+  // accepted lift and, with liveStateAdvanced=false, calibrates the screener middle
+  // band (useful work, no live state advancement).
   const provenance = packDocAnchor(seed);
-  const rel = relationUnits(3);
+  const rel = relationUnits(2);
   return {
     patch: { patchType: PATCH_TYPE.MIXED, wordCount: rel.indices.length, scoreDelta: 0, parentStateRoot: parentRoot,
       indices: rel.indices,
       newWords: rel.newWords },
     intent: 'viable_non_advancing',
-    anchor: { ...provenance, substrate: 'relation(3)', note: 'liveStateAdvanced=false; should qualify as SCREENER_PASS, not STATE_ADVANCE' },
+    anchor: { ...provenance, substrate: 'relation(2)', note: 'liveStateAdvanced=false; should qualify as SCREENER_PASS, not STATE_ADVANCE' },
   };
 }
 function patchTrueAdvanceCandidate(seed) {
@@ -251,12 +254,8 @@ const classes = [
 ];
 
 async function scorePatchDelta(patch) {
-  try {
-    const r = await evaluateRetrievalBenchmarkPatch(zero(), patch, corpus, pack, opts, floors);
-    return { deltaPpm: r.deltaPpm ?? 0, accepted: !!r.accepted, reason: r.reason ?? null };
-  } catch (e) {
-    return { deltaPpm: 0, accepted: false, reason: `eval_error:${e.message?.slice(0, 80)}` };
-  }
+  const r = await evaluateRetrievalBenchmarkPatch(zero(), patch, corpus, pack, opts, floors);
+  return { deltaPpm: r.deltaPpm ?? 0, accepted: !!r.accepted, reason: r.reason ?? null };
 }
 
 // ─── Noise-floor sampling (control phase) — feeds canonical qualification ───
@@ -358,7 +357,9 @@ const summary = {
 
 const report = {
   schema: 'coretex.screener-threshold-calibration.v2',
-  reranker: RERANKER === 'gpu' ? `Qwen/${RR.modelId}@${RR.revision}` : 'deterministic',
+  reranker: (RERANKER === 'gpu' || RERANKER === 'qwen-cpu')
+    ? `Qwen/${RR.modelId}@${RR.revision} (${RERANKER})`
+    : 'deterministic',
   profile: PROFILE_PATH, bundle: BUNDLE_PATH, corpus: CORPUS_PATH, embeddings: EMB_PATH,
   bundleHash: bundle.bundleHash, corpusRoot: corpus.corpusRoot,
   noise_floor_samples: noiseDeltas,
