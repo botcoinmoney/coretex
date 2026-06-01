@@ -29,6 +29,9 @@ export function profileAttestation(profile, profilePath) {
     pipelineVersion: profile?.pipelineVersion ?? null,
     scalarPins: {
       firstStageTopK: profile?.firstStageTopK ?? null,
+      firstStageMode: profile?.firstStageMode ?? null,
+      firstStageDenseWeight: profile?.firstStageDenseWeight ?? null,
+      firstStageLexicalWeight: profile?.firstStageLexicalWeight ?? null,
       rerankerInputTopK: profile?.rerankerInputTopK ?? null,
       lensTopK: profile?.lensTopK ?? null,
       lensWeight: profile?.lensWeight ?? null,

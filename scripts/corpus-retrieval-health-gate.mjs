@@ -71,7 +71,7 @@ import { loadMaterializedCorpus } from './lib/load-materialized-corpus.mjs';
 import { buildV2ProductionCorpus } from './lib/build-v2-production-corpus.mjs';
 
 const C = await import(distIndex);
-const { buildPublicCorpusIndex, firstStageCandidates, deriveQueryPack } = C;
+const { buildPublicCorpusIndex, retrieveFirstStageCandidates, deriveQueryPack } = C;
 
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
 const PROFILE_PATH = flag('profile');
@@ -85,6 +85,7 @@ const PACK_SIZE = Number(flag('pack-size', '64'));
 const MAX_TEXT_DUP = Number(env.MAX_TEXT_DUP ?? flag('max-text-dup', '0.20'));
 const MAX_EMB_DUP = Number(env.MAX_EMB_DUP ?? flag('max-emb-dup', '0.20'));
 const MIN_FAM_REACH = Number(env.MIN_FAMILY_REACHABLE ?? flag('min-family-reachable', '0.10'));
+const MIN_FAMILY_SAMPLES = Number(env.MIN_FAMILY_SAMPLES ?? flag('min-family-samples', '10'));
 // Randomness-corrected hard thresholds (primary gate).
 const MIN_REACH_LIFT_HARD = Number(env.MIN_REACH_LIFT_HARD ?? flag('min-reach-lift-hard', '0.05'));
 const MIN_ENRICHMENT_HARD = Number(env.MIN_ENRICHMENT_HARD ?? flag('min-enrichment-hard', '2.0'));
@@ -136,12 +137,70 @@ if (INLINE_BUILD) {
 console.log(`[health-gate] bundleHash=${matBundleHash} corpusRoot=${corpus.corpusRoot.slice(0, 18)}…  events=${corpus.events.length}`);
 const profile = JSON.parse(readFileSync(resolve(repoRoot, PROFILE_PATH), 'utf8'));
 const firstStageTopK = profile.firstStageTopK ?? 3200;
+const firstStageMode = profile.firstStageMode ?? 'dense';
+const firstStageDenseWeight = profile.firstStageDenseWeight ?? 1;
+const firstStageLexicalWeight = profile.firstStageLexicalWeight ?? 1;
 console.log(`[health-gate] firstStageTopK from profile = ${firstStageTopK}`);
+console.log(`[health-gate] firstStageMode from profile = ${firstStageMode} (denseWeight=${firstStageDenseWeight}, lexicalWeight=${firstStageLexicalWeight})`);
 
 const failures = [];
 function gate(name, ok, detail) {
   console.log(`${ok ? 'PASS' : 'FAIL'} [${name}] ${detail}`);
   if (!ok) failures.push({ name, detail });
+}
+
+// ─── Check 0: visible-token cluster sizes (corpus-generator diversity sub-gate) ───
+// Per operator directive (2026-06-01): "Add a health sub-gate that reports max cluster
+// size for first name, project adjective, project noun, and project full-name prefix."
+// Threshold: max cluster size <= 15 subjects per visible token (operator's ~10-15 target).
+const MAX_NAME_CLUSTER = Number(env.MAX_NAME_CLUSTER ?? flag('max-name-cluster', '15'));
+console.log('\n=== check 0: visible-token cluster sizes (generator-diversity sub-gate) ===');
+{
+  const labeled = JSON.parse(readFileSync(resolve(repoRoot, CORPUS_PATH), 'utf8'));
+  const entities = labeled.entities ?? [];
+  // Projects have 4 whitespace-separated tokens (ADJ DOMAIN TYPE SUFFIX). People have 2 (First Last).
+  const projects = entities.filter((e) => e.canonicalName && e.canonicalName.split(' ').length === 4);
+  const people   = entities.filter((e) => e.canonicalName && e.canonicalName.split(' ').length === 2);
+  function countBy(items, keyFn) {
+    const counts = new Map();
+    for (const it of items) {
+      const k = keyFn(it);
+      if (!k) continue;
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    return counts;
+  }
+  const projAdjCounts  = countBy(projects, (e) => e.canonicalName.split(' ')[0]);
+  const projDomCounts  = countBy(projects, (e) => e.canonicalName.split(' ')[1]);
+  const projTypeCounts = countBy(projects, (e) => e.canonicalName.split(' ')[2]);
+  // Project full-name prefix = first 3 tokens (drops the unique 3-char suffix to expose
+  // structural cluster: e.g. all "Granite Auth Forge X" subjects).
+  const projPrefixCounts = countBy(projects, (e) => e.canonicalName.split(' ').slice(0, 3).join(' '));
+  const firstCounts = countBy(people, (e) => e.canonicalName.split(' ')[0]);
+  const lastCounts  = countBy(people, (e) => e.canonicalName.split(' ')[1]);
+  function summary(name, counts) {
+    if (counts.size === 0) return { name, distinct: 0, max: 0, top: [] };
+    const max = Math.max(...counts.values());
+    const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+    return { name, distinct: counts.size, max, top };
+  }
+  const sums = [
+    summary('project_adjective', projAdjCounts),
+    summary('project_domain',    projDomCounts),
+    summary('project_type',      projTypeCounts),
+    summary('project_prefix3',   projPrefixCounts),
+    summary('person_first_name', firstCounts),
+    summary('person_last_name',  lastCounts),
+  ];
+  for (const s of sums) {
+    console.log(`  ${s.name.padEnd(20)} distinct=${s.distinct}  max-cluster=${s.max}  top: ${s.top.map(([k, c]) => `${k}=${c}`).join(', ')}`);
+  }
+  for (const s of sums) {
+    if (s.distinct === 0) continue;
+    gate(`name-cluster/${s.name}`, s.max <= MAX_NAME_CLUSTER,
+      `max-cluster=${s.max}  threshold<=${MAX_NAME_CLUSTER}  distinct-values=${s.distinct}  worst: ${s.top.slice(0, 3).map(([k, c]) => `${k}=${c}`).join(', ')}`);
+  }
+  global.__nameClusterReport = sums;
 }
 
 // ─── Check 1: exact text duplicate rate ─────────────────────────────────────
@@ -217,6 +276,7 @@ for (const ev of corpus.events) {
 const labeledCorpus = JSON.parse(readFileSync(resolve(repoRoot, CORPUS_PATH), 'utf8'));
 const docKindById = new Map();
 for (const d of labeledCorpus.docs ?? []) docKindById.set(d.id, d.kind);
+const labeledQueryById = new Map((labeledCorpus.queries ?? []).map((q) => [q.id, q]));
 // Build a relations adjacency for the canonical-recovery check (Stage B).
 // In the generator (scripts/generate-dgen1-corpus.mjs) edges are emitted as rel(answerDoc, anchorDoc, label)
 // — e.g. rel(bridgeDoc, answerDoc, 'depends_on') means source=bridgeDoc (anchor), dst=answerDoc;
@@ -227,24 +287,53 @@ const relFwd = new Map();
 const relRev = new Map();
 for (const r of labeledCorpus.relations ?? []) {
   if (!relFwd.has(r.src)) relFwd.set(r.src, []);
-  relFwd.get(r.src).push({ dst: r.dst, label: r.label });
+  relFwd.get(r.src).push({ dst: r.dst, label: r.label, type: r.type });
   if (!relRev.has(r.dst)) relRev.set(r.dst, []);
-  relRev.get(r.dst).push({ src: r.src, label: r.label });
+  relRev.get(r.dst).push({ src: r.src, label: r.label, type: r.type });
 }
 const ROUTING_REQUIRED = {
-  multi_session_bridge: { anchorKind: 'bridge_seed', answerKind: 'bridge_answer', edgeLabels: new Set(['supports', 'depends_on', 'belongs_to_project']) },
-  decision_provenance:  { anchorKind: 'decision',    answerKind: 'decision_reason', edgeLabels: new Set(['decision_reason']) },
-  causal_memory_chain:  { anchorKind: 'gotcha',      answerKind: 'fix',              edgeLabels: new Set(['fixes']) },
+  multi_session_bridge: { anchorKind: 'bridge_seed', answerKind: 'bridge_answer', edgeLabels: new Set(['supports', 'depends_on', 'belongs_to_project']), edgeTypes: new Set(['supports']) },
+  decision_provenance:  { anchorKind: 'decision',    answerKind: 'decision_reason', edgeLabels: new Set(['decision_reason']), edgeTypes: new Set(['causes']) },
+  causal_memory_chain:  { anchorKind: 'gotcha',      answerKind: 'fix',              edgeLabels: new Set(['fixes']), edgeTypes: new Set(['causes']) },
 };
 
 const byFam = new Map();
 const anchorByFam = new Map();   // routing-required: separate reach over ANCHOR docs only (Stage A)
 const recoveryByFam = new Map(); // routing-required: anchor → answer edge recovery rate (Stage B)
 const missesByFam = new Map();   // fam → [{queryId, queryText, truthDocs:[{id,text}], top5:[{id,text,rank}]}]
-function pickAnchorIds(family, truthIds) {
+const expectedFamilies = new Map();
+function directTargetIdsForQueryId(queryId) {
+  const q = labeledQueryById.get(queryId);
+  return (q?.qrels ?? []).filter((r) => r.role === 'direct' && r.relevance > 0).map((r) => r.docId);
+}
+function bridgeTargetIdsForQueryId(queryId) {
+  const q = labeledQueryById.get(queryId);
+  return (q?.qrels ?? []).filter((r) => r.role === 'bridge' && r.relevance > 0).map((r) => r.docId);
+}
+function targetIdsForEvent(ev) {
+  const direct = directTargetIdsForQueryId(ev.id);
+  return direct.length ? direct : (ev.truthDocuments ?? []).filter((t) => t.isCurrent !== false).map((t) => t.id);
+}
+function randomHitBaseline(targetCount, K = firstStageTopK) {
+  if (targetCount <= 0 || pubCandCount <= 0 || K <= 0) return 0;
+  const draws = Math.min(K, pubCandCount);
+  const m = Math.min(targetCount, pubCandCount);
+  if (m === 1) return draws / pubCandCount;
+  let miss = 1;
+  for (let i = 0; i < draws; i++) miss *= Math.max(0, pubCandCount - m - i) / Math.max(1, pubCandCount - i);
+  return 1 - miss;
+}
+for (const ev of corpus.events) {
+  if (ev.id.startsWith('mem_') || ev.split !== 'eval_hidden') continue;
+  const fam = ev.logicalFamily ?? ev.family;
+  if (targetIdsForEvent(ev).length === 0) continue; // abstention/no-answer family
+  expectedFamilies.set(fam, (expectedFamilies.get(fam) ?? 0) + 1);
+}
+function pickAnchorIds(family, truthIds, queryId) {
   const rcfg = ROUTING_REQUIRED[family];
   if (!rcfg) return truthIds;
-  return truthIds.filter((id) => docKindById.get(id) === rcfg.anchorKind);
+  const bridges = bridgeTargetIdsForQueryId(queryId).filter((id) => docKindById.get(id) === rcfg.anchorKind);
+  return bridges.length ? bridges : truthIds.filter((id) => docKindById.get(id) === rcfg.anchorKind);
 }
 function answerReachableFromAnchor(family, anchorIds, answerIds) {
   const rcfg = ROUTING_REQUIRED[family];
@@ -255,10 +344,10 @@ function answerReachableFromAnchor(family, anchorIds, answerIds) {
   // edge connect the anchor to its answer?" (deterministic corpus-structure check, not BFS depth).
   for (const a of anchorIds) {
     for (const out of (relFwd.get(a) ?? [])) {
-      if (rcfg.edgeLabels.has(out.label) && answerSet.has(out.dst)) return true;
+      if (rcfg.edgeLabels.has(out.label) && rcfg.edgeTypes.has(out.type) && answerSet.has(out.dst)) return true;
     }
     for (const inc of (relRev.get(a) ?? [])) {
-      if (rcfg.edgeLabels.has(inc.label) && answerSet.has(inc.src)) return true;
+      if (rcfg.edgeLabels.has(inc.label) && rcfg.edgeTypes.has(inc.type) && answerSet.has(inc.src)) return true;
     }
   }
   return false;
@@ -269,12 +358,17 @@ for (const baseSeed of SEEDS) {
     const pack = deriveQueryPack(p, seedHex, corpus, hiddenPack);
     for (const ev of pack.events) {
       const fam = ev.logicalFamily ?? ev.family;
-      const targets = (ev.truthDocuments ?? []).map((t) => t.id);
+      const targets = targetIdsForEvent(ev);
       if (targets.length === 0) continue; // skip abstention-pattern queries (no truths)
-      if (!byFam.has(fam)) byFam.set(fam, { total: 0, retrievable: 0, ranks: [] });
+      if (!byFam.has(fam)) byFam.set(fam, { total: 0, retrievable: 0, ranks: [], randomSum: 0 });
       const bucket = byFam.get(fam);
       bucket.total++;
-      const cands = firstStageCandidates(ev.embeddings.query, pubIndex, firstStageTopK);
+      bucket.randomSum += randomHitBaseline(targets.length);
+      const cands = retrieveFirstStageCandidates(ev.queryText ?? '', ev.embeddings.query, pubIndex, firstStageTopK, {
+        mode: firstStageMode,
+        denseWeight: firstStageDenseWeight,
+        lexicalWeight: firstStageLexicalWeight,
+      });
       let bestRank = Infinity;
       for (const t of targets) {
         const idx = cands.findIndex((c) => (c.documentId ?? c.id) === t);
@@ -287,13 +381,14 @@ for (const baseSeed of SEEDS) {
       // the anchor → answer routing edge exists in the labeled corpus (deterministic).
       if (ROUTING_REQUIRED[fam]) {
         const rcfg = ROUTING_REQUIRED[fam];
-        const anchorIds = pickAnchorIds(fam, targets);
+        const anchorIds = pickAnchorIds(fam, targets, ev.id);
         const answerIds = targets.filter((id) => docKindById.get(id) === rcfg.answerKind);
-        if (!anchorByFam.has(fam)) anchorByFam.set(fam, { total: 0, retrievable: 0, ranks: [] });
+        if (!anchorByFam.has(fam)) anchorByFam.set(fam, { total: 0, retrievable: 0, ranks: [], randomSum: 0 });
         if (!recoveryByFam.has(fam)) recoveryByFam.set(fam, { total: 0, recovered: 0 });
         const ab = anchorByFam.get(fam);
         const rb = recoveryByFam.get(fam);
         ab.total++;
+        ab.randomSum += randomHitBaseline(anchorIds.length);
         let bestAnchor = Infinity;
         for (const a of anchorIds) {
           const idx = cands.findIndex((c) => (c.documentId ?? c.id) === a);
@@ -305,7 +400,9 @@ for (const baseSeed of SEEDS) {
         if (answerReachableFromAnchor(fam, anchorIds, answerIds)) rb.recovered++;
       }
 
-      if (bestRank === Infinity && DUMP_MISSES_N > 0) {
+      const gatedRank = ROUTING_REQUIRED[fam] ? (anchorByFam.get(fam)?.ranks.at(-1) ?? -1) : (bestRank === Infinity ? -1 : bestRank);
+      const gatedTargets = ROUTING_REQUIRED[fam] ? pickAnchorIds(fam, targets, ev.id) : targets;
+      if (gatedRank <= 0 && DUMP_MISSES_N > 0) {
         if (!missesByFam.has(fam)) missesByFam.set(fam, []);
         const acc = missesByFam.get(fam);
         if (acc.length < DUMP_MISSES_N) {
@@ -317,8 +414,9 @@ for (const baseSeed of SEEDS) {
           acc.push({
             queryId: ev.id,
             family: fam,
+            gatedTargetRole: ROUTING_REQUIRED[fam] ? 'routing_anchor' : 'direct',
             queryText: (ev.queryText ?? '').slice(0, 240),
-            truthDocs: targets.map((id) => ({ id, text: (docTextById.get(id) ?? '').slice(0, 240) })),
+            truthDocs: gatedTargets.map((id) => ({ id, kind: docKindById.get(id) ?? null, text: (docTextById.get(id) ?? '').slice(0, 240) })),
             top5,
           });
         }
@@ -327,30 +425,38 @@ for (const baseSeed of SEEDS) {
   }
 }
 const familyReport = {};
-function liftStats(reach) {
-  const reachLift = reach - randomBaseline;
-  const enrichment = randomBaseline > 0 ? reach / randomBaseline : (reach > 0 ? Infinity : 0);
-  return { reach, reachLift, enrichment };
+function liftStats(reach, baseline) {
+  const reachLift = reach - baseline;
+  const enrichment = baseline > 0 ? reach / baseline : (reach > 0 ? Infinity : 0);
+  return { reach, randomBaseline: baseline, reachLift, enrichment };
+}
+console.log('\n=== check 3a: family coverage in sampled hidden packs ===');
+for (const [fam, expected] of [...expectedFamilies.entries()].sort()) {
+  const observed = byFam.get(fam)?.total ?? 0;
+  gate(`family-coverage/${fam}`, observed >= MIN_FAMILY_SAMPLES,
+    `observed=${observed} sampled queries  minimum=${MIN_FAMILY_SAMPLES}  eval_hidden_available=${expected}`);
 }
 for (const [fam, b] of byFam) {
   const isRouting = !!ROUTING_REQUIRED[fam];
   const reach = b.total > 0 ? b.retrievable / b.total : 0;
-  const { reachLift, enrichment } = liftStats(reach);
+  const famBaseline = b.total > 0 ? b.randomSum / b.total : 0;
+  const { reachLift, enrichment } = liftStats(reach, famBaseline);
   const validRanks = b.ranks.filter((r) => r > 0).sort((a, b) => a - b);
   const p10 = validRanks[Math.floor(validRanks.length * 0.1)] ?? null;
   const p50 = validRanks[Math.floor(validRanks.length * 0.5)] ?? null;
   const p90 = validRanks[Math.floor(validRanks.length * 0.9)] ?? null;
   const targetMet = reachLift >= MIN_REACH_LIFT_TARGET && enrichment >= MIN_ENRICHMENT_TARGET;
-  const famEntry = { routingRequired: isRouting, total: b.total, retrievable: b.retrievable, reach, randomBaseline, reachLift, enrichment: Number.isFinite(enrichment) ? enrichment : null, targetMet, p10, p50, p90 };
+  const famEntry = { routingRequired: isRouting, total: b.total, retrievable: b.retrievable, reach, randomBaseline: famBaseline, reachLift, enrichment: Number.isFinite(enrichment) ? enrichment : null, targetMet, p10, p50, p90 };
 
   if (isRouting) {
     // Routing-aware: gate Stage A (anchor reach) + Stage B (canonical recovery).
     // The any-truth reach reported above is informational only — it includes the routing-required
     // answer doc which by design omits the canonical name and so is not bi-encoder reachable.
-    const ab = anchorByFam.get(fam) ?? { total: 0, retrievable: 0, ranks: [] };
+    const ab = anchorByFam.get(fam) ?? { total: 0, retrievable: 0, ranks: [], randomSum: 0 };
     const rb = recoveryByFam.get(fam) ?? { total: 0, recovered: 0 };
     const anchorReach = ab.total > 0 ? ab.retrievable / ab.total : 0;
-    const { reachLift: aL, enrichment: aE } = liftStats(anchorReach);
+    const anchorBaseline = ab.total > 0 ? ab.randomSum / ab.total : 0;
+    const { reachLift: aL, enrichment: aE } = liftStats(anchorReach, anchorBaseline);
     const anchorTargetMet = aL >= MIN_REACH_LIFT_TARGET && aE >= MIN_ENRICHMENT_TARGET;
     const validAnchorRanks = ab.ranks.filter((r) => r > 0).sort((a, b) => a - b);
     const ap10 = validAnchorRanks[Math.floor(validAnchorRanks.length * 0.1)] ?? null;
@@ -358,22 +464,22 @@ for (const [fam, b] of byFam) {
     const ap90 = validAnchorRanks[Math.floor(validAnchorRanks.length * 0.9)] ?? null;
     const recoveryRate = rb.total > 0 ? rb.recovered / rb.total : 0;
     famEntry.routing = {
-      anchorReach, anchorLift: aL, anchorEnrichment: Number.isFinite(aE) ? aE : null, anchorTargetMet,
+      anchorReach, anchorRandomBaseline: anchorBaseline, anchorLift: aL, anchorEnrichment: Number.isFinite(aE) ? aE : null, anchorTargetMet,
       anchorTotal: ab.total, anchorRetrievable: ab.retrievable,
       anchorRanks: { p10: ap10, p50: ap50, p90: ap90 },
       canonicalRecoveryRate: recoveryRate, canonicalRecoveryTotal: rb.total, canonicalRecovered: rb.recovered,
     };
-    const stageAOk = aL > MIN_REACH_LIFT_HARD && aE >= MIN_ENRICHMENT_HARD;
-    const stageBOk = recoveryRate >= 0.99; // canonical edge must connect anchor → answer for ≥99% of queries
+    const stageAOk = anchorReach >= MIN_FAM_REACH && aL > MIN_REACH_LIFT_HARD && aE >= MIN_ENRICHMENT_HARD;
+    const stageBOk = recoveryRate === 1; // deterministic corpus-structure gate: every anchor must route
     gate(`routing-A/${fam}`, stageAOk,
-      `anchor-reach=${(100 * anchorReach).toFixed(1)}%  baseline=${(100 * randomBaseline).toFixed(2)}%  lift=${(100 * aL).toFixed(2)}pp  enrich=${aE.toFixed(2)}x  hard(lift>${(100 * MIN_REACH_LIFT_HARD).toFixed(0)}pp & enrich>=${MIN_ENRICHMENT_HARD.toFixed(1)}x)  target(${anchorTargetMet ? 'MET' : 'NOT MET'})  n=${ab.total}  anchor-ranks p10=${ap10} p50=${ap50} p90=${ap90}`);
+      `anchor-reach=${(100 * anchorReach).toFixed(1)}%  baseline=${(100 * anchorBaseline).toFixed(2)}%  lift=${(100 * aL).toFixed(2)}pp  enrich=${aE.toFixed(2)}x  hard(reach>=${(100 * MIN_FAM_REACH).toFixed(0)}% & lift>${(100 * MIN_REACH_LIFT_HARD).toFixed(0)}pp & enrich>=${MIN_ENRICHMENT_HARD.toFixed(1)}x)  target(${anchorTargetMet ? 'MET' : 'NOT MET'})  n=${ab.total}  anchor-ranks p10=${ap10} p50=${ap50} p90=${ap90}`);
     gate(`routing-B/${fam}`, stageBOk,
-      `canonical-recovery=${(100 * recoveryRate).toFixed(2)}%  threshold>=99%  ${rb.recovered}/${rb.total} anchors connect to answer via labeled edge`);
+      `canonical-recovery=${(100 * recoveryRate).toFixed(2)}%  threshold=100%  ${rb.recovered}/${rb.total} anchors connect to answer via labeled production-routeable edge`);
     console.log(`  [info/${fam}] any-truth reach=${(100 * reach).toFixed(1)}% (informational; answer doc is routing-required and intentionally omits canonical)`);
   } else {
-    const hardOk = reachLift > MIN_REACH_LIFT_HARD && enrichment >= MIN_ENRICHMENT_HARD;
+    const hardOk = reach >= MIN_FAM_REACH && reachLift > MIN_REACH_LIFT_HARD && enrichment >= MIN_ENRICHMENT_HARD;
     gate(`family-reachability/${fam}`, hardOk,
-      `reach=${(100 * reach).toFixed(1)}%  baseline=${(100 * randomBaseline).toFixed(2)}%  lift=${(100 * reachLift).toFixed(2)}pp  enrich=${enrichment.toFixed(2)}x  hard(lift>${(100 * MIN_REACH_LIFT_HARD).toFixed(0)}pp & enrich>=${MIN_ENRICHMENT_HARD.toFixed(1)}x)  target(${targetMet ? 'MET' : 'NOT MET'} lift>=${(100 * MIN_REACH_LIFT_TARGET).toFixed(0)}pp & enrich>=${MIN_ENRICHMENT_TARGET.toFixed(1)}x)  n=${b.total}  retrievable=${b.retrievable}  ranks p10=${p10} p50=${p50} p90=${p90}`);
+      `reach=${(100 * reach).toFixed(1)}%  baseline=${(100 * famBaseline).toFixed(2)}%  lift=${(100 * reachLift).toFixed(2)}pp  enrich=${enrichment.toFixed(2)}x  hard(reach>=${(100 * MIN_FAM_REACH).toFixed(0)}% & lift>${(100 * MIN_REACH_LIFT_HARD).toFixed(0)}pp & enrich>=${MIN_ENRICHMENT_HARD.toFixed(1)}x)  target(${targetMet ? 'MET' : 'NOT MET'} lift>=${(100 * MIN_REACH_LIFT_TARGET).toFixed(0)}pp & enrich>=${MIN_ENRICHMENT_TARGET.toFixed(1)}x)  n=${b.total}  retrievable=${b.retrievable}  ranks p10=${p10} p50=${p50} p90=${p90}`);
   }
   familyReport[fam] = famEntry;
 }
@@ -385,36 +491,71 @@ if (TOPK_SWEEP.length > 0) {
   // To avoid re-running the embedding lookup per K, pull all pack queries once and
   // compute ranks against the FULL ordering, then bucket by K.
   const Kmax = Math.max(...TOPK_SWEEP);
-  const sweepByFam = new Map(); // fam → ranks[]
+  const sweepByFam = new Map(); // fam → {ranks, randomByK}
+  const sweepAnchorByFam = new Map(); // routing fam → {ranks, randomByK}
   for (const baseSeed of SEEDS) {
     for (let p = 0; p < ITERS; p++) {
-      const seedHex = '0x' + createHash('sha256').update(`${baseSeed}:${p}`).digest('hex');
-      const pack = deriveQueryPack(p, seedHex, corpus, hiddenPack);
-      for (const ev of pack.events) {
-        const fam = ev.logicalFamily ?? ev.family;
-        const targets = (ev.truthDocuments ?? []).map((t) => t.id);
+        const seedHex = '0x' + createHash('sha256').update(`${baseSeed}:${p}`).digest('hex');
+        const pack = deriveQueryPack(p, seedHex, corpus, hiddenPack);
+        for (const ev of pack.events) {
+          const fam = ev.logicalFamily ?? ev.family;
+        const targets = targetIdsForEvent(ev);
         if (targets.length === 0) continue;
-        if (!sweepByFam.has(fam)) sweepByFam.set(fam, []);
-        const cands = firstStageCandidates(ev.embeddings.query, pubIndex, Kmax);
+        if (!sweepByFam.has(fam)) sweepByFam.set(fam, { ranks: [], randomByK: new Map() });
+        if (ROUTING_REQUIRED[fam] && !sweepAnchorByFam.has(fam)) sweepAnchorByFam.set(fam, { ranks: [], randomByK: new Map() });
+        const cands = retrieveFirstStageCandidates(ev.queryText ?? '', ev.embeddings.query, pubIndex, Kmax, {
+          mode: firstStageMode,
+          denseWeight: firstStageDenseWeight,
+          lexicalWeight: firstStageLexicalWeight,
+        });
         let bestRank = Infinity;
         for (const t of targets) {
           const idx = cands.findIndex((c) => (c.documentId ?? c.id) === t);
           if (idx >= 0 && idx + 1 < bestRank) bestRank = idx + 1;
         }
-        sweepByFam.get(fam).push(bestRank === Infinity ? -1 : bestRank);
+        const sb = sweepByFam.get(fam);
+        sb.ranks.push(bestRank === Infinity ? -1 : bestRank);
+        for (const K of TOPK_SWEEP) sb.randomByK.set(K, (sb.randomByK.get(K) ?? 0) + randomHitBaseline(targets.length, K));
+        if (ROUTING_REQUIRED[fam]) {
+          const anchorIds = pickAnchorIds(fam, targets, ev.id);
+          let bestAnchorRank = Infinity;
+          for (const a of anchorIds) {
+            const idx = cands.findIndex((c) => (c.documentId ?? c.id) === a);
+            if (idx >= 0 && idx + 1 < bestAnchorRank) bestAnchorRank = idx + 1;
+          }
+          const ab = sweepAnchorByFam.get(fam);
+          ab.ranks.push(bestAnchorRank === Infinity ? -1 : bestAnchorRank);
+          for (const K of TOPK_SWEEP) ab.randomByK.set(K, (ab.randomByK.get(K) ?? 0) + randomHitBaseline(anchorIds.length, K));
+        }
       }
     }
   }
-  for (const [fam, ranks] of sweepByFam) {
-    topkSweepReport[fam] = { total: ranks.length, perK: {} };
+  for (const [fam, data] of sweepByFam) {
+    const ranks = data.ranks;
+    topkSweepReport[fam] = { total: ranks.length, routingRequired: !!ROUTING_REQUIRED[fam], perK: {} };
     for (const K of TOPK_SWEEP) {
       const retrievable = ranks.filter((r) => r > 0 && r <= K).length;
       const reach = ranks.length > 0 ? retrievable / ranks.length : 0;
-      const baseline = pubCandCount > 0 ? K / pubCandCount : 0;
+      const baseline = ranks.length > 0 ? (data.randomByK.get(K) ?? 0) / ranks.length : 0;
       const lift = reach - baseline;
       const enrich = baseline > 0 ? reach / baseline : null;
       topkSweepReport[fam].perK[String(K)] = { reach, baseline, reachLift: lift, enrichment: enrich, retrievable, K };
-      console.log(`  ${fam.padEnd(28)} K=${String(K).padStart(5)}  reach=${(100 * reach).toFixed(1)}%  baseline=${(100 * baseline).toFixed(2)}%  lift=${(100 * lift).toFixed(2)}pp  enrich=${enrich !== null ? enrich.toFixed(2) + 'x' : 'n/a'}`);
+      if (ROUTING_REQUIRED[fam]) {
+        const adata = sweepAnchorByFam.get(fam) ?? { ranks: [], randomByK: new Map() };
+        const aranks = adata.ranks;
+        const anchorRetrievable = aranks.filter((r) => r > 0 && r <= K).length;
+        const anchorReach = aranks.length > 0 ? anchorRetrievable / aranks.length : 0;
+        const anchorBaseline = aranks.length > 0 ? (adata.randomByK.get(K) ?? 0) / aranks.length : 0;
+        const anchorLift = anchorReach - anchorBaseline;
+        const anchorEnrich = anchorBaseline > 0 ? anchorReach / anchorBaseline : null;
+        topkSweepReport[fam].perK[String(K)].routingAnchor = {
+          reach: anchorReach, baseline: anchorBaseline, reachLift: anchorLift, enrichment: anchorEnrich,
+          retrievable: anchorRetrievable, total: aranks.length,
+        };
+        console.log(`  ${fam.padEnd(28)} K=${String(K).padStart(5)}  any-reach=${(100 * reach).toFixed(1)}%  anchor-reach=${(100 * anchorReach).toFixed(1)}%  anchor-baseline=${(100 * anchorBaseline).toFixed(2)}%  anchor-lift=${(100 * anchorLift).toFixed(2)}pp  anchor-enrich=${anchorEnrich !== null ? anchorEnrich.toFixed(2) + 'x' : 'n/a'}`);
+      } else {
+        console.log(`  ${fam.padEnd(28)} K=${String(K).padStart(5)}  reach=${(100 * reach).toFixed(1)}%  baseline=${(100 * baseline).toFixed(2)}%  lift=${(100 * lift).toFixed(2)}pp  enrich=${enrich !== null ? enrich.toFixed(2) + 'x' : 'n/a'}`);
+      }
     }
   }
 }
@@ -438,7 +579,8 @@ const report = {
     bundle: { path: BUNDLE_PATH, sha256: bundleSha, bundleHash: matBundleHash },
     corpusRoot: corpus.corpusRoot,
   },
-  thresholds: { MAX_TEXT_DUP, MAX_EMB_DUP, MIN_FAM_REACH, MIN_REACH_LIFT_HARD, MIN_ENRICHMENT_HARD, MIN_REACH_LIFT_TARGET, MIN_ENRICHMENT_TARGET },
+  thresholds: { MAX_TEXT_DUP, MAX_EMB_DUP, MIN_FAM_REACH, MIN_FAMILY_SAMPLES, MIN_REACH_LIFT_HARD, MIN_ENRICHMENT_HARD, MIN_REACH_LIFT_TARGET, MIN_ENRICHMENT_TARGET, MAX_NAME_CLUSTER },
+  name_clusters: global.__nameClusterReport ?? [],
   sample: { requested: SAMPLE_N, actual: sample.length, totalMemoryEvents: memEvents.length },
   text_duplication: { uniquePayloads: textClusters.size, totalEvents: totalText, nullOrEmpty: textNullOrEmpty,
     duplicateRate: textDupRate, nonSingletonClusterCount: nonSingletonText.length,
@@ -446,7 +588,7 @@ const report = {
   embedding_duplication: { uniquePayloads: embClusters.size, totalEvents: totalEmb, nullOrEmpty: embNullOrEmpty,
     duplicateRate: embDupRate, nonSingletonClusterCount: nonSingletonEmb.length,
     eventsInNonSingletonClusters: inDupEmbCluster, largestClusterSizes: largestEmbClusters },
-  family_reachability: { firstStageTopK, publicCandidateCount: pubCandCount, randomBaseline, seeds: SEEDS, iters: ITERS, packSize: PACK_SIZE, perFamily: familyReport },
+  family_reachability: { firstStageTopK, firstStageMode, firstStageDenseWeight, firstStageLexicalWeight, publicCandidateCount: pubCandCount, randomBaseline, seeds: SEEDS, iters: ITERS, packSize: PACK_SIZE, perFamily: familyReport },
   topk_sweep: TOPK_SWEEP.length > 0 ? { Ks: TOPK_SWEEP, publicCandidateCount: pubCandCount, perFamily: topkSweepReport } : null,
   miss_dumps: DUMP_MISSES_N > 0 ? { perFamilyCap: DUMP_MISSES_N, perFamily: missDumps } : null,
   verdict: { pass: failures.length === 0, failedGates: failures },

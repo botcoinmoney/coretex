@@ -108,7 +108,7 @@ if (MODE === 'deep') {
   // 3. build production corpus → corpusRoot coherence + activeFrontierRoot derivation (canonical).
   console.log('building 300k production corpus (corpusRoot + frontier derivation)…');
   const { buildV2ProductionCorpus } = await import('./lib/build-v2-production-corpus.mjs');
-  const { corpus } = buildV2ProductionCorpus({ corpusPath: CORPUS, embPath: EMB });
+  const { corpus } = buildV2ProductionCorpus({ corpusPath: CORPUS, embPath: EMB, bundlePath: BUNDLE });
   corpusRoot = computeCorpusRoot(corpus.events);
   check('corpusRoot == computeCorpusRoot(events)', corpusRoot === corpus.corpusRoot, corpusRoot);
   if (bundle) check('bundle.corpus.root == corpusRoot', (bundle.corpus?.root ?? '').toLowerCase() === corpusRoot.toLowerCase(), `bundle=${bundle.corpus?.root?.slice(0,18)} corpus=${corpusRoot.slice(0,18)}`);

@@ -26,7 +26,8 @@
  *   node scripts/corpus-determinism-gate.mjs \
  *     [--corpus release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-corpus.json] \
  *     [--emb    release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-embeddings.json] \
- *     [--profile release/bundle/evaluator-profile-v2-dgen1-policy-r5.json] [--epoch 0]
+ *     [--profile release/bundle/evaluator-profile-v2-dgen1-policy-r5.json] \
+ *     [--bundle release/bundle/bundle-manifest-v2-dgen1-policy-r5-300k.json] [--epoch 0]
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -43,6 +44,7 @@ function flag(name, fb) { const i = argv.indexOf(`--${name}`); return i >= 0 && 
 const corpusPath = flag('corpus', 'release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-300k-final-corpus.json');
 const embPath = flag('emb', 'release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-300k-final-embeddings.json');
 const profilePath = flag('profile', 'release/bundle/evaluator-profile-v2-dgen1-policy-r5-300k.json');
+const bundlePath = flag('bundle', 'release/bundle/bundle-manifest-v2-dgen1-policy-r5-300k.json');
 const epoch = Number(flag('epoch', '0'));
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
@@ -53,8 +55,8 @@ const out = [];
 function check(name, ok, detail = '') { out.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`); if (!ok) pass = false; }
 
 // 1. two independent loads → identical corpusRoot
-const a = buildV2ProductionCorpus({ corpusPath, embPath });
-const b = buildV2ProductionCorpus({ corpusPath, embPath });
+const a = buildV2ProductionCorpus({ corpusPath, embPath, bundlePath });
+const b = buildV2ProductionCorpus({ corpusPath, embPath, bundlePath });
 check('corpusRoot stable across two loads', a.corpus.corpusRoot === b.corpus.corpusRoot, `${a.corpus.corpusRoot}`);
 // independent recompute via the canonical hash function
 check('corpusRoot == computeCorpusRoot(events)', a.corpus.corpusRoot === computeCorpusRoot(a.corpus.events));

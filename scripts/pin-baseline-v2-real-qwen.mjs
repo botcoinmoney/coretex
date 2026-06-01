@@ -39,20 +39,21 @@ function flag(name, fb) { const i = argv.indexOf(`--${name}`); return i >= 0 && 
 const corpusPath = flag('corpus');
 const embPath = flag('emb');
 const profilePath = flag('profile');
+const bundlePath = flag('bundle');
 const samples = Number(flag('samples', '3'));
 const epochId = Number(flag('epoch-id', '0'));
 const defaultSeed = '0x' + 'a5'.repeat(32);
 const evalSeedHex = flag('eval-seed-hex', defaultSeed);
 const outPath = flag('out');
 
-if (!corpusPath || !embPath || !profilePath || !outPath) {
-  console.error('usage: --corpus <p> --emb <p> --profile <p> --out <p> [--samples 3] [--eval-seed-hex 0x...] [--epoch-id 0]');
+if (!corpusPath || !embPath || !profilePath || !bundlePath || !outPath) {
+  console.error('usage: --corpus <p> --emb <p> --profile <p> --bundle <p> --out <p> [--samples 3] [--eval-seed-hex 0x...] [--epoch-id 0]');
   exit(2);
 }
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
 console.error(`[pin-v2] loading ${corpusPath}`);
-const { corpus, LAYOUT, BE, RR, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath });
+const { corpus, LAYOUT, BE, RR, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath, bundlePath });
 console.error(`[pin-v2] corpus events=${corpus.events.length} corpusRoot=${corpus.corpusRoot}`);
 
 console.error(`[pin-v2] spawning real Qwen3-Reranker-0.6B (${RR.modelId}@${RR.revision})`);

@@ -41,12 +41,30 @@
   "hiddenPack": {
     "packSize": 64,
     "quotas": [
-      { "stratum": "family=near_collision", "minCount": 12 },
-      { "stratum": "family=temporal", "minCount": 12 },
-      { "stratum": "family=multi_hop_relation", "minCount": 10 },
-      { "stratum": "family=conflict_lifecycle", "minCount": 8 },
-      { "stratum": "family=aspect_constraint", "minCount": 8 },
-      { "stratum": "family=coreference", "minCount": 6 }
+      {
+        "stratum": "family=near_collision",
+        "minCount": 12
+      },
+      {
+        "stratum": "family=temporal",
+        "minCount": 12
+      },
+      {
+        "stratum": "family=multi_hop_relation",
+        "minCount": 10
+      },
+      {
+        "stratum": "family=conflict_lifecycle",
+        "minCount": 8
+      },
+      {
+        "stratum": "family=aspect_constraint",
+        "minCount": 8
+      },
+      {
+        "stratum": "family=coreference",
+        "minCount": 6
+      }
     ]
   },
   "relationHopBudget": 3,
@@ -92,8 +110,8 @@
   "corpusDocDedupe": "canonical-doc-id",
   "firstStageTopKSelection": {
     "method": "worst-stratum-target",
-    "reason": "inherited from deep-r1; calibration unchanged for the r5 epoch.",
-    "calibrationReport": "release/calibration/first-stage-topk-sweep.json"
+    "reason": "2026-06-01 v14 health gate: hybrid dense+public-lexical first-stage clears randomness-corrected direct/anchor reach at K=3200; dense-only failed 4/7 families.",
+    "calibrationReport": "release/calibration/2026-05-21-memory-corpus-v2/corpus-retrieval-health-v14-100k-hybrid.json"
   },
   "ownerScopeMode": "restrict",
   "categoryLensFinalBonusWeight": 0,
@@ -101,7 +119,6 @@
   "categoryLensSeedTopK": 2,
   "categoryLensHopBudget": 1,
   "categoryLensEvidenceBundle": true,
-
   "temporalStaleContrast": true,
   "enableEvidenceBundleAtoms": true,
   "enableConflictLifecycleAtoms": true,
@@ -121,7 +138,6 @@
   "policyEmitTraces": true,
   "policyQueryLocalTopK": 24,
   "_calibrationPolicyNote": "CALIBRATION PROFILE — every reclaimed r5 substrate is enabled so the A100 campaign measures every surface under consistent controls. NOT a launch profile; results from this profile decide which surfaces survive into the final launch posture. Sibling 'evaluator-profile-v2-dgen1-policy-r5-300k.json' is the current cautious launch-candidate posture; do not conflate. Reclaimed surfaces ENABLED here: evidence_bundle, conflict_lifecycle, relation_typed admission, query_conditioned admission, conflict_intent admission, abstention (top1+margin), aspect_constraint + aspect_intent admission + aspect_boost. Temporal currency stays on by default. Constraint rules verified at write time: enableConflictLifecycleAtoms requires policyConflictIntentAdmission (both true); policyAspectIntentAdmission requires enableAspectConstraintAtoms (both true); enableAspectConstraintAtoms requires policyAspectBoost in (0, 0.5] (0.1).",
-
   "majorDeltaThreshold": 220,
   "controllerParams": {
     "rampUpMaxRatio": 1.1,
@@ -148,5 +164,8 @@
   "baselineParentScorePpm": 163371,
   "baselineVariancePpm": 0,
   "baselineSamples": 3,
-  "baselineEvalSeedHex": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+  "baselineEvalSeedHex": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "firstStageMode": "hybrid",
+  "firstStageDenseWeight": 1,
+  "firstStageLexicalWeight": 1
 }

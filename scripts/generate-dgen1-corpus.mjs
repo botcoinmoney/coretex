@@ -63,8 +63,51 @@ const chance = (p) => rand() < p;
 function splitFor(id) { const h = parseInt(createHash('sha256').update(`${SEED}:${id}`).digest('hex').slice(0, 8), 16) % 100; return h < 70 ? 'train_visible' : h < 80 ? 'calibration' : h < 95 ? 'eval_hidden' : 'canary'; }
 
 // ── banks (large enough that FIRST×LAST×index keeps subjects UNIQUE) ──
-const FIRST = ['Maya', 'Alex', 'Priya', 'Jordan', 'Sam', 'Lena', 'Diego', 'Aisha', 'Tom', 'Nina', 'Omar', 'Grace', 'Ravi', 'Elena', 'Yuki', 'Carlos', 'Hana', 'Marcus', 'Leo', 'Sofia', 'Noah', 'Zara', 'Ivan', 'Mei', 'Kofi'];
-const LAST = ['Chen', 'Nadar', 'Sharma', 'Okafor', 'Reyes', 'Petrov', 'Kim', 'Haddad', 'Singh', 'Rossi', 'Mueller', 'Ito', 'Diallo', 'Costa', 'Larsen', 'Mensah', 'Park', 'Novak', 'Tanaka', 'Vega', 'Bauer', 'Osei', 'Lund', 'Cruz', 'Aziz'];
+// v12: name pools expanded per operator directive (final deterministic corpus-diversity pass).
+// Prior pools (FIRST=25, LAST=25) produced 80 subjects/first-name at 2000 person subjects —
+// `Yuki the JOB` clusters of 80 docs flooded multi_session_bridge "job of sibling" queries.
+// New target: max cluster ≤ ~10–15 subjects per single visible token at 100k scale.
+const FIRST = [
+  'Maya', 'Alex', 'Priya', 'Jordan', 'Sam', 'Lena', 'Diego', 'Aisha', 'Tom', 'Nina',
+  'Omar', 'Grace', 'Ravi', 'Elena', 'Yuki', 'Carlos', 'Hana', 'Marcus', 'Leo', 'Sofia',
+  'Noah', 'Zara', 'Ivan', 'Mei', 'Kofi', 'Anaya', 'Bilal', 'Camila', 'Dmitri', 'Esi',
+  'Farouk', 'Gemma', 'Hiroshi', 'Indira', 'Jakub', 'Kira', 'Linh', 'Mateo', 'Nadia', 'Oleg',
+  'Pia', 'Qadir', 'Rosa', 'Soren', 'Tara', 'Uma', 'Vikram', 'Wendell', 'Ximena', 'Yara',
+  'Zane', 'Anika', 'Bjorn', 'Cyril', 'Daria', 'Emil', 'Fiona', 'Gunnar', 'Henna', 'Idris',
+  'Jia', 'Kenji', 'Liana', 'Magnus', 'Nico', 'Oksana', 'Petra', 'Quentin', 'Rania', 'Sven',
+  'Tahir', 'Una', 'Vesa', 'Wren', 'Xochitl', 'Yusuf', 'Zelda', 'Astrid', 'Boris', 'Celine',
+  'Dario', 'Eira', 'Felix', 'Greta', 'Hugo', 'Inga', 'Joaquin', 'Kaja', 'Lars', 'Maris',
+  'Niko', 'Otto', 'Paolo', 'Quinn', 'Reza', 'Saoirse', 'Tomas', 'Ulla', 'Vince', 'Wilma',
+  'Yael', 'Zuri', 'Adi', 'Bao', 'Cleo', 'Dax', 'Edda', 'Fjola', 'Gus', 'Hilda',
+  'Igor', 'Juno', 'Kit', 'Lior', 'Marius', 'Nia', 'Osric', 'Pim', 'Rhett', 'Saba',
+  'Tibor', 'Ursula', 'Vidya', 'Wolf', 'Xander', 'Yoel', 'Zoya', 'Ada', 'Bram', 'Cato',
+  'Dora', 'Enzo', 'Faye', 'Geir', 'Hira', 'Ines', 'Jorge', 'Kemal', 'Lia', 'Magda',
+  'Niall', 'Onyx', 'Pavel', 'Rana', 'Sten', 'Tia', 'Ugo', 'Vela', 'Wim', 'Xara',
+  'Yulia', 'Zev', 'Arda', 'Bea', 'Cyrus', 'Dilan', 'Eda', 'Florian', 'Galia', 'Henrik',
+  'Imani', 'Jens', 'Kasimir', 'Liva', 'Milo', 'Nora', 'Oren', 'Pilar', 'Rasmus', 'Selma',
+  'Tristan', 'Una2', 'Vasco', 'Wira', 'Yann', 'Zaid', 'Aron', 'Bodhi', 'Cora', 'Dalia',
+  'Esme', 'Finn', 'Gaia', 'Halle', 'Iker', 'Jalen', 'Kael', 'Leon', 'Mika', 'Nyla',
+  'Olek', 'Pax', 'Remy', 'Sasa', 'Talia', 'Uli', 'Vera', 'Wyn', 'Xolani', 'Yago',
+  'Zeya', 'Alba', 'Beni', 'Chao', 'Davi', 'Ela', 'Faraj', 'Gali', 'Hela', 'Inez',
+];
+const LAST = [
+  'Chen', 'Nadar', 'Sharma', 'Okafor', 'Reyes', 'Petrov', 'Kim', 'Haddad', 'Singh', 'Rossi',
+  'Mueller', 'Ito', 'Diallo', 'Costa', 'Larsen', 'Mensah', 'Park', 'Novak', 'Tanaka', 'Vega',
+  'Bauer', 'Osei', 'Lund', 'Cruz', 'Aziz', 'Bose', 'Cardenas', 'Delacroix', 'Eskildsen', 'Farouk',
+  'Greco', 'Halvorsen', 'Iqbal', 'Janssen', 'Kowalski', 'Lindgren', 'Marchetti', 'Naidoo', 'Oduya', 'Pereira',
+  'Qasim', 'Ramaswamy', 'Solberg', 'Tagliani', 'Ueno', 'Vasquez', 'Wallenberg', 'Xu', 'Yamamoto', 'Zelinsky',
+  'Andersson', 'Bekele', 'Carvalho', 'Dvorak', 'Eriksen', 'Falconer', 'Goncalves', 'Hashimoto', 'Ivanov', 'Jovanovic',
+  'Kowalczyk', 'Laurent', 'Mbeki', 'Nakajima', 'Olsen', 'Patel', 'Quintero', 'Reinhardt', 'Saavedra', 'Tanovic',
+  'Ueda', 'Volkov', 'Wernicke', 'Xanthopoulos', 'Yilmaz', 'Zovko', 'Aaltonen', 'Bertolini', 'Chakraborty', 'Devereux',
+  'Engstrom', 'Fontaine', 'Garbo', 'Hofmann', 'Ishikawa', 'Janowski', 'Kapoor', 'Lefebvre', 'Magnusson', 'Nilsson',
+  'Ostrowski', 'Piazza', 'Quezada', 'Roussos', 'Soderberg', 'Tashkov', 'Ugarte', 'Vaidya', 'Wozniak', 'Yildirim',
+  'Almasi', 'Berenbaum', 'Cholewa', 'Dimitriou', 'Estrada', 'Fellini', 'Granados', 'Holmberg', 'Imamura', 'Jakubowski',
+  'Karvonen', 'Lazarev', 'Mohebbi', 'Nikolic', 'Oyelaran', 'Polanco', 'Quillen', 'Ramazani', 'Stojanovic', 'Takahashi',
+  'Uchida', 'Vanderberg', 'Wiese', 'Xanthakis', 'Yousef', 'Zaitsev', 'Abramowitz', 'Beauchamp', 'Cisneros', 'Dubrovsky',
+  'Esposito', 'Fernandez', 'Gjorgjevski', 'Heitkamp', 'Iordanidis', 'Joachimsthaler', 'Kruger', 'Lindholm', 'Maslowski', 'Nieminen',
+  'Olszewski', 'Pajari', 'Qureshi', 'Rakotomalala', 'Skarsgard', 'Tiwari', 'Uddin', 'Verbeek', 'Wojciechowski', 'Yokoyama',
+  'Zambrano', 'Aufderheide', 'Bjornsson', 'Czerwinski', 'Dragomir', 'Espinoza',
+];
 const JOBS = ['UX designer', 'data analyst', 'ER nurse', 'high-school teacher', 'civil engineer', 'product manager', 'pastry chef', 'physical therapist', 'accountant', 'graphic illustrator', 'marine biologist', 'tax attorney'];
 const CITIES = ['Seattle', 'Austin', 'Denver', 'Portland', 'Chicago', 'Boston', 'Atlanta', 'Toronto', 'Lisbon', 'Berlin', 'Oslo', 'Nairobi'];
 const DIETS = ['low-FODMAP', 'pescatarian', 'keto', 'Mediterranean', 'vegan', 'gluten-free', 'paleo', 'DASH'];
@@ -109,44 +152,93 @@ const SESSION_OUTCOMES = ['action items logged', 'follow-ups assigned', 'a doc u
 // 0.32x and multi_session_bridge Stage A 1.05x at 100k v8c). New names use 4 semantic tokens
 // (adjective + domain + service-type + 3-hex suffix) for ~49M unique combinations vs ~1500
 // subjects → zero collision. Each subject gets a SEMANTICALLY DISTINCT natural-language name.
-const PROJ_ADJ = ['Granite', 'Velvet', 'Copper', 'Sapphire', 'Cinder', 'Maple', 'Cobalt', 'Ember', 'Flint', 'Glade', 'Harbor', 'Ivory', 'Juniper', 'Kestrel', 'Larch', 'Mocha', 'Nimbus', 'Opal', 'Pebble', 'Quartz', 'Ridge', 'Sage', 'Thistle', 'Umbra', 'Verdant', 'Wren', 'Xenon', 'Yarrow', 'Zephyr', 'Amber', 'Bramble', 'Cedar', 'Driftwood', 'Echo', 'Fjord', 'Glacier', 'Hazel', 'Iris', 'Jade', 'Klein'];
-const PROJ_DOMAIN = ['Billing', 'Auth', 'Search', 'Imaging', 'Export', 'Onboarding', 'Notification', 'Inventory', 'Reporting', 'Analytics', 'Webhook', 'Sync', 'Archive', 'Ingest', 'Discovery', 'Telemetry', 'Catalog', 'Dispatch', 'Replay', 'Audit'];
-const PROJ_TYPE = ['Pipeline', 'Forge', 'Gateway', 'Hub', 'Ledger', 'Queue', 'Stack', 'Engine', 'Bridge', 'Console', 'Workbench', 'Mill', 'Bank', 'Loom', 'Vault'];
-function projectName(s, seed) {
-  const h = createHash('sha256').update(`proj-name:${seed}:${s}`).digest('hex');
-  const adj = PROJ_ADJ[parseInt(h.slice(0, 4), 16) % PROJ_ADJ.length];
-  const dom = PROJ_DOMAIN[parseInt(h.slice(4, 8), 16) % PROJ_DOMAIN.length];
-  const typ = PROJ_TYPE[parseInt(h.slice(8, 12), 16) % PROJ_TYPE.length];
-  const suffix = h.slice(12, 15).toUpperCase();
-  return `${adj} ${dom} ${typ} ${suffix}`;
+const PROJ_ADJ = [
+  'Granite', 'Velvet', 'Copper', 'Sapphire', 'Cinder', 'Maple', 'Cobalt', 'Ember', 'Flint', 'Glade',
+  'Harbor', 'Ivory', 'Juniper', 'Kestrel', 'Larch', 'Mocha', 'Nimbus', 'Opal', 'Pebble', 'Quartz',
+  'Ridge', 'Sage', 'Thistle', 'Umbra', 'Verdant', 'Wren', 'Xenon', 'Yarrow', 'Zephyr', 'Amber',
+  'Bramble', 'Cedar', 'Driftwood', 'Echo', 'Fjord', 'Glacier', 'Hazel', 'Iris', 'Jade', 'Klein',
+  'Lichen', 'Marble', 'Nettle', 'Onyx', 'Pollen', 'Quill', 'Rune', 'Slate', 'Tundra', 'Umber',
+  'Vapor', 'Willow', 'Xanadu', 'Yew', 'Zenith', 'Alder', 'Birch', 'Citrine', 'Dune', 'Elm',
+  'Fern', 'Garnet', 'Hemlock', 'Indigo', 'Jasper', 'Krill', 'Loam', 'Moss', 'Nacre', 'Obsidian',
+  'Petrel', 'Quasar', 'Reef', 'Spruce', 'Tide', 'Updraft', 'Vellum', 'Whisker', 'Xylem', 'Yarrowleaf',
+  'Zephyra', 'Abalone', 'Boulder', 'Clover', 'Drift', 'Eddy', 'Flintlock', 'Gorse', 'Heather', 'Iceberg',
+  'Jetty', 'Kelp', 'Lupin', 'Mistral', 'Nimbus2', 'Ochre', 'Plinth', 'Quoll', 'Reed', 'Sienna',
+  'Tamarisk', 'Umbrawood', 'Vesper', 'Wickerwork', 'Xeric', 'Yucca', 'Zen', 'Aspen', 'Briar', 'Calcite',
+  'Daffodil', 'Esker', 'Fjordstone', 'Gneiss', 'Halite', 'Iolite', 'Jadeite', 'Kyanite', 'Lapis', 'Magnetite',
+];
+const PROJ_DOMAIN = [
+  'Billing', 'Auth', 'Search', 'Imaging', 'Export', 'Onboarding', 'Notification', 'Inventory', 'Reporting', 'Analytics',
+  'Webhook', 'Sync', 'Archive', 'Ingest', 'Discovery', 'Telemetry', 'Catalog', 'Dispatch', 'Replay', 'Audit',
+  'Payments', 'Identity', 'Recommendation', 'Pricing', 'Workflow', 'Subscription', 'Invoice', 'Refund', 'Tax', 'Compliance',
+  'Provisioning', 'Allocation', 'Reservation', 'Quota', 'Tenant', 'Rollback', 'Migration', 'Deployment', 'Rollout', 'Canary',
+  'Schema', 'Index', 'Partition', 'Shard', 'Cache', 'Buffer', 'Stream', 'Pubsub', 'Event', 'Trace',
+  'Metric', 'Log', 'Alert', 'Threshold', 'Watcher', 'QuotaGuard', 'Throttle', 'Limit', 'Backoff', 'Retry',
+  'Healthcheck', 'Heartbeat', 'Locator', 'Resolver', 'Renderer', 'Compositor', 'Decoder', 'Encoder', 'Transcoder', 'Mosaic',
+  'Pagination', 'Filter', 'Sorter', 'Routing', 'Selector', 'Orchestration', 'Federation', 'Geo', 'Locale', 'Timezone',
+  'Translation', 'Glossary', 'Vocabulary', 'Ontology', 'Knowledge', 'Personalization', 'Segmentation', 'Targeting', 'Campaign', 'Bidding',
+  'Auction', 'Apportionment', 'Spend', 'Budgeting', 'Forecast', 'Projection', 'Reconciliation', 'Settlement', 'Clearing', 'Bookkeeping',
+];
+const PROJ_TYPE = [
+  'Pipeline', 'Forge', 'Gateway', 'Hub', 'Ledger', 'Queue', 'Stack', 'Engine', 'Bridge', 'Console',
+  'Workbench', 'Mill', 'Bank', 'Loom', 'Vault', 'Foundry', 'Lab', 'Studio', 'Tower', 'Boundary',
+  'Sentinel', 'Lighthouse', 'Anchor', 'Compass', 'Pivot', 'Hinge', 'Fulcrum', 'Conduit', 'Channel', 'Aqueduct',
+  'Spillway', 'Reservoir', 'Cistern', 'Wellspring', 'Causeway', 'Threshold', 'Atrium', 'Portico', 'Veranda', 'Cloister',
+  'Crucible', 'Kiln', 'Smelter', 'Anvil', 'Furnace', 'Hearth', 'Brazier', 'Lantern', 'Beacon', 'Pyre',
+  'Roost', 'Aerie', 'Eyrie', 'Nest', 'Den', 'Lair', 'Burrow', 'Hollow', 'Refuge', 'Sanctum',
+  'Garrison', 'Bastion', 'Citadel', 'Keep', 'Redoubt', 'Outpost', 'Rampart', 'Barbican', 'Palisade', 'Watchtower',
+  'Quarry', 'Lode', 'Vein', 'Seam', 'Riffle', 'Shoal', 'Sandbar', 'Berm', 'Mound', 'Crest',
+  'Span', 'Trestle', 'Overpass', 'Footbridge', 'Catwalk', 'Boardwalk', 'Promenade', 'Concourse', 'Gallery', 'Plaza',
+  'Forum', 'Agora', 'Bazaar', 'Caravanserai', 'Emporium', 'Exchange', 'Marketplace', 'Workshop', 'Atelier', 'Dispensary',
+];
+// Seed-rotated round-robin index: gives EXACT uniform distribution (max cluster =
+// ceil(N/pool_size)) vs hash-random's tail variance. Replaces the prior hash-mod selection
+// that produced max=19 ADJ cluster at 1000 projects (operator threshold ~10-15).
+function rrIdx(seed, tag, poolSize, idx) {
+  const offset = parseInt(createHash('sha256').update(`rr-offset:${seed}:${tag}`).digest('hex').slice(0, 4), 16) % poolSize;
+  return (idx + offset) % poolSize;
+}
+function projectName(projIdx, seed) {
+  // Three rotated round-robins (one per token) with relatively-prime cycle offsets so the
+  // combined (ADJ, DOMAIN, TYPE) triple is near-uniformly distributed across pool^3 combos.
+  const adj = PROJ_ADJ[rrIdx(seed, 'proj-adj', PROJ_ADJ.length, projIdx)];
+  const dom = PROJ_DOMAIN[rrIdx(seed, 'proj-dom', PROJ_DOMAIN.length, projIdx * 7)];
+  const typ = PROJ_TYPE[rrIdx(seed, 'proj-typ', PROJ_TYPE.length, projIdx * 13)];
+  // Long suffix preserves uniqueness even when the visible (ADJ, DOMAIN, TYPE) prefix cycles.
+  const h = createHash('sha256').update(`proj-suffix:${seed}:${projIdx}`).digest('hex');
+  return `${adj} ${dom} ${typ} ${h.slice(0, 8).toUpperCase()}`;
 }
 // Per-subject natural project-context phrase: a short descriptive tag that adds
 // discriminative natural-language content to project anchor docs (decision, bridge_seed,
 // conflict). Per operator: "Ensure decision/multi-session/conflict anchors contain
 // discriminative natural project context."
 const PROJ_CONTEXT = ['internal-tools group', 'platform-services group', 'infrastructure team', 'data-platform org', 'customer-facing group', 'developer-experience team', 'reliability org', 'partner-integrations team', 'commerce platform', 'observability stack'];
-function projectContext(s, seed) {
-  const h = createHash('sha256').update(`proj-ctx:${seed}:${s}`).digest('hex');
-  return PROJ_CONTEXT[parseInt(h.slice(0, 4), 16) % PROJ_CONTEXT.length];
+function projectContext(projIdx, seed) {
+  return PROJ_CONTEXT[rrIdx(seed, 'proj-ctx', PROJ_CONTEXT.length, projIdx)];
 }
 // Per-subject token derivation. Uses subject index `s` + SEED for byte-deterministic uniqueness.
 // codename / infraTag namespaces are ENORMOUS (20*20*99*hex6) so cross-subject collisions are
 // vanishingly rare even at 300k subjects. None of these tokens duplicate the subject's canonical
 // name, so "ROUTING-REQUIRED" docs that previously omitted canonical can keep doing so.
 function subjectTokens(s, seed) {
+  // v12c: hash-based codename selection. Prior mod-arithmetic cycled at LCM(20,20,99)=1980,
+  // producing ~120 codename collisions at 3000 subjects → cross-subject session-text dups
+  // (1564 dup-pairs in v12 100k corpus). Hash gives uniform distribution across 20*20*99 =
+  // 39,600 codename combos with negligible collision rate at this scale.
   const hexTag = createHash('sha256').update(`subj-tokens:${seed}:${s}`).digest('hex');
+  const cnH = createHash('sha256').update(`codename:${seed}:${s}`).digest('hex');
+  const codename = `${COLORS[parseInt(cnH.slice(0, 4), 16) % COLORS.length]}-${ANIMALS[parseInt(cnH.slice(4, 8), 16) % ANIMALS.length]}-${(parseInt(cnH.slice(8, 12), 16) % 99).toString().padStart(2, '0')}-${cnH.slice(12, 16)}`;
   return {
-    codename: `${COLORS[s % COLORS.length]}-${ANIMALS[(s * 7 + 3) % ANIMALS.length]}-${(s % 99).toString().padStart(2, '0')}`,
+    codename,
     infraTag: `ix-${hexTag.slice(0, 6)}`,
     deployId: `deploy-${(1000 + s).toString()}`,
-    region: REGIONS[s % REGIONS.length],
-    quarter: QUARTERS[(s * 3 + 1) % QUARTERS.length],
-    month: MONTHS[(s + 2) % MONTHS.length],
-    year: 2020 + (s % 6),
-    version: `v${1 + (s % 9)}.${(s * 7) % 9}.${(s * 11) % 9}`,
-    pet: PETS[s % PETS.length],
-    professional: PROFESSIONALS[(s * 5) % PROFESSIONALS.length],
-    cause: CAUSES[(s * 9 + 2) % CAUSES.length],
+    region: REGIONS[parseInt(hexTag.slice(6, 10), 16) % REGIONS.length],
+    quarter: QUARTERS[parseInt(hexTag.slice(10, 14), 16) % QUARTERS.length],
+    month: MONTHS[parseInt(hexTag.slice(14, 18), 16) % MONTHS.length],
+    year: 2020 + (parseInt(hexTag.slice(18, 22), 16) % 6),
+    version: `v${1 + (parseInt(hexTag.slice(22, 24), 16) % 9)}.${parseInt(hexTag.slice(24, 26), 16) % 9}.${parseInt(hexTag.slice(26, 28), 16) % 9}`,
+    pet: PETS[parseInt(hexTag.slice(28, 32), 16) % PETS.length],
+    professional: PROFESSIONALS[parseInt(hexTag.slice(32, 36), 16) % PROFESSIONALS.length],
+    cause: CAUSES[parseInt(hexTag.slice(36, 40), 16) % CAUSES.length],
   };
 }
 
@@ -191,22 +283,27 @@ function band(revisions, distractors, isExhaustion) {
 }
 
 // ── build each universe ──
+let globalPersonIdx = 0;
+let globalProjectIdx = 0;
 for (let ui = 0; ui < N_UNIVERSES; ui++) {
   const universe = universes[ui];
   addEntity(universe, `Deep Memory Universe ${ui}`, [], 'deep_universe');
-  const subjectsThisU = Math.ceil(N_SUBJECTS / N_UNIVERSES);
-  // unique-name pool: FIRST×LAST gives 625 combos; index suffix guarantees uniqueness beyond that.
-  for (let s = 0; s < subjectsThisU; s++) {
-    const first = FIRST[(s * 7 + ui) % FIRST.length];
-    const last = LAST[(s * 13 + ui * 3) % LAST.length];
-    const uniqIdx = s; // disambiguating index keeps canonical identity unique even on name reuse
+  const startSubject = Math.floor((ui * N_SUBJECTS) / N_UNIVERSES);
+  const endSubject = Math.floor(((ui + 1) * N_SUBJECTS) / N_UNIVERSES);
+  const subjectsThisU = endSubject - startSubject;
+  for (let localS = 0; localS < subjectsThisU; localS++) {
+    const s = startSubject + localS;
     const isProject = s % 3 === 0; // ~1/3 projects, ~2/3 people
+    const myProjectIdx = isProject ? globalProjectIdx++ : -1;
+    const myPersonIdx = isProject ? -1 : globalPersonIdx++;
+    const first = isProject ? null : FIRST[rrIdx(SEED, `first:${ui}`, FIRST.length, myPersonIdx)];
+    const last  = isProject ? null : LAST[rrIdx(SEED, `last:${ui}`,  LAST.length,  myPersonIdx)];
+    const uniqIdx = s; // disambiguating index keeps canonical identity unique even on name reuse
     const subjId = `e_${universe}_s${s}`;
     CURRENT_SUBJECT_ID = subjId; // public grounding for every query about this subject
     const job = pick(JOBS), city = pick(CITIES);
-    // v10: high-distance project naming (operator path C). See PROJ_ADJ/PROJ_DOMAIN/PROJ_TYPE.
-    const projName = projectName(s, SEED);
-    const projCtx = projectContext(s, SEED);
+    const projName = isProject ? projectName(myProjectIdx, SEED) : null;
+    const projCtx = isProject ? projectContext(myProjectIdx, SEED) : null;
     const canonical = isProject ? projName : `${first} ${last}`;
     // UNIQUE alias: include a disambiguator so coreference is well-posed even when first names repeat
     const role = isProject ? `the ${pick(STACKS)} service` : `the ${job} in ${city}`;
@@ -363,10 +460,10 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
       const answerDoc = addDoc({ lane: 'deep', kind: 'bridge_answer', entityIds: tagU(),
         text: isProject
           ? (partial
-              ? `${canonical}'s data layer runs on a ${attrVal} cluster (${tok.region}, ${tok.version}); ${canonical} owns that ${attrVal} backend.`
+              ? `That ${tok.codename} data layer runs on a ${attrVal} cluster (${tok.region}, ${tok.version}); infra ${tok.infraTag} owns the backend.`
               : `The ${tok.codename} platform layer runs on a ${attrVal} cluster (${tok.region}, ${tok.version}); infra ${tok.infraTag}.`)
           : (partial
-              ? `${sibName}, ${canonical}'s sibling, works as a ${attrVal} (${tok.region} crew, id ${tok.infraTag}).`
+              ? `${sibName} works as a ${attrVal} (${tok.region} crew, id ${tok.infraTag}, case ${tok.codename}).`
               : `${sibName} works as a ${attrVal} (${tok.codename}, ${tok.region}); team id ${tok.infraTag}.`),
         shape: 'bridge_record', timestamp: ts(5 + ri(20)), currentStaleFlag: true });
       // v10: project bridge_seed includes per-subject natural context phrase (projCtx) for
@@ -404,7 +501,10 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
         text: `After the migration in ${tok.month} ${tok.year}, ${canonical} saw latency drop; ${incident}-class incidents on ${canonical}'s stack fell to weekly checks (${tok.region}, codename ${tok.codename}).`,
         shape: 'decision_outcome', timestamp: ts(8 + ri(8)), currentStaleFlag: true });
       rel(reason, decision, 'decision_reason'); rel(outcome, decision, 'decision_outcome');
-      addQuery({ lane: 'deep', family: 'decision_provenance', queryText: `Why did ${canonical} migrate its datastore?`,
+      // v12: query carries projCtx for natural project-specific context (operator directive).
+      // projCtx is the org/team descriptor (e.g. "internal-tools group"), NOT the migration
+      // WHY — no label leakage. Truth doc carries the same projCtx so query→truth lex-anchors.
+      addQuery({ lane: 'deep', family: 'decision_provenance', queryText: `Why did ${canonical} (${projCtx}) migrate its datastore?`,
         qrels: [{ docId: reason, relevance: 1.0, role: 'direct' }, { docId: decision, relevance: 0.4, role: 'bridge' }],
         hardNegatives: [{ docId: outcome, category: 'relation_neighbor' }], ownerEntityId: universe, band: band(3, 2, chance(0.2)) });
     }
@@ -583,11 +683,23 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
 // ── DENSE same-universe distractors: for each query, add a few hard negatives that are
 // other subjects' docs of the SAME kind (strong same-universe negatives, not cross-owner). ──
 const docsByKind = new Map();
-for (const d of docs) { const k = d.kind.replace(/_\w+$/, ''); if (!docsByKind.has(k)) docsByKind.set(k, []); docsByKind.get(k).push(d.id); }
+const docsByKindUniverse = new Map();
+for (const d of docs) {
+  const k = d.kind.replace(/_\w+$/, '');
+  if (!docsByKind.has(k)) docsByKind.set(k, []);
+  docsByKind.get(k).push(d.id);
+  const owner = Array.isArray(d.entityIds) ? d.entityIds[0] : null;
+  if (owner) {
+    const uk = `${owner}:${k}`;
+    if (!docsByKindUniverse.has(uk)) docsByKindUniverse.set(uk, []);
+    docsByKindUniverse.get(uk).push(d.id);
+  }
+}
 for (const q of queries) {
   const directKind = docs.find((d) => d.id === q.qrels.find((r) => r.role === 'direct')?.docId)?.kind;
   if (!directKind) continue;
-  const pool = docsByKind.get(directKind.replace(/_\w+$/, '')) ?? [];
+  const baseKind = directKind.replace(/_\w+$/, '');
+  const pool = docsByKindUniverse.get(`${q.ownerEntityId}:${baseKind}`) ?? docsByKind.get(baseKind) ?? [];
   const have = new Set(q.qrels.map((r) => r.docId).concat(q.hardNegatives.map((n) => n.docId)));
   let added = 0;
   for (let i = 0; i < pool.length && added < 3; i++) { const cand = pool[ri(pool.length)]; if (!have.has(cand)) { q.hardNegatives.push({ docId: cand, category: 'near_collision_attribute' }); have.add(cand); added++; } }
