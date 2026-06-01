@@ -100,6 +100,35 @@ const CAUSES = ['a flaky cron', 'a stale TLS chain', 'a queue saturation', 'a mi
 // boilerplate instead of subject name).
 const SESSION_ACTIVITIES = ['standup notes', 'a Friday writeup', 'a Monday huddle', 'a sprint retro', 'a planning sync', 'a backlog grooming'];
 const SESSION_OUTCOMES = ['action items logged', 'follow-ups assigned', 'a doc updated', 'tickets filed', 'a ticket closed', 'a new note created'];
+
+// 2026-06-01 v10: project-name restructure (operator path C). The prior `${TOPIC}-svc-${idx}`
+// pattern (e.g. "auth-refresh-svc-1761") created a BGE-M3 compound-name cluster: at 1500
+// project subjects across 6 TOPICS, each topic-prefix had 250 docs that share exact leading
+// tokens, leaving only the trailing digit to disambiguate — and BGE-M3 dim 243 int8 cannot
+// distinguish digit-suffixes reliably (this was the root cause of decision_provenance Stage A
+// 0.32x and multi_session_bridge Stage A 1.05x at 100k v8c). New names use 4 semantic tokens
+// (adjective + domain + service-type + 3-hex suffix) for ~49M unique combinations vs ~1500
+// subjects → zero collision. Each subject gets a SEMANTICALLY DISTINCT natural-language name.
+const PROJ_ADJ = ['Granite', 'Velvet', 'Copper', 'Sapphire', 'Cinder', 'Maple', 'Cobalt', 'Ember', 'Flint', 'Glade', 'Harbor', 'Ivory', 'Juniper', 'Kestrel', 'Larch', 'Mocha', 'Nimbus', 'Opal', 'Pebble', 'Quartz', 'Ridge', 'Sage', 'Thistle', 'Umbra', 'Verdant', 'Wren', 'Xenon', 'Yarrow', 'Zephyr', 'Amber', 'Bramble', 'Cedar', 'Driftwood', 'Echo', 'Fjord', 'Glacier', 'Hazel', 'Iris', 'Jade', 'Klein'];
+const PROJ_DOMAIN = ['Billing', 'Auth', 'Search', 'Imaging', 'Export', 'Onboarding', 'Notification', 'Inventory', 'Reporting', 'Analytics', 'Webhook', 'Sync', 'Archive', 'Ingest', 'Discovery', 'Telemetry', 'Catalog', 'Dispatch', 'Replay', 'Audit'];
+const PROJ_TYPE = ['Pipeline', 'Forge', 'Gateway', 'Hub', 'Ledger', 'Queue', 'Stack', 'Engine', 'Bridge', 'Console', 'Workbench', 'Mill', 'Bank', 'Loom', 'Vault'];
+function projectName(s, seed) {
+  const h = createHash('sha256').update(`proj-name:${seed}:${s}`).digest('hex');
+  const adj = PROJ_ADJ[parseInt(h.slice(0, 4), 16) % PROJ_ADJ.length];
+  const dom = PROJ_DOMAIN[parseInt(h.slice(4, 8), 16) % PROJ_DOMAIN.length];
+  const typ = PROJ_TYPE[parseInt(h.slice(8, 12), 16) % PROJ_TYPE.length];
+  const suffix = h.slice(12, 15).toUpperCase();
+  return `${adj} ${dom} ${typ} ${suffix}`;
+}
+// Per-subject natural project-context phrase: a short descriptive tag that adds
+// discriminative natural-language content to project anchor docs (decision, bridge_seed,
+// conflict). Per operator: "Ensure decision/multi-session/conflict anchors contain
+// discriminative natural project context."
+const PROJ_CONTEXT = ['internal-tools group', 'platform-services group', 'infrastructure team', 'data-platform org', 'customer-facing group', 'developer-experience team', 'reliability org', 'partner-integrations team', 'commerce platform', 'observability stack'];
+function projectContext(s, seed) {
+  const h = createHash('sha256').update(`proj-ctx:${seed}:${s}`).digest('hex');
+  return PROJ_CONTEXT[parseInt(h.slice(0, 4), 16) % PROJ_CONTEXT.length];
+}
 // Per-subject token derivation. Uses subject index `s` + SEED for byte-deterministic uniqueness.
 // codename / infraTag namespaces are ENORMOUS (20*20*99*hex6) so cross-subject collisions are
 // vanishingly rare even at 300k subjects. None of these tokens duplicate the subject's canonical
@@ -175,7 +204,9 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     const subjId = `e_${universe}_s${s}`;
     CURRENT_SUBJECT_ID = subjId; // public grounding for every query about this subject
     const job = pick(JOBS), city = pick(CITIES);
-    const projName = `${pick(TOPICS).replace(/\s/g, '-')}-svc-${uniqIdx}`;
+    // v10: high-distance project naming (operator path C). See PROJ_ADJ/PROJ_DOMAIN/PROJ_TYPE.
+    const projName = projectName(s, SEED);
+    const projCtx = projectContext(s, SEED);
     const canonical = isProject ? projName : `${first} ${last}`;
     // UNIQUE alias: include a disambiguator so coreference is well-posed even when first names repeat
     const role = isProject ? `the ${pick(STACKS)} service` : `the ${job} in ${city}`;
@@ -184,11 +215,14 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     // Per-subject stable semantic tokens (see subjectTokens definition near banks).
     const tok = subjectTokens(s, SEED);
 
-    // intro / coreference anchor doc (v8c form — v9's job-removal hurt coref reach).
+    // v11: intro doc drops "is a ${job}" AND "${first} the ${job}" patterns — the v10 100k
+    // miss-dumps showed intro docs flooded multi_session "job of sibling" queries because
+    // each of 1500 intro docs contained the "job" token + name pattern. Job-alias mapping
+    // moved EXCLUSIVELY to coref doc (one per person, 1500 total) to limit job-token flood.
     const introId = addDoc({ lane: 'deep', kind: 'intro', entityIds: tagU(),
       text: isProject
         ? `Project ${canonical} is ${role} in ${tok.region}. ${canonical}'s codename is ${tok.codename}; the platform team has owned ${canonical} since ${tok.quarter}.`
-        : `${canonical} is a ${job} based in ${city}. Friends and colleagues sometimes call ${canonical} just "${first}" — ${first} the ${job} and ${canonical} refer to the same person. Account ${tok.codename}.`,
+        : `${canonical} is based in ${city} (region ${tok.region}); ${canonical} sometimes goes by ${first}. Account ${tok.codename}.`,
       shape: 'intro_record', timestamp: ts(0), currentStaleFlag: true });
 
     // ── deep session filler (same-universe distractors) ──
@@ -335,10 +369,11 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
               ? `${sibName}, ${canonical}'s sibling, works as a ${attrVal} (${tok.region} crew, id ${tok.infraTag}).`
               : `${sibName} works as a ${attrVal} (${tok.codename}, ${tok.region}); team id ${tok.infraTag}.`),
         shape: 'bridge_record', timestamp: ts(5 + ri(20)), currentStaleFlag: true });
-      // v8c form (v9 longer "depends on its datastore" 2x regressed bridge_seed at 100k).
+      // v10: project bridge_seed includes per-subject natural context phrase (projCtx) for
+      // discriminative anchoring (operator path C). People bridge_seed unchanged from v8c.
       const bridgeDoc = addDoc({ lane: 'deep', kind: 'bridge_seed', entityIds: tagU(),
         text: isProject
-          ? `${canonical}'s datastore: ${canonical} depends on the ${tok.codename} backend (${tok.region}).`
+          ? `${canonical} (${projCtx}) depends on its datastore at the ${tok.codename} backend in ${tok.region}.`
           : `${canonical}'s sibling ${sibName} has a different job (contact ${tok.infraTag}, ${tok.region}).`,
         shape: 'bridge_seed', timestamp: ts(4 + ri(10)), currentStaleFlag: true });
       rel(bridgeDoc, answerDoc, isProject ? 'depends_on' : 'supports');
@@ -352,12 +387,11 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     // ── FAMILY 4: decision_provenance (reason → outcome) ──
     if (isProject) {
       const fromDb = pick(DBS), incident = pick(ERRORS);
-      // v8c form (v9 "reason" expansion regressed enrich; v8c had decision-anchor 0.32x which
-      // is the BEST single-template result so far at 100k for this family). The decision
-      // anchor remains the hardest at-scale family — the compound name "TOPIC-svc-NNN"
-      // produces an embedding cluster the bi-encoder cannot easily disambiguate by trailing
-      // digits across ~1500 project subjects.
-      const decisionText = `${canonical} migrated its datastore off ${fromDb} (${tok.quarter}, codename ${tok.codename}); ${canonical}'s migration plan was approved.`;
+      // v11: lead decision text with the exact query-anchor phrase "${canonical}'s datastore
+      // migration" — query says "Why did X migrate its datastore?" so the truth that LEADS
+      // with "X's datastore migration:" will lex-anchor against the temporal-stale "X's city
+      // was previously Y" flood that beat decision at v10 100k.
+      const decisionText = `${canonical}'s datastore migration: ${canonical} moved off ${fromDb} after the ${tok.quarter} planning review (${projCtx}, codename ${tok.codename}).`;
       const decision = addDoc({ lane: 'deep', kind: 'decision', entityIds: tagU(),
         text: decisionText,
         shape: 'decision_record', timestamp: ts(6 + ri(10)), currentStaleFlag: true });
@@ -436,10 +470,12 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
       const csCap = cap(stableScope);
       const coCap = cap(otherScope);
       let conflictAText, conflictBText, scopeDocText;
+      // v10: shape 0 includes projCtx for projects only (people don't have a project context).
+      const ctxParen = isProject ? `, ${projCtx}` : '';
       if (cs === 0) {
-        conflictAText = `${canonical} once used ${scopedA} for ${stableScope} ${conflictAttr} (${tok.quarter}, ${tok.codename}).`;
-        conflictBText = `${canonical} now uses ${scopedB} for ${stableScope} ${conflictAttr}, replacing ${scopedA} (${tok.month} ${tok.year}, ${tok.codename}).`;
-        scopeDocText  = `${canonical} keeps ${scopedA} for ${otherScope} ${conflictAttr} (separate from ${stableScope}, ${tok.codename}).`;
+        conflictAText = `${canonical}${ctxParen} once used ${scopedA} for ${stableScope} ${conflictAttr} (${tok.quarter}, ${tok.codename}).`;
+        conflictBText = `${canonical}${ctxParen} now uses ${scopedB} for ${stableScope} ${conflictAttr}, replacing ${scopedA} (${tok.month} ${tok.year}, ${tok.codename}).`;
+        scopeDocText  = `${canonical}${ctxParen} keeps ${scopedA} for ${otherScope} ${conflictAttr} (separate from ${stableScope}, ${tok.codename}).`;
       } else if (cs === 1) {
         conflictAText = `Previously ${scopedA} was the ${stableScope} ${conflictAttr} for ${canonical} (${tok.quarter}, ${tok.codename}).`;
         conflictBText = `Currently ${scopedB} is the ${stableScope} ${conflictAttr} for ${canonical} (replaced ${scopedA}, ${tok.month} ${tok.year}, ${tok.codename}).`;
