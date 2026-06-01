@@ -184,8 +184,7 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     // Per-subject stable semantic tokens (see subjectTokens definition near banks).
     const tok = subjectTokens(s, SEED);
 
-    // intro / coreference anchor doc. Canonical repeated 2x for embedding upweight; alias
-    // pair (first / canonical) carried so coreference queries can link.
+    // intro / coreference anchor doc (v8c form — v9's job-removal hurt coref reach).
     const introId = addDoc({ lane: 'deep', kind: 'intro', entityIds: tagU(),
       text: isProject
         ? `Project ${canonical} is ${role} in ${tok.region}. ${canonical}'s codename is ${tok.codename}; the platform team has owned ${canonical} since ${tok.quarter}.`
@@ -336,13 +335,11 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
               ? `${sibName}, ${canonical}'s sibling, works as a ${attrVal} (${tok.region} crew, id ${tok.infraTag}).`
               : `${sibName} works as a ${attrVal} (${tok.codename}, ${tok.region}); team id ${tok.infraTag}.`),
         shape: 'bridge_record', timestamp: ts(5 + ri(20)), currentStaleFlag: true });
-      // v7: lex-mirror the query verb. Project query says "datastore ... depend on" → seed
-      // says "datastore" verbatim, not "data layer". Person query says "job of ... sibling" →
-      // seed names "sibling" (already) and adds "role" as a "job"-adjacent semantic anchor.
+      // v8c form (v9 longer "depends on its datastore" 2x regressed bridge_seed at 100k).
       const bridgeDoc = addDoc({ lane: 'deep', kind: 'bridge_seed', entityIds: tagU(),
         text: isProject
-          ? `${canonical}'s primary datastore is hosted at the ${tok.codename} platform; ${canonical} depends on that ${tok.region} backend (${tok.version}).`
-          : `${canonical}'s sibling, ${sibName}, has a separate role; ${canonical} keeps ${sibName}'s contact ${tok.infraTag} on the ${tok.region} roster.`,
+          ? `${canonical}'s datastore: ${canonical} depends on the ${tok.codename} backend (${tok.region}).`
+          : `${canonical}'s sibling ${sibName} has a different job (contact ${tok.infraTag}, ${tok.region}).`,
         shape: 'bridge_seed', timestamp: ts(4 + ri(10)), currentStaleFlag: true });
       rel(bridgeDoc, answerDoc, isProject ? 'depends_on' : 'supports');
       const nDist = 1 + ri(3);
@@ -355,10 +352,12 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     // ── FAMILY 4: decision_provenance (reason → outcome) ──
     if (isProject) {
       const fromDb = pick(DBS), incident = pick(ERRORS);
-      // v7b: revert to single shape with canonical 2x. The v7 3-shape rotation halved the
-      // canonical-mention count (shapes 1+2 had canonical 1x) and dropped enrichment from
-      // 2.17x to 1.19x. Canonical-anchor strength matters more than syntactic variation here.
-      const decisionText = `${canonical} chose to migrate its datastore off ${fromDb}; the ${tok.quarter} planning review approved ${canonical}'s migration (region ${tok.region}, codename ${tok.codename}).`;
+      // v8c form (v9 "reason" expansion regressed enrich; v8c had decision-anchor 0.32x which
+      // is the BEST single-template result so far at 100k for this family). The decision
+      // anchor remains the hardest at-scale family — the compound name "TOPIC-svc-NNN"
+      // produces an embedding cluster the bi-encoder cannot easily disambiguate by trailing
+      // digits across ~1500 project subjects.
+      const decisionText = `${canonical} migrated its datastore off ${fromDb} (${tok.quarter}, codename ${tok.codename}); ${canonical}'s migration plan was approved.`;
       const decision = addDoc({ lane: 'deep', kind: 'decision', entityIds: tagU(),
         text: decisionText,
         shape: 'decision_record', timestamp: ts(6 + ri(10)), currentStaleFlag: true });
@@ -398,12 +397,10 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     }
 
     // ── FAMILY 6: coreference_resolution (alias/role → canonical) ──
-    // 2026-05-31 v5b: tighten — earlier 4×-name repetition flooded top-K across other
-    // families' queries (coref docs were top-1 for temporal/conflict misses). Carry alias
-    // + canonical exactly once each in a single short sentence.
+    // v8c form (v9 canonical-led parenthetical regressed coref from 3.72x to 2.27x at 100k).
     if (!isProject) {
       const corefDoc = addDoc({ lane: 'deep', kind: 'coref_fact', entityIds: tagU(),
-        text: `${first} the ${job} (also known as ${canonical}) has a rescue dog named ${tok.pet} (case ${tok.codename}).`,
+        text: `${first} the ${job}, also known as ${canonical}, has a pet named ${tok.pet} (case ${tok.codename}).`,
         shape: 'coref_record', timestamp: ts(9 + ri(6)), currentStaleFlag: true });
       rel(corefDoc, introId, 'coreference_of');
       addQuery({ lane: 'deep', family: 'coreference_resolution', queryText: `What pet does ${first} the ${job} have?`,
@@ -428,34 +425,49 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
       const scopedA = isProject ? cityA : `${cityA} family clinic`;
       const scopedB = isProject ? cityB : `${cityB} specialist clinic`;
       const stableScope = isProject ? 'production' : 'weekday care';
-      // 2026-05-31 v7 fix: lead the CURRENT truth with the EXACT query-prefix phrase
-      // ("${stableScope} ${conflictAttr} for ${canonical} is currently ${scopedB}") so
-      // BGE-M3 anchors on direct prefix match. The query template is
-      // "For ${stableScope}, what is ${canonical}'s current ${conflictAttr}?" — by
-      // starting the truth with "${stableScope} ${conflictAttr} for ${canonical} is currently"
-      // the same 4-5 lexical tokens appear in the same relative position. Same approach for
-      // stale (use past tense lead) and scope (different scope, similar prefix shape).
-      // Per-subject 3-shape rotation still varies the tail to avoid one-template clustering.
+      // 2026-05-31 v8 fix: 8-shape rotation with VARIED structural positions for
+      // canonical/scope/attr/value — v7's "leading prefix" became a 1500-doc cluster
+      // attracting any name-like query. Each shape places canonical/attr/scope/value in
+      // different syntactic positions so no single structural pattern dominates >12.5% of
+      // conflict docs across 1500 project + 1500 person subjects.
       const otherScope = isProject ? 'staging' : 'weekend care';
-      const cs = s % 3;
-      // The capitalize helper inlined: take first char up, rest as-is. Used for the
-      // sentence-initial scope tokens ("Production" / "Weekday care").
+      const cs = s % 8;
       const cap = (str) => str.charAt(0).toUpperCase() + str.slice(1);
       const csCap = cap(stableScope);
       const coCap = cap(otherScope);
       let conflictAText, conflictBText, scopeDocText;
       if (cs === 0) {
-        conflictAText = `${csCap} ${conflictAttr} for ${canonical} was previously ${scopedA}; recorded in ${tok.quarter} (codename ${tok.codename}).`;
-        conflictBText = `${csCap} ${conflictAttr} for ${canonical} is currently ${scopedB}, switched from ${scopedA} in ${tok.month} ${tok.year} (codename ${tok.codename}).`;
-        scopeDocText  = `${coCap} ${conflictAttr} for ${canonical} remains ${scopedA}; held separate from the ${stableScope} setup (codename ${tok.codename}).`;
+        conflictAText = `${canonical} once used ${scopedA} for ${stableScope} ${conflictAttr} (${tok.quarter}, ${tok.codename}).`;
+        conflictBText = `${canonical} now uses ${scopedB} for ${stableScope} ${conflictAttr}, replacing ${scopedA} (${tok.month} ${tok.year}, ${tok.codename}).`;
+        scopeDocText  = `${canonical} keeps ${scopedA} for ${otherScope} ${conflictAttr} (separate from ${stableScope}, ${tok.codename}).`;
       } else if (cs === 1) {
-        conflictAText = `${csCap} ${conflictAttr} for ${canonical} used to be ${scopedA} (logged ${tok.quarter}, codename ${tok.codename}).`;
-        conflictBText = `${csCap} ${conflictAttr} for ${canonical} is now ${scopedB}, having replaced ${scopedA} as of ${tok.month} ${tok.year} (codename ${tok.codename}).`;
-        scopeDocText  = `${coCap} ${conflictAttr} for ${canonical} stays ${scopedA}, scoped apart from ${stableScope} (codename ${tok.codename}).`;
+        conflictAText = `Previously ${scopedA} was the ${stableScope} ${conflictAttr} for ${canonical} (${tok.quarter}, ${tok.codename}).`;
+        conflictBText = `Currently ${scopedB} is the ${stableScope} ${conflictAttr} for ${canonical} (replaced ${scopedA}, ${tok.month} ${tok.year}, ${tok.codename}).`;
+        scopeDocText  = `On ${otherScope}, ${canonical}'s ${conflictAttr} stays ${scopedA} (independent of ${stableScope}, ${tok.codename}).`;
+      } else if (cs === 2) {
+        conflictAText = `${tok.codename}: ${canonical}'s ${stableScope} ${conflictAttr} was ${scopedA} (${tok.quarter}).`;
+        conflictBText = `${tok.codename}: ${canonical}'s ${stableScope} ${conflictAttr} is now ${scopedB}, switched from ${scopedA} (${tok.month} ${tok.year}).`;
+        scopeDocText  = `${tok.codename}: ${canonical}'s ${otherScope} ${conflictAttr} remains ${scopedA} (separate ${stableScope}).`;
+      } else if (cs === 3) {
+        conflictAText = `${canonical}'s ${stableScope} ${conflictAttr}: prior value ${scopedA} (${tok.quarter}, ${tok.codename}).`;
+        conflictBText = `${canonical}'s ${stableScope} ${conflictAttr}: current value ${scopedB}, switched from ${scopedA} (${tok.month} ${tok.year}, ${tok.codename}).`;
+        scopeDocText  = `${canonical}'s ${otherScope} ${conflictAttr}: kept at ${scopedA} (distinct from ${stableScope}, ${tok.codename}).`;
+      } else if (cs === 4) {
+        conflictAText = `Earlier on ${stableScope}, ${canonical} had ${scopedA} as its ${conflictAttr} (${tok.quarter}, ${tok.codename}).`;
+        conflictBText = `As of ${tok.month} ${tok.year}, ${canonical}'s ${stableScope} ${conflictAttr} is ${scopedB} (was ${scopedA}, ${tok.codename}).`;
+        scopeDocText  = `For ${otherScope}, ${canonical} has ${scopedA} as its ${conflictAttr} (not the ${stableScope} value, ${tok.codename}).`;
+      } else if (cs === 5) {
+        conflictAText = `${scopedA} was assigned to ${canonical} for ${stableScope} ${conflictAttr} (${tok.quarter}, ${tok.codename}).`;
+        conflictBText = `${scopedB} is now assigned to ${canonical} for ${stableScope} ${conflictAttr}, in place of ${scopedA} (${tok.month} ${tok.year}, ${tok.codename}).`;
+        scopeDocText  = `${scopedA} is assigned to ${canonical} for ${otherScope} ${conflictAttr} (not ${stableScope}, ${tok.codename}).`;
+      } else if (cs === 6) {
+        conflictAText = `${canonical} ran ${scopedA} for ${stableScope} ${conflictAttr} in ${tok.quarter} (codename ${tok.codename}).`;
+        conflictBText = `${canonical} runs ${scopedB} for ${stableScope} ${conflictAttr} as of ${tok.month} ${tok.year}, replacing ${scopedA} (codename ${tok.codename}).`;
+        scopeDocText  = `${canonical} runs ${scopedA} for ${otherScope} ${conflictAttr}, separate from ${stableScope} (codename ${tok.codename}).`;
       } else {
-        conflictAText = `${csCap} ${conflictAttr} for ${canonical} was ${scopedA} until the correction (${tok.quarter}, codename ${tok.codename}).`;
-        conflictBText = `${csCap} ${conflictAttr} for ${canonical} is presently ${scopedB}; the prior ${scopedA} record was retired ${tok.month} ${tok.year} (codename ${tok.codename}).`;
-        scopeDocText  = `${coCap} ${conflictAttr} for ${canonical} is ${scopedA}, kept independent of the ${stableScope} channel (codename ${tok.codename}).`;
+        conflictAText = `${canonical} mapped ${stableScope} ${conflictAttr} to ${scopedA} (${tok.quarter}, ${tok.codename}).`;
+        conflictBText = `${canonical} maps ${stableScope} ${conflictAttr} to ${scopedB} now, from earlier ${scopedA} (${tok.month} ${tok.year}, ${tok.codename}).`;
+        scopeDocText  = `${canonical} maps ${otherScope} ${conflictAttr} to ${scopedA}, kept apart from ${stableScope} (${tok.codename}).`;
       }
       const conflictA = addDoc({ lane: 'deep', kind: 'lifecycle_conflict', entityIds: tagU(),
         text: conflictAText,
