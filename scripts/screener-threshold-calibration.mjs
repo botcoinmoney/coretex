@@ -196,21 +196,18 @@ const minableTemporalQueries = pack.events
 console.log(`[screener-threshold] minable temporal queries in pack: ${minableTemporalQueries.length} (current+stale truth pair available)`);
 
 function patchViableNonAdvancing(seed) {
-  // Corpus-anchored MIXED patch: 1 MemoryIndex anchor slot on a real pack truth doc +
-  // 1 category-lens edge. Structurally valid and touches the scorer's relation path
-  // (so the patch can actually shift retrieval) — but only 1 edge → typically below
-  // STATE_ADVANCE threshold. Expected outcome: SCREENER_PASS when delta clears the
-  // screener threshold but not state-advance, REJECT below.
-  const { docId, family, productionFamily, eventId } = packDocAnchor(seed);
-  const slotOffset = 32 + (seed % 16);
-  const anchorIdx = RANGES.MEMORY_INDEX_START + slotOffset;
-  const rel = relationUnits(1);
+  // A100 v15 probe result: relation(1) is a no-op at 300k, while relation(2-4)
+  // produces accepted retrieval lift. This class intentionally uses a real relation
+  // patch but sets liveStateAdvanced=false in classification, so it calibrates the
+  // screener middle band (useful work, no live state advancement).
+  const provenance = packDocAnchor(seed);
+  const rel = relationUnits(3);
   return {
-    patch: { patchType: PATCH_TYPE.MIXED, wordCount: 1 + rel.indices.length, scoreDelta: 0, parentStateRoot: parentRoot,
-      indices: [anchorIdx, ...rel.indices],
-      newWords: [anchorWordForDoc({ docId, family, slotIndex: slotOffset }), ...rel.newWords] },
+    patch: { patchType: PATCH_TYPE.MIXED, wordCount: rel.indices.length, scoreDelta: 0, parentStateRoot: parentRoot,
+      indices: rel.indices,
+      newWords: rel.newWords },
     intent: 'viable_non_advancing',
-    anchor: { docId, family, productionFamily, eventId, slotOffset, substrate: 'memIndex+relation(1)' },
+    anchor: { ...provenance, substrate: 'relation(3)', note: 'liveStateAdvanced=false; should qualify as SCREENER_PASS, not STATE_ADVANCE' },
   };
 }
 function patchTrueAdvanceCandidate(seed) {
