@@ -29,10 +29,11 @@ const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 
 const corpusPath = flag('corpus', 'release/calibration/2026-05-21-memory-corpus-v2/p1-corpus.json');
 const embPath = flag('emb', 'release/calibration/2026-05-21-memory-corpus-v2/p1-embeddings.json');
 const profilePath = flag('profile', 'release/bundle/evaluator-profile-v2-ownerscope-r1.json');
+const pinBundlePath = flag('bundle', 'release/bundle/bundle-manifest-v2-dgen1-policy-r5-300k-calibration.json');
 const outPath = resolve(repoRoot, flag('out', 'release/bundle/bundle-manifest-v2-ownerscope-candidate.json'));
 
 const evaluatorProfile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
-const { corpus } = buildV2ProductionCorpus({ corpusPath, embPath });
+const { corpus } = buildV2ProductionCorpus({ corpusPath, embPath, bundlePath: pinBundlePath });
 const corpusRoot = corpus.corpusRoot;
 // Attest BOTH the logical corpus AND the embeddings file: embeddings feed the production events /
 // corpusRoot / scoring path, so the signed bundle must commit the embeddings sha256 too (not just
@@ -55,4 +56,4 @@ mkdirSync(dirname(outPath), { recursive: true });
 writeFileSync(outPath, JSON.stringify(manifest, null, 2));
 const p = manifest.evaluator.profile;
 console.log(JSON.stringify({ ok: true, out: relative(repoRoot, outPath), bundleHash: manifest.bundleHash, corpusRoot: manifest.corpus.root,
-  profileSigned: { name: p.name, ownerScopeMode: p.ownerScopeMode, categoryLensFinalBonusWeight: p.categoryLensFinalBonusWeight, categoryLensScoreInheritance: p.categoryLensScoreInheritance, majorDeltaThreshold: p.majorDeltaThreshold, hiddenPackQuotas: p.hiddenPack.quotas.map((q) => q.stratum) } }, null, 2));
+  profileSigned: { name: p.name, ownerScopeMode: p.ownerScopeMode, firstStageMode: p.firstStageMode, firstStageTopK: p.firstStageTopK, firstStageDenseWeight: p.firstStageDenseWeight, firstStageLexicalWeight: p.firstStageLexicalWeight, categoryLensFinalBonusWeight: p.categoryLensFinalBonusWeight, categoryLensScoreInheritance: p.categoryLensScoreInheritance, majorDeltaThreshold: p.majorDeltaThreshold, hiddenPackQuotas: p.hiddenPack.quotas.map((q) => q.stratum) } }, null, 2));
