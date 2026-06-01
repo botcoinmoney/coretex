@@ -110,8 +110,8 @@
   "corpusDocDedupe": "canonical-doc-id",
   "firstStageTopKSelection": {
     "method": "worst-stratum-target",
-    "reason": "2026-06-01 v14 health gate: hybrid dense+public-lexical first-stage clears randomness-corrected direct/anchor reach at K=3200; dense-only failed 4/7 families.",
-    "calibrationReport": "release/calibration/2026-05-21-memory-corpus-v2/corpus-retrieval-health-v14-100k-hybrid.json"
+    "reason": "2026-06-01 v15 300k health gate: canonical hybrid dense+public-lexical first-stage clears randomness-corrected direct/anchor reach at K=3200; dense-only failed earlier artifacts.",
+    "calibrationReport": "release/calibration/2026-05-21-memory-corpus-v2/corpus-retrieval-health-v15-300k-hybrid.json"
   },
   "ownerScopeMode": "restrict",
   "categoryLensFinalBonusWeight": 0,

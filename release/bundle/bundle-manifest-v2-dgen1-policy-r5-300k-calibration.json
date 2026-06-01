@@ -101,19 +101,19 @@
     ]
   },
   "corpus": {
-    "root": "0x29fb84c9fab86f1a93ff0a428145b6d9cf4a2f59e022fa1998a752b094b77f29",
+    "root": "0x624a44cb5f50def86f3e38130571963b9cea932f4bf14d073a2b4fe47ce2dd65",
     "files": [
       {
         "role": "corpus",
-        "path": "release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-300k-final-corpus.json",
-        "sha256": "862758008d58339fa61837376cbd0d1f7b604bbe01f4d653e86c57edd0968e74",
-        "bytes": 124151040
+        "path": "release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-300k-v15-corpus.json",
+        "sha256": "83bcdc77543b022087ab92467e6a40eebdeadf1c2cc678dc319ca1735fa09aa7",
+        "bytes": 152109923
       },
       {
         "role": "corpus",
-        "path": "release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-300k-final-embeddings.json",
-        "sha256": "13a86bf55f769be4630b264596a6465354f01de5b39543c51816e0e15d2a95b9",
-        "bytes": 448435409
+        "path": "release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-300k-v15-embeddings.json",
+        "sha256": "22f8e75aacc8589302ea9f834dc8edb7ba9493d575723cf5e3d7b430ed0b67ce",
+        "bytes": 473900499
       }
     ]
   },
@@ -229,8 +229,8 @@
       "corpusDocDedupe": "canonical-doc-id",
       "firstStageTopKSelection": {
         "method": "worst-stratum-target",
-        "reason": "inherited from deep-r1; calibration unchanged for the r5 epoch.",
-        "calibrationReport": "release/calibration/first-stage-topk-sweep.json"
+        "reason": "2026-06-01 v15 300k health gate: canonical hybrid dense+public-lexical first-stage clears randomness-corrected direct/anchor reach at K=3200; dense-only failed earlier artifacts.",
+        "calibrationReport": "release/calibration/2026-05-21-memory-corpus-v2/corpus-retrieval-health-v15-300k-hybrid.json"
       },
       "_reclaimedRegionsNote": "r5 PROTOCOL EPOCH: RetrievalKeys (384-671) + Codebook (896-991) WORDS are reclaimed for typed PolicyAtoms. Under r5 pin, 384-671 reads as evidence_bundle(384-511)/conflict_lifecycle(512-639)/abstention(640-671) atoms; 896-991 reserved.",
       "ownerScopeMode": "restrict",
@@ -284,7 +284,10 @@
       "baselineParentScorePpm": 163371,
       "baselineVariancePpm": 0,
       "baselineSamples": 3,
-      "baselineEvalSeedHex": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+      "baselineEvalSeedHex": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "firstStageMode": "hybrid",
+      "firstStageDenseWeight": 1,
+      "firstStageLexicalWeight": 1
     },
     "files": [
       {
@@ -296,8 +299,8 @@
       {
         "role": "evaluator",
         "path": "packages/cortex/src/eval/retrieval-benchmark.ts",
-        "sha256": "8222f7b5e20860403fbb441c51f5be45b637f0e05aff22dedf77bd112dbc9f73",
-        "bytes": 134559
+        "sha256": "fc2e398a6a9901a8822062fa010281f732a6ddf9d514cb47461b77076c41ee9e",
+        "bytes": 137810
       },
       {
         "role": "evaluator",
@@ -363,7 +366,7 @@
         "role": "evaluator",
         "path": "packages/cortex/src/coordinator/epoch-frontier.ts",
         "sha256": "eeef64bf9e45ed9dbaa70fbbf786788ed1d8284f399e8f91e3c7bcae30eb7e9e",
-        "bytes": 9275
+        "bytes": 11620
       },
       {
         "role": "evaluator",
@@ -654,5 +657,5 @@
     "coordinatorCacheOptional": true,
     "snapshots": []
   },
-  "bundleHash": "0x78c485410e5267e56878a3567e61830dd4a596b21cf6add4ad142dcca53a58bb"
+  "bundleHash": "0x89a0fae7eac639a8495f9c735b5464f0f35ca14f66a80bed106a870312d7cae4"
 }

@@ -25,7 +25,7 @@
 #                             canonical evaluateCoreTexWorkQualification; measured noise floor)
 #
 # Usage:
-#   bash scripts/a100-campaign.sh <100k|300k> [--profile <p>] [--bundle <b>] [--resume]
+#   bash scripts/a100-campaign.sh <100k|300k> [--profile <p>] [--bundle <b>] [--corpus <c>] [--emb <e>] [--resume]
 #   setsid nohup bash scripts/a100-campaign.sh 300k > /workspace/campaign-300k/_driver.log 2>&1 < /dev/null &
 
 set -euo pipefail
@@ -33,22 +33,26 @@ set -euo pipefail
 SCALE=""
 PROFILE_OVERRIDE=""
 BUNDLE_OVERRIDE=""
+CORPUS_OVERRIDE=""
+EMB_OVERRIDE=""
 RESUME=0
 while [ $# -gt 0 ]; do
   case "$1" in
     100k|300k) SCALE="$1"; shift ;;
     --profile) PROFILE_OVERRIDE="$2"; shift 2 ;;
     --bundle)  BUNDLE_OVERRIDE="$2";  shift 2 ;;
+    --corpus)  CORPUS_OVERRIDE="$2";  shift 2 ;;
+    --emb)     EMB_OVERRIDE="$2";     shift 2 ;;
     --resume)  RESUME=1; shift ;;
-    *) echo "HARD FAIL: unknown arg '$1' (usage: a100-campaign.sh <100k|300k> [--profile p] [--bundle b] [--resume])" >&2; exit 1 ;;
+    *) echo "HARD FAIL: unknown arg '$1' (usage: a100-campaign.sh <100k|300k> [--profile p] [--bundle b] [--corpus c] [--emb e] [--resume])" >&2; exit 1 ;;
   esac
 done
 [ -z "$SCALE" ] && { echo "HARD FAIL: scale required (100k|300k)" >&2; exit 1; }
 
 cd /workspace/cortex
 CORPUS_DIR=release/calibration/2026-05-21-memory-corpus-v2
-C=$CORPUS_DIR/dgen1-r5-synth-$SCALE-final-corpus.json
-E=$CORPUS_DIR/dgen1-r5-synth-$SCALE-final-embeddings.json
+C=${CORPUS_OVERRIDE:-$CORPUS_DIR/dgen1-r5-synth-$SCALE-final-corpus.json}
+E=${EMB_OVERRIDE:-$CORPUS_DIR/dgen1-r5-synth-$SCALE-final-embeddings.json}
 P=${PROFILE_OVERRIDE:-release/bundle/evaluator-profile-v2-dgen1-policy-r5-$SCALE-calibration.json}
 B=${BUNDLE_OVERRIDE:-release/bundle/bundle-manifest-v2-dgen1-policy-r5-$SCALE-calibration.json}
 LOGD=/workspace/campaign-$SCALE
