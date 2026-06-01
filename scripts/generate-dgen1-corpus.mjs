@@ -190,6 +190,34 @@ const PROJ_TYPE = [
   'Span', 'Trestle', 'Overpass', 'Footbridge', 'Catwalk', 'Boardwalk', 'Promenade', 'Concourse', 'Gallery', 'Plaza',
   'Forum', 'Agora', 'Bazaar', 'Caravanserai', 'Emporium', 'Exchange', 'Marketplace', 'Workshop', 'Atelier', 'Dispensary',
 ];
+// v15: scale visible-token diversity to 300k. Fixed manual pools passed 100k but failed
+// the 300k cluster gate (e.g. 6000 people / 210 first names => ~29 per first token).
+// Extend with deterministic pronounceable tokens; no numeric suffixes, no qrel/label content.
+const SYL_A = ['al', 'be', 'ca', 'di', 'el', 'fa', 'gi', 'ha', 'io', 'ja', 'ka', 'lo', 'mi', 'na', 'or', 'pa', 'qui', 'ra', 'se', 'ta', 'ul', 'vi', 'wen', 'xo', 'ya', 'zo'];
+const SYL_B = ['bar', 'cen', 'dor', 'fen', 'gan', 'hal', 'ior', 'jen', 'kor', 'lin', 'mor', 'nel', 'por', 'quil', 'ran', 'sin', 'tor', 'ven', 'wel', 'yor', 'zan'];
+const SYL_C = ['a', 'en', 'ia', 'on', 'or', 'u', 'el', 'is', 'ar', 'eth', 'um'];
+function titleToken(s) { return s.slice(0, 1).toUpperCase() + s.slice(1); }
+function expandTokenPool(base, target, salt) {
+  const out = [...base];
+  const seen = new Set(out.map((x) => x.toLowerCase()));
+  for (let i = 0; out.length < target; i++) {
+    const h = createHash('sha256').update(`token-pool:${SEED}:${salt}:${i}`).digest('hex');
+    const tok = titleToken(
+      SYL_A[parseInt(h.slice(0, 2), 16) % SYL_A.length]
+      + SYL_B[parseInt(h.slice(2, 4), 16) % SYL_B.length]
+      + SYL_C[parseInt(h.slice(4, 6), 16) % SYL_C.length],
+    );
+    if (seen.has(tok.toLowerCase())) continue;
+    seen.add(tok.toLowerCase());
+    out.push(tok);
+  }
+  return out;
+}
+const FIRST_POOL = expandTokenPool(FIRST, 768, 'first');
+const LAST_POOL = expandTokenPool(LAST, 768, 'last');
+const PROJ_ADJ_POOL = expandTokenPool(PROJ_ADJ, 384, 'proj-adj');
+const PROJ_DOMAIN_POOL = expandTokenPool(PROJ_DOMAIN, 384, 'proj-domain');
+const PROJ_TYPE_POOL = expandTokenPool(PROJ_TYPE, 384, 'proj-type');
 // Seed-rotated round-robin index: gives EXACT uniform distribution (max cluster =
 // ceil(N/pool_size)) vs hash-random's tail variance. Replaces the prior hash-mod selection
 // that produced max=19 ADJ cluster at 1000 projects (operator threshold ~10-15).
@@ -200,9 +228,9 @@ function rrIdx(seed, tag, poolSize, idx) {
 function projectName(projIdx, seed) {
   // Three rotated round-robins (one per token) with relatively-prime cycle offsets so the
   // combined (ADJ, DOMAIN, TYPE) triple is near-uniformly distributed across pool^3 combos.
-  const adj = PROJ_ADJ[rrIdx(seed, 'proj-adj', PROJ_ADJ.length, projIdx)];
-  const dom = PROJ_DOMAIN[rrIdx(seed, 'proj-dom', PROJ_DOMAIN.length, projIdx * 7)];
-  const typ = PROJ_TYPE[rrIdx(seed, 'proj-typ', PROJ_TYPE.length, projIdx * 13)];
+  const adj = PROJ_ADJ_POOL[rrIdx(seed, 'proj-adj', PROJ_ADJ_POOL.length, projIdx)];
+  const dom = PROJ_DOMAIN_POOL[rrIdx(seed, 'proj-dom', PROJ_DOMAIN_POOL.length, projIdx * 7)];
+  const typ = PROJ_TYPE_POOL[rrIdx(seed, 'proj-typ', PROJ_TYPE_POOL.length, projIdx * 13)];
   // Long suffix preserves uniqueness even when the visible (ADJ, DOMAIN, TYPE) prefix cycles.
   const h = createHash('sha256').update(`proj-suffix:${seed}:${projIdx}`).digest('hex');
   return `${adj} ${dom} ${typ} ${h.slice(0, 8).toUpperCase()}`;
@@ -296,8 +324,8 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     const isProject = s % 3 === 0; // ~1/3 projects, ~2/3 people
     const myProjectIdx = isProject ? globalProjectIdx++ : -1;
     const myPersonIdx = isProject ? -1 : globalPersonIdx++;
-    const first = isProject ? null : FIRST[rrIdx(SEED, `first:${ui}`, FIRST.length, myPersonIdx)];
-    const last  = isProject ? null : LAST[rrIdx(SEED, `last:${ui}`,  LAST.length,  myPersonIdx)];
+    const first = isProject ? null : FIRST_POOL[rrIdx(SEED, `first:${ui}`, FIRST_POOL.length, myPersonIdx)];
+    const last  = isProject ? null : LAST_POOL[rrIdx(SEED, `last:${ui}`,  LAST_POOL.length,  myPersonIdx)];
     const uniqIdx = s; // disambiguating index keeps canonical identity unique even on name reuse
     const subjId = `e_${universe}_s${s}`;
     CURRENT_SUBJECT_ID = subjId; // public grounding for every query about this subject
@@ -446,7 +474,7 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     // ONLY via a public support/depends_on edge from a findable bridge SEED doc that DOES
     // name the subject. (Mirrors the V2 bridge@1→answer design + decision_provenance.)
     {
-      const sibName = `${FIRST[(s * 11 + 3) % FIRST.length]} ${LAST[(s * 17 + 5) % LAST.length]}`;
+      const sibName = `${FIRST_POOL[(s * 11 + 3) % FIRST_POOL.length]} ${LAST_POOL[(s * 17 + 5) % LAST_POOL.length]}`;
       const attrVal = isProject ? pick(DBS) : pick(JOBS);
       // REALISM SLICE: ~1/3 of bridge answers are PARTIALLY grounded (carry a weak subject
       // reference) rather than maximally lexically-distant — to test whether relation
