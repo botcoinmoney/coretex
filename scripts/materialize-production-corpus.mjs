@@ -123,7 +123,13 @@ if (existsSync(MANIFEST) && !FORCE) {
 //     "fix the design, don't reloop full rebuilds" rule.
 const ROOT_MAT = resolve(repoRoot, 'release/calibration/2026-05-21-memory-corpus-v2/materialized');
 if (existsSync(ROOT_MAT) && !FORCE) {
-  for (const sib of readdirSync(ROOT_MAT)) {
+  const siblings = readdirSync(ROOT_MAT).sort((a, b) => {
+    const aHasRootLeaves = existsSync(resolve(ROOT_MAT, a, 'corpus.json.root-leaves.ndjson')) ? 1 : 0;
+    const bHasRootLeaves = existsSync(resolve(ROOT_MAT, b, 'corpus.json.root-leaves.ndjson')) ? 1 : 0;
+    if (aHasRootLeaves !== bHasRootLeaves) return bHasRootLeaves - aHasRootLeaves;
+    return a.localeCompare(b);
+  });
+  for (const sib of siblings) {
     if (sib === bundleTag) continue;
     const sibManifest = resolve(ROOT_MAT, sib, 'manifest.json');
     const sibCorpus = resolve(ROOT_MAT, sib, 'corpus.json');

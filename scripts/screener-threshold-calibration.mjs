@@ -28,6 +28,7 @@ import { distIndex, repoRoot } from './_repo-root.mjs';
 import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadMaterializedCorpus } from './lib/load-materialized-corpus.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
+import { makeInstrumentedReranker } from './lib/instrumented-reranker.mjs';
 import { calibrationProvenance } from './lib/calibration-provenance.mjs';
 // CANONICAL: reuse the SAME honest-patch helpers the long-horizon harness uses, so the
 // screener's "viable" / "true_advance" classes exercise the SAME substrate write the miner
@@ -62,6 +63,7 @@ const PACK_SIZE = Number(flag('pack-size', '64'));
 const NOISE_SAMPLES = Number(flag('noise-samples', '6'));
 const CLEAR_PACK_QUOTAS = has('clear-pack-quotas');
 const ALLOW_BUNDLE_SOURCE_MISMATCH = has('allow-bundle-source-mismatch');
+const DISABLE_QWEN_CACHE = has('disable-qwen-cache');
 
 if (!PROFILE_PATH || !BUNDLE_PATH || !CORPUS_PATH || !EMB_PATH || !OUT_PATH) {
   console.error('HARD FAIL: --profile, --bundle, --corpus, --emb, --out required'); exit(1);
@@ -89,9 +91,22 @@ const hiddenPack = CLEAR_PACK_QUOTAS ? { packSize: PACK_SIZE, quotas: [] } : { .
 const pack = deriveQueryPack(0, evalSeedHex, corpus, hiddenPack);
 console.log(`[screener-threshold] hidden pack derived: ${pack.events.length} events`);
 
-const reranker = (RERANKER === 'gpu' || RERANKER === 'qwen-cpu')
+const rawReranker = (RERANKER === 'gpu' || RERANKER === 'qwen-cpu')
   ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: RERANKER === 'gpu' })
   : await createDeterministicReranker();
+const profileHash = '0x' + createHash('sha256').update(readFileSync(resolve(repoRoot, PROFILE_PATH))).digest('hex');
+const qwenCachePath = DISABLE_QWEN_CACHE ? null : flag('qwen-cache', OUT_PATH.replace(/\.json$/i, '') + '-qwen-score-cache.jsonl');
+const reranker = makeInstrumentedReranker({
+  reranker: rawReranker,
+  modelId: RR.modelId,
+  revision: RR.revision,
+  profileHash,
+  substrateMode: profile.pipelineVersion ?? 'unknown',
+  memoryIRVersion: profile.memoryIRSchemaVersion ?? 'raw',
+  cachePath: qwenCachePath,
+  mode: RERANKER,
+  batchSize: Number(env.RERANKER_INNER_BATCH ?? '8'),
+});
 const biEncoderHash = biEncoderModelIdHash(BE.modelId, BE.revision, 'dense');
 const rt = { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT };
 const opts = scoringOptionsFromProfile(profile, rt);
@@ -443,6 +458,21 @@ const report = {
   reranker: (RERANKER === 'gpu' || RERANKER === 'qwen-cpu')
     ? `Qwen/${RR.modelId}@${RR.revision} (${RERANKER})`
     : 'deterministic',
+  rerankerTelemetry: {
+    ...reranker.telemetrySnapshot?.(),
+    modelStartupMs: reranker.modelStartupMs?.() ?? null,
+    safeCacheKey: {
+      queryTextHash: true,
+      renderedCandidateHash: true,
+      rerankerModelId: RR.modelId,
+      rerankerRevision: RR.revision,
+      memoryIRVersion: profile.memoryIRSchemaVersion ?? 'raw',
+      profileHash,
+      substrateMode: profile.pipelineVersion ?? 'unknown',
+      includesQrelsOrHiddenLabels: false,
+      cacheExposedToMiner: false,
+    },
+  },
   noise_floor_samples: cleanNoiseDeltas,
   bundleVerify: {
     sourceHashMismatchAllowed: ALLOW_BUNDLE_SOURCE_MISMATCH,

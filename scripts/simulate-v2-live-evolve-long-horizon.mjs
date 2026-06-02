@@ -283,12 +283,15 @@ function renderedTop(q, k = 10) {
   }));
 }
 function classifyTrace({ query, beforeQ, afterQ, activeImprovement }) {
+  const deltaNdcg = (afterQ?.nDCG10 ?? 0) - (beforeQ?.nDCG10 ?? 0);
   const beforeTop = topK(beforeQ, 10);
   const afterTop = topK(afterQ, 10);
   const staleIds = new Set((query.truthDocuments ?? []).filter((d) => d.isCurrent === false).map((d) => d.id));
   const staleDropped = beforeTop.some((r) => staleIds.has(r.docId) && !afterTop.some((a) => a.docId === r.docId && a.rank <= r.rank));
   const junkTop = afterTop.filter((r) => r.relevance === 0);
   const routedJunk = junkTop.filter((r) => r.sources?.some((s) => s === 'categoryLensBFS' || s === 'anchorBFS' || s === 'policyAdmitted'));
+  if (deltaNdcg === 0) return 'no_metric_change';
+  if (deltaNdcg > 0) return 'metric_improvement';
   if ((query.logicalFamily ?? query.family) === 'temporal_update' || query.family === 'temporal') {
     if (staleDropped) return 'expected_stale_suppression';
   }

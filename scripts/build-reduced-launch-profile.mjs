@@ -49,7 +49,7 @@ profile.hiddenPack = {
 profile.temporalStaleContrast = true;
 profile.temporalCurrentBoost = 0.1;
 profile.temporalStaleSuppression = 0.1;
-profile.enableEvidenceBundleAtoms = true;
+profile.enableEvidenceBundleAtoms = false;
 profile.categoryLensEvidenceBundle = true;
 profile.policyQueryConditionedAdmission = true;
 profile.policyRelationTypedAdmission = true;
@@ -78,7 +78,6 @@ profile.activeSubstrateSurfaces = [
   'temporal_update',
   'conflict_lifecycle',
   'causal_decision_lensOnly',
-  'evidence_bundle_bundleOnly',
   'relation_category_routing',
   'abstention_top1',
 ];
@@ -86,12 +85,13 @@ profile.disabledSubstrateSurfaces = [
   'phaseAEdges',
   'combined_relation_routing',
   'raw_anchors',
+  'evidence_bundle_bundleOnly',
   'evidence_reach_only',
   'coreference',
   'aspect_constraint',
   'noise_suppression',
 ];
-profile._launchReducedProfileNote = 'Launch-candidate reduced profile derived 2026-06-02 from the v15 all-on calibration profile. Keeps only promoted surfaces; sandbox/damaging surfaces stay off. Hidden-pack quotas remove aspect/coreference hard quotas, while free fill still samples the full eval-hidden corpus for damage detection.';
+profile._launchReducedProfileNote = 'Launch-candidate reduced profile derived 2026-06-02 from the v15 all-on calibration profile. Keeps only A100-confirmed promoted reward surfaces; sandbox/damaging/failed surfaces stay off. Evidence PolicyAtom rewards are disabled after reduced A100 bundle-only failed strict lift/safety, while category-lens evidence rendering remains part of the non-rewardable relation scorer path. Hidden-pack quotas remove aspect/coreference hard quotas, while free fill still samples the full eval-hidden corpus for damage detection.';
 delete profile._calibrationPolicyNote;
 delete profile._aspectDisabledNote;
 delete profile._noiseSuppressionNote;

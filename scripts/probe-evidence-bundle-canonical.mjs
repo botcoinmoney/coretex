@@ -44,6 +44,8 @@ const auditLimit = Math.max(0, Number(flag('audit-limit', has('audit') ? '25' : 
 const outPath = flag('out', `${base}/evidence-bundle-canonical-v15-${flag('reranker', 'deterministic')}-current.json`);
 const rerankerArg = flag('reranker', 'deterministic');
 const realQwen = rerankerArg === 'gpu' || rerankerArg === 'cpu';
+const respectProfileEvidence = has('respect-profile-evidence');
+const expectDisabled = has('expect-disabled');
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
 const rawCorpus = JSON.parse(readFileSync(resolve(repoRoot, corpusPath), 'utf8'));
@@ -63,9 +65,11 @@ const optsBase = {
   ...scoringOptionsFromProfile(profile, rt),
   exposeFullRanking: true,
   policyEmitTraces: true,
-  enableEvidenceBundleAtoms: true,
-  policyQueryConditionedAdmission: true,
-  policyRelationTypedAdmission: true,
+  ...(!respectProfileEvidence ? {
+    enableEvidenceBundleAtoms: true,
+    policyQueryConditionedAdmission: true,
+    policyRelationTypedAdmission: true,
+  } : {}),
   policyEntityRegistry: entityRegistry,
   policyGenericEntityIds: GENERIC,
 };
@@ -381,14 +385,26 @@ const agg = (sel) => {
   const vals = perSeed.map(sel);
   return { mean: +(vals.reduce((a, b) => a + b, 0) / Math.max(1, vals.length)).toFixed(4), min: +Math.min(...vals).toFixed(4), max: +Math.max(...vals).toFixed(4), perSeed: vals };
 };
+const enabledExpectedPass = perSeed.every((s) =>
+  Math.abs(s.noOpAnchorsOnlyDelta) < 1e-9
+  && s.targetBundle.meanDeltaNdcg > 0
+  && s.targetBundle.primaryGoldDamage === 0
+  && s.offFamilyBundle.meanDeltaNdcg >= -0.03
+  && s.randomTarget.meanDeltaNdcg <= 0.005
+  && s.patchSmoke.applyStructurallyOk);
+const disabledExpectedPass = perSeed.every((s) =>
+  Math.abs(s.noOpAnchorsOnlyDelta) < 1e-9
+  && s.targetBundle.meanDeltaNdcg === 0
+  && s.targetReach.meanDeltaNdcg === 0
+  && s.offFamilyBundle.meanDeltaNdcg === 0
+  && s.randomTarget.meanDeltaNdcg === 0
+  && s.targetBundle.evidenceTraceCount === 0
+  && s.targetReach.evidenceTraceCount === 0
+  && s.offFamilyBundle.evidenceTraceCount === 0
+  && s.patchSmoke.applyStructurallyOk);
 const summary = {
-  pass: perSeed.every((s) =>
-    Math.abs(s.noOpAnchorsOnlyDelta) < 1e-9
-    && s.targetBundle.meanDeltaNdcg > 0
-    && s.targetBundle.primaryGoldDamage === 0
-    && s.offFamilyBundle.meanDeltaNdcg >= -0.03
-    && s.randomTarget.meanDeltaNdcg <= 0.005
-    && s.patchSmoke.applyStructurallyOk),
+  pass: expectDisabled ? disabledExpectedPass : enabledExpectedPass,
+  expectedMode: expectDisabled ? 'disabled_inert' : 'enabled_positive',
   targetBundle_meanDelta: agg((s) => s.targetBundle.meanDeltaNdcg),
   targetReach_meanDelta: agg((s) => s.targetReach.meanDeltaNdcg),
   offFamilyBundle_meanDelta: agg((s) => s.offFamilyBundle.meanDeltaNdcg),
@@ -411,11 +427,13 @@ const summary = {
 const reachArmPromotable = realQwen && summary.targetReach_meanDelta.mean > 0 && summary.targetReach_meanDelta.min > 0;
 const verdict = {
   pass: summary.pass,
-  promote: summary.pass ? ['bundle'] : [],
-  doNotPromote: reachArmPromotable ? [] : ['reach'],
+  promote: summary.pass && !expectDisabled ? ['bundle'] : [],
+  doNotPromote: [...(expectDisabled ? ['evidence_bundle_policy_atoms'] : []), ...(reachArmPromotable ? [] : ['reach'])],
   needsFollowup: realQwen && summary.pass ? [] : ['real_qwen_confirmation'],
   reasons: [
-    summary.pass ? 'bundle arm has positive target lift with clean random/off-family controls' : 'bundle arm failed lift/safety controls',
+    expectDisabled
+      ? (summary.pass ? 'evidence PolicyAtoms are disabled and inert under this profile' : 'evidence PolicyAtoms produced movement despite disabled profile')
+      : (summary.pass ? 'bundle arm has positive target lift with clean random/off-family controls' : 'bundle arm failed lift/safety controls'),
     reachArmPromotable ? 'reach arm is positive across seeds' : 'reach arm is not positive across seeds; do not promote reach-only',
     realQwen ? 'reranker gate used real Qwen scores' : 'CPU deterministic run is structural only; Qwen rank checks are not applicable',
   ],
@@ -439,7 +457,13 @@ const report = {
     patchAcceptanceNote: 'patchSmoke.accepted is an improvement/floor verdict; patchSmoke.applyStructurallyOk is the structural apply gate.',
   },
   verdict,
-  passFailSummary: summary.pass ? `PASS: ${targetSurface} bundle arm has target lift with clean random/off-family controls.` : `FAIL: ${targetSurface} did not satisfy target lift and safety controls.`,
+  passFailSummary: expectDisabled
+    ? (summary.pass
+      ? `PASS: ${targetSurface} PolicyAtom arms are disabled/inert under the supplied profile.`
+      : `FAIL: ${targetSurface} PolicyAtom arms moved rankings despite disabled profile.`)
+    : (summary.pass
+      ? `PASS: ${targetSurface} bundle arm has target lift with clean random/off-family controls.`
+      : `FAIL: ${targetSurface} did not satisfy target lift and safety controls.`),
   lowerLayerGateSummary: summary.lowerLayerGate,
   offFamilyDamageSummary: summary.offFamilyBundle_meanDelta,
   summary,

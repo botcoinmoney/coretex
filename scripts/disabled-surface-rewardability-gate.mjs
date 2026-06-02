@@ -167,7 +167,7 @@ async function phaseAEdgesDisabled() {
   };
 }
 
-async function evidenceReachOnlyDisabled() {
+async function evidencePolicyAtomsDisabled() {
   const q = event({ id: 'q-evidence', queryText: 'what does Alice depend on?', truthText: 'unused', truthVec: V.far, qrels: [{ documentId: 'ev-answer-truth', relevance: 1 }] });
   const bridge = event({ id: 'ev-ebridge', queryText: 'Alice dependency bridge', truthText: 'bridge', truthVec: V.near, split: 'train_visible', relations: [{ other_id: 'ev-answer', edgeType: 'supports' }] });
   const answer = event({ id: 'ev-answer', queryText: 'answer', truthText: 'ANSWER evidence target', truthVec: V.far, split: 'train_visible' });
@@ -191,15 +191,19 @@ async function evidenceReachOnlyDisabled() {
     });
     return { words };
   };
-  const boostBlocked = await score(build('boost'), corpus, q, { policyEvidenceAllowedActions: ['bundle'], rerankerInputTopK: 2 });
-  const bundleAllowed = await score(build('bundle'), corpus, q, { policyEvidenceAllowedActions: ['bundle'], rerankerInputTopK: 2 });
+  const boostBlocked = await score(build('boost'), corpus, q, { rerankerInputTopK: 2 });
+  const bundleBlocked = await score(build('bundle'), corpus, q, { rerankerInputTopK: 2 });
+  const bundleWouldFireIfEnabled = await score(build('bundle'), corpus, q, { enableEvidenceBundleAtoms: true, policyEvidenceAllowedActions: ['bundle'], rerankerInputTopK: 2 });
   return {
-    surface: 'evidence_reach_only',
-    pass: boostBlocked.nDCG10 === 0 && bundleAllowed.nDCG10 > boostBlocked.nDCG10,
+    surface: 'evidence_policy_atoms',
+    pass: boostBlocked.nDCG10 === 0 && bundleBlocked.nDCG10 === 0 && bundleWouldFireIfEnabled.nDCG10 > 0
+      && (boostBlocked.policyTraces ?? []).length === 0 && (bundleBlocked.policyTraces ?? []).length === 0,
     boostBlockedNdcg: boostBlocked.nDCG10,
-    bundleAllowedNdcg: bundleAllowed.nDCG10,
+    bundleBlockedNdcg: bundleBlocked.nDCG10,
+    bundleWouldFireIfEnabledNdcg: bundleWouldFireIfEnabled.nDCG10,
     boostTraces: boostBlocked.policyTraces ?? [],
-    bundleTraces: bundleAllowed.policyTraces ?? [],
+    bundleBlockedTraces: bundleBlocked.policyTraces ?? [],
+    bundleWouldFireIfEnabledTraces: bundleWouldFireIfEnabled.policyTraces ?? [],
   };
 }
 
@@ -235,12 +239,13 @@ async function aspectConstraintDisabled() {
 const checks = [
   await rawAnchorDisabled(),
   await phaseAEdgesDisabled(),
-  await evidenceReachOnlyDisabled(),
+  await evidencePolicyAtomsDisabled(),
   await aspectConstraintDisabled(),
 ];
 const profilePins = {
   enableRawRoutingAnchors: profile.enableRawRoutingAnchors,
   enableRelationAnchorEdges: profile.enableRelationAnchorEdges,
+  enableEvidenceBundleAtoms: profile.enableEvidenceBundleAtoms,
   policyEvidenceAllowedActions: profile.policyEvidenceAllowedActions,
   enableAspectConstraintAtoms: profile.enableAspectConstraintAtoms,
   policyAspectIntentAdmission: profile.policyAspectIntentAdmission,
@@ -248,6 +253,7 @@ const profilePins = {
 const okPins =
   profile.enableRawRoutingAnchors === false &&
   profile.enableRelationAnchorEdges === false &&
+  profile.enableEvidenceBundleAtoms === false &&
   JSON.stringify(profile.policyEvidenceAllowedActions) === JSON.stringify(['bundle']) &&
   profile.enableAspectConstraintAtoms === false &&
   profile.policyAspectIntentAdmission === false;

@@ -558,6 +558,7 @@ summary.armPass = {
     structuralPatchSmoke.relationPatchApplies),
   combined: evaluatedArms.has('combined') && perSeed.every((s) =>
     s.targetCombined.meanDeltaNdcg > 0 &&
+    (!evaluatedArms.has('lensOnly') || s.targetCombined.meanDeltaNdcg > s.targetLens.meanDeltaNdcg + 1e-9) &&
     s.targetCombined.primaryGoldDamage === 0 &&
     s.targetCombined.junkMoved <= maxTargetJunkPerQuery * Math.max(1, s.targetCombined.n) &&
     s.offCombined.meanDeltaNdcg >= -0.03 &&
@@ -575,6 +576,7 @@ const verdict = {
     summary.pass ? 'at least one direct relation routing arm has positive target lift with clean safety controls' : 'all direct relation routing arms failed target lift and/or safety controls',
     `lensOnly mean=${summary.targetLens_meanDelta.mean} off=${summary.offLens_meanDelta.mean}`,
     `phaseA-vs-anchors mean=${summary.targetPhaseA_vsAnchors_meanDelta.mean}`,
+    `combined requires incremental lift over lensOnly when lensOnly is evaluated`,
     `target junk cap=${maxTargetJunkPerQuery}/query`,
     realQwen ? 'reranker gate used real Qwen scores' : 'CPU deterministic run is structural/lower-layer only; Qwen rank checks are not applicable',
   ],
