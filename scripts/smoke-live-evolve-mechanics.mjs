@@ -32,7 +32,7 @@ import { evolveCorpusDelta } from './lib/evolve-corpus.mjs';
 import { loadMaterializedCorpusSlice } from './lib/load-materialized-corpus.mjs';
 
 const C = await import(distIndex);
-const { buildCorpusDelta, applyCorpusDelta, makeLaunchFrontier, bridgeLogicalDeltaToProductionEvents } = C;
+const { buildCorpusDelta, applyCorpusDelta, makeLaunchFrontier, bridgeLogicalDeltaToProductionEvents, isMemoryDocumentEventId } = C;
 
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
 const PROFILE = flag('profile');
@@ -135,8 +135,8 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     biEncoder: { modelId: BE.modelId, revision: BE.revision, layout: LAYOUT },
   });
   if (!Array.isArray(additions) || additions.length === 0) fail(`epoch ${epoch} bridge returned ${additions?.length} additions`);
-  const memEvents = additions.filter((e) => e.id.startsWith('mem_'));
-  const queryEvents = additions.filter((e) => !e.id.startsWith('mem_'));
+  const memEvents = additions.filter((e) => isMemoryDocumentEventId(e.id));
+  const queryEvents = additions.filter((e) => !isMemoryDocumentEventId(e.id));
   pass(`epoch ${epoch} bridgeLogicalDeltaToProductionEvents: mem=${memEvents.length} query=${queryEvents.length} (pin parity enforced vs previousCorpus)`);
 
   const delta = buildCorpusDelta({ previousCorpus: currentProd, additions, removals: [], epoch, labelingProvenance });
