@@ -29,6 +29,7 @@ import { createHash } from 'node:crypto';
 import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadV2CompatBundle } from './lib/load-materialized-corpus.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
+import { calibrationProvenance } from './lib/calibration-provenance.mjs';
 
 const C = await import(distIndex);
 const {
@@ -52,7 +53,8 @@ if (!bundlePath) { console.error('HARD FAIL: --bundle <path> required (calibrati
 
 const r4Profile = JSON.parse(readFileSync(resolve(repoRoot, r4ProfilePath), 'utf8'));
 const r5Profile = JSON.parse(readFileSync(resolve(repoRoot, r5ProfilePath), 'utf8'));
-const { corpus, logical, LAYOUT, BE, RR, biEncoderHash } = loadV2CompatBundle(bundlePath, corpusPath, embPath);
+const { corpus, logical, LAYOUT, BE, RR, biEncoderHash, manifest } = loadV2CompatBundle(bundlePath, corpusPath, embPath);
+const provenance = calibrationProvenance({ bundlePath, corpusPath, embPath, profilePath: r5ProfilePath, manifest });
 const reranker = rerankerArg === 'gpu'
   ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: process.env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: true })
   : await createDeterministicReranker();
@@ -207,7 +209,8 @@ const pass = isGpu
 
 const report = {
   probe: 'conflict_state malleability (Track B). Honest public-edge generator; deterministic magnitude is a PROXY, Qwen is the verdict.',
-  generatedAt: new Date().toISOString(), corpus: corpusPath, reranker: rerankerArg === 'gpu' ? `Qwen3-Reranker-0.6B@${RR.revision} (gpu)` : 'deterministic-stub',
+  ...provenance,
+  generatedAt: new Date().toISOString(), reranker: rerankerArg === 'gpu' ? `Qwen3-Reranker-0.6B@${RR.revision} (gpu)` : 'deterministic-stub',
   packSize: pack.events.length, families: packFams, evalSubjects: evalSubjects.size,
   honestAnchors: honest.atoms, conflictAtomsDecoded: dh.conflictLifecycleAtoms.length,
   arms_overall_nDCG10: { A_r4: +A.nDCG10.toFixed(4), B_r5_noatoms: +B.nDCG10.toFixed(4), H_honest: +H.nDCG10.toFixed(4), R_random: +R.nDCG10.toFixed(4), W_wrong: +W.nDCG10.toFixed(4) },

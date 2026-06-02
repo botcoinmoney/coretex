@@ -28,6 +28,7 @@ import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadV2CompatBundle } from './lib/load-materialized-corpus.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
 import { honestPatch, empty } from './lib/v2-patch-families.mjs';
+import { calibrationProvenance } from './lib/calibration-provenance.mjs';
 
 const { scoringOptionsFromProfile, deriveQueryPack, evaluateRetrievalBenchmarkPatch, createDeterministicReranker } = await import(distIndex);
 
@@ -59,7 +60,8 @@ if (wTemporalOverride !== undefined) {
 }
 const retrievalFloorOk = profile.compositeWeights.w_retrieval >= 0.70 - 1e-9;
 
-const { corpus, logical, LAYOUT, BE, RR, biEncoderHash } = loadV2CompatBundle(bundlePath, corpusPath, embPath);
+const { corpus, logical, LAYOUT, BE, RR, biEncoderHash, manifest } = loadV2CompatBundle(bundlePath, corpusPath, embPath);
+const provenance = calibrationProvenance({ bundlePath, corpusPath, embPath, profilePath, manifest });
 const logicalQById = new Map(logical.queries.map((q) => [q.id, q]));
 // --stale-relevance R : TEMPORAL-SPECIFIC qrel treatment — set temporal_update stale docs' nDCG
 // relevance to R (contrast role, not strongly rewarded). NOT a global qrel change; temporal queries only.
@@ -151,8 +153,9 @@ for (const m of measured) { const b = m.band || 'none'; (byBand[b] ??= { n: 0, i
 const inctxDeltas = measured.map((m) => m.inctxDeltaPpm);
 
 const summary = {
+  ...provenance,
   generatedAt: new Date().toISOString(),
-  track: corpusPath, profile: profilePath, reranker: rerankerArg, packSize: PACK_SIZE, nChains: n, seeds: SEEDS,
+  track: corpusPath, reranker: rerankerArg, packSize: PACK_SIZE, nChains: n, seeds: SEEDS,
   oracleScope, mode: oracleScope ? 'scoped-lifecycle-oracle' : 'blunt-global (current temporal)',
   compositeWeights: profile.compositeWeights, retrievalFloorOk,
   staleRelevanceOverride: staleRelOverride ?? null, staleQrelsModified,

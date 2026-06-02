@@ -20,6 +20,7 @@ import { createHash } from 'node:crypto';
 import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadV2CompatBundle } from './lib/load-materialized-corpus.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
+import { calibrationProvenance } from './lib/calibration-provenance.mjs';
 
 const C = await import(distIndex);
 const { scoringOptionsFromProfile, deriveQueryPack, evaluateRetrievalBenchmarkState, createDeterministicReranker } = C;
@@ -37,7 +38,8 @@ const bundlePath = flag('bundle');
 if (!bundlePath) { console.error('HARD FAIL: --bundle <path> required (calibration uses materialized corpus)'); process.exit(1); }
 
 const r5Profile = JSON.parse(readFileSync(resolve(repoRoot, r5ProfilePath), 'utf8'));
-const { corpus, logical, LAYOUT, BE, RR, biEncoderHash } = loadV2CompatBundle(bundlePath, corpusPath, embPath);
+const { corpus, logical, LAYOUT, BE, RR, biEncoderHash, manifest } = loadV2CompatBundle(bundlePath, corpusPath, embPath);
+const provenance = calibrationProvenance({ bundlePath, corpusPath, embPath, profilePath: r5ProfilePath, manifest });
 const reranker = rerankerArg === 'gpu'
   ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: process.env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: true })
   : await createDeterministicReranker();
@@ -87,7 +89,8 @@ const pick = (maxFalse) => sweep.filter((s) => s.falseAbstentionRate <= maxFalse
 
 const report = {
   probe: 'r5-abstention-margin (Category A). One real-Qwen pass; thresholds swept offline.',
-  generatedAt: new Date().toISOString(), corpus: corpusPath, reranker: rerankerArg === 'gpu' ? 'Qwen3-Reranker-0.6B (gpu)' : 'deterministic-stub',
+  ...provenance,
+  generatedAt: new Date().toISOString(), reranker: rerankerArg === 'gpu' ? 'Qwen3-Reranker-0.6B (gpu)' : 'deterministic-stub',
   counts: { abstention: abst.length, answerable: ans.length },
   distributions: { abstention: stats(abst), answerable: stats(ans) },
   separationAUC: { top1: auc(abst, ans, 'top1'), margin: auc(abst, ans, 'margin'), note: 'P(answerable out-scores abstention); higher = better separation' },

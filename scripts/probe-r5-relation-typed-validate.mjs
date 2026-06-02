@@ -23,6 +23,7 @@ import { resolve } from 'node:path';
 import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadV2CompatBundle } from './lib/load-materialized-corpus.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
+import { calibrationProvenance } from './lib/calibration-provenance.mjs';
 
 const C = await import(distIndex);
 const {
@@ -49,7 +50,8 @@ if (!bundlePath) { console.error('HARD FAIL: --bundle <path> required (calibrati
 
 const r4Profile = JSON.parse(readFileSync(resolve(repoRoot, r4ProfilePath), 'utf8'));
 const r5Profile = JSON.parse(readFileSync(resolve(repoRoot, r5ProfilePath), 'utf8'));
-const { corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash } = loadV2CompatBundle(bundlePath, corpusPath, embPath);
+const { corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash, manifest } = loadV2CompatBundle(bundlePath, corpusPath, embPath);
+const provenance = calibrationProvenance({ bundlePath, corpusPath, embPath, profilePath: r5ProfilePath, manifest });
 const reranker = rerankerArg === 'gpu'
   ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: process.env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: true })
   : await createDeterministicReranker();
@@ -216,7 +218,7 @@ const summary = {
   offFamily_typed_damageApproxZero_allSeeds: perSeed.every((s) => Math.abs(s.offFamily_typed.meanDeltaNdcg) < 0.005),
   typed_beats_entity_routing_allSeeds: perSeed.every((s) => s.routingSlice_typed.meanDeltaNdcg >= s.routingSlice_entity.meanDeltaNdcg),
 };
-const report = { probe: 'r5-relation-typed-validate (Category B launch validation, multi-seed)', generatedAt: new Date().toISOString(), corpus: corpusPath, reranker: rerankerArg === 'gpu' ? 'Qwen3-Reranker-0.6B (gpu)' : 'deterministic-stub', seeds, routePerFam, offPerFam, perSeed, summary };
+const report = { probe: 'r5-relation-typed-validate (Category B launch validation, multi-seed)', ...provenance, generatedAt: new Date().toISOString(), reranker: rerankerArg === 'gpu' ? 'Qwen3-Reranker-0.6B (gpu)' : 'deterministic-stub', seeds, routePerFam, offPerFam, perSeed, summary };
 mkdirSync(resolve(repoRoot, base), { recursive: true });
 writeFileSync(resolve(repoRoot, outPath), JSON.stringify(report, null, 2));
 console.log(JSON.stringify(summary, null, 2));

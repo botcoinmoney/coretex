@@ -44,6 +44,7 @@ import { distIndex, repoRoot } from './_repo-root.mjs';
 import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadV2CompatBundle } from './lib/load-materialized-corpus.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
+import { calibrationProvenance } from './lib/calibration-provenance.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -67,6 +68,8 @@ const rerankerArg = flag('reranker', 'deterministic');          // 'gpu' | 'dete
 const seedsN = Number(flag('seeds', '1'));                       // CPU smoke: 1; GPU: 3
 const betas = (flag('betas', '0.5,1.0')).split(',').map(Number).filter((x) => Number.isFinite(x));
 const temporalBatch = Number(flag('temporal-batch', '40'));
+const maxPerFamily = Number(flag('max-per-family', '0'));         // 0 = full historical oracle; >0 = bounded mini
+const selectedFamilies = new Set(flag('families', 'conflict_lifecycle,aspect_constraint,abstention_missing,temporal_update,multi_session_bridge,decision_provenance,causal_memory_chain,coreference_resolution').split(',').map((s) => s.trim()).filter(Boolean));
 const exportTraces = has('export-traces');
 const outPath = resolve(repoRoot, flag('out', 'release/calibration/2026-05-21-memory-corpus-v2/r5-a100-oracle-smoke.json'));
 const tracePath = outPath.replace(/\.json$/, '') + '.traces.jsonl';
@@ -75,7 +78,8 @@ const START_T = Date.now();
 const profile = JSON.parse(readFileSync(profilePath, 'utf8'));
 
 // Use the shared canonical stream reranker — was previously a local clone here (drift hazard).
-const { corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash } = loadV2CompatBundle(bundlePath, flag('corpus'), flag('emb'));
+const { corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash, manifest } = loadV2CompatBundle(bundlePath, flag('corpus'), flag('emb'));
+const runProvenance = calibrationProvenance({ bundlePath, corpusPath: flag('corpus'), embPath: flag('emb'), profilePath: flag('profile'), manifest });
 const reranker = (rerankerArg === 'gpu' || rerankerArg === 'cpu')
   ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: process.env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: rerankerArg === 'gpu' })
   : await createDeterministicReranker();
@@ -146,7 +150,7 @@ function applyTemporalRecords(words, temporalLogicalQueries) {
 // ── LOCKED deep profile scoring options + exposeFullRanking opt-in ────────────
 const baseOpts = scoringOptionsFromProfile(profile, { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT });
 const opts = { ...baseOpts, exposeFullRanking: true };
-console.error(`[r5] reranker=${rerankerLabel} betas=${betas} seeds=${seedsN} K=${K} ownerScopeMode=${opts.ownerScopeMode} abstentionThreshold=${opts.abstentionThreshold}`);
+console.error(`[r5] reranker=${rerankerLabel} betas=${betas} seeds=${seedsN} K=${K} ownerScopeMode=${opts.ownerScopeMode} abstentionThreshold=${opts.abstentionThreshold} maxPerFamily=${maxPerFamily || 'full'}`);
 
 // ── score the corpus ONCE per seed; bucket eval_hidden by logicalFamily ───────
 // Seed only changes the temporal-batch grouping order (the pack/sampling lever). The reranker is
@@ -164,11 +168,11 @@ async function scoreSeed(seed) {
   for (const ev of evalAll) { const f = ev.logicalFamily; if (!byLogical.has(f)) byLogical.set(f, []); byLogical.get(f).push(ev); }
   for (const [, arr] of byLogical) arr.sort((a, b) => a.id.localeCompare(b.id));
   const perQueryAll = [];
-  const want = new Set(['conflict_lifecycle', 'aspect_constraint', 'abstention_missing',
-    'temporal_update', 'multi_session_bridge', 'decision_provenance', 'causal_memory_chain', 'coreference_resolution']);
   for (const [family, eventsRaw] of byLogical) {
-    if (!want.has(family)) continue;
-    const events = seed === 0 ? eventsRaw : seedShuffle(eventsRaw, seed);
+    if (!selectedFamilies.has(family)) continue;
+    const ordered = seed === 0 ? eventsRaw : seedShuffle(eventsRaw, seed);
+    const events = maxPerFamily > 0 ? ordered.slice(0, maxPerFamily) : ordered;
+    if (events.length === 0) continue;
     if (family === 'temporal_update') {
       for (let i = 0; i < events.length; i += temporalBatch) {
         const batch = events.slice(i, i + temporalBatch);
@@ -642,17 +646,19 @@ const gpuRunCommand = `CORETEX_RERANKER_PYTHON=/usr/bin/python3 HF_HUB_CACHE=/va
 
 const report = {
   probe: 'r5-a100-oracle (UNIFIED, all 6 families, bounded query-local atoms)',
+  ...runProvenance,
   mode: rerankerArg === 'gpu' ? 'A100 real-Qwen' : 'CPU smoke (deterministic — wiring/query-locality/zero-damage only; magnitude is a PROXY)',
   goal: 'Per-family real-Qwen hidden-eval lift from BOUNDED QUERY-LOCAL atoms (±β·per-query-spread nudge on q\'s OWN exposed list), with source attribution, answer-damage, junk/flood, and query-locality safety. CPU smoke validates wiring + query-locality + zero answer-damage; GPU gives the magnitude verdict.',
   honestyRules: 'Policy SIGNAL is PUBLIC only (support/bridge edges + in-degree, subject entityIds[1], doc.lifecycleState, doc.aspectTags, query.intentAspect, currentStaleFlag, biCosine, Qwen top1Score) read from the LOGICAL corpus. qrel role/relevance ONLY LABELS/measures. Deterministic reranker magnitude is a PROXY; GPU is the verdict.',
   boundedAtomDesign: 'Per query q: take q\'s exposed reranked list (finalRankingFull, now carrying rerankerScore via additive opt-in). UNIT = (max-min rerankerScore) over q\'s OWN list. Atom adds +β·UNIT to its in-pool boost docs / −β·UNIT to suppress docs, RE-SORTS, recomputes nDCG@K. β·UNIT is a bounded FRACTION of q\'s own spread → NOT wholesale push-to-tail / corpus-wide dominance. β swept over ' + JSON.stringify(betas) + '.',
   provenance: {
+    ...runProvenance,
     specVersion: logical.specVersion, phase: logical.phase, corpusRoot, gitSha, distHashRetrievalBenchmark: distHash, dirtyTree,
     reranker: rerankerLabel, profile: profilePath.replace(repoRoot + '/', ''), biEncoder: BE.modelId, layout: LAYOUT,
     corpus: corpusPath.replace(repoRoot + '/', ''), emb: embPath.replace(repoRoot + '/', ''),
     rerankerTopK: K, rerankerInputTopK: opts.rerankerInputTopK, ownerScopeMode: opts.ownerScopeMode,
     abstentionThreshold: opts.abstentionThreshold, temporalStaleContrast: opts.temporalStaleContrast,
-    exposeFullRanking: true, betas, seeds: seedsN, exportTraces, publicEdgeTypesUsed: [...PUBLIC_EDGES],
+    exposeFullRanking: true, betas, seeds: seedsN, maxPerFamily, selectedFamilies: [...selectedFamilies], exportTraces, publicEdgeTypesUsed: [...PUBLIC_EDGES],
     wallClockSec: +((Date.now() - START_T) / 1000).toFixed(1),
     scorerChange: 'ADDITIVE/backward-compatible: finalRankingFull entries now also carry rerankerScore (was docId+relevance only). Needed so the bounded atom can nudge ±β·spread on q\'s OWN reranker scores. No reward-path change; gated behind the existing exposeFullRanking opt-in (default off).',
   },
