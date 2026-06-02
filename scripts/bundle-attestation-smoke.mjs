@@ -55,6 +55,7 @@ mutateAndCheck('abstentionThreshold', (p) => { p.abstentionThreshold = (p.absten
 mutateAndCheck('relationHopBudget', (p) => { p.relationHopBudget = (p.relationHopBudget ?? 3) + 1; });
 mutateAndCheck('pipelineVersion', (p) => { p.pipelineVersion = p.pipelineVersion + '-x'; });
 mutateAndCheck('controllerParams.qualityHighThresholdMult', (p) => { p.controllerParams = { ...(p.controllerParams ?? {}), qualityHighThresholdMult: (p.controllerParams?.qualityHighThresholdMult ?? 1) + 1 }; });
+mutateAndCheck('controllerParams.underTargetRecoveryRatio', (p) => { p.controllerParams = { ...(p.controllerParams ?? {}), underTargetRecoveryRatio: (p.controllerParams?.underTargetRecoveryRatio ?? 0.95) * 0.9 }; });
 mutateAndCheck('majorDeltaThreshold', (p) => { p.majorDeltaThreshold = (p.majorDeltaThreshold ?? 10) + 1; });
 mutateAndCheck('baselineParentScorePpm', (p) => { p.baselineParentScorePpm = (p.baselineParentScorePpm ?? 0) + 1; });
 mutateAndCheck('policyMaxBudgetEvidence', (p) => { p.policyMaxBudgetEvidence = (p.policyMaxBudgetEvidence ?? 250) + 1; });

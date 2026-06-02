@@ -318,6 +318,18 @@ if (!cleanNoiseDeltas.length || !Number.isFinite(recentNoiseFloorPpm) || recentN
   console.error(`HARD FAIL: clean noise-floor sampling produced invalid signal (${recentNoiseFloorPpm}, raw=${JSON.stringify(noiseSamples)})`); exit(1);
 }
 const screenerThresholdPpm = computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baseline, recentNoiseFloorPpm: BigInt(recentNoiseFloorPpm) });
+const plateauEasedThresholdPpm = computeCoreTexScreenerThresholdPpm({
+  baselineScorePpm: baseline,
+  recentNoiseFloorPpm: BigInt(recentNoiseFloorPpm),
+  targetStateAdvances: 2,
+  recentStateAdvances: 0,
+  recentScreenerPasses: 2,
+});
+const antiGaming5PctThresholdPpm = computeCoreTexScreenerThresholdPpm({
+  baselineScorePpm: baseline,
+  recentNoiseFloorPpm: BigInt(recentNoiseFloorPpm),
+  recentProbePassRatePpm: 50_000,
+});
 console.log(`[screener-threshold] baseline=${baseline}ppm cleanNoiseFloor(p90)=${recentNoiseFloorPpm}ppm structuralFailureFloor(p90)=${structuralFailureControlFloorPpm ?? 'n/a'}ppm → screenerThreshold=${screenerThresholdPpm}ppm`);
 
 // ─── CANONICAL classification via evaluateCoreTexWorkQualification ───
@@ -390,6 +402,11 @@ const summary = {
     minImprovementPpm: profile.patchAcceptanceFloors?.minImprovementPpm,
     replayTolerancePpm: profile.replayTolerancePpm,
     screenerThresholdPpm: Number(screenerThresholdPpm),
+    dynamicScreenerThresholdSensitivity: {
+      plateauEasedThresholdPpm: Number(plateauEasedThresholdPpm),
+      antiGamingProbePassRate5PctThresholdPpm: Number(antiGaming5PctThresholdPpm),
+      note: 'Plateau easing affects only the headroom component; clean noise remains the floor. Probe pass pressure raises the threshold.',
+    },
     canonical_qualification: 'evaluateCoreTexWorkQualification (REJECT / SCREENER_PASS / STATE_ADVANCE)',
   },
   per_class: Object.fromEntries(results.map((r) => [r.class, {
@@ -455,8 +472,8 @@ const report = {
   summary,
   canonicalAPIsUsed: [
     'evaluateRetrievalBenchmarkPatch(state, patch, corpus, pack, opts, floors)',
-    'computeCoreTexScreenerThresholdPpm({baselineScorePpm, recentNoiseFloorPpm})',
-    'evaluateCoreTexWorkQualification({outcome, parentMatchesLiveRoot, deterministicDeltaPpm, baselineScorePpm, recentNoiseFloorPpm, ...})',
+    'computeCoreTexScreenerThresholdPpm({baselineScorePpm, recentNoiseFloorPpm, recentScreenerPasses?, recentStateAdvances?, targetStateAdvances?, recentProbePassRatePpm?})',
+    'evaluateCoreTexWorkQualification({outcome, parentMatchesLiveRoot, deterministicDeltaPpm, baselineScorePpm, recentNoiseFloorPpm, dynamic threshold inputs..., ...})',
   ],
 };
 mkdirSync(dirname(resolve(repoRoot, OUT_PATH)), { recursive: true });

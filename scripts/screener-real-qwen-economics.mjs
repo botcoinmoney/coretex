@@ -180,6 +180,7 @@ if (!existsSync(HF_CACHE)) warn(`HF cache ${HF_CACHE} does not exist; first run 
 // ─────────────────────────────────────────────────────────────────────────────
 info(`Loading launch profile: ${PROFILE_PATH}`);
 const profile = JSON.parse(readFileSync(PROFILE_PATH, 'utf8'));
+const TARGET_STATE_ADVANCES = Number(flag('target-state-advances', String(profile.epochFrontier?.targetAccepts ?? 2)));
 // ── Acceptance floors + replay tolerance: read from the CANONICAL profile fields, NOT a
 // non-existent `profile.stateAdvance` block. The old `profile.stateAdvance?.X ?? default`
 // reads silently fell through to WRONG hardcoded defaults (structuralFloor 0.4 vs the real
@@ -256,9 +257,12 @@ let bundleHash = bundle.bundleHash;
 let baseline = await evaluateBaseline(liveState, corpus, deriveHiddenPackFor(epochId, profile, corpus), scoringOptsBase);
 let baselineScorePpm = baseline.parentScorePpm;
 let recentNoiseFloorPpm = baseline.variancePpm;
-let screenerThresholdPpm = Number(computeCoreTexScreenerThresholdPpm({
-  baselineScorePpm, recentNoiseFloorPpm, policy: DEFAULT_CORETEX_WORK_POLICY,
-}));
+let recentScreenerPasses = 0;
+let recentStateAdvances = 0;
+let recentProbeAttempts = 0;
+let recentProbePasses = 0;
+let screenerThresholdPpm = 0;
+recomputeScreenerThreshold();
 
 // Per-miner + global counters (mirror V4 + registry semantics).
 const perMinerScreeners = new Map();    // address(lower) -> count this epoch
@@ -269,6 +273,26 @@ const dedup = new Set();                // `${parentRoot}|${patchHash}|${outcome
 // Submissions JSONL — every patch outcome lands here (full deltaPpm, gate/confirm scores, reason).
 function logSubmission(rec) { appendFileSync(SUBMISSIONS_LOG, JSON.stringify(rec) + '\n'); }
 function logTransition(rec) { appendFileSync(TRANSITIONS_LOG, JSON.stringify(rec) + '\n'); }
+function screenerThresholdContext() {
+  return {
+    baselineScorePpm,
+    recentNoiseFloorPpm,
+    recentScreenerPasses,
+    recentStateAdvances,
+    targetStateAdvances: TARGET_STATE_ADVANCES,
+    recentProbePassRatePpm: recentProbeAttempts > 0 ? Math.round((recentProbePasses * 1_000_000) / recentProbeAttempts) : 0,
+    policy: DEFAULT_CORETEX_WORK_POLICY,
+  };
+}
+function recomputeScreenerThreshold() {
+  screenerThresholdPpm = Number(computeCoreTexScreenerThresholdPpm(screenerThresholdContext()));
+  return screenerThresholdPpm;
+}
+function isProbeSubmission(body) {
+  const hint = String(body?.outcome ?? '').toUpperCase();
+  const probeClass = String(body?.probeClass ?? body?.attemptClass ?? '').toUpperCase();
+  return ['PROBE', 'JUNK', 'RANDOM', 'HILLCLIMB', 'DUPLICATE'].some((x) => hint.includes(x) || probeClass.includes(x));
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Real per-patch scorer (closure over Qwen + corpus + profile)
@@ -355,6 +379,8 @@ async function handleSubmit(body) {
   if (typeof patchBytesHex !== 'string' || !/^0x[0-9a-fA-F]+$/.test(patchBytesHex)) return { status: 'rejected', reason: 'patchBytesHex-malformed', code: 'BODY' };
   if (typeof parentStateRoot !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(parentStateRoot)) return { status: 'rejected', reason: 'parentStateRoot-malformed', code: 'BODY' };
   if (typeof minerAddress !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(minerAddress)) return { status: 'rejected', reason: 'minerAddress-malformed', code: 'BODY' };
+  const isProbeAttempt = isProbeSubmission(body);
+  if (isProbeAttempt) recentProbeAttempts += 1;
   if (parentStateRoot.toLowerCase() !== liveRoot.toLowerCase()) {
     return { status: 'rejected', reason: 'parentStateRoot ≠ current live root', code: 'E01', currentStateRoot: liveRoot };
   }
@@ -388,8 +414,7 @@ async function handleSubmit(body) {
     }
     const q = evaluateCoreTexWorkQualification({
       outcome: OUTCOME_CORETEX_STATE_ADVANCE, parentMatchesLiveRoot: true,
-      baselineScorePpm, recentNoiseFloorPpm, deterministicDeltaPpm: deltaPpm, liveStateAdvanced: true,
-      policy: DEFAULT_CORETEX_WORK_POLICY,
+      ...screenerThresholdContext(), deterministicDeltaPpm: deltaPpm, liveStateAdvanced: true,
       qualifiedScreenerPassesSinceLastStateAdvance,
     });
     if (!q.qualified) {
@@ -414,12 +439,14 @@ async function handleSubmit(body) {
     liveRoot = bytesToHex(merkleizeState(liveState));
     transitionCount += 1;
     qualifiedScreenerPassesSinceLastStateAdvance = 0;
+    recentStateAdvances += 1;
+    if (isProbeAttempt) recentProbePasses += 1;
     // Recompute baseline against the new parent — positional signature, ppm fields direct
     // (evaluateBaseline already returns parentScorePpm/variancePpm in ppm; do NOT re-scale).
     const newBaseline = await evaluateBaseline(liveState, corpus, deriveHiddenPackFor(epochId, profile, corpus), scoringOptsBase);
     baselineScorePpm = newBaseline.parentScorePpm;
     recentNoiseFloorPpm = newBaseline.variancePpm;
-    screenerThresholdPpm = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm, recentNoiseFloorPpm, policy: DEFAULT_CORETEX_WORK_POLICY }));
+    recomputeScreenerThreshold();
     logTransition({ t: new Date().toISOString(), kind: 'STATE_ADVANCE', beforeRoot, afterRoot: liveRoot, deltaPpm, miner: minerL, baselineScorePpm, screenerThresholdPpm });
     const out = {
       status: 'accepted', outcome: 'STATE_ADVANCE', patchHash,
@@ -443,8 +470,7 @@ async function handleSubmit(body) {
   }
   const q = evaluateCoreTexWorkQualification({
     outcome: OUTCOME_CORETEX_SCREENER_PASS, parentMatchesLiveRoot: true,
-    baselineScorePpm, recentNoiseFloorPpm, deterministicDeltaPpm: deltaPpm,
-    policy: DEFAULT_CORETEX_WORK_POLICY,
+    ...screenerThresholdContext(), deterministicDeltaPpm: deltaPpm,
   });
   if (!q.qualified) {
     const out = { status: 'rejected', reason: q.reason, code: q.reason, deterministicDeltaPpm: deltaPpm, requiredDeltaPpm: Number(q.requiredDeterministicDeltaPpm) };
@@ -460,6 +486,9 @@ async function handleSubmit(body) {
   dedup.add(dedupKey);
   perMinerScreeners.set(minerL, (perMinerScreeners.get(minerL) || 0) + 1);
   qualifiedScreenerPassesSinceLastStateAdvance += 1;
+  recentScreenerPasses += 1;
+  if (isProbeAttempt) recentProbePasses += 1;
+  recomputeScreenerThreshold();
   const out = {
     status: 'accepted', outcome: 'SCREENER_PASS', patchHash,
     evalReportHash: '0x' + createHash('sha256').update(`eval-${patchHash}`).digest('hex'),
@@ -524,6 +553,10 @@ async function adminNextEpoch() {
   epochId += 1;
   perMinerScreeners.clear();           // per-miner cap resets on epoch boundary
   qualifiedScreenerPassesSinceLastStateAdvance = 0;
+  recentScreenerPasses = 0;
+  recentStateAdvances = 0;
+  recentProbeAttempts = 0;
+  recentProbePasses = 0;
   await recomputeBaseline('next-epoch');
   logTransition({ t: new Date().toISOString(), kind: 'EPOCH_BOUNDARY', beforeEpochId: before, afterEpochId: epochId, baselineScorePpm });
   return { ok: true, epochId };
@@ -532,7 +565,7 @@ async function recomputeBaseline(cause) {
   const b = await evaluateBaseline(liveState, corpus, deriveHiddenPackFor(epochId, profile, corpus), scoringOptsBase);
   baselineScorePpm = b.parentScorePpm;
   recentNoiseFloorPpm = b.variancePpm;
-  screenerThresholdPpm = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm, recentNoiseFloorPpm, policy: DEFAULT_CORETEX_WORK_POLICY }));
+  recomputeScreenerThreshold();
   info(`Baseline recomputed (${cause}): ${baselineScorePpm}ppm  threshold=${screenerThresholdPpm}ppm`);
 }
 
@@ -583,6 +616,7 @@ server.listen(PORT, '127.0.0.1', () => {
     profilePath: PROFILE_PATH, bundlePath: BUNDLE_PATH, corpusPath: CORPUS_PATH,
     bundleHash, corpusRoot, profileHash, rerankerHash,
     onChainScreenerCap, chainCapSource: BASE_RPC_URL && V4_ADDRESS ? 'v4' : 'offline-fallback',
+    targetStateAdvances: TARGET_STATE_ADVANCES,
     minerAddress: MINER_ADDRESS,
   }, null, 2));
 });
@@ -643,6 +677,14 @@ function snapshotCtx() {
   return {
     epochId, liveRoot, activeFrontierRoot, corpusRoot, profileHash, rerankerHash, bundleHash,
     baselineScorePpm, recentNoiseFloorPpm, screenerThresholdPpm,
+    thresholdDynamics: {
+      recentScreenerPasses,
+      recentStateAdvances,
+      targetStateAdvances: TARGET_STATE_ADVANCES,
+      recentProbeAttempts,
+      recentProbePasses,
+      recentProbePassRatePpm: recentProbeAttempts > 0 ? Math.round((recentProbePasses * 1_000_000) / recentProbeAttempts) : 0,
+    },
     transitionCount, qualifiedScreenerPassesSinceLastStateAdvance,
     onChainScreenerCap, perMinerScreeners: Object.fromEntries(perMinerScreeners),
   };

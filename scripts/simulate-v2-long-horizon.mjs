@@ -111,6 +111,7 @@ const big = (n) => { const v = flag(n, undefined); return v === undefined ? unde
 const rampUpMaxRatio = num('ramp-up-max-ratio');
 const decayRatio = num('decay-ratio');
 const smallDriftRatio = num('small-drift-ratio');
+const underTargetRecoveryRatio = num('under-target-recovery-ratio');
 const qualityHighThresholdMult = num('quality-high-threshold-mult');
 // Experimental clamp-bound overrides (research-only; pinned constants otherwise).
 const minImprovementFloorPpm = big('min-improvement-floor-ppm');
@@ -144,6 +145,7 @@ const controllerOverrides = {
   rampUpMaxRatio: rampUpMaxRatio ?? profileController.rampUpMaxRatio,
   decayRatio: decayRatio ?? profileController.decayRatio,
   smallDriftRatio: smallDriftRatio ?? profileController.smallDriftRatio,
+  underTargetRecoveryRatio: underTargetRecoveryRatio ?? profileController.underTargetRecoveryRatio,
   qualityHighThreshold: qualityHighThresholdMult !== undefined
     ? qualityHighThresholdMult * targetAdvances
     : profileController.qualityHighThreshold,
@@ -396,10 +398,11 @@ const out = {
       rampUpMaxRatio: controllerOverrides.rampUpMaxRatio,
       decayRatio: controllerOverrides.decayRatio,
       smallDriftRatio: controllerOverrides.smallDriftRatio,
+      underTargetRecoveryRatio: controllerOverrides.underTargetRecoveryRatio,
       qualityHighThreshold: controllerOverrides.qualityHighThreshold,
       qualityHighThresholdMult: controllerOverrides.qualityHighThreshold / targetAdvances,
     },
-    controllerCliOverrides: { rampUpMaxRatio, decayRatio, smallDriftRatio, qualityHighThresholdMult },
+    controllerCliOverrides: { rampUpMaxRatio, decayRatio, smallDriftRatio, underTargetRecoveryRatio, qualityHighThresholdMult },
     acceptanceRule: 'delta > minImprovementPpm + variancePpm + replayTolerancePpm' },
   summary: {
     epochs, scopedOwners: owners.length, baselineRecomputes,

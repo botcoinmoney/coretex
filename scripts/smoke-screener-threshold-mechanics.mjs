@@ -84,6 +84,21 @@ pass(`noise floor sampled: ${noiseAbs}ppm`);
 const screenerThreshold = computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baseline, recentNoiseFloorPpm });
 if (screenerThreshold <= 0n) fail(`canonical screenerThreshold non-positive: ${screenerThreshold}`);
 pass(`computeCoreTexScreenerThresholdPpm returned ${screenerThreshold}ppm`);
+const plateauThreshold = computeCoreTexScreenerThresholdPpm({
+  baselineScorePpm: baseline,
+  recentNoiseFloorPpm,
+  targetStateAdvances: 2,
+  recentStateAdvances: 0,
+  recentScreenerPasses: 2,
+});
+const probePressureThreshold = computeCoreTexScreenerThresholdPpm({
+  baselineScorePpm: baseline,
+  recentNoiseFloorPpm,
+  recentProbePassRatePpm: 50_000,
+});
+if (plateauThreshold > screenerThreshold) fail(`plateau-eased threshold increased: ${plateauThreshold} > ${screenerThreshold}`);
+if (probePressureThreshold < screenerThreshold) fail(`probe-pressure threshold decreased: ${probePressureThreshold} < ${screenerThreshold}`);
+pass(`dynamic threshold controls responded — plateau=${plateauThreshold}ppm probe5pct=${probePressureThreshold}ppm`);
 
 // Canonical qualification path — try REJECT, SCREENER_PASS, STATE_ADVANCE outcomes via the
 // canonical evaluator (mechanics check; deterministic reranker gives delta≈0 so we expect REJECT).
