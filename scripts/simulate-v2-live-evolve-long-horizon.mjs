@@ -477,6 +477,7 @@ const report = {
   schema: 'coretex.live-evolve-long-horizon.v2',
   ...provenance,
   tag: TAG,
+  command: ['node', 'scripts/simulate-v2-live-evolve-long-horizon.mjs', ...process.argv.slice(2)].join(' '),
   commandArgs: process.argv.slice(2),
   reranker: RERANKER === 'gpu' ? `Qwen/${RR.modelId}@${RR.revision}` : 'deterministic',
   rerankerModel: RR.modelId,

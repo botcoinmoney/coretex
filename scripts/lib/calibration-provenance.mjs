@@ -29,6 +29,7 @@ export function calibrationProvenance({ bundlePath, corpusPath, embPath, profile
     : gitField('git status --short', '') !== '';
   const dirtyDiffText = gitDirty ? gitField('git diff --binary HEAD', '') : '';
   const dirtyStatusText = gitDirty ? gitField('git status --porcelain=v1', '') : '';
+  const embeddingSha256 = manifest?.sourceEmbSha256 ?? sha256File(embPath);
   return {
     bundle: bundlePath,
     bundlePath,
@@ -42,7 +43,8 @@ export function calibrationProvenance({ bundlePath, corpusPath, embPath, profile
     corpusRoot: manifest?.corpusRoot ?? null,
     bundleSha256: manifest?.sourceBundleSha256 ?? sha256File(bundlePath),
     corpusSha256: manifest?.sourceCorpusSha256 ?? sha256File(corpusPath),
-    embeddingSha256: manifest?.sourceEmbSha256 ?? sha256File(embPath),
+    embeddingSha256,
+    embeddingsSha256: embeddingSha256,
     profileSha256: profilePath ? (manifest?.sourceProfileSha256 ?? sha256File(profilePath)) : null,
     gitCommit,
     gitDirty,
