@@ -63,6 +63,9 @@ const anchorLimit = Number(flag('anchor-limit', '64'));
 const auditLimit = Number(flag('audit-limit', '12'));
 const categoryLensBudget = Number(flag('category-lens-budget', '50'));
 const categoryLensSeedTopK = Number(flag('category-lens-seed-topk', '2'));
+const scopeRoutingAnchors = flag('scope-routing-anchors', 'off');
+const scopeRoutingAnchorsToQuerySubject = ['subject', 'query-subject', 'true', '1'].includes(scopeRoutingAnchors);
+const maxTargetJunkPerQuery = Number(flag('max-target-junk-per-query', '1'));
 const outPath = flag('out', `${base}/direct-relation-routing-v15-${rerankerArg}-current.json`);
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
@@ -87,6 +90,7 @@ const optsBase = {
   categoryLensExpansionBudget: categoryLensBudget,
   categoryLensSeedTopK,
   categoryLensFinalBonusWeight: 0,
+  scopeRoutingAnchorsToQuerySubject,
 };
 
 const byFam = new Map();
@@ -515,17 +519,20 @@ summary.armPass = {
     s.targetLens.meanDeltaNdcg > 0 &&
     s.targetLens.primaryGoldDamage === 0 &&
     s.targetLens.answerDamage === 0 &&
+    s.targetLens.junkMoved <= maxTargetJunkPerQuery * Math.max(1, s.targetLens.n) &&
     s.offLens.meanDeltaNdcg >= -0.03 &&
     structuralPatchSmoke.relationPatchApplies),
   phaseAEdges: perSeed.every((s) =>
     (s.targetPhaseA.meanDeltaVsCompare ?? 0) > 0 &&
     s.targetPhaseA.primaryGoldDamage === 0 &&
+    s.targetPhaseA.junkMoved <= maxTargetJunkPerQuery * Math.max(1, s.targetPhaseA.n) &&
     s.offPhaseA.meanDeltaNdcg >= -0.03 &&
     s.randomTarget.meanDeltaNdcg <= 0.005 &&
     structuralPatchSmoke.relationPatchApplies),
   combined: perSeed.every((s) =>
     s.targetCombined.meanDeltaNdcg > 0 &&
     s.targetCombined.primaryGoldDamage === 0 &&
+    s.targetCombined.junkMoved <= maxTargetJunkPerQuery * Math.max(1, s.targetCombined.n) &&
     s.offCombined.meanDeltaNdcg >= -0.03 &&
     s.randomTarget.meanDeltaNdcg <= 0.005 &&
     structuralPatchSmoke.relationPatchApplies),
@@ -540,6 +547,7 @@ const verdict = {
     summary.pass ? 'at least one direct relation routing arm has positive target lift with clean safety controls' : 'all direct relation routing arms failed target lift and/or safety controls',
     `lensOnly mean=${summary.targetLens_meanDelta.mean} off=${summary.offLens_meanDelta.mean}`,
     `phaseA-vs-anchors mean=${summary.targetPhaseA_vsAnchors_meanDelta.mean}`,
+    `target junk cap=${maxTargetJunkPerQuery}/query`,
     realQwen ? 'reranker gate used real Qwen scores' : 'CPU deterministic run is structural/lower-layer only; Qwen rank checks are not applicable',
   ],
 };
@@ -556,7 +564,7 @@ const report = {
   offFamilies,
   edgeTypes,
   seeds,
-  knobs: { targetPerFam, offPerFam, anchorLimit, categoryLensBudget, categoryLensSeedTopK, auditLimit },
+  knobs: { targetPerFam, offPerFam, anchorLimit, categoryLensBudget, categoryLensSeedTopK, scopeRoutingAnchors, maxTargetJunkPerQuery, auditLimit },
   structuralPatchSmoke,
   verdict,
   passFailSummary: summary.pass ? `PASS: ${targetSurface} direct relation routing shape is positive and clean.` : `FAIL: ${targetSurface} direct relation routing shape is not promotable.`,
