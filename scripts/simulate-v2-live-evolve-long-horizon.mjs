@@ -45,6 +45,7 @@ import { loadMaterializedCorpus } from './lib/load-materialized-corpus.mjs';
 import { embedTexts } from './_embed-v2.mjs';
 import { hseed, mulberry32, randomPatch, relationUnits } from './lib/v2-patch-families.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
+import { makeInstrumentedReranker } from './lib/instrumented-reranker.mjs';
 import { calibrationProvenance } from './lib/calibration-provenance.mjs';
 
 const C = await import(distIndex);
@@ -81,6 +82,9 @@ const HILLCLIMB_PROBES = Number(flag('hillclimb-probes', '2'));
 const PACK_SIZE = Number(flag('pack-size', '64'));
 const CLEAR_PACK_QUOTAS = has('clear-pack-quotas');
 const MOCK_EMBEDDINGS = has('mock-embeddings');
+const TRACE_DIAGNOSTICS = has('trace-diagnostics');
+const TRACE_LIMIT = Number(flag('trace-limit', '5'));
+const DISABLE_QWEN_CACHE = has('disable-qwen-cache');
 
 if (!PROFILE_PATH || !BUNDLE_PATH || !CORPUS_PATH || !EMB_PATH || !OUTDIR) {
   console.error('HARD FAIL: --profile, --bundle, --corpus, --emb, --out required');
@@ -131,9 +135,22 @@ function mockVec(seed = 0) {
   return v;
 }
 
-const reranker = RERANKER === 'gpu'
+const rawReranker = RERANKER === 'gpu'
   ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: true })
   : await createDeterministicReranker();
+const profileHash = '0x' + createHash('sha256').update(readFileSync(resolve(repoRoot, PROFILE_PATH))).digest('hex');
+const qwenCachePath = DISABLE_QWEN_CACHE ? null : flag('qwen-cache', `${OUTDIR}/qwen-score-cache.jsonl`);
+const reranker = makeInstrumentedReranker({
+  reranker: rawReranker,
+  modelId: RR.modelId,
+  revision: RR.revision,
+  profileHash,
+  substrateMode: profile.pipelineVersion ?? 'unknown',
+  memoryIRVersion: profile.memoryIRSchemaVersion ?? 'raw',
+  cachePath: qwenCachePath,
+  mode: RERANKER,
+  batchSize: Number(env.RERANKER_INNER_BATCH ?? '8'),
+});
 const biEncoderHash = biEncoderModelIdHash(BE.modelId, BE.revision, 'dense');
 
 const evalSeedHex = profile.baselineEvalSeedHex ?? '0x' + 'a5'.repeat(32);
@@ -141,12 +158,210 @@ const hiddenPackProfile = CLEAR_PACK_QUOTAS ? { packSize: PACK_SIZE, quotas: [] 
 
 function makeGenesisState() { return { words: new Array(1024).fill(0n) }; }
 function rt() { return { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT }; }
-function optsForProd() { return scoringOptionsFromProfile(profile, rt()); }
+function makeScoringTelemetry(label) {
+  return { label, queryCount: 0, candidateCounts: [], rerankerInputTopK: [], totalQwenPairs: 0, candidateRenderingMs: 0, qwenScoringMs: 0, queryTotalMs: 0 };
+}
+function recordScoringTelemetry(t, e) {
+  if (!t) return;
+  t.queryCount++;
+  t.candidateCounts.push(e.candidatePoolSize);
+  t.rerankerInputTopK.push(e.rerankerInputTopK);
+  t.totalQwenPairs += e.rerankerPairs;
+  t.candidateRenderingMs += e.candidateRenderingMs;
+  t.qwenScoringMs += e.rerankerScoringMs;
+  t.queryTotalMs += e.queryTotalMs;
+}
+function quantile(xs, q) {
+  if (!xs.length) return null;
+  const a = [...xs].sort((x, y) => x - y);
+  return a[Math.min(a.length - 1, Math.max(0, Math.ceil(q * a.length) - 1))];
+}
+function summarizeScoringTelemetry(t) {
+  if (!t) return null;
+  return {
+    label: t.label,
+    queryCount: t.queryCount,
+    candidateCount: {
+      p50: quantile(t.candidateCounts, 0.5),
+      p90: quantile(t.candidateCounts, 0.9),
+      max: t.candidateCounts.length ? Math.max(...t.candidateCounts) : null,
+    },
+    rerankerInputTopK: {
+      p50: quantile(t.rerankerInputTopK, 0.5),
+      p90: quantile(t.rerankerInputTopK, 0.9),
+      max: t.rerankerInputTopK.length ? Math.max(...t.rerankerInputTopK) : null,
+    },
+    totalQwenPairs: t.totalQwenPairs,
+    candidateRenderingMs: t.candidateRenderingMs,
+    qwenScoringMs: t.qwenScoringMs,
+    queryTotalMs: t.queryTotalMs,
+  };
+}
+function optsForProd(telemetry = null, trace = false) {
+  return {
+    ...scoringOptionsFromProfile(profile, rt()),
+    ...(trace ? { exposeFullRanking: true, policyEmitTraces: true, exposeRenderedCandidates: true } : {}),
+    ...(telemetry ? { scoringTelemetry: (e) => recordScoringTelemetry(telemetry, e) } : {}),
+  };
+}
 
-async function scoreOnPack(prod, pack) {
-  const opts = optsForProd();
+async function evaluatePack(prod, pack, telemetry = null, trace = false) {
+  const opts = optsForProd(telemetry, trace);
   const res = await evaluateRetrievalBenchmarkState(makeGenesisState(), prod, pack, opts);
-  return Math.round((res.compositeScore ?? res.composite ?? 0) * 1_000_000);
+  return { scorePpm: Math.round((res.compositeScore ?? res.composite ?? 0) * 1_000_000), score: res };
+}
+async function scoreOnPack(prod, pack, telemetry = null) {
+  return (await evaluatePack(prod, pack, telemetry, false)).scorePpm;
+}
+
+function queryMap(score) {
+  return new Map((score?.perQuery ?? []).map((q) => [q.recordId, q]));
+}
+function compareQueries(before, after) {
+  const b = queryMap(before);
+  const out = [];
+  for (const q of after?.perQuery ?? []) {
+    const prev = b.get(q.recordId);
+    if (!prev) continue;
+    out.push({ recordId: q.recordId, family: q.family, before: prev, after: q, deltaNdcg: q.nDCG10 - prev.nDCG10 });
+  }
+  return out;
+}
+function stableSample(items, n, seed) {
+  const a = [...items];
+  const rand = mulberry32(hseed(seed));
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a.slice(0, Math.max(0, n));
+}
+function docSnapshots(corpus, docIds) {
+  const need = new Set([...docIds].filter(Boolean));
+  const out = [];
+  for (const ev of corpus.events) {
+    const docs = [...(ev.truthDocuments ?? []), ...(ev.hardNegatives ?? []), ...(ev.negativeDocuments ?? [])];
+    for (const d of docs) {
+      if (!need.has(d.id)) continue;
+      out.push({
+        docId: d.id,
+        eventId: ev.id,
+        text: d.text,
+        logicalFamily: ev.logicalFamily ?? ev.family ?? null,
+        entityIds: ev.entityIds ?? [],
+        isCurrent: d.isCurrent ?? null,
+        isHardNegative: (ev.hardNegatives ?? []).some((x) => x.id === d.id),
+        isTruthDocument: (ev.truthDocuments ?? []).some((x) => x.id === d.id),
+      });
+    }
+  }
+  return out;
+}
+function topK(q, k = 10) {
+  return (q?.finalRankingTop20 ?? []).slice(0, k).map((r) => ({
+    docId: r.docId,
+    rank: r.rank,
+    relevance: r.relevance,
+    rerankerScore: r.rerankerScore,
+    finalReorderingScore: r.finalReorderingScore,
+    sources: r.sources,
+    biCosine: r.biCosine,
+    lensBonus: r.lensBonus,
+    anchorBonus: r.anchorBonus,
+    categoryLensBonus: r.categoryLensBonus,
+    temporalBonus: r.temporalBonus,
+  }));
+}
+function renderedTop(q, k = 10) {
+  return (q?.renderedCandidatesTop20 ?? []).slice(0, k).map((r) => ({
+    docId: r.docId,
+    eventId: r.eventId,
+    rank: r.rank,
+    sources: r.sources,
+    rawText: r.rawText,
+    renderedText: r.renderedText,
+  }));
+}
+function classifyTrace({ query, beforeQ, afterQ, activeImprovement }) {
+  const beforeTop = topK(beforeQ, 10);
+  const afterTop = topK(afterQ, 10);
+  const staleIds = new Set((query.truthDocuments ?? []).filter((d) => d.isCurrent === false).map((d) => d.id));
+  const staleDropped = beforeTop.some((r) => staleIds.has(r.docId) && !afterTop.some((a) => a.docId === r.docId && a.rank <= r.rank));
+  const junkTop = afterTop.filter((r) => r.relevance === 0);
+  const routedJunk = junkTop.filter((r) => r.sources?.some((s) => s === 'categoryLensBFS' || s === 'anchorBFS' || s === 'policyAdmitted'));
+  if ((query.logicalFamily ?? query.family) === 'temporal_update' || query.family === 'temporal') {
+    if (staleDropped) return 'expected_stale_suppression';
+  }
+  if ((query.logicalFamily ?? query.family) === 'conflict_lifecycle' && (afterQ.policyTraces ?? []).some((t) => t.atomFamily === 'conflict_lifecycle')) {
+    return 'expected_conflict_resolution';
+  }
+  if (routedJunk.length >= 3) return 'route_flooding';
+  if (activeImprovement && activeImprovement.family !== afterQ.family) return 'off_family_damage';
+  if (junkTop.length > 0) return 'pack_noise';
+  if (activeImprovement) return 'active_focus_tradeoff';
+  return 'unknown';
+}
+function buildTraceEntry({ epoch, h, patchProvenance, comparison, query, corpus, activeImprovement, kind }) {
+  const beforeQ = comparison.before;
+  const afterQ = comparison.after;
+  const beforeIds = new Set(topK(beforeQ, 20).map((r) => r.docId));
+  const afterIds = new Set(topK(afterQ, 20).map((r) => r.docId));
+  const movedIds = new Set([
+    ...beforeIds,
+    ...afterIds,
+    ...(query.qrels ?? []).map((q) => q.documentId),
+    ...(query.truthDocuments ?? []).map((d) => d.id),
+    patchProvenance?.targetDocId,
+  ].filter(Boolean));
+  return {
+    kind,
+    epoch,
+    patchIndex: h,
+    patchProvenance,
+    activeQueryThatImproved: activeImprovement ? {
+      recordId: activeImprovement.recordId,
+      family: activeImprovement.family,
+      deltaNdcg: activeImprovement.deltaNdcg,
+      queryText: corpus.byId.get(activeImprovement.recordId)?.queryText ?? null,
+    } : null,
+    query: {
+      recordId: query.id,
+      queryText: query.queryText,
+      logicalFamily: query.logicalFamily ?? query.family ?? null,
+      family: query.family,
+      subjectEntityId: query.subjectEntityId ?? null,
+      ownerEntityId: query.ownerEntityId ?? null,
+      qrels: query.qrels ?? [],
+      truthDocuments: (query.truthDocuments ?? []).map((d) => ({ id: d.id, text: d.text, isCurrent: d.isCurrent ?? null })),
+    },
+    metricDelta: {
+      nDCG10Before: beforeQ.nDCG10,
+      nDCG10After: afterQ.nDCG10,
+      deltaNdcg: comparison.deltaNdcg,
+    },
+    topKBefore: topK(beforeQ, 10),
+    topKAfter: topK(afterQ, 10),
+    renderedCandidatesBefore: renderedTop(beforeQ, 10),
+    renderedCandidatesAfter: renderedTop(afterQ, 10),
+    rerankerInputBefore: (beforeQ.rerankerInputCandidates ?? []).slice(0, 20).map((r) => ({ docId: r.docId, eventId: r.eventId, rank: r.rank, sources: r.sources, renderedText: r.renderedText })),
+    rerankerInputAfter: (afterQ.rerankerInputCandidates ?? []).slice(0, 20).map((r) => ({ docId: r.docId, eventId: r.eventId, rank: r.rank, sources: r.sources, renderedText: r.renderedText })),
+    substrateTraceLines: {
+      beforePolicyTraces: beforeQ.policyTraces ?? [],
+      afterPolicyTraces: afterQ.policyTraces ?? [],
+    },
+    documentSnapshots: docSnapshots(corpus, movedIds),
+    explanationClassification: classifyTrace({ query, beforeQ, afterQ, activeImprovement }),
+  };
+}
+function patchTraceProvenance(hp) {
+  if (!hp) return null;
+  return {
+    fingerprint: hp.fingerprint ?? null,
+    operationFingerprint: hp.operationFingerprint ?? null,
+    selectorFingerprint: hp.selectorFingerprint ?? null,
+    targetDocId: hp.targetDocId ?? null,
+    targetDocIdRecordedOnly: hp.targetDocIdRecordedOnly ?? true,
+  };
 }
 
 function filterPackToActive(pack, activeIds) {
@@ -234,8 +449,13 @@ let prevHeldoutPack = filterPackToHeldout(basePack, fr0.activeIds);
 // Hard subset assertion: every activePack id MUST be in frontier.activeIds.
 for (const ev of prevActivePack.events) if (!fr0.activeIds.has(ev.id)) { console.error(`HARD FAIL: activePack contains id ${ev.id} not in frontier.activeIds`); exit(1); }
 
-let prevActiveScorePpm = prevActivePack.events.length ? await scoreOnPack(currentProd, prevActivePack) : null;
-let prevHeldoutScorePpm = prevHeldoutPack.events.length ? await scoreOnPack(currentProd, prevHeldoutPack) : null;
+const genesisScoringTelemetry = makeScoringTelemetry('genesis');
+const prevActiveEval = prevActivePack.events.length ? await evaluatePack(currentProd, prevActivePack, genesisScoringTelemetry, TRACE_DIAGNOSTICS) : null;
+const prevHeldoutEval = prevHeldoutPack.events.length ? await evaluatePack(currentProd, prevHeldoutPack, genesisScoringTelemetry, TRACE_DIAGNOSTICS) : null;
+let prevActiveScorePpm = prevActiveEval?.scorePpm ?? null;
+let prevHeldoutScorePpm = prevHeldoutEval?.scorePpm ?? null;
+let prevActiveDetailed = prevActiveEval?.score ?? null;
+let prevHeldoutDetailed = prevHeldoutEval?.score ?? null;
 console.log(`[live-evolve] genesis activeScore=${prevActiveScorePpm}ppm heldoutScore=${prevHeldoutScorePpm}ppm`);
 
 const operationReuseSet = new Set();
@@ -247,6 +467,7 @@ const baselineFloors = { ...profile.patchAcceptanceFloors, acceptanceThresholdPp
 
 for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   const epochStartMs = Date.now();
+  const epochScoringTelemetry = makeScoringTelemetry(`epoch-${epoch}`);
   let lastMarkMs = epochStartMs;
   const timingsMs = {};
   const mark = (name) => {
@@ -322,11 +543,16 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   mark('evalPackRefresh');
 
   let activeScorePpm = null, heldoutScorePpm = null, idShuffledScorePpm = null;
+  let activeDetailed = null, heldoutDetailed = null;
   if (baselineRecomputedBecause) {
     console.log(`[live-evolve] scoring active(${activePack.events.length}) + heldout(${heldoutPack.events.length}) + idShuffled control ...`);
-    activeScorePpm = activePack.events.length ? await scoreOnPack(newProd, activePack) : null;
-    heldoutScorePpm = heldoutPack.events.length ? await scoreOnPack(newProd, heldoutPack) : null;
-    idShuffledScorePpm = idShuffledActivePack.events.length ? await scoreOnPack(newProd, idShuffledActivePack) : null;
+    const activeEval = activePack.events.length ? await evaluatePack(newProd, activePack, epochScoringTelemetry, TRACE_DIAGNOSTICS) : null;
+    const heldoutEval = heldoutPack.events.length ? await evaluatePack(newProd, heldoutPack, epochScoringTelemetry, TRACE_DIAGNOSTICS) : null;
+    activeScorePpm = activeEval?.scorePpm ?? null;
+    heldoutScorePpm = heldoutEval?.scorePpm ?? null;
+    activeDetailed = activeEval?.score ?? null;
+    heldoutDetailed = heldoutEval?.score ?? null;
+    idShuffledScorePpm = idShuffledActivePack.events.length ? await scoreOnPack(newProd, idShuffledActivePack, epochScoringTelemetry) : null;
   }
   mark('baselineScoring');
 
@@ -346,7 +572,11 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     if (!hp) break;
     qualityAttemptsThisEpoch++;
     try {
-      const r = await evaluateRetrievalBenchmarkPatch(makeGenesisState(), hp.patch, newProd, activePack, optsForProd(), baselineFloors);
+      const tracePatch = TRACE_DIAGNOSTICS;
+      const r = await evaluateRetrievalBenchmarkPatch(makeGenesisState(), hp.patch, newProd, activePack, optsForProd(epochScoringTelemetry, tracePatch), baselineFloors);
+      const heldoutPatch = tracePatch && heldoutPack.events.length
+        ? await evaluateRetrievalBenchmarkPatch(makeGenesisState(), hp.patch, newProd, heldoutPack, optsForProd(epochScoringTelemetry, true), baselineFloors)
+        : null;
       const accepted = !!r.accepted;
       if (accepted) {
         honestAcceptsThisEpoch++;
@@ -361,16 +591,41 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         const applied = applyPatch(bestState, bestPatch);
         if (applied?.ok) bestState = applied.state;
       }
+      const activeComparisons = tracePatch ? compareQueries(r.before, r.after) : [];
+      const activeImprovements = activeComparisons
+        .filter((c) => c.deltaNdcg > 0)
+        .sort((a, b) => b.deltaNdcg - a.deltaNdcg)
+        .slice(0, TRACE_LIMIT);
+      const topActiveImprovement = activeImprovements[0] ?? null;
+      const heldoutComparisons = tracePatch && heldoutPatch ? compareQueries(heldoutPatch.before, heldoutPatch.after) : [];
+      const heldoutById = new Map(heldoutPack.events.map((e) => [e.id, e]));
+      const activeById = new Map(activePack.events.map((e) => [e.id, e]));
+      const traceDiagnostics = tracePatch ? {
+        worstHeldoutRegressions: heldoutComparisons
+          .filter((c) => c.deltaNdcg < 0)
+          .sort((a, b) => a.deltaNdcg - b.deltaNdcg)
+          .slice(0, TRACE_LIMIT)
+          .filter((c) => heldoutById.has(c.recordId))
+          .map((c) => buildTraceEntry({ epoch, h, patchProvenance: patchTraceProvenance(hp), comparison: c, query: heldoutById.get(c.recordId), corpus: newProd, activeImprovement: topActiveImprovement, kind: 'heldout_regression' })),
+        heldoutNonRegressions: stableSample(heldoutComparisons.filter((c) => c.deltaNdcg >= 0), TRACE_LIMIT, `${frontierSeed}:${epoch}:${h}:heldout-nonregression`)
+          .filter((c) => heldoutById.has(c.recordId))
+          .map((c) => buildTraceEntry({ epoch, h, patchProvenance: patchTraceProvenance(hp), comparison: c, query: heldoutById.get(c.recordId), corpus: newProd, activeImprovement: topActiveImprovement, kind: 'heldout_non_regression' })),
+        activeImprovements: activeImprovements
+          .filter((c) => activeById.has(c.recordId))
+          .map((c) => buildTraceEntry({ epoch, h, patchProvenance: patchTraceProvenance(hp), comparison: c, query: activeById.get(c.recordId), corpus: newProd, activeImprovement: c, kind: 'active_improvement' })),
+      } : undefined;
       honestPerPatch.push({
         h,
         accepted,
         deltaPpm: r.deltaPpm ?? 0,
+        heldoutDeltaPpm: heldoutPatch ? (heldoutPatch.deltaPpm ?? 0) : null,
         reason: r.reason ?? null,
         fingerprint: hp.fingerprint,
         operationFingerprint: hp.operationFingerprint,
         selectorFingerprint: hp.selectorFingerprint,
         targetDocId: hp.targetDocId,
         targetDocIdRecordedOnly: true,
+        ...(traceDiagnostics ? { traceDiagnostics } : {}),
       });
     } catch (e) {
       honestPerPatch.push({
@@ -394,17 +649,49 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   const randomDeltas = [], hillclimbDeltas = [];
   for (let i = 0; i < RANDOM_PROBES; i++) {
     const state = makeGenesisState();
-    const r = await evaluateRetrievalBenchmarkPatch(state, randomPatch(state, rand), newProd, activePack, optsForProd(), baselineFloors);
+    const r = await evaluateRetrievalBenchmarkPatch(state, randomPatch(state, rand), newProd, activePack, optsForProd(epochScoringTelemetry, false), baselineFloors);
     randomDeltas.push(r.deltaPpm ?? 0);
     if (r.accepted) randomAccepts++;
   }
   for (let i = 0; i < HILLCLIMB_PROBES; i++) {
-    const r = await evaluateRetrievalBenchmarkPatch(bestState, randomPatch(bestState, rand), newProd, activePack, optsForProd(), baselineFloors);
+    const r = await evaluateRetrievalBenchmarkPatch(bestState, randomPatch(bestState, rand), newProd, activePack, optsForProd(epochScoringTelemetry, false), baselineFloors);
     hillclimbDeltas.push(r.deltaPpm ?? 0);
     if (r.accepted) hillclimbAccepts++;
   }
   mark('antiCheatScoring');
   timingsMs.epochTotal = Date.now() - epochStartMs;
+  timingsMs.live_delta_mechanics_ms = (timingsMs.deltaGeneration ?? 0) + (timingsMs.bridgeLogicalDelta ?? 0);
+  timingsMs.embedding_ms = (timingsMs.biEncoderEmbedding ?? 0) + (timingsMs.mockEmbedding ?? 0);
+  timingsMs.root_update_ms = (timingsMs.buildCorpusDeltaRoot ?? 0) + (timingsMs.applyCorpusDeltaRoot ?? 0);
+  timingsMs.frontier_update_ms = timingsMs.frontierUpdate ?? 0;
+  timingsMs.candidate_rendering_ms = epochScoringTelemetry.candidateRenderingMs;
+  timingsMs.qwen_scoring_ms = epochScoringTelemetry.qwenScoringMs;
+  timingsMs.total_epoch_ms = timingsMs.epochTotal;
+  const frontierTraceDiagnostics = TRACE_DIAGNOSTICS && prevHeldoutDetailed && heldoutDetailed ? (() => {
+    const heldoutById = new Map(heldoutPack.events.map((e) => [e.id, e]));
+    const activeById = new Map(activePack.events.map((e) => [e.id, e]));
+    const activeImprovements = compareQueries(prevActiveDetailed, activeDetailed)
+      .filter((c) => c.deltaNdcg > 0)
+      .sort((a, b) => b.deltaNdcg - a.deltaNdcg)
+      .slice(0, TRACE_LIMIT);
+    const topActiveImprovement = activeImprovements[0] ?? null;
+    const heldoutComparisons = compareQueries(prevHeldoutDetailed, heldoutDetailed);
+    const patchProvenance = patchTraceProvenance(honestPerPatch.find((p) => p.accepted) ?? null);
+    return {
+      note: 'Frontier/baseline comparison across epoch boundary; query set changes can affect aggregate heldout_frontier_lift independently of patch causality.',
+      comparedHeldoutQueries: heldoutComparisons.length,
+      worstHeldoutRegressions: heldoutComparisons
+        .filter((c) => c.deltaNdcg < 0 && heldoutById.has(c.recordId))
+        .sort((a, b) => a.deltaNdcg - b.deltaNdcg)
+        .slice(0, TRACE_LIMIT)
+        .map((c) => buildTraceEntry({ epoch, h: null, patchProvenance, comparison: c, query: heldoutById.get(c.recordId), corpus: newProd, activeImprovement: topActiveImprovement, kind: 'frontier_heldout_regression' })),
+      heldoutNonRegressions: stableSample(heldoutComparisons.filter((c) => c.deltaNdcg >= 0 && heldoutById.has(c.recordId)), TRACE_LIMIT, `${frontierSeed}:${epoch}:frontier-heldout-nonregression`)
+        .map((c) => buildTraceEntry({ epoch, h: null, patchProvenance, comparison: c, query: heldoutById.get(c.recordId), corpus: newProd, activeImprovement: topActiveImprovement, kind: 'frontier_heldout_non_regression' })),
+      activeImprovements: activeImprovements
+        .filter((c) => activeById.has(c.recordId))
+        .map((c) => buildTraceEntry({ epoch, h: null, patchProvenance, comparison: c, query: activeById.get(c.recordId), corpus: newProd, activeImprovement: c, kind: 'frontier_active_improvement' })),
+    };
+  })() : undefined;
 
   perEpoch.push({
     epoch,
@@ -429,6 +716,8 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     rootCacheLeavesBefore: rootCacheBefore?.eventCount ?? null,
     rootCacheLeavesAfter: newProd.corpusRootCache?.eventCount ?? null,
     timingsMs,
+    scoringTelemetry: summarizeScoringTelemetry(epochScoringTelemetry),
+    ...(frontierTraceDiagnostics ? { frontierTraceDiagnostics } : {}),
     baselineRecomputedBecause,
     activeScorePpm, heldoutScorePpm, idShuffledActiveScorePpm: idShuffledScorePpm,
     cross_frontier_lift: crossFrontierLift,
@@ -460,6 +749,8 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   prevActiveRoot = frontierSnap.activeRoot;
   prevActiveScorePpm = activeScorePpm ?? prevActiveScorePpm;
   prevHeldoutScorePpm = heldoutScorePpm ?? prevHeldoutScorePpm;
+  prevActiveDetailed = activeDetailed ?? prevActiveDetailed;
+  prevHeldoutDetailed = heldoutDetailed ?? prevHeldoutDetailed;
   prevHonestAccepts = honestAcceptsThisEpoch;        // feed to next epoch's stepEpoch
   prevQualityAttempts = qualityAttemptsThisEpoch;
 }
@@ -489,6 +780,23 @@ const report = {
   baseCorpusRoot: baseBundle.corpus.corpusRoot, finalCorpusRoot: currentProd.corpusRoot,
   finalActiveRoot: prevActiveRoot,
   epochsRun: perEpoch.length, churnFraction: CHURN_FRACTION, seed: frontierSeed,
+  traceDiagnosticsEnabled: TRACE_DIAGNOSTICS,
+  genesisScoringTelemetry: summarizeScoringTelemetry(genesisScoringTelemetry),
+  rerankerTelemetry: {
+    ...reranker.telemetrySnapshot?.(),
+    modelStartupMs: reranker.modelStartupMs?.() ?? null,
+    safeCacheKey: {
+      queryTextHash: true,
+      renderedCandidateHash: true,
+      rerankerModelId: RR.modelId,
+      rerankerRevision: RR.revision,
+      memoryIRVersion: profile.memoryIRSchemaVersion ?? 'raw',
+      profileHash,
+      substrateMode: profile.pipelineVersion ?? 'unknown',
+      includesQrelsOrHiddenLabels: false,
+      cacheExposedToMiner: false,
+    },
+  },
   perEpoch,
   uniqueHonestOperations: operationReuseSet.size,
   summary: {

@@ -157,6 +157,11 @@
   "firstStageMode": "hybrid",
   "firstStageDenseWeight": 1,
   "firstStageLexicalWeight": 1,
+  "enableRawRoutingAnchors": false,
+  "enableRelationAnchorEdges": false,
+  "policyEvidenceAllowedActions": [
+    "bundle"
+  ],
   "activeSubstrateSurfaces": [
     "temporal_update",
     "conflict_lifecycle",

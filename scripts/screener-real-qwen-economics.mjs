@@ -68,6 +68,7 @@ import { URL } from 'node:url';
 import { distIndex, repoRoot } from './_repo-root.mjs';
 import { buildV2ProductionCorpus, inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { makeLaunchFrontier } from './lib/epoch-frontier.mjs';
+import { makeInstrumentedReranker } from './lib/instrumented-reranker.mjs';
 
 const cortex = await import(distIndex);
 const {
@@ -219,22 +220,40 @@ info(`Corpus root: ${corpus.corpusRoot} | biEncoderHash=${biEncoderHash}`);
 // Persistent Qwen reranker (the only allowed scorer path)
 // ─────────────────────────────────────────────────────────────────────────────
 info(`Spawning persistent Qwen reranker (${QWEN_MODEL}@${QWEN_REVISION}) — model load can take 30-60s on first run.`);
-const reranker = createStreamingQwen3Reranker({
+const rawReranker = createStreamingQwen3Reranker({
   model: QWEN_MODEL,
   revision: QWEN_REVISION,
   cacheDir: HF_CACHE,
   localOnly: env.HF_HUB_OFFLINE === '1',
 });
 // Wait for ready by issuing a tiny warm-up score.
-await reranker.score([{ query: 'warmup', document: 'warmup' }]);
-info(`Reranker ready.`);
+const rerankerStartupStartMs = Date.now();
+await rawReranker.score([{ query: 'warmup', document: 'warmup' }]);
+const rerankerStartupMs = Date.now() - rerankerStartupStartMs;
+info(`Reranker ready (${rerankerStartupMs}ms).`);
+const profileHashForCache = computeProfileHash(profile);
+const reranker = makeInstrumentedReranker({
+  reranker: rawReranker,
+  modelId: QWEN_MODEL,
+  revision: QWEN_REVISION,
+  profileHash: profileHashForCache,
+  substrateMode: profile.pipelineVersion ?? 'unknown',
+  memoryIRVersion: profile.memoryIRSchemaVersion ?? 'raw',
+  cachePath: `${RUN_DIR}/qwen-score-cache.jsonl`,
+  mode: MODE,
+  batchSize: Number(env.RERANKER_INNER_BATCH ?? '8'),
+});
 
 // Scoring options derived from the SIGNED profile + live runtime (biEncoder + reranker +
 // biEncoderHash + retrievalKeyLayout) — matches production wiring exactly.
-const scoringOptsBase = scoringOptionsFromProfile(profile, {
+const scoringTelemetry = createScoringTelemetry();
+const scoringOptsBase = {
+  ...scoringOptionsFromProfile(profile, {
   biEncoder: inertBiEncoder(BE, LAYOUT),
   reranker, biEncoderHash, retrievalKeyLayout: LAYOUT,
-});
+  }),
+  scoringTelemetry: (e) => recordScoringTelemetry(scoringTelemetry, e),
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Live state (mirrors what V4 + CoreTexRegistry would see)
@@ -251,7 +270,7 @@ let frontierEpoch = 0;
 let activeFrontierRoot = launchFrontier.stepEpoch(0, null, null).activeRoot;
 if (!activeFrontierRoot || /^0x0+$/.test(activeFrontierRoot)) fail('derived genesis activeFrontierRoot is zero — V4 would reject');
 let corpusRoot = corpus.corpusRoot;
-let profileHash = computeProfileHash(profile);
+let profileHash = profileHashForCache;
 let rerankerHash = bundle.rerankerHash || profileHash;
 let bundleHash = bundle.bundleHash;
 let baseline = await evaluateBaseline(liveState, corpus, deriveHiddenPackFor(epochId, profile, corpus), scoringOptsBase);
@@ -618,6 +637,7 @@ server.listen(PORT, '127.0.0.1', () => {
     onChainScreenerCap, chainCapSource: BASE_RPC_URL && V4_ADDRESS ? 'v4' : 'offline-fallback',
     targetStateAdvances: TARGET_STATE_ADVANCES,
     minerAddress: MINER_ADDRESS,
+    rerankerTelemetry: rerankerTelemetrySnapshot(),
   }, null, 2));
 });
 
@@ -636,6 +656,7 @@ async function shutdown(exitCode) {
   appendFileSync(`${repoRoot}/release/calibration/CALIBRATION_LEDGER.jsonl`, JSON.stringify({
     t: new Date().toISOString(), kind: 'screener-real-qwen-economics', runId: RUN_ID, mode: MODE,
     bundleHash, corpusRoot, profileHash, rerankerHash, submissionsSeen,
+    rerankerTelemetry: rerankerTelemetrySnapshot(),
     chainCapSource: BASE_RPC_URL && V4_ADDRESS ? 'v4' : 'offline-fallback', onChainScreenerCap,
     artifactPaths: { run: RUN_DIR, submissions: SUBMISSIONS_LOG, transitions: TRANSITIONS_LOG, meta: RUN_META, findings: `${repoRoot}/release/calibration/SCREENER_REAL_QWEN_ECONOMICS_FINDINGS.md` },
   }) + '\n');
@@ -685,8 +706,65 @@ function snapshotCtx() {
       recentProbePasses,
       recentProbePassRatePpm: recentProbeAttempts > 0 ? Math.round((recentProbePasses * 1_000_000) / recentProbeAttempts) : 0,
     },
+    scoringTelemetry: summarizeScoringTelemetry(scoringTelemetry),
+    rerankerTelemetry: rerankerTelemetrySnapshot(),
     transitionCount, qualifiedScreenerPassesSinceLastStateAdvance,
     onChainScreenerCap, perMinerScreeners: Object.fromEntries(perMinerScreeners),
+  };
+}
+function createScoringTelemetry() {
+  return { queryCount: 0, candidateCounts: [], rerankerInputTopK: [], totalQwenPairs: 0, candidateRenderingMs: 0, qwenScoringMs: 0, queryTotalMs: 0 };
+}
+function recordScoringTelemetry(t, e) {
+  t.queryCount++;
+  t.candidateCounts.push(e.candidatePoolSize);
+  t.rerankerInputTopK.push(e.rerankerInputTopK);
+  t.totalQwenPairs += e.rerankerPairs;
+  t.candidateRenderingMs += e.candidateRenderingMs;
+  t.qwenScoringMs += e.rerankerScoringMs;
+  t.queryTotalMs += e.queryTotalMs;
+}
+function q(xs, quantile) {
+  if (!xs.length) return null;
+  const a = [...xs].sort((x, y) => x - y);
+  return a[Math.min(a.length - 1, Math.max(0, Math.ceil(quantile * a.length) - 1))];
+}
+function summarizeScoringTelemetry(t) {
+  return {
+    queryCount: t.queryCount,
+    candidateCount: {
+      p50: q(t.candidateCounts, 0.5),
+      p90: q(t.candidateCounts, 0.9),
+      max: t.candidateCounts.length ? Math.max(...t.candidateCounts) : null,
+    },
+    rerankerInputTopK: {
+      p50: q(t.rerankerInputTopK, 0.5),
+      p90: q(t.rerankerInputTopK, 0.9),
+      max: t.rerankerInputTopK.length ? Math.max(...t.rerankerInputTopK) : null,
+    },
+    totalQwenPairs: t.totalQwenPairs,
+    candidateRenderingMs: t.candidateRenderingMs,
+    qwenScoringMs: t.qwenScoringMs,
+    queryTotalMs: t.queryTotalMs,
+  };
+}
+function rerankerTelemetrySnapshot() {
+  return {
+    ...reranker.telemetrySnapshot(),
+    modelStartupMs: rerankerStartupMs,
+    cpuGpuMode: MODE,
+    safeCacheKey: {
+      queryTextHash: true,
+      renderedCandidateHash: true,
+      rerankerModelId: QWEN_MODEL,
+      rerankerRevision: QWEN_REVISION,
+      memoryIRVersion: profile.memoryIRSchemaVersion ?? 'raw',
+      profileHash,
+      substrateMode: profile.pipelineVersion ?? 'unknown',
+      includesQrelsOrHiddenLabels: false,
+      cacheExposedToMiner: false,
+    },
+    scoring: summarizeScoringTelemetry(scoringTelemetry),
   };
 }
 function computeProfileHash(p) {
@@ -768,6 +846,7 @@ Bundle:  \`${BUNDLE_PATH}\` (\`bundleHash ${bundleHash}\`)
 Corpus:  \`${CORPUS_PATH}\` (\`corpusRoot ${corpusRoot}\`)
 Reranker: ${QWEN_MODEL}@${QWEN_REVISION}
 On-chain V4 \`coreTexScreenerCapPerMinerPerEpoch\`: ${onChainScreenerCap} (${BASE_RPC_URL && V4_ADDRESS ? 'chain-read' : 'offline-fallback'})
+Qwen cost telemetry: \`${JSON.stringify(rerankerTelemetrySnapshot())}\`
 
 Mining wallet (subagent miner EOA): \`${MINER_ADDRESS}\`
 

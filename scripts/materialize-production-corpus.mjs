@@ -73,6 +73,11 @@ if (!PROFILE_PATH || !BUNDLE_PATH || !CORPUS_PATH || !EMB_PATH) {
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, PROFILE_PATH), 'utf8'));
 const bundle = JSON.parse(readFileSync(resolve(repoRoot, BUNDLE_PATH), 'utf8'));
+const PIN_BE = bundle.model?.biEncoder;
+const PIN_RR = bundle.model?.reranker;
+const PIN_LAYOUT = PIN_BE?.retrievalKeyLayout
+  ? { dim: PIN_BE.retrievalKeyLayout.dim, quantization: PIN_BE.retrievalKeyLayout.quantization, headerBytes: PIN_BE.retrievalKeyLayout.headerBytes }
+  : null;
 const sha256File = (p) => '0x' + createHash('sha256').update(readFileSync(resolve(repoRoot, p))).digest('hex');
 const sourceCorpusSha = sha256File(CORPUS_PATH);
 const sourceEmbSha = sha256File(EMB_PATH);
@@ -127,10 +132,17 @@ if (existsSync(ROOT_MAT) && !FORCE) {
     if (!existsSync(sibManifest) || !existsSync(sibCorpus) || !existsSync(sibNdjson)) continue;
     try {
       const sm = JSON.parse(readFileSync(sibManifest, 'utf8'));
+      const sameModelPins =
+        PIN_BE && PIN_RR && PIN_LAYOUT
+        && sm.biEncoder?.modelId === PIN_BE.modelId
+        && sm.biEncoder?.revision === PIN_BE.revision
+        && JSON.stringify(sm.biEncoder?.layout) === JSON.stringify(PIN_LAYOUT)
+        && sm.labelingModel?.modelId === PIN_RR.modelId
+        && sm.labelingModel?.revision === PIN_RR.revision;
       const contentMatches =
         sm.sourceCorpusSha256 === sourceCorpusSha
         && sm.sourceEmbSha256 === sourceEmbSha
-        && sm.profileHash === profileHashLocal
+        && sameModelPins
         && sm.corpusRoot && sm.corpusRoot.startsWith('0x');
       if (!contentMatches) continue;
       mkdirSync(MAT_DIR, { recursive: true });
@@ -151,7 +163,14 @@ if (existsSync(ROOT_MAT) && !FORCE) {
           },
         } : {}),
         gitCommit,
-        siblingCopyFrom: { bundleTag: sib, bundleHash: sm.bundleHash, note: 'content-equivalent corpus copied from sibling; corpus content + profile + embeddings unchanged' },
+        siblingCopyFrom: {
+          bundleTag: sib,
+          bundleHash: sm.bundleHash,
+          profileHash: sm.profileHash ?? null,
+          note: sm.profileHash === profileHashLocal
+            ? 'content-equivalent corpus copied from sibling; corpus content + profile + embeddings unchanged'
+            : 'content-equivalent corpus copied from sibling; evaluator profile changed but corpus inputs and BE/RR/layout pins are identical',
+        },
       };
       writeFileSync(MANIFEST, JSON.stringify(newManifest, null, 2));
       console.log(`[materialize] SIBLING COPY — content-equivalent artifact found under materialized/${sib}/`);

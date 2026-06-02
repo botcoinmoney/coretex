@@ -18,6 +18,7 @@ import { resolve } from 'node:path';
 import { repoRoot } from '../_repo-root.mjs';
 
 export function makeStreamReranker({ model, revision, python, allowCuda }) {
+  const spawnStartMs = Date.now();
   const env = {
     ...process.env,
     CORETEX_RERANKER_STREAM_MODEL_ID: model,
@@ -44,6 +45,7 @@ export function makeStreamReranker({ model, revision, python, allowCuda }) {
   let exited = false;
   let exitErr = null;
   let ready = false;
+  let readyAtMs = null;
 
   let readyResolve, readyReject;
   const readyP = new Promise((res, rej) => { readyResolve = res; readyReject = rej; });
@@ -77,7 +79,7 @@ export function makeStreamReranker({ model, revision, python, allowCuda }) {
         try { proc.kill('SIGTERM'); } catch { /* noop */ }
         continue;
       }
-      if (m.ready) { ready = true; clearTimeout(startupTimer); readyResolve(); continue; }
+      if (m.ready) { ready = true; readyAtMs = Date.now(); clearTimeout(startupTimer); readyResolve(); continue; }
       if (m.id !== undefined && pending.has(m.id)) {
         pending.get(m.id)(m);
         pending.delete(m.id);
@@ -105,6 +107,12 @@ export function makeStreamReranker({ model, revision, python, allowCuda }) {
   });
 
   return {
+    model,
+    revision,
+    mode: allowCuda ? 'gpu' : 'cpu',
+    modelStartupMs() {
+      return readyAtMs === null ? null : readyAtMs - spawnStartMs;
+    },
     async score(pairs) {
       if (!pairs?.length) return [];
       await readyP;

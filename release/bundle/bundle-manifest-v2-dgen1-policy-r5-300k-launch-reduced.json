@@ -277,6 +277,11 @@
       "firstStageMode": "hybrid",
       "firstStageDenseWeight": 1,
       "firstStageLexicalWeight": 1,
+      "enableRawRoutingAnchors": false,
+      "enableRelationAnchorEdges": false,
+      "policyEvidenceAllowedActions": [
+        "bundle"
+      ],
       "activeSubstrateSurfaces": [
         "temporal_update",
         "conflict_lifecycle",
@@ -306,8 +311,8 @@
       {
         "role": "evaluator",
         "path": "packages/cortex/src/eval/retrieval-benchmark.ts",
-        "sha256": "c0e676694551716972cf9c34fca544d72a5415c08fc672be4792b2cf176b2db3",
-        "bytes": 139369
+        "sha256": "ad308637723ef1cd12efd4c5988c6f7a16f97c83b755061a6646c797d569cb0a",
+        "bytes": 144900
       },
       {
         "role": "evaluator",
@@ -676,5 +681,5 @@
     "coordinatorCacheOptional": true,
     "snapshots": []
   },
-  "bundleHash": "0x392bf7913f87055bf8deb22b92dc15dbab48de0fd52d0cbca16c8ecc685c2554"
+  "bundleHash": "0x983a05ceabb9a0a5756e36f70fc7773c8e104c45f4641f07591ed2c9f94d7182"
 }

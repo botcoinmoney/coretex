@@ -11,7 +11,8 @@
  *   2. Mutating each scoring-affecting profile knob flips the bundleHash:
  *      compositeWeights, replayTolerancePpm, rerankerTopK, abstentionThreshold,
  *      relationHopBudget, pipelineVersion, controllerParams, majorDeltaThreshold,
- *      baselineParentScorePpm, policyMaxBudgetEvidence, policyRelationTypedAdmission.
+ *      baselineParentScorePpm, policyMaxBudgetEvidence, policyRelationTypedAdmission,
+ *      raw-anchor/Phase-A/evidence-action reduced-profile gates.
  *   3. Mutating the pinned reranker model revision flips the hash; ADDING a
  *      reranker adapter flips the hash (a tuned-reranker promotion cannot be
  *      silent — dormant flywheel artifacts that are NOT pinned do not affect it).
@@ -60,6 +61,9 @@ mutateAndCheck('majorDeltaThreshold', (p) => { p.majorDeltaThreshold = (p.majorD
 mutateAndCheck('baselineParentScorePpm', (p) => { p.baselineParentScorePpm = (p.baselineParentScorePpm ?? 0) + 1; });
 mutateAndCheck('policyMaxBudgetEvidence', (p) => { p.policyMaxBudgetEvidence = (p.policyMaxBudgetEvidence ?? 250) + 1; });
 mutateAndCheck('policyRelationTypedAdmission', (p) => { p.policyRelationTypedAdmission = !(p.policyRelationTypedAdmission ?? true); });
+mutateAndCheck('enableRawRoutingAnchors', (p) => { p.enableRawRoutingAnchors = !(p.enableRawRoutingAnchors ?? true); });
+mutateAndCheck('enableRelationAnchorEdges', (p) => { p.enableRelationAnchorEdges = !(p.enableRelationAnchorEdges ?? true); });
+mutateAndCheck('policyEvidenceAllowedActions', (p) => { p.policyEvidenceAllowedActions = ['bundle', 'boost']; });
 
 // reranker model pin + adapter
 mutateAndCheck('model.reranker.revision', (_p, mf) => { mf.model.reranker.revision = 'deadbeef' + mf.model.reranker.revision.slice(8); });
