@@ -44,7 +44,7 @@ const C = await import(distIndex);
 const {
   scoringOptionsFromProfile, createDeterministicReranker, deriveQueryPack,
   biEncoderModelIdHash, evaluateRetrievalBenchmarkState,
-  RANGES, PATCH_TYPE, merkleizeState, firstStageCandidates, buildPublicCorpusIndex,
+  RANGES, PATCH_TYPE, merkleizeState, firstStageCandidates, retrieveFirstStageCandidates, buildPublicCorpusIndex,
 } = C;
 
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
@@ -64,6 +64,15 @@ function info(s) { console.log(`     ${s}`); }
 
 const isoProfile = JSON.parse(readFileSync(resolve(repoRoot, ISO_PROFILE), 'utf8'));
 const mixProfile = JSON.parse(readFileSync(resolve(repoRoot, MIX_PROFILE), 'utf8'));
+const isoProfileForScoring = {
+  ...isoProfile,
+  // Isolate temporal substrate flags, not stale lower-layer retrieval knobs.
+  firstStageTopK: mixProfile.firstStageTopK,
+  firstStageMode: mixProfile.firstStageMode,
+  firstStageDenseWeight: mixProfile.firstStageDenseWeight,
+  firstStageLexicalWeight: mixProfile.firstStageLexicalWeight,
+  rerankerInputTopK: mixProfile.rerankerInputTopK,
+};
 
 // ─── Check 1: profile knobs ───
 console.log('\n=== check 1: isolated temporal profile knobs ===');
@@ -87,6 +96,8 @@ console.log('\n=== loading materialized corpus (via mixed bundle — content is 
 const { corpus, BE, RR, LAYOUT } = loadMaterializedCorpus(MIX_BUNDLE, { sourceCorpusPath: CORPUS_PATH, sourceEmbPath: EMB_PATH });
 const reranker = await createDeterministicReranker();
 const rt = { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash: biEncoderModelIdHash(BE.modelId, BE.revision, 'dense'), retrievalKeyLayout: LAYOUT };
+const optsIso = scoringOptionsFromProfile(isoProfileForScoring, rt);
+const optsMix = scoringOptionsFromProfile(mixProfile, rt);
 info(`corpus events=${corpus.events.length} root=${corpus.corpusRoot.slice(0, 18)}...`);
 
 // ─── Check 2: qrels mark current vs stale ───
@@ -120,16 +131,21 @@ info(`  stale truth doc:   ${sampleStale.id}`);
 console.log('\n=== check 3: stale doc in pre-rerank candidate set ===');
 try {
   const pubIndex = buildPublicCorpusIndex(corpus);
-  // firstStageCandidates(queryVec, publicIndex, topK) — queryVec is the canonical
-  // query-vector field on the production event.
+  // Use the active first-stage settings, not a diagnostic-only topK. v15 pins
+  // hybrid top-3200; checking dense top-256 produced false lower-layer failures.
   const queryVec = sample.embeddings?.query ?? sample.queryVec ?? sample.embedding;
   if (!queryVec) {
     info(`pack event ${sample.id} has no embeddings.query — first-stage candidate enumeration not possible from this event shape`);
     check('first-stage candidate enumeration', false, 'no queryVec on pack event');
   } else {
-    const cands = firstStageCandidates(queryVec, pubIndex, 256);
+    const stage1K = optsIso.firstStageTopK;
+    const stage1Mode = optsIso.firstStageMode ?? 'dense';
+    const stage1Opts = { mode: stage1Mode, denseWeight: optsIso.firstStageDenseWeight ?? 1, lexicalWeight: optsIso.firstStageLexicalWeight ?? 1 };
+    const cands = typeof retrieveFirstStageCandidates === 'function'
+      ? retrieveFirstStageCandidates(sample.queryText ?? '', queryVec, pubIndex, stage1K, stage1Opts)
+      : firstStageCandidates(queryVec, pubIndex, stage1K);
     const candIds = new Set((cands ?? []).map((c) => c.documentId ?? c.id ?? c.docId));
-    info(`first-stage candidates: ${candIds.size} (topK=256)`);
+    info(`first-stage candidates: ${candIds.size} (mode=${stage1Mode} topK=${stage1K})`);
     check('current truth doc in pre-rerank candidates', candIds.has(sampleCurrent.id), `id=${sampleCurrent.id}`);
     check('stale truth doc in pre-rerank candidates', candIds.has(sampleStale.id), `id=${sampleStale.id}`);
     if (!candIds.has(sampleStale.id)) info('  → stale doc is filtered out before rerank; temporal suppression has nothing to act on.');
@@ -167,39 +183,47 @@ check('parent != post-patch root (patch actually mutates state)', parentRoot !==
 
 // ─── Check 5: same-pack delta — isolated vs mixed ───
 console.log('\n=== check 5: same-pack delta isolated vs mixed (empty + post-patch) ===');
-const optsIso = scoringOptionsFromProfile(isoProfile, rt);
-const optsMix = scoringOptionsFromProfile(mixProfile, rt);
-async function scoreFamilyDelta(opts, label, state) {
-  const r = await evaluateRetrievalBenchmarkState(state, corpus, pack, opts);
+async function scoreFamilyDelta(opts, label, state, scorePack = pack) {
+  const r = await evaluateRetrievalBenchmarkState(state, corpus, scorePack, opts);
+  const eventByRecord = new Map(scorePack.events.map((e) => [e.recordId ?? e.id, e]));
   const perQ = r.perQuery ?? [];
   const tQ = perQ.filter((q) => {
-    const ev = pack.events.find((e) => (e.recordId ?? e.id) === (q.recordId ?? q.id));
+    const ev = eventByRecord.get(q.recordId ?? q.id);
     return ev && (ev.logicalFamily ?? ev.family) === 'temporal_update';
   });
   const mean = tQ.length ? tQ.reduce((a, q) => a + q.nDCG10, 0) / tQ.length : 0;
   return { label, agg: r.nDCG10, temporalMean: mean, temporalN: tQ.length };
 }
+const soloPack = { ...pack, events: [sample] };
+const isoSoloEmpty = await scoreFamilyDelta(optsIso, 'isolated/solo-empty', empty, soloPack);
+const isoSoloPost = await scoreFamilyDelta(optsIso, 'isolated/solo-post-patch', postState, soloPack);
 const isoEmpty = await scoreFamilyDelta(optsIso, 'isolated/empty', empty);
 const mixEmpty = await scoreFamilyDelta(optsMix, 'mixed/empty', empty);
 const isoPost = await scoreFamilyDelta(optsIso, 'isolated/post-patch', postState);
 const mixPost = await scoreFamilyDelta(optsMix, 'mixed/post-patch', postState);
+info(`isolated/solo-empty:      agg=${isoSoloEmpty.agg.toFixed(4)} temporal-family-mean=${isoSoloEmpty.temporalMean.toFixed(4)} (n=${isoSoloEmpty.temporalN})`);
+info(`isolated/solo-post-patch: agg=${isoSoloPost.agg.toFixed(4)} temporal-family-mean=${isoSoloPost.temporalMean.toFixed(4)}`);
 info(`isolated/empty:      agg=${isoEmpty.agg.toFixed(4)} temporal-family-mean=${isoEmpty.temporalMean.toFixed(4)} (n=${isoEmpty.temporalN})`);
 info(`mixed/empty:         agg=${mixEmpty.agg.toFixed(4)} temporal-family-mean=${mixEmpty.temporalMean.toFixed(4)} (n=${mixEmpty.temporalN})`);
 info(`isolated/post-patch: agg=${isoPost.agg.toFixed(4)} temporal-family-mean=${isoPost.temporalMean.toFixed(4)}`);
 info(`mixed/post-patch:    agg=${mixPost.agg.toFixed(4)} temporal-family-mean=${mixPost.temporalMean.toFixed(4)}`);
+const isoSoloLiftTemporal = isoSoloPost.temporalMean - isoSoloEmpty.temporalMean;
+const isoSoloLiftAgg = isoSoloPost.agg - isoSoloEmpty.agg;
 const isoLiftTemporal = isoPost.temporalMean - isoEmpty.temporalMean;
 const mixLiftTemporal = mixPost.temporalMean - mixEmpty.temporalMean;
 const isoLiftAgg = isoPost.agg - isoEmpty.agg;
 const mixLiftAgg = mixPost.agg - mixEmpty.agg;
+info(`isolated single-query temporal lift: ${isoSoloLiftTemporal.toFixed(4)}    isolated single-query aggregate lift: ${isoSoloLiftAgg.toFixed(4)}`);
 info(`isolated temporal-family lift: ${isoLiftTemporal.toFixed(4)}    isolated aggregate lift: ${isoLiftAgg.toFixed(4)}`);
 info(`mixed    temporal-family lift: ${mixLiftTemporal.toFixed(4)}    mixed    aggregate lift: ${mixLiftAgg.toFixed(4)}`);
-check('isolated profile: temporal-family lift > 0 on same pack', isoLiftTemporal > 0, `${isoLiftTemporal.toFixed(4)}`);
-check('isolated profile: aggregate lift >= 0 on same pack (no global damage)', isoLiftAgg >= 0, `${isoLiftAgg.toFixed(4)}`);
-if (isoLiftTemporal > 0 && mixLiftAgg <= 0) {
-  info(`\nROOT CAUSE INDICATOR: isolated produces positive temporal lift but mixed has aggregate damage`);
-  info(`  → temporal substrate is sound; pack interference / admission / rerank-cap composition is burying it.`);
-} else if (isoLiftTemporal <= 0) {
-  info(`\nROOT CAUSE INDICATOR: isolated profile itself can't produce temporal lift`);
+check('isolated profile: single-query temporal lift > 0', isoSoloLiftTemporal > 0, `${isoSoloLiftTemporal.toFixed(4)}`);
+check('isolated profile: same-pack temporal-family lift > 0', isoLiftTemporal > 0, `${isoLiftTemporal.toFixed(4)}`);
+check('isolated profile: same-pack aggregate lift >= 0 (no global damage)', isoLiftAgg >= 0, `${isoLiftAgg.toFixed(4)}`);
+if (isoSoloLiftTemporal > 0 && isoLiftAgg <= 0) {
+  info(`\nROOT CAUSE INDICATOR: single-query temporal lift is positive but same-pack isolated aggregate is damaging`);
+  info(`  → temporal substrate wiring is live; pack interference / global temporal modulation is burying it.`);
+} else if (isoSoloLiftTemporal <= 0) {
+  info(`\nROOT CAUSE INDICATOR: single-query isolated profile can't produce temporal lift`);
   info(`  → temporal substrate or wiring issue, NOT just pack interference.`);
 }
 

@@ -90,9 +90,9 @@ export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex =
       const cur = (lq.qrels ?? []).find((r) => r.role === 'direct');
       const stale = (lq.qrels ?? []).find((r) => r.role === 'stale');
       if (skip.has(cur.docId)) continue;
-      const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(`mem_${stale.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, retrievalSlot: 0, expiryEpoch: 0n });
+      const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(`mem_${stale.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n });
       indices.push(RANGES.MEMORY_INDEX_START + staleSlot * 1); newWords.push(sw[0]);
-      const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(`mem_${cur.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: 0, expiryEpoch: 0n });
+      const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(`mem_${cur.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n });
       indices.push(RANGES.MEMORY_INDEX_START + curSlot * 1); newWords.push(cw[0]);
       const tw = encodeTemporalRecord({ recordIndex: slotBase, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: 1n, validUntilEpoch: (2n ** 40n - 1n), currentStaleFlag: true });
       indices.push(RANGES.TEMPORAL_START + slotBase); newWords.push(tw[0]);
@@ -113,9 +113,9 @@ export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex =
     if (recIdx >= 96 || curSlot >= 36) break;
     const cur = (lq.qrels ?? []).find((r) => r.role === 'direct');
     const stale = (lq.qrels ?? []).find((r) => r.role === 'stale');
-    const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(`mem_${stale.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, retrievalSlot: staleSlot, expiryEpoch: 0n });
+    const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(`mem_${stale.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, policyAnchor: true, retrievalSlot: staleSlot, expiryEpoch: 0n });
     indices.push(RANGES.MEMORY_INDEX_START + staleSlot * 1); newWords.push(sw[0]); // nonzero w0 only
-    const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(`mem_${cur.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, retrievalSlot: curSlot, expiryEpoch: 0n });
+    const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(`mem_${cur.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: curSlot, expiryEpoch: 0n });
     indices.push(RANGES.MEMORY_INDEX_START + curSlot * 1); newWords.push(cw[0]);
     const tw = encodeTemporalRecord({ recordIndex: recIdx, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: 1n, validUntilEpoch: (2n ** 40n - 1n), currentStaleFlag: true });
     indices.push(RANGES.TEMPORAL_START + recIdx); newWords.push(tw[0]); // stride-1 temporal records
