@@ -66,6 +66,8 @@ const categoryLensSeedTopK = Number(flag('category-lens-seed-topk', '2'));
 const scopeRoutingAnchors = flag('scope-routing-anchors', 'off');
 const scopeRoutingAnchorsToQuerySubject = ['subject', 'query-subject', 'true', '1'].includes(scopeRoutingAnchors);
 const maxTargetJunkPerQuery = Number(flag('max-target-junk-per-query', '1'));
+const evaluatedArms = new Set(flag('arms', 'lensOnly,anchorsOnly,phaseAEdges,combined,randomPhaseA')
+  .split(',').map((s) => s.trim()).filter(Boolean));
 const outPath = flag('out', `${base}/direct-relation-routing-v15-${rerankerArg}-current.json`);
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
@@ -409,6 +411,29 @@ function sliceStats(packEvents, baseM, armM, fams, sourceTags, compareM = null) 
     qwenGoldOverHardByScoreRate: realQwen && scoreEligible ? +(scoreWins / scoreEligible).toFixed(4) : null,
   };
 }
+function unevaluatedStats(packEvents, fams, qwenRankCheck) {
+  return {
+    n: packEvents.filter((e) => fams.includes(e.logicalFamily)).length,
+    meanDeltaNdcg: 0,
+    meanDeltaVsCompare: null,
+    answerInCapBefore: 0,
+    answerInCapAfter: 0,
+    recoveredInCap: 0,
+    goldRose: 0,
+    goldMoved: 0,
+    answerDamage: 0,
+    primaryGoldDamage: 0,
+    junkMoved: 0,
+    routedRelevantTop10: 0,
+    routedJunkTop10: 0,
+    routedRelevantInCap: 0,
+    routedJunkInCap: 0,
+    qwenRankCheck,
+    qwenGoldOverHardByRankRate: null,
+    qwenGoldOverHardByScoreRate: null,
+    evaluated: false,
+  };
+}
 function auditRows(packEvents, baseM, armM, sourceTags) {
   return packEvents.filter((e) => targetFamilies.includes(e.logicalFamily)).slice(0, auditLimit).map((e) => {
     const qb = baseM.get(e.id);
@@ -438,21 +463,23 @@ for (const seed of seeds) {
   const { anchors, subjects, publicCandidates } = anchorCandidates(packEvents);
   const states = buildStates(anchors, seed);
   const B = await evaluateRetrievalBenchmarkState(emptyState(), corpus, pack, optsBase);
-  const L = await evaluateRetrievalBenchmarkState(states.lensOnly, corpus, pack, optsBase);
-  const A = await evaluateRetrievalBenchmarkState(states.anchorsOnly, corpus, pack, optsBase);
-  const P = await evaluateRetrievalBenchmarkState(states.phaseAEdges, corpus, pack, optsBase);
-  const Cb = await evaluateRetrievalBenchmarkState(states.combined, corpus, pack, optsBase);
-  const R = await evaluateRetrievalBenchmarkState(states.randomPhaseA, corpus, pack, optsBase);
-  const bM = byId(B), lM = byId(L), aM = byId(A), pM = byId(P), cM = byId(Cb), rM = byId(R);
-  const targetLens = sliceStats(packEvents, bM, lM, targetFamilies, ['categoryLensBFS']);
-  const offLens = sliceStats(packEvents, bM, lM, offFamilies, ['categoryLensBFS']);
-  const targetAnchors = sliceStats(packEvents, bM, aM, targetFamilies, ['anchorMandatory']);
-  const offAnchors = sliceStats(packEvents, bM, aM, offFamilies, ['anchorMandatory']);
-  const targetPhaseA = sliceStats(packEvents, bM, pM, targetFamilies, ['anchorBFS'], aM);
-  const offPhaseA = sliceStats(packEvents, bM, pM, offFamilies, ['anchorBFS'], aM);
-  const targetCombined = sliceStats(packEvents, bM, cM, targetFamilies, ['anchorBFS', 'categoryLensBFS'], aM);
-  const offCombined = sliceStats(packEvents, bM, cM, offFamilies, ['anchorBFS', 'categoryLensBFS'], aM);
-  const randomTarget = sliceStats(packEvents, bM, rM, targetFamilies, ['anchorBFS']);
+  const L = evaluatedArms.has('lensOnly') ? await evaluateRetrievalBenchmarkState(states.lensOnly, corpus, pack, optsBase) : null;
+  const A = evaluatedArms.has('anchorsOnly') || evaluatedArms.has('phaseAEdges') || evaluatedArms.has('combined')
+    ? await evaluateRetrievalBenchmarkState(states.anchorsOnly, corpus, pack, optsBase) : null;
+  const P = evaluatedArms.has('phaseAEdges') ? await evaluateRetrievalBenchmarkState(states.phaseAEdges, corpus, pack, optsBase) : null;
+  const Cb = evaluatedArms.has('combined') ? await evaluateRetrievalBenchmarkState(states.combined, corpus, pack, optsBase) : null;
+  const R = evaluatedArms.has('randomPhaseA') ? await evaluateRetrievalBenchmarkState(states.randomPhaseA, corpus, pack, optsBase) : null;
+  const bM = byId(B), lM = L ? byId(L) : null, aM = A ? byId(A) : null, pM = P ? byId(P) : null, cM = Cb ? byId(Cb) : null, rM = R ? byId(R) : null;
+  const qwenRankCheck = realQwen ? 'real_qwen' : 'not_applicable_deterministic_reranker';
+  const targetLens = lM ? sliceStats(packEvents, bM, lM, targetFamilies, ['categoryLensBFS']) : unevaluatedStats(packEvents, targetFamilies, qwenRankCheck);
+  const offLens = lM ? sliceStats(packEvents, bM, lM, offFamilies, ['categoryLensBFS']) : unevaluatedStats(packEvents, offFamilies, qwenRankCheck);
+  const targetAnchors = aM ? sliceStats(packEvents, bM, aM, targetFamilies, ['anchorMandatory']) : unevaluatedStats(packEvents, targetFamilies, qwenRankCheck);
+  const offAnchors = aM ? sliceStats(packEvents, bM, aM, offFamilies, ['anchorMandatory']) : unevaluatedStats(packEvents, offFamilies, qwenRankCheck);
+  const targetPhaseA = pM ? sliceStats(packEvents, bM, pM, targetFamilies, ['anchorBFS'], aM) : unevaluatedStats(packEvents, targetFamilies, qwenRankCheck);
+  const offPhaseA = pM ? sliceStats(packEvents, bM, pM, offFamilies, ['anchorBFS'], aM) : unevaluatedStats(packEvents, offFamilies, qwenRankCheck);
+  const targetCombined = cM ? sliceStats(packEvents, bM, cM, targetFamilies, ['anchorBFS', 'categoryLensBFS'], aM) : unevaluatedStats(packEvents, targetFamilies, qwenRankCheck);
+  const offCombined = cM ? sliceStats(packEvents, bM, cM, offFamilies, ['anchorBFS', 'categoryLensBFS'], aM) : unevaluatedStats(packEvents, offFamilies, qwenRankCheck);
+  const randomTarget = rM ? sliceStats(packEvents, bM, rM, targetFamilies, ['anchorBFS']) : unevaluatedStats(packEvents, targetFamilies, qwenRankCheck);
   perSeed.push({
     seed,
     packSize: packEvents.length,
@@ -463,11 +490,11 @@ for (const seed of seeds) {
     stateMeta: states.meta,
     arms_overall_nDCG10: {
       B_empty: +B.nDCG10.toFixed(4),
-      lensOnly: +L.nDCG10.toFixed(4),
-      anchorsOnly: +A.nDCG10.toFixed(4),
-      phaseAEdges: +P.nDCG10.toFixed(4),
-      combined: +Cb.nDCG10.toFixed(4),
-      randomPhaseA: +R.nDCG10.toFixed(4),
+      lensOnly: L ? +L.nDCG10.toFixed(4) : null,
+      anchorsOnly: A ? +A.nDCG10.toFixed(4) : null,
+      phaseAEdges: P ? +P.nDCG10.toFixed(4) : null,
+      combined: Cb ? +Cb.nDCG10.toFixed(4) : null,
+      randomPhaseA: R ? +R.nDCG10.toFixed(4) : null,
     },
     targetLens,
     offLens,
@@ -478,7 +505,7 @@ for (const seed of seeds) {
     targetCombined,
     offCombined,
     randomTarget,
-    targetAudit: auditRows(packEvents, bM, cM, ['anchorBFS', 'categoryLensBFS']),
+    targetAudit: auditRows(packEvents, bM, cM ?? lM ?? bM, cM ? ['anchorBFS', 'categoryLensBFS'] : ['categoryLensBFS']),
   });
   console.error(`[direct-rel] seed=${seed} pack=${packEvents.length} anchors=${anchors.length} lensΔ=${targetLens.meanDeltaNdcg} phaseAΔ=${targetPhaseA.meanDeltaNdcg} phaseA-vs-anchor=${targetPhaseA.meanDeltaVsCompare} combinedΔ=${targetCombined.meanDeltaNdcg} off=${offCombined.meanDeltaNdcg} random=${randomTarget.meanDeltaNdcg}`);
 }
@@ -515,21 +542,21 @@ const summary = {
   },
 };
 summary.armPass = {
-  lensOnly: perSeed.every((s) =>
+  lensOnly: evaluatedArms.has('lensOnly') && perSeed.every((s) =>
     s.targetLens.meanDeltaNdcg > 0 &&
     s.targetLens.primaryGoldDamage === 0 &&
     s.targetLens.answerDamage === 0 &&
     s.targetLens.junkMoved <= maxTargetJunkPerQuery * Math.max(1, s.targetLens.n) &&
     s.offLens.meanDeltaNdcg >= -0.03 &&
     structuralPatchSmoke.relationPatchApplies),
-  phaseAEdges: perSeed.every((s) =>
+  phaseAEdges: evaluatedArms.has('phaseAEdges') && perSeed.every((s) =>
     (s.targetPhaseA.meanDeltaVsCompare ?? 0) > 0 &&
     s.targetPhaseA.primaryGoldDamage === 0 &&
     s.targetPhaseA.junkMoved <= maxTargetJunkPerQuery * Math.max(1, s.targetPhaseA.n) &&
     s.offPhaseA.meanDeltaNdcg >= -0.03 &&
     s.randomTarget.meanDeltaNdcg <= 0.005 &&
     structuralPatchSmoke.relationPatchApplies),
-  combined: perSeed.every((s) =>
+  combined: evaluatedArms.has('combined') && perSeed.every((s) =>
     s.targetCombined.meanDeltaNdcg > 0 &&
     s.targetCombined.primaryGoldDamage === 0 &&
     s.targetCombined.junkMoved <= maxTargetJunkPerQuery * Math.max(1, s.targetCombined.n) &&
@@ -541,7 +568,8 @@ summary.pass = summary.armPass.lensOnly || summary.armPass.phaseAEdges || summar
 const verdict = {
   pass: summary.pass,
   promote: Object.entries(summary.armPass).filter(([, ok]) => ok).map(([arm]) => arm),
-  doNotPromote: Object.entries(summary.armPass).filter(([, ok]) => !ok).map(([arm]) => arm),
+  doNotPromote: Object.entries(summary.armPass).filter(([arm, ok]) => evaluatedArms.has(arm) && !ok).map(([arm]) => arm),
+  notEvaluated: Object.keys(summary.armPass).filter((arm) => !evaluatedArms.has(arm)),
   needsFollowup: summary.pass && !realQwen ? ['real_qwen_confirmation'] : (!summary.pass ? ['selector_or_knob_redesign'] : []),
   reasons: [
     summary.pass ? 'at least one direct relation routing arm has positive target lift with clean safety controls' : 'all direct relation routing arms failed target lift and/or safety controls',
@@ -564,7 +592,7 @@ const report = {
   offFamilies,
   edgeTypes,
   seeds,
-  knobs: { targetPerFam, offPerFam, anchorLimit, categoryLensBudget, categoryLensSeedTopK, scopeRoutingAnchors, maxTargetJunkPerQuery, auditLimit },
+  knobs: { targetPerFam, offPerFam, anchorLimit, categoryLensBudget, categoryLensSeedTopK, scopeRoutingAnchors, maxTargetJunkPerQuery, evaluatedArms: [...evaluatedArms], auditLimit },
   structuralPatchSmoke,
   verdict,
   passFailSummary: summary.pass ? `PASS: ${targetSurface} direct relation routing shape is positive and clean.` : `FAIL: ${targetSurface} direct relation routing shape is not promotable.`,
