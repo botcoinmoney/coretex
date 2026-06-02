@@ -225,9 +225,9 @@ function rankAudit(q) {
   let bestRelevantScore = null;
   let bestHardNegativeRank = Infinity;
   let bestHardNegativeScore = null;
-  for (const r of ranking) {
+  for (const [i, r] of ranking.entries()) {
     const rel = r.relevance ?? 0;
-    const rank = r.rank ?? Infinity;
+    const rank = r.rank ?? (i + 1);
     const score = typeof r.rerankerScore === 'number' ? r.rerankerScore : null;
     if (rel > 0) {
       if (rank < bestRelevantRank) bestRelevantRank = rank;
