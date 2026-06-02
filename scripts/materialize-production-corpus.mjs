@@ -24,7 +24,7 @@ import { distIndex, repoRoot } from './_repo-root.mjs';
 import { buildV2ProductionCorpus } from './lib/build-v2-production-corpus.mjs';
 
 const C = await import(distIndex);
-const { computeCorpusRoot } = C;
+const { computeCorpusEventLeafHash, buildCorpusRootLeafCacheFromLeaves } = C;
 
 // Local profileHash: keccak/sha256 over a deterministic JSON of the profile (sorted keys).
 // No canonical export exists; this gives a stable per-profile identity for the artifact manifest.
@@ -81,6 +81,7 @@ const bundleTag = (bundle.bundleHash ?? '0xunknown').slice(2, 10);
 const MAT_DIR = resolve(repoRoot, 'release/calibration/2026-05-21-memory-corpus-v2/materialized', bundleTag);
 const CORPUS_JSON = resolve(MAT_DIR, 'corpus.json');
 const NDJSON = `${CORPUS_JSON}.events.ndjson`;
+const ROOT_LEAVES = `${CORPUS_JSON}.root-leaves.ndjson`;
 const MANIFEST = resolve(MAT_DIR, 'manifest.json');
 
 const profileHashLocal = computeProfileHashLocal(profile);
@@ -122,6 +123,7 @@ if (existsSync(ROOT_MAT) && !FORCE) {
     const sibManifest = resolve(ROOT_MAT, sib, 'manifest.json');
     const sibCorpus = resolve(ROOT_MAT, sib, 'corpus.json');
     const sibNdjson = `${sibCorpus}.events.ndjson`;
+    const sibRootLeaves = `${sibCorpus}.root-leaves.ndjson`;
     if (!existsSync(sibManifest) || !existsSync(sibCorpus) || !existsSync(sibNdjson)) continue;
     try {
       const sm = JSON.parse(readFileSync(sibManifest, 'utf8'));
@@ -134,6 +136,7 @@ if (existsSync(ROOT_MAT) && !FORCE) {
       mkdirSync(MAT_DIR, { recursive: true });
       copyFileSync(sibCorpus, CORPUS_JSON);
       copyFileSync(sibNdjson, NDJSON);
+      if (existsSync(sibRootLeaves)) copyFileSync(sibRootLeaves, ROOT_LEAVES);
       const gitCommit = (() => { try { return execSync('git rev-parse HEAD', { cwd: repoRoot }).toString().trim(); } catch { return 'unknown'; } })();
       const newManifest = {
         ...sm,
@@ -141,6 +144,12 @@ if (existsSync(ROOT_MAT) && !FORCE) {
         profileHash: profileHashLocal,
         sourceProfileSha256: sha256File(PROFILE_PATH),
         sourceBundleSha256: sha256File(BUNDLE_PATH),
+        ...(existsSync(sibRootLeaves) && sm.rootLeafCache ? {
+          rootLeafCache: {
+            ...sm.rootLeafCache,
+            path: ROOT_LEAVES.replace(repoRoot + '/', ''),
+          },
+        } : {}),
         gitCommit,
         siblingCopyFrom: { bundleTag: sib, bundleHash: sm.bundleHash, note: 'content-equivalent corpus copied from sibling; corpus content + profile + embeddings unchanged' },
       };
@@ -183,18 +192,32 @@ writeFileSync(CORPUS_JSON, JSON.stringify(headerOnly, null, 2));
 // Stream NDJSON sidecar: serialize event-by-event so we never hold all on-disk events in memory.
 const t1 = Date.now();
 const stream = createWriteStream(NDJSON, { flags: 'w', highWaterMark: 16 * 1024 * 1024 });
+const rootStream = createWriteStream(ROOT_LEAVES, { flags: 'w', highWaterMark: 16 * 1024 * 1024 });
 let writes = 0;
+const rootLeaves = [];
 async function writeLine(line) {
   if (!stream.write(line)) await new Promise((res) => stream.once('drain', res));
 }
+async function writeRootLine(line) {
+  if (!rootStream.write(line)) await new Promise((res) => rootStream.once('drain', res));
+}
 for (const e of corpus.events) {
   await writeLine(JSON.stringify(eventOnDisk(e)) + '\n');
+  const hash = computeCorpusEventLeafHash(e);
+  rootLeaves.push({ id: e.id, hash });
+  await writeRootLine(JSON.stringify({ id: e.id, hash: Buffer.from(hash).toString('hex') }) + '\n');
   writes++;
   if (writes % 50_000 === 0) console.log(`[materialize] ndjson progress: ${writes}/${corpus.events.length}`);
 }
 await new Promise((res, rej) => { stream.end((err) => err ? rej(err) : res()); });
+await new Promise((res, rej) => { rootStream.end((err) => err ? rej(err) : res()); });
 const ndjsonSec = ((Date.now() - t1) / 1000).toFixed(1);
 console.log(`[materialize] wrote ${writes} events to NDJSON in ${ndjsonSec}s`);
+const rootCache = buildCorpusRootLeafCacheFromLeaves(rootLeaves);
+if (rootCache.root.toLowerCase() !== corpus.corpusRoot.toLowerCase()) {
+  console.error(`HARD FAIL: root leaf cache mismatch — cache=${rootCache.root} corpus=${corpus.corpusRoot}`);
+  exit(1);
+}
 
 const gitCommit = (() => { try { return execSync('git rev-parse HEAD', { cwd: repoRoot }).toString().trim(); } catch { return 'unknown'; } })();
 const manifest = {
@@ -217,6 +240,13 @@ const manifest = {
   eventCount: corpus.events.length,
   materializedCorpusJson: CORPUS_JSON.replace(repoRoot + '/', ''),
   materializedEventsNdjson: NDJSON.replace(repoRoot + '/', ''),
+  rootLeafCache: {
+    schema: rootCache.schema,
+    path: ROOT_LEAVES.replace(repoRoot + '/', ''),
+    eventCount: rootCache.eventCount,
+    root: rootCache.root,
+    builtFrom: 'materialization stream',
+  },
 };
 writeFileSync(MANIFEST, JSON.stringify(manifest, null, 2));
 console.log(`[materialize] manifest: ${MANIFEST}`);

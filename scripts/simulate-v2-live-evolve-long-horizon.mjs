@@ -108,6 +108,7 @@ const provenance = calibrationProvenance({
 console.log(`[live-evolve] materialized manifest bundleHash=${baseBundle.manifest.bundleHash} corpusRoot=${baseBundle.manifest.corpusRoot.slice(0, 18)}…`);
 const labelingProvenance = { modelId: RR.modelId, revision: RR.revision, runtime: 'coretex-retrieval-v2-policy-r5', batchHash: '0x' + '00'.repeat(32) };
 console.log(`[live-evolve] base events=${currentProd.events.length} root=${currentProd.corpusRoot.slice(0, 18)}…`);
+console.log(`[live-evolve] root leaf cache=${currentProd.corpusRootCache ? `present (${currentProd.corpusRootCache.eventCount} leaves)` : 'missing (full root recompute fallback)'}`);
 
 let currentLogical = JSON.parse(readFileSync(resolve(repoRoot, CORPUS_PATH), 'utf8'));
 const docTextById = new Map(currentLogical.docs.map((d) => [d.id, d]));
@@ -245,8 +246,17 @@ const perEpoch = [];
 const baselineFloors = { ...profile.patchAcceptanceFloors, acceptanceThresholdPpm: profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500 };
 
 for (let epoch = 1; epoch <= EPOCHS; epoch++) {
+  const epochStartMs = Date.now();
+  let lastMarkMs = epochStartMs;
+  const timingsMs = {};
+  const mark = (name) => {
+    const now = Date.now();
+    timingsMs[name] = now - lastMarkMs;
+    lastMarkMs = now;
+  };
   console.log(`\n[live-evolve] ===== EPOCH ${epoch} =====`);
   const ld = evolveCorpusDelta({ baseLogical: currentLogical, epoch, seed: frontierSeed, churnFraction: CHURN_FRACTION });
+  mark('deltaGeneration');
   console.log(`[live-evolve] evolveCorpusDelta: +${ld.addedDocs.length} docs / +${ld.addedRelations.length} rels / +${ld.addedQueries.length} queries / churnRate=${ld.liveChurnRate.toFixed(4)}`);
 
   if (!ld.addedDocs.length) { console.warn(`[live-evolve] epoch ${epoch}: no churn signal at fraction=${CHURN_FRACTION}; skipping`); continue; }
@@ -260,6 +270,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   const qVecs = MOCK_EMBEDDINGS
     ? ld.addedQueries.map((_, i) => mockVec(epoch * 2000 + i))
     : (ld.addedQueries.length ? await embedTexts(ld.addedQueries.map((q) => q.queryText)) : []);
+  mark(MOCK_EMBEDDINGS ? 'mockEmbedding' : 'biEncoderEmbedding');
   for (const d of ld.addedDocs) docTextById.set(d.id, d);
   const addedDocEmbeddings = new Map();
   ld.addedDocs.forEach((d, i) => addedDocEmbeddings.set(d.id, int8Bytes(docVecs[i])));
@@ -272,12 +283,16 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     addedQueryEmbeddings,
     biEncoder: { modelId: BE.modelId, revision: BE.revision, layout: LAYOUT },
   });
+  mark('bridgeLogicalDelta');
 
-  const delta = buildCorpusDelta({ previousCorpus: currentProd, additions, removals: [], epoch, labelingProvenance });
+  const rootCacheBefore = currentProd.corpusRootCache ?? null;
+  const delta = buildCorpusDelta({ previousCorpus: currentProd, additions, removals: [], epoch, labelingProvenance, ...(rootCacheBefore ? { previousRootCache: rootCacheBefore } : {}) });
+  mark('buildCorpusDeltaRoot');
   if (delta.previousRoot.toLowerCase() !== currentProd.corpusRoot.toLowerCase()) { console.error(`HARD FAIL: delta.previousRoot != currentProd.corpusRoot epoch=${epoch}`); exit(1); }
-  const newProd = applyCorpusDelta(currentProd, delta);
+  const newProd = applyCorpusDelta(currentProd, delta, { ...(rootCacheBefore ? { rootCache: rootCacheBefore, attachRootCache: true } : {}) });
+  mark('applyCorpusDeltaRoot');
   if (newProd.corpusRoot.toLowerCase() !== delta.nextRoot.toLowerCase()) { console.error(`HARD FAIL: applyCorpusDelta root mismatch epoch=${epoch}`); exit(1); }
-  console.log(`[live-evolve] delta: ${delta.previousRoot.slice(0, 18)} → ${delta.nextRoot.slice(0, 18)} (+${delta.addedIds.length} events)`);
+  console.log(`[live-evolve] delta: ${delta.previousRoot.slice(0, 18)} → ${delta.nextRoot.slice(0, 18)} (+${delta.addedIds.length} events, rootCache=${rootCacheBefore ? 'yes' : 'no'})`);
 
   const corpusRootChanged = newProd.corpusRoot !== currentProd.corpusRoot;
   // INJECT new eval_hidden ids from this epoch's evolveCorpusDelta into frontier reserve
@@ -295,6 +310,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   // CANONICAL stepEpoch: NUMERIC honest-accepts + quality-attempts (NEVER roots).
   // Step the PERSISTED frontier instance — preserves reservePtr / cumulative counts.
   const frontierSnap = frontier.stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts);
+  mark('frontierUpdate');
   const activeRootChanged = frontierSnap.activeRoot !== prevActiveRoot;
   const baselineRecomputedBecause = corpusRootChanged ? 'corpusRootChanged' : (activeRootChanged ? 'activeRootChanged' : null);
 
@@ -303,6 +319,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   const heldoutPack = filterPackToHeldout(fullPack, frontierSnap.activeIds);
   for (const ev of activePack.events) if (!frontierSnap.activeIds.has(ev.id)) { console.error(`HARD FAIL: epoch ${epoch} activePack contains id ${ev.id} not in frontierSnap.activeIds`); exit(1); }
   const idShuffledActivePack = buildIdShuffledPack(activePack);
+  mark('evalPackRefresh');
 
   let activeScorePpm = null, heldoutScorePpm = null, idShuffledScorePpm = null;
   if (baselineRecomputedBecause) {
@@ -311,6 +328,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     heldoutScorePpm = heldoutPack.events.length ? await scoreOnPack(newProd, heldoutPack) : null;
     idShuffledScorePpm = idShuffledActivePack.events.length ? await scoreOnPack(newProd, idShuffledActivePack) : null;
   }
+  mark('baselineScoring');
 
   const crossFrontierLift = (activeScorePpm != null && prevActiveScorePpm != null) ? (activeScorePpm - prevActiveScorePpm) : null;
   const heldoutFrontierLift = (heldoutScorePpm != null && prevHeldoutScorePpm != null) ? (heldoutScorePpm - prevHeldoutScorePpm) : null;
@@ -369,6 +387,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     }
   }
   const operationReuseRate = honestAcceptsThisEpoch ? honestReuseThisEpoch / honestAcceptsThisEpoch : 0;
+  mark('honestPatchScoring');
 
   const rand = mulberry32(hseed(`${frontierSeed}:live-evolve:anti-cheat:${epoch}`));
   let randomAccepts = 0, hillclimbAccepts = 0;
@@ -384,6 +403,8 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     hillclimbDeltas.push(r.deltaPpm ?? 0);
     if (r.accepted) hillclimbAccepts++;
   }
+  mark('antiCheatScoring');
+  timingsMs.epochTotal = Date.now() - epochStartMs;
 
   perEpoch.push({
     epoch,
@@ -404,6 +425,10 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     addedDocs: ld.addedDocs.length, addedQueries: ld.addedQueries.length,
     addedMemDocs: ld.addedDocs.length, addedRelations: ld.addedRelations.length,
     liveChurnRate: ld.liveChurnRate,
+    rootCacheUsed: !!rootCacheBefore,
+    rootCacheLeavesBefore: rootCacheBefore?.eventCount ?? null,
+    rootCacheLeavesAfter: newProd.corpusRootCache?.eventCount ?? null,
+    timingsMs,
     baselineRecomputedBecause,
     activeScorePpm, heldoutScorePpm, idShuffledActiveScorePpm: idShuffledScorePpm,
     cross_frontier_lift: crossFrontierLift,
@@ -440,6 +465,14 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
 }
 
 const qrelShuffleCollapseValues = perEpoch.map((e) => e.qrel_shuffle_collapse_ratio).filter((v) => v != null);
+const timingKeys = Array.from(new Set(perEpoch.flatMap((e) => Object.keys(e.timingsMs ?? {}))));
+const timingSummaryMs = Object.fromEntries(timingKeys.map((key) => {
+  const vals = perEpoch.map((e) => e.timingsMs?.[key]).filter((v) => typeof v === 'number');
+  return [key, {
+    max: vals.length ? Math.max(...vals) : null,
+    mean: vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null,
+  }];
+}));
 const report = {
   schema: 'coretex.live-evolve-long-horizon.v2',
   ...provenance,
@@ -470,6 +503,8 @@ const report = {
     crossFrontierLiftPpm: perEpoch.map((e) => e.cross_frontier_lift).filter((v) => v != null),
     heldoutFrontierLiftPpm: perEpoch.map((e) => e.heldout_frontier_lift).filter((v) => v != null),
     liveEvalIdsInjected: perEpoch.reduce((s, e) => s + e.frontierRotation.newEvalIdsInjectedThisEpoch, 0),
+    rootCacheUsedAllEpochs: perEpoch.every((e) => e.rootCacheUsed),
+    timingSummaryMs,
     qrelShuffleCollapseRatioMean: qrelShuffleCollapseValues.length
       ? qrelShuffleCollapseValues.reduce((a, b) => a + b, 0) / qrelShuffleCollapseValues.length
       : null,

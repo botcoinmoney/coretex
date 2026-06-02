@@ -24,7 +24,7 @@ import { createHash } from 'node:crypto';
 import { distIndex, repoRoot } from '../_repo-root.mjs';
 
 const C = await import(distIndex);
-const { computeCorpusRoot, biEncoderModelIdHash } = C;
+const { computeCorpusRoot, biEncoderModelIdHash, buildCorpusRootLeafCache, buildCorpusRootLeafCacheFromLeaves } = C;
 
 function sha256File(p) { return '0x' + createHash('sha256').update(readFileSync(p)).digest('hex'); }
 function hexToU8(hex) { return new Uint8Array(Buffer.from(hex, 'hex')); }
@@ -37,6 +37,7 @@ function resolveArtifactPaths(bundlePath) {
     bundle, tag, dir,
     corpusJson: resolve(dir, 'corpus.json'),
     ndjson: resolve(dir, 'corpus.json.events.ndjson'),
+    rootLeaves: resolve(dir, 'corpus.json.root-leaves.ndjson'),
     manifest: resolve(dir, 'manifest.json'),
   };
 }
@@ -93,6 +94,37 @@ function hydrateEvent(e) {
     perNegative: new Map(Object.entries(e.embeddings.perNegative ?? {}).map(([k, v]) => [k, hexToU8(v)])),
   };
   return out;
+}
+
+function loadRootLeafCache(rootLeavesPath, expectedRoot) {
+  if (!existsSync(rootLeavesPath)) return null;
+  const fd = openSync(rootLeavesPath, 'r');
+  const leaves = [];
+  try {
+    const buf = Buffer.alloc(16 * 1024 * 1024);
+    let pending = '';
+    while (true) {
+      const r = readSync(fd, buf, 0, buf.length, null);
+      if (r <= 0) break;
+      pending += buf.toString('utf8', 0, r);
+      let nl;
+      while ((nl = pending.indexOf('\n')) >= 0) {
+        const line = pending.slice(0, nl); pending = pending.slice(nl + 1);
+        if (!line) continue;
+        const leaf = JSON.parse(line);
+        leaves.push({ id: leaf.id, hash: hexToU8(leaf.hash) });
+      }
+    }
+    if (pending.length > 0) {
+      const leaf = JSON.parse(pending);
+      leaves.push({ id: leaf.id, hash: hexToU8(leaf.hash) });
+    }
+  } finally { closeSync(fd); }
+  const cache = buildCorpusRootLeafCacheFromLeaves(leaves);
+  if (cache.root.toLowerCase() !== expectedRoot.toLowerCase()) {
+    throw new Error(`HARD FAIL: materialized root leaf cache mismatch — cache=${cache.root} manifest=${expectedRoot}`);
+  }
+  return cache;
 }
 
 /**
@@ -183,19 +215,21 @@ function streamEvents(ndjsonPath, maxN) {
  * @param {{sourceCorpusPath?:string, sourceEmbPath?:string, verifyCorpusRoot?:boolean}} [opts]
  */
 export function loadMaterializedCorpus(bundlePath, opts = {}) {
-  const { bundle, manifest, ndjson, corpusJson } = resolveArtifactPaths(bundlePath);
+  const { bundle, manifest, ndjson, corpusJson, rootLeaves } = resolveArtifactPaths(bundlePath);
   const m = assertManifest(manifest, bundle.bundleHash, opts.sourceCorpusPath, opts.sourceEmbPath);
   if (!existsSync(ndjson)) throw new Error(`HARD FAIL: ndjson sidecar missing: ${ndjson}`);
   const head = JSON.parse(readFileSync(corpusJson, 'utf8'));
   const events = streamEvents(ndjson, null);
+  const rootCache = loadRootLeafCache(rootLeaves, m.corpusRoot);
   if (opts.verifyCorpusRoot) {
-    const computed = computeCorpusRoot(events);
+    const computed = rootCache?.root ?? computeCorpusRoot(events);
     if (computed.toLowerCase() !== m.corpusRoot.toLowerCase()) {
       throw new Error(`HARD FAIL: materialized corpusRoot mismatch — manifest=${m.corpusRoot} computed=${computed}`);
     }
   }
   const corpus = {
     events, byId: new Map(events.map((e) => [e.id, e])),
+    ...(rootCache ? { corpusRootCache: rootCache } : {}),
     ...(head.entities ? { entities: head.entities } : {}),
     corpusRoot: m.corpusRoot.toLowerCase(), corpusEpoch: head.corpusEpoch ?? 0,
     biEncoderModelId: m.biEncoder.modelId, biEncoderRevision: m.biEncoder.revision, biEncoderRetrievalKeyLayout: m.biEncoder.layout,
@@ -252,10 +286,12 @@ export function loadMaterializedCorpusSlice(bundlePath, n, opts = {}) {
     for (const h of e.hardNegatives ?? []) if (!idsInSlice.has(h.id) && !idsInSlice.has(`mem_${h.id}`)) return false;
     return true;
   });
-  const root = computeCorpusRoot(filtered);
+  const rootCache = buildCorpusRootLeafCache(filtered);
+  const root = rootCache.root;
   return {
     corpus: {
       events: filtered, byId: new Map(filtered.map((e) => [e.id, e])),
+      corpusRootCache: rootCache,
       corpusRoot: root, corpusEpoch: 0,
       biEncoderModelId: m.biEncoder.modelId, biEncoderRevision: m.biEncoder.revision, biEncoderRetrievalKeyLayout: m.biEncoder.layout,
       labelingModelId: m.labelingModel.modelId, labelingModelRevision: m.labelingModel.revision,
