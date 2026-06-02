@@ -28,6 +28,7 @@ import { distIndex, repoRoot } from './_repo-root.mjs';
 import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadMaterializedCorpus } from './lib/load-materialized-corpus.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
+import { calibrationProvenance } from './lib/calibration-provenance.mjs';
 // CANONICAL: reuse the SAME honest-patch helpers the long-horizon harness uses, so the
 // screener's "viable" / "true_advance" classes exercise the SAME substrate write the miner
 // would emit. A class that fails to lift here will fail to lift in the harness too — exactly
@@ -60,6 +61,7 @@ const PER_CLASS = Number(flag('per-class', '8'));
 const PACK_SIZE = Number(flag('pack-size', '64'));
 const NOISE_SAMPLES = Number(flag('noise-samples', '6'));
 const CLEAR_PACK_QUOTAS = has('clear-pack-quotas');
+const ALLOW_BUNDLE_SOURCE_MISMATCH = has('allow-bundle-source-mismatch');
 
 if (!PROFILE_PATH || !BUNDLE_PATH || !CORPUS_PATH || !EMB_PATH || !OUT_PATH) {
   console.error('HARD FAIL: --profile, --bundle, --corpus, --emb, --out required'); exit(1);
@@ -71,12 +73,16 @@ if (!['gpu', 'qwen-cpu', 'cpu', 'deterministic'].includes(RERANKER)) {
 const profile = JSON.parse(readFileSync(resolve(repoRoot, PROFILE_PATH), 'utf8'));
 const bundle = JSON.parse(readFileSync(resolve(repoRoot, BUNDLE_PATH), 'utf8'));
 const verr = verifyBundleManifest(bundle, repoRoot);
-if (verr.length > 0) { console.error('HARD FAIL: bundle verify dirty:', verr.join('; ')); exit(1); }
+if (verr.length > 0 && !ALLOW_BUNDLE_SOURCE_MISMATCH) { console.error('HARD FAIL: bundle verify dirty:', verr.join('; ')); exit(1); }
+if (verr.length > 0) {
+  console.warn('[screener-threshold] WARNING: bundle source-hash mismatch allowed for calibration reporting:', verr.join('; '));
+}
 
 console.log('[screener-threshold] loading materialized production corpus (NO rebuild) ...');
 const { corpus, BE, RR, LAYOUT, manifest: matManifest } = loadMaterializedCorpus(BUNDLE_PATH, { sourceCorpusPath: CORPUS_PATH, sourceEmbPath: EMB_PATH });
 console.log(`[screener-threshold] materialized manifest bundleHash=${matManifest.bundleHash} corpusRoot=${matManifest.corpusRoot.slice(0, 18)}…`);
 console.log(`[screener-threshold] corpus root=${corpus.corpusRoot.slice(0, 18)}… events=${corpus.events.length}`);
+const provenance = calibrationProvenance({ bundlePath: BUNDLE_PATH, corpusPath: CORPUS_PATH, embPath: EMB_PATH, profilePath: PROFILE_PATH, manifest: matManifest });
 
 const evalSeedHex = profile.baselineEvalSeedHex ?? '0x' + 'a5'.repeat(32);
 const hiddenPack = CLEAR_PACK_QUOTAS ? { packSize: PACK_SIZE, quotas: [] } : { ...(profile.hiddenPack ?? { packSize: PACK_SIZE, quotas: [] }), packSize: PACK_SIZE };
@@ -214,13 +220,10 @@ function patchViableNonAdvancing(seed) {
   };
 }
 function patchTrueAdvanceCandidate(seed) {
-  // Canonical state-advance candidate: full 4-edge category-lens relation patch — exactly
-  // the shape `honestPatch({family: 'relation'})` emits in the long-horizon miner. Relation
+  // Canonical state-advance candidate: 2-edge category-lens relation patch. Relation
   // substrate is family-friendlier than temporal (which trips family_catastrophic at small
-  // pack sizes — a real pack-interference signal documented in temporal-yield-300k.json;
-  // that surface has its own probe). The 4-word patch budget rules out the memIndex anchor
-  // and policy atom together — for the screener's calibration purpose, the relation lift
-  // alone is enough to exercise the state-advance qualification path.
+  // pack sizes — a real pack-interference signal documented in temporal-yield-300k.json).
+  // For screener calibration, this exercises the qualification path without max-lift mining.
   //
   // Pack-doc provenance is still recorded so the artifact links each patch to a
   // representative pack event, even though the patch body itself is anchor-free.
@@ -234,7 +237,7 @@ function patchTrueAdvanceCandidate(seed) {
     patch: { patchType: PATCH_TYPE.MIXED, wordCount: rel.indices.length, scoreDelta: 0, parentStateRoot: parentRoot,
       indices: rel.indices, newWords: rel.newWords },
     intent: 'true_state_advance_candidate',
-    anchor: { ...provenance, substrate: 'relation(4)', note: 'patch body is 4 category-lens edges; pack docId recorded for provenance only' },
+    anchor: { ...provenance, substrate: 'relation(2)', note: 'patch body is 2 category-lens edges; pack docId recorded for provenance only' },
   };
 }
 
@@ -255,24 +258,67 @@ const classes = [
 
 async function scorePatchDelta(patch) {
   const r = await evaluateRetrievalBenchmarkPatch(zero(), patch, corpus, pack, opts, floors);
-  return { deltaPpm: r.deltaPpm ?? 0, accepted: !!r.accepted, reason: r.reason ?? null };
+  const retrievalDeltaPpm =
+    typeof r.after?.nDCG10 === 'number' && typeof r.before?.nDCG10 === 'number'
+      ? Math.round((r.after.nDCG10 - r.before.nDCG10) * 1_000_000)
+      : null;
+  return {
+    deltaPpm: r.deltaPpm ?? 0,
+    compositeDeltaPpm: r.deltaPpm ?? 0,
+    retrievalDeltaPpm,
+    accepted: !!r.accepted,
+    reason: r.reason ?? null,
+  };
 }
 
 // ─── Noise-floor sampling (control phase) — feeds canonical qualification ───
 console.log(`[screener-threshold] sampling noise floor: ${NOISE_SAMPLES} no-op-like patches ...`);
-const noiseDeltas = [];
+const noiseSamples = [];
 for (let i = 0; i < NOISE_SAMPLES; i++) {
-  const cls = i % 2 === 0 ? patchJunk(1000 + i) : patchStructValidIrrelevant(2000 + i);
+  const variants = [
+    { name: 'structurally_valid_irrelevant', bucket: 'clean_noop_or_near_noop', gen: patchStructValidIrrelevant },
+    { name: 'weak_positive_noop', bucket: 'clean_noop_or_near_noop', gen: patchWeakPositive },
+    { name: 'exact_duplicate_noop', bucket: 'clean_noop_or_near_noop', gen: patchExactDuplicate },
+    { name: 'junk_random_structural_failure', bucket: 'structural_failure_damage', gen: patchJunk },
+  ];
+  const v = variants[i % variants.length];
+  const cls = v.gen(1000 + i);
   const r = await scorePatchDelta(cls.patch);
-  noiseDeltas.push(Math.abs(r.deltaPpm));
+  noiseSamples.push({
+    i,
+    class: v.name,
+    bucket: v.bucket,
+    compositeDeltaPpm: r.compositeDeltaPpm,
+    retrievalDeltaPpm: r.retrievalDeltaPpm,
+    absCompositeDeltaPpm: Math.abs(r.compositeDeltaPpm),
+    absRetrievalDeltaPpm: r.retrievalDeltaPpm === null ? null : Math.abs(r.retrievalDeltaPpm),
+    applyAccepted: r.accepted,
+    applyReason: r.reason,
+  });
 }
-noiseDeltas.sort((a, b) => a - b);
-const recentNoiseFloorPpm = noiseDeltas[Math.floor(noiseDeltas.length * 0.9)] || 0; // p90 abs delta
-if (!Number.isFinite(recentNoiseFloorPpm) || recentNoiseFloorPpm < 0) {
-  console.error(`HARD FAIL: noise-floor sampling produced invalid signal (${recentNoiseFloorPpm}, raw=${JSON.stringify(noiseDeltas)})`); exit(1);
+const cleanNoiseDeltas = noiseSamples
+  .filter((s) => s.bucket === 'clean_noop_or_near_noop')
+  .map((s) => s.absCompositeDeltaPpm)
+  .sort((a, b) => a - b);
+const cleanRetrievalDeltas = noiseSamples
+  .filter((s) => s.bucket === 'clean_noop_or_near_noop' && s.absRetrievalDeltaPpm !== null)
+  .map((s) => s.absRetrievalDeltaPpm)
+  .sort((a, b) => a - b);
+const structuralFailureDeltas = noiseSamples
+  .filter((s) => s.bucket === 'structural_failure_damage')
+  .map((s) => s.absCompositeDeltaPpm)
+  .sort((a, b) => a - b);
+const mixedControlDeltas = noiseSamples.map((s) => s.absCompositeDeltaPpm).sort((a, b) => a - b);
+const p90 = (arr) => arr.length ? arr[Math.floor(arr.length * 0.9)] : null;
+const recentNoiseFloorPpm = p90(cleanNoiseDeltas);
+const cleanRetrievalNoiseFloorPpm = p90(cleanRetrievalDeltas);
+const structuralFailureControlFloorPpm = p90(structuralFailureDeltas);
+const legacyMixedControlFloorPpm = p90(mixedControlDeltas);
+if (!cleanNoiseDeltas.length || !Number.isFinite(recentNoiseFloorPpm) || recentNoiseFloorPpm < 0) {
+  console.error(`HARD FAIL: clean noise-floor sampling produced invalid signal (${recentNoiseFloorPpm}, raw=${JSON.stringify(noiseSamples)})`); exit(1);
 }
 const screenerThresholdPpm = computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baseline, recentNoiseFloorPpm: BigInt(recentNoiseFloorPpm) });
-console.log(`[screener-threshold] baseline=${baseline}ppm measured noiseFloor(p90)=${recentNoiseFloorPpm}ppm → screenerThreshold=${screenerThresholdPpm}ppm`);
+console.log(`[screener-threshold] baseline=${baseline}ppm cleanNoiseFloor(p90)=${recentNoiseFloorPpm}ppm structuralFailureFloor(p90)=${structuralFailureControlFloorPpm ?? 'n/a'}ppm → screenerThreshold=${screenerThresholdPpm}ppm`);
 
 // ─── CANONICAL classification via evaluateCoreTexWorkQualification ───
 function classifyCanonically({ applyAccepted, applyReason, deltaPpm, parentMatchesLiveRoot, liveStateAdvanced }) {
@@ -312,7 +358,8 @@ for (const cls of classes) {
     const r = await scorePatchDelta(patch);
     const cls2 = classifyCanonically({ applyAccepted: r.accepted, applyReason: r.reason, deltaPpm: r.deltaPpm, parentMatchesLiveRoot: cls.parentMatchesLiveRoot, liveStateAdvanced: cls.liveStateAdvanced });
     const fp = createHash('sha256').update(`${patch.patchType}|${patch.indices.join(',')}|${patch.newWords.map((w) => w.toString(16)).join(',')}`).digest('hex').slice(0, 16);
-    perPatch.push({ i, deltaPpm: r.deltaPpm, applyAccepted: r.accepted, applyReason: r.reason, outcome: cls2.outcome, qualificationReason: cls2.reason, patchFingerprint: '0x' + fp,
+    perPatch.push({ i, deltaPpm: r.deltaPpm, compositeDeltaPpm: r.compositeDeltaPpm, retrievalDeltaPpm: r.retrievalDeltaPpm,
+      applyAccepted: r.accepted, applyReason: r.reason, outcome: cls2.outcome, qualificationReason: cls2.reason, patchFingerprint: '0x' + fp,
       // Anchor provenance — present for corpus-derived classes (viable + true_advance) so the
       // artifact records WHICH real corpus doc each patch anchored to. Absent for non-anchored
       // classes (junk/dup/stale/weak — they have no anchor).
@@ -323,6 +370,12 @@ for (const cls of classes) {
   for (const p of perPatch) counts[p.outcome]++;
   results.push({ class: cls.name, expected: cls.expected, n: PER_CLASS,
     deltaPpm: { mean: deltas.reduce((a, b) => a + b, 0) / Math.max(1, deltas.length), p10: pctile(deltas, 10), p50: pctile(deltas, 50), p90: pctile(deltas, 90), min: Math.min(...deltas), max: Math.max(...deltas) },
+    retrievalDeltaPpm: (() => {
+      const vals = perPatch.map((p) => p.retrievalDeltaPpm).filter((v) => v !== null);
+      return vals.length
+        ? { mean: vals.reduce((a, b) => a + b, 0) / vals.length, p10: pctile(vals, 10), p50: pctile(vals, 50), p90: pctile(vals, 90), min: Math.min(...vals), max: Math.max(...vals) }
+        : null;
+    })(),
     outcomeCounts: counts, perPatch });
 }
 
@@ -330,12 +383,22 @@ const summary = {
   threshold_inputs: {
     baselineParentScorePpm: Number(baseline),
     measuredRecentNoiseFloorPpm: Number(recentNoiseFloorPpm),
+    measuredCleanRecentNoiseFloorPpm: Number(recentNoiseFloorPpm),
+    measuredCleanRetrievalNoiseFloorPpm: cleanRetrievalNoiseFloorPpm === null ? null : Number(cleanRetrievalNoiseFloorPpm),
+    structuralFailureControlFloorPpm: structuralFailureControlFloorPpm === null ? null : Number(structuralFailureControlFloorPpm),
+    legacyMixedControlFloorPpm: legacyMixedControlFloorPpm === null ? null : Number(legacyMixedControlFloorPpm),
     minImprovementPpm: profile.patchAcceptanceFloors?.minImprovementPpm,
     replayTolerancePpm: profile.replayTolerancePpm,
     screenerThresholdPpm: Number(screenerThresholdPpm),
     canonical_qualification: 'evaluateCoreTexWorkQualification (REJECT / SCREENER_PASS / STATE_ADVANCE)',
   },
-  per_class: Object.fromEntries(results.map((r) => [r.class, { mean_delta_ppm: Math.round(r.deltaPpm.mean), outcomes: r.outcomeCounts, expected: r.expected }])),
+  per_class: Object.fromEntries(results.map((r) => [r.class, {
+    mean_delta_ppm: Math.round(r.deltaPpm.mean),
+    mean_composite_delta_ppm: Math.round(r.deltaPpm.mean),
+    mean_retrieval_delta_ppm: r.retrievalDeltaPpm ? Math.round(r.retrievalDeltaPpm.mean) : null,
+    outcomes: r.outcomeCounts,
+    expected: r.expected,
+  }])),
   false_screener_rate_by_class: Object.fromEntries(results.map((r) => {
     if (!r.expected.startsWith('REJECT')) return [r.class, null];
     return [r.class, (r.outcomeCounts.SCREENER_PASS + r.outcomeCounts.STATE_ADVANCE) / r.n];
@@ -356,13 +419,38 @@ const summary = {
 };
 
 const report = {
-  schema: 'coretex.screener-threshold-calibration.v2',
+  schema: 'coretex.screener-threshold-calibration.v3',
+  generatedAt: new Date().toISOString(),
+  ...provenance,
+  commandArgs: argv.slice(2),
   reranker: (RERANKER === 'gpu' || RERANKER === 'qwen-cpu')
     ? `Qwen/${RR.modelId}@${RR.revision} (${RERANKER})`
     : 'deterministic',
-  profile: PROFILE_PATH, bundle: BUNDLE_PATH, corpus: CORPUS_PATH, embeddings: EMB_PATH,
-  bundleHash: bundle.bundleHash, corpusRoot: corpus.corpusRoot,
-  noise_floor_samples: noiseDeltas,
+  noise_floor_samples: cleanNoiseDeltas,
+  bundleVerify: {
+    sourceHashMismatchAllowed: ALLOW_BUNDLE_SOURCE_MISMATCH,
+    errors: verr,
+  },
+  noise_floor_breakdown: {
+    clean_noop_or_near_noop: {
+      samples: noiseSamples.filter((s) => s.bucket === 'clean_noop_or_near_noop'),
+      compositeAbsDeltasPpm: cleanNoiseDeltas,
+      retrievalAbsDeltasPpm: cleanRetrievalDeltas,
+      p90CompositePpm: recentNoiseFloorPpm,
+      p90RetrievalPpm: cleanRetrievalNoiseFloorPpm,
+    },
+    structural_failure_damage: {
+      samples: noiseSamples.filter((s) => s.bucket === 'structural_failure_damage'),
+      compositeAbsDeltasPpm: structuralFailureDeltas,
+      p90CompositePpm: structuralFailureControlFloorPpm,
+      note: 'Reported separately; not used as reranker/no-op noise floor.',
+    },
+    legacy_mixed_controls: {
+      compositeAbsDeltasPpm: mixedControlDeltas,
+      p90CompositePpm: legacyMixedControlFloorPpm,
+      note: 'Diagnostic only; old mixed controls included structural rejection damage.',
+    },
+  },
   per_class_results: results,
   summary,
   canonicalAPIsUsed: [
