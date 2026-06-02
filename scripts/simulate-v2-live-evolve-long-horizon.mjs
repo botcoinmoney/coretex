@@ -31,7 +31,8 @@
  *   node scripts/simulate-v2-live-evolve-long-horizon.mjs --reranker gpu
  *     --profile <p> --bundle <b> --corpus <c> --emb <e> --out <outdir> --tag <tag>
  *     [--epochs 12] [--churn-fraction 0.05] [--seed <s>] [--honest-per-epoch 3]
- *     [--pack-size 64] [--clear-pack-quotas]
+ *     [--random-probes 4] [--hillclimb-probes 2] [--pack-size 64] [--clear-pack-quotas]
+ *     [--mock-embeddings]   # CPU mechanics/report smoke only; A100 minis use real embeddings.
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -42,8 +43,9 @@ import { evolveCorpusDelta } from './lib/evolve-corpus.mjs';
 import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadMaterializedCorpus } from './lib/load-materialized-corpus.mjs';
 import { embedTexts } from './_embed-v2.mjs';
-import { relationUnits } from './lib/v2-patch-families.mjs';
+import { hseed, mulberry32, randomPatch, relationUnits } from './lib/v2-patch-families.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
+import { calibrationProvenance } from './lib/calibration-provenance.mjs';
 
 const C = await import(distIndex);
 const {
@@ -52,6 +54,7 @@ const {
   splitForRecord, biEncoderModelIdHash,
   scoringOptionsFromProfile, deriveQueryPack,
   evaluateRetrievalBenchmarkState, evaluateRetrievalBenchmarkPatch,
+  applyPatch,
   createDeterministicReranker,
   encodePolicyAtom, POLICY_SELECTOR, POLICY_EVIDENCE_FEATURE,
   merkleizeState,
@@ -73,8 +76,11 @@ const EPOCHS = Number(flag('epochs', '12'));
 const CHURN_FRACTION = Number(flag('churn-fraction', '0.05'));
 const SEED_OVERRIDE = flag('seed', null);
 const HONEST_PER_EPOCH = Number(flag('honest-per-epoch', '3'));
+const RANDOM_PROBES = Number(flag('random-probes', '4'));
+const HILLCLIMB_PROBES = Number(flag('hillclimb-probes', '2'));
 const PACK_SIZE = Number(flag('pack-size', '64'));
 const CLEAR_PACK_QUOTAS = has('clear-pack-quotas');
+const MOCK_EMBEDDINGS = has('mock-embeddings');
 
 if (!PROFILE_PATH || !BUNDLE_PATH || !CORPUS_PATH || !EMB_PATH || !OUTDIR) {
   console.error('HARD FAIL: --profile, --bundle, --corpus, --emb, --out required');
@@ -92,6 +98,13 @@ console.log('[live-evolve] loading materialized base production corpus (NO rebui
 const baseBundle = loadMaterializedCorpus(BUNDLE_PATH, { sourceCorpusPath: CORPUS_PATH, sourceEmbPath: EMB_PATH });
 let currentProd = baseBundle.corpus;
 const { BE, RR, LAYOUT } = baseBundle;
+const provenance = calibrationProvenance({
+  bundlePath: BUNDLE_PATH,
+  corpusPath: CORPUS_PATH,
+  embPath: EMB_PATH,
+  profilePath: PROFILE_PATH,
+  manifest: baseBundle.manifest,
+});
 console.log(`[live-evolve] materialized manifest bundleHash=${baseBundle.manifest.bundleHash} corpusRoot=${baseBundle.manifest.corpusRoot.slice(0, 18)}…`);
 const labelingProvenance = { modelId: RR.modelId, revision: RR.revision, runtime: 'coretex-retrieval-v2-policy-r5', batchHash: '0x' + '00'.repeat(32) };
 console.log(`[live-evolve] base events=${currentProd.events.length} root=${currentProd.corpusRoot.slice(0, 18)}…`);
@@ -110,6 +123,11 @@ function int8Bytes(vec) {
   new DataView(o.buffer).setFloat32(0, s, false);
   for (let i = 0; i < LAYOUT.dim; i++) { let c = Math.round((vec[i] ?? 0) / s); c = Math.max(-127, Math.min(127, c)); o[4 + i] = c & 0xff; }
   return o;
+}
+function mockVec(seed = 0) {
+  const v = new Float32Array(LAYOUT.dim);
+  for (let i = 0; i < LAYOUT.dim; i++) v[i] = Math.sin(i + seed * 131 + 7);
+  return v;
 }
 
 const reranker = RERANKER === 'gpu'
@@ -168,22 +186,22 @@ function buildIdShuffledPack(pack) {
 // 2 edges gives a measurable lift on relation-family queries with low cross-family interference,
 // matching the screener's verified pattern.
 //
-// Pack-derived target docId is still recorded in fingerprint/targetDocId for provenance, even
-// though the patch body itself is anchor-free (relation edges are not per-doc keyed).
+// Pack-derived target docId is recorded for provenance only. The patch body itself is
+// anchor-free and doc-id-free: it encodes a reusable public relation category lens.
 const GENESIS_PARENT_ROOT = merkleizeState({ words: new Array(1024).fill(0n) });
 function honestPatchForEpoch(epoch, honestIdx, addedDocs) {
   const target = addedDocs[honestIdx % Math.max(1, addedDocs.length)];
   if (!target) return null;
   const rel = relationUnits(2);
-  // (honestIdx + epoch*7) keeps the fingerprint distinct across epochs so operation-reuse
-  // measurement isn't masked by every epoch emitting an identical 2-edge patch.
-  const fingerprint = `honest:relation(2):e${epoch}:h${honestIdx}:target=${target.id}`;
+  const operationFingerprint = 'honest:relation(2):categoryLens:supports,causes';
+  const selectorFingerprint = 'public-edge-category-lens:supports,causes';
+  const fingerprint = `${operationFingerprint}:e${epoch}:h${honestIdx}`;
   return { patch: {
     patchType: PATCH_TYPE.MIXED, wordCount: rel.indices.length, scoreDelta: 0,
     parentStateRoot: GENESIS_PARENT_ROOT,
     indices: rel.indices,
     newWords: rel.newWords,
-  }, fingerprint, targetDocId: target.id };
+  }, fingerprint, operationFingerprint, selectorFingerprint, targetDocId: target.id };
 }
 
 // ─── Genesis frontier (BUILD ONCE, step every epoch on the SAME instance) ───
@@ -220,6 +238,9 @@ let prevHeldoutScorePpm = prevHeldoutPack.events.length ? await scoreOnPack(curr
 console.log(`[live-evolve] genesis activeScore=${prevActiveScorePpm}ppm heldoutScore=${prevHeldoutScorePpm}ppm`);
 
 const operationReuseSet = new Set();
+let acceptedOperationCount = 0;
+let acceptedOperationReuseCount = 0;
+let bestState = makeGenesisState();
 const perEpoch = [];
 const baselineFloors = { ...profile.patchAcceptanceFloors, acceptanceThresholdPpm: profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500 };
 
@@ -233,8 +254,12 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   // CANONICAL: bridge the logical delta into production additions via
   // bridgeLogicalDeltaToProductionEvents (packages/cortex/src/corpus/logical-delta-bridge.ts).
   // The harness owns ONLY the Python embedding step; the package owns the mapping.
-  const docVecs = await embedTexts(ld.addedDocs.map((d) => d.text));
-  const qVecs = ld.addedQueries.length ? await embedTexts(ld.addedQueries.map((q) => q.queryText)) : [];
+  const docVecs = MOCK_EMBEDDINGS
+    ? ld.addedDocs.map((_, i) => mockVec(epoch * 1000 + i))
+    : await embedTexts(ld.addedDocs.map((d) => d.text));
+  const qVecs = MOCK_EMBEDDINGS
+    ? ld.addedQueries.map((_, i) => mockVec(epoch * 2000 + i))
+    : (ld.addedQueries.length ? await embedTexts(ld.addedQueries.map((q) => q.queryText)) : []);
   for (const d of ld.addedDocs) docTextById.set(d.id, d);
   const addedDocEmbeddings = new Map();
   ld.addedDocs.forEach((d, i) => addedDocEmbeddings.set(d.id, int8Bytes(docVecs[i])));
@@ -307,15 +332,58 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
       const accepted = !!r.accepted;
       if (accepted) {
         honestAcceptsThisEpoch++;
-        if (operationReuseSet.has(hp.fingerprint)) honestReuseThisEpoch++;
-        else operationReuseSet.add(hp.fingerprint);
+        acceptedOperationCount++;
+        if (operationReuseSet.has(hp.operationFingerprint)) {
+          honestReuseThisEpoch++;
+          acceptedOperationReuseCount++;
+        } else {
+          operationReuseSet.add(hp.operationFingerprint);
+        }
+        const bestPatch = { ...hp.patch, parentStateRoot: merkleizeState(bestState) };
+        const applied = applyPatch(bestState, bestPatch);
+        if (applied?.ok) bestState = applied.state;
       }
-      honestPerPatch.push({ h, accepted, deltaPpm: r.deltaPpm ?? 0, reason: r.reason ?? null, fingerprint: hp.fingerprint, targetDocId: hp.targetDocId });
+      honestPerPatch.push({
+        h,
+        accepted,
+        deltaPpm: r.deltaPpm ?? 0,
+        reason: r.reason ?? null,
+        fingerprint: hp.fingerprint,
+        operationFingerprint: hp.operationFingerprint,
+        selectorFingerprint: hp.selectorFingerprint,
+        targetDocId: hp.targetDocId,
+        targetDocIdRecordedOnly: true,
+      });
     } catch (e) {
-      honestPerPatch.push({ h, accepted: false, deltaPpm: 0, reason: `eval_error:${e.message?.slice(0, 80)}`, fingerprint: hp.fingerprint, targetDocId: hp.targetDocId });
+      honestPerPatch.push({
+        h,
+        accepted: false,
+        deltaPpm: 0,
+        reason: `eval_error:${e.message?.slice(0, 80)}`,
+        fingerprint: hp.fingerprint,
+        operationFingerprint: hp.operationFingerprint,
+        selectorFingerprint: hp.selectorFingerprint,
+        targetDocId: hp.targetDocId,
+        targetDocIdRecordedOnly: true,
+      });
     }
   }
   const operationReuseRate = honestAcceptsThisEpoch ? honestReuseThisEpoch / honestAcceptsThisEpoch : 0;
+
+  const rand = mulberry32(hseed(`${frontierSeed}:live-evolve:anti-cheat:${epoch}`));
+  let randomAccepts = 0, hillclimbAccepts = 0;
+  const randomDeltas = [], hillclimbDeltas = [];
+  for (let i = 0; i < RANDOM_PROBES; i++) {
+    const state = makeGenesisState();
+    const r = await evaluateRetrievalBenchmarkPatch(state, randomPatch(state, rand), newProd, activePack, optsForProd(), baselineFloors);
+    randomDeltas.push(r.deltaPpm ?? 0);
+    if (r.accepted) randomAccepts++;
+  }
+  for (let i = 0; i < HILLCLIMB_PROBES; i++) {
+    const r = await evaluateRetrievalBenchmarkPatch(bestState, randomPatch(bestState, rand), newProd, activePack, optsForProd(), baselineFloors);
+    hillclimbDeltas.push(r.deltaPpm ?? 0);
+    if (r.accepted) hillclimbAccepts++;
+  }
 
   perEpoch.push({
     epoch,
@@ -345,12 +413,22 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     honestAttempted: qualityAttemptsThisEpoch, honestAccepted: honestAcceptsThisEpoch,
     operation_reuse_rate: operationReuseRate,
     honestPerPatch,
+    antiCheat: {
+      randomProbes: RANDOM_PROBES,
+      randomAccepts,
+      randomAcceptanceRate: randomAccepts / Math.max(1, RANDOM_PROBES),
+      randomDeltaPpmMax: randomDeltas.length ? Math.max(...randomDeltas) : null,
+      hillclimbProbes: HILLCLIMB_PROBES,
+      hillclimbAccepts,
+      hillclimbAcceptanceRate: hillclimbAccepts / Math.max(1, HILLCLIMB_PROBES),
+      hillclimbDeltaPpmMax: hillclimbDeltas.length ? Math.max(...hillclimbDeltas) : null,
+    },
     stepEpochInputs: { prevHonestAccepts, prevQualityAttempts },
   });
 
   console.log(`[live-evolve] activeScore=${activeScorePpm}ppm heldoutScore=${heldoutScorePpm}ppm idShuffledScore=${idShuffledScorePpm}ppm`);
   console.log(`[live-evolve] cross_frontier_lift=${crossFrontierLift} heldout_frontier_lift=${heldoutFrontierLift} doc_id_dependence=${docIdDependence}`);
-  console.log(`[live-evolve] honest: ${honestAcceptsThisEpoch}/${qualityAttemptsThisEpoch} accepted, operation_reuse_rate=${operationReuseRate.toFixed(3)}`);
+  console.log(`[live-evolve] honest: ${honestAcceptsThisEpoch}/${qualityAttemptsThisEpoch} accepted, operation_reuse_rate=${operationReuseRate.toFixed(3)}; antiCheat random=${randomAccepts}/${RANDOM_PROBES} hill=${hillclimbAccepts}/${HILLCLIMB_PROBES}`);
 
   currentLogical = { ...currentLogical, docs: [...currentLogical.docs, ...ld.addedDocs], relations: [...currentLogical.relations, ...ld.addedRelations], queries: [...currentLogical.queries, ...ld.addedQueries] };
   currentProd = newProd;
@@ -361,17 +439,49 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   prevQualityAttempts = qualityAttemptsThisEpoch;
 }
 
+const qrelShuffleCollapseValues = perEpoch.map((e) => e.qrel_shuffle_collapse_ratio).filter((v) => v != null);
 const report = {
   schema: 'coretex.live-evolve-long-horizon.v2',
+  ...provenance,
   tag: TAG,
+  commandArgs: process.argv.slice(2),
   reranker: RERANKER === 'gpu' ? `Qwen/${RR.modelId}@${RR.revision}` : 'deterministic',
+  rerankerModel: RR.modelId,
+  rerankerRevision: RR.revision,
+  rerankerMode: RERANKER,
   profile: PROFILE_PATH, bundle: BUNDLE_PATH, corpus: CORPUS_PATH, embeddings: EMB_PATH,
   bundleHash: JSON.parse(readFileSync(resolve(repoRoot, BUNDLE_PATH), 'utf8')).bundleHash,
+  corpusRoot: baseBundle.manifest.corpusRoot,
   baseCorpusRoot: baseBundle.corpus.corpusRoot, finalCorpusRoot: currentProd.corpusRoot,
   finalActiveRoot: prevActiveRoot,
   epochsRun: perEpoch.length, churnFraction: CHURN_FRACTION, seed: frontierSeed,
   perEpoch,
   uniqueHonestOperations: operationReuseSet.size,
+  summary: {
+    honestAttempts: perEpoch.reduce((s, e) => s + e.honestAttempted, 0),
+    honestAccepted: perEpoch.reduce((s, e) => s + e.honestAccepted, 0),
+    acceptedOperationReuseRate: acceptedOperationCount ? acceptedOperationReuseCount / acceptedOperationCount : 0,
+    randomProbes: perEpoch.reduce((s, e) => s + e.antiCheat.randomProbes, 0),
+    randomAccepts: perEpoch.reduce((s, e) => s + e.antiCheat.randomAccepts, 0),
+    hillclimbProbes: perEpoch.reduce((s, e) => s + e.antiCheat.hillclimbProbes, 0),
+    hillclimbAccepts: perEpoch.reduce((s, e) => s + e.antiCheat.hillclimbAccepts, 0),
+    antiCheatCleanRandom: perEpoch.every((e) => e.antiCheat.randomAccepts === 0),
+    antiCheatCleanHillclimb: perEpoch.every((e) => e.antiCheat.hillclimbAccepts === 0),
+    crossFrontierLiftPpm: perEpoch.map((e) => e.cross_frontier_lift).filter((v) => v != null),
+    heldoutFrontierLiftPpm: perEpoch.map((e) => e.heldout_frontier_lift).filter((v) => v != null),
+    liveEvalIdsInjected: perEpoch.reduce((s, e) => s + e.frontierRotation.newEvalIdsInjectedThisEpoch, 0),
+    qrelShuffleCollapseRatioMean: qrelShuffleCollapseValues.length
+      ? qrelShuffleCollapseValues.reduce((a, b) => a + b, 0) / qrelShuffleCollapseValues.length
+      : null,
+    antiIndexer: {
+      patchUsesDirectDocId: false,
+      patchUsesCorpusHeaderOrLabel: false,
+      targetDocIdRecordedOnly: true,
+      operationFingerprint: 'honest:relation(2):categoryLens:supports,causes',
+      selectorFingerprint: 'public-edge-category-lens:supports,causes',
+      qrelShuffleCollapseIsNotDocIdDependence: true,
+    },
+  },
   canonicalAPIsUsed: [
     'evolveCorpusDelta(baseLogical, epoch, seed, churnFraction)',
     'bridgeLogicalDeltaToProductionEvents({previousCorpus, logicalDelta, addedDocEmbeddings, addedQueryEmbeddings, biEncoder})',
