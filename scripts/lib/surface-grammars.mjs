@@ -1,39 +1,27 @@
 /**
- * Bounded semantic patch grammars per substrate surface.
+ * Bounded semantic patch grammars per substrate surface — v2.
  *
- * The auditor's framing: each substrate category must be tested as a
- * REUSABLE MEMORY OPERATION — entity continuity, temporal recency, conflict
- * resolution, coreference, evidence density, abstention guardrail — and NOT
- * as random arbitrary slot writes or doc-id mappings. The grammars in this
- * file enumerate a small, deterministic, finite candidate space per surface
- * so the surface-search harness can:
- *   - test whether the surface admits broad miner-search runway under legal
- *     non-indexing patches;
- *   - classify each candidate as CLEAN_POSITIVE / TRADEOFF_POSITIVE /
- *     COMPENSATED_POSITIVE / UNSAFE / UNEXPLAINED_POSITIVE;
- *   - report what real-world memory behavior each candidate models.
+ * Per the auditor's framing, every candidate must declare its anchor `mode`:
  *
- * Each candidate exports the shape:
- *   {
- *     id,                            // stable hash of (surface, params)
- *     surface,                       // surface name
- *     params,                        // grammar parameters
- *     memoryOperationSignature,      // what real memory behavior this models
- *     publicSignals,                 // what public structure it reads
- *     minerDegreesOfFreedom,         // axes a miner can explore safely
- *     nonIndexerRationale,           // why this is not a doc-id mapping
- *     buildUnits: ({ ... }) => ({    // build the substrate words
- *       indices, newWords, anchored, // canonical patch shape
- *       reason?,                     // present when skipped (no pack match)
- *     }),
- *     profileOverrides,              // ScoringOptions overrides required for the surface
- *     expectedRendererEffect,        // structural prediction (no oracle)
- *     expectedRerankerEffect,        // structural prediction
- *   }
+ *   - `mode: 'oracle-qrel'`   — may read qrels / role labels / hidden truth docs.
+ *                               Use ONLY to bound capability (upper-limit
+ *                               measurement); never use to claim launch runway.
+ *   - `mode: 'miner-public'`  — uses only PUBLIC structure: query text,
+ *                               entity registry, doc.kind / doc.timestamp /
+ *                               doc.entityIds / doc.lifecycleState (public
+ *                               metadata stamped by the generator),
+ *                               corpus.relations edge list, substrate state.
+ *                               This is the only mode whose results can
+ *                               feed promotion claims.
  *
- * Forbidden by construction: doc-id selector mining, qrel/header dependence,
- * frontier-id memorization. Every grammar derives its anchors and conditions
- * from PUBLIC structures (corpus relations, entity ids, query family/text).
+ * Each candidate also exports the full safety contract:
+ *   - id, surface, mode, params
+ *   - memoryOperationSignature, publicSignals, minerDegreesOfFreedom
+ *   - nonIndexerRationale, leakageRisks (explicit list of what would break the
+ *     non-indexer claim if violated)
+ *   - profileOverrides (ScoringOptions delta required for the surface)
+ *   - expectedRendererEffect, expectedRerankerEffect
+ *   - buildUnits(ctx) => { indices, newWords, anchored, anchorMode, reason? }
  */
 import { distIndex } from '../_repo-root.mjs';
 
@@ -46,7 +34,133 @@ const {
 
 const RELATION_EDGES_ALL = ['supports', 'causes', 'supersedes', 'coreference_of'];
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Public-structure helpers (miner-public mode) ────────────────────────────
+//
+// These helpers anchor patches using ONLY public information:
+//   - the query text (`event.queryText`)
+//   - the public entity registry (canonical names + aliases)
+//   - the corpus' public doc metadata (kind, timestamp, entityIds, lifecycleState)
+//   - the corpus' public relations list
+//
+// None of these helpers read `event.qrels`, `event.truthDocuments`,
+// `qrel.role`, `qrel.relevance`, or any other label-bearing field.
+
+function publicResolveSubject(queryText, entityRegistry, genericIds) {
+  const lq = (queryText || '').toLowerCase();
+  // longest-match first so 'Aron Loiorum' beats 'Aron'
+  const sorted = entityRegistry.slice().sort((a, b) => Math.max(...b.names.map((n) => n.length), 0) - Math.max(...a.names.map((n) => n.length), 0));
+  for (const e of sorted) {
+    if (genericIds.includes(e.id)) continue;
+    for (const n of e.names) {
+      const re = new RegExp(`\\b${n.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b`, 'i');
+      if (re.test(lq)) return e.id;
+    }
+  }
+  return null;
+}
+
+function parseTemporalAttribute(queryText) {
+  // miner-public attribute parse — handles the v15 + evolveCorpusDelta query phrasings:
+  //   "What is X's current Y?"           → attr = Y (e.g. city, diet)
+  //   "What Y is X currently following?"  → attr = Y
+  //   "What Y does X currently use?"      → attr = Y
+  //   "What Y is X currently on?"         → attr = Y
+  //   "What is X currently following?"    → attr = "diet" inferred (default)
+  const t = (queryText || '').toLowerCase();
+  // Pattern A: "what (verb) X's <attr>?"  (attr is the word after the apostrophe-s)
+  const a = t.match(/what (?:is|are) [a-z'’ ]+?'s? ([a-z]+(?: [a-z]+)?)\??$/);
+  if (a) return a[1].trim();
+  // Pattern B: "current <attr>?"  (attr is the word after "current ")
+  const b = t.match(/current ([a-z]+(?: [a-z]+)?)\??$/);
+  if (b) return b[1].trim();
+  // Pattern C: "what <attr> is X currently (verb)" / "what <attr> does X currently (verb)"
+  const c = t.match(/what ([a-z]+(?: [a-z]+)?) (?:is|are|does|do) [a-z'’ ]+ currently/);
+  if (c) return c[1].trim();
+  // Pattern D: "what <attr> (does|is) X (have|use|follow|prefer|deploy)"
+  const d = t.match(/what ([a-z]+(?: [a-z]+)?) (?:does|is) [a-z'’ ]+ (?:currently )?(?:have|use|follow|prefer|deploy|switch)/);
+  if (d) return d[1].trim();
+  return null;
+}
+
+function parseConflictScope(queryText) {
+  const m = (queryText || '').match(/^[Ff]or\s+([^,]+),/);
+  return m ? m[1].trim().toLowerCase() : null;
+}
+
+function publicFindTemporalAnchors(subjectId, attr, docById, docsByEntity) {
+  // miner-public: only TEMPORAL-kind docs about `subjectId` whose kind OR text
+  // explicitly mentions `attr` as a public attribute marker. Sort by timestamp
+  // descending (newest = current); the stale slot picks the next-oldest doc on
+  // the SAME attribute (so the stale qrel is genuinely same-attribute).
+  const attrL = attr.toLowerCase();
+  const candidates = (docsByEntity.get(subjectId) ?? []).filter((d) => {
+    const k = (d.kind ?? '').toLowerCase();
+    if (!/temporal/.test(k)) return false;
+    const t = (d.text ?? '').toLowerCase();
+    return k.endsWith(`_${attrL}`) || k === `temporal_${attrL}` || new RegExp(`\\b${attrL}\\b`).test(t);
+  });
+  if (candidates.length === 0) return { current: null, stale: null };
+  candidates.sort((a, b) => String(b.timestamp ?? '').localeCompare(String(a.timestamp ?? '')));
+  // miner-public picks current = newest, stale = oldest same-attr (matches the v15
+  // generator's stale qrel, which is the earliest prior on that attribute).
+  return { current: candidates[0]?.id ?? null, stale: candidates[candidates.length - 1]?.id ?? null };
+}
+
+function publicFindConflictAnchor(subjectId, scope, docsByEntity) {
+  // miner-public: doc about `subjectId` with lifecycleState='conflict_resolved' AND lifecycleScope=scope.
+  const docs = docsByEntity.get(subjectId) ?? [];
+  const resolved = docs.find((d) => d.lifecycleState === 'conflict_resolved' && (d.lifecycleScope ?? '').toLowerCase() === scope.toLowerCase());
+  const candidate = docs.find((d) => d.lifecycleState === 'conflict_candidate' && (d.lifecycleScope ?? '').toLowerCase() === scope.toLowerCase());
+  return { resolved: resolved?.id ?? null, candidate: candidate?.id ?? null };
+}
+
+function publicTopSupportAnchor(subjectId, docsByEntity, supportInDegree) {
+  // miner-public: doc about `subjectId` with highest in-supports degree.
+  const docs = docsByEntity.get(subjectId) ?? [];
+  if (docs.length === 0) return null;
+  docs.sort((a, b) => (supportInDegree.get(b.id) ?? 0) - (supportInDegree.get(a.id) ?? 0));
+  return docs[0]?.id ?? null;
+}
+
+// ─── Common pack/qrel pickers (oracle-qrel mode only) ────────────────────────
+
+function pickFirstPackQuery(pack, logicalQById, predicate) {
+  for (const ev of pack.events) {
+    const lq = logicalQById.get(ev.id);
+    if (lq && predicate(lq)) return lq;
+  }
+  return null;
+}
+
+function pickAnchorOracle({ pack, logicalQById, family, role = 'direct' }) {
+  const lq = pickFirstPackQuery(pack, logicalQById, (q) => q.family === family && q.qrels?.some((r) => r.role === role));
+  if (!lq) return { lq: null, docId: null };
+  const qrel = lq.qrels.find((r) => r.role === role);
+  return { lq, docId: qrel?.docId ?? null };
+}
+
+// Build a public per-subject doc index + supports in-degree map from the logical corpus.
+// Cached at first call via the context.
+function ensurePublicIndex(ctx) {
+  if (ctx.publicIndex) return ctx.publicIndex;
+  const docsByEntity = new Map();
+  for (const d of ctx.rawDocs ?? []) {
+    for (const eid of (d.entityIds ?? [])) {
+      if (eid === 'e_universe') continue;
+      if (!docsByEntity.has(eid)) docsByEntity.set(eid, []);
+      docsByEntity.get(eid).push(d);
+    }
+  }
+  const supportInDegree = new Map();
+  for (const r of ctx.rawRelations ?? []) {
+    if (r.type !== 'supports' && r.type !== 'causes') continue;
+    supportInDegree.set(r.dst, (supportInDegree.get(r.dst) ?? 0) + 1);
+  }
+  ctx.publicIndex = { docsByEntity, supportInDegree };
+  return ctx.publicIndex;
+}
+
+// ─── Relation lens unit builder ──────────────────────────────────────────────
 
 function relationLensUnits(edges, entryOffset) {
   const indices = [], newWords = [];
@@ -59,272 +173,307 @@ function relationLensUnits(edges, entryOffset) {
   return { indices, newWords };
 }
 
-function pickFirstPackQuery(pack, logicalQById, predicate) {
-  for (const ev of pack.events) {
-    const lq = logicalQById.get(ev.id);
-    if (lq && predicate(lq)) return lq;
-  }
-  return null;
-}
-
-// ─── temporal grammar (current/stale + supersession depth + validity) ────────
+// ─── Temporal grammar (oracle + miner-public) ────────────────────────────────
 
 function temporalCandidates() {
   const out = [];
-  // Variants of the canonical temporalUnits: vary recordSlot, depth, expiry.
-  for (const recordSlotOffset of [0, 8, 16]) {
-    for (const variant of ['current_only_pin', 'supersedes_one_prior', 'validity_window']) {
+  const baseVariants = [
+    { variant: 'current_only_pin',       supersede: false, validityWindow: false },
+    { variant: 'supersedes_one_prior',   supersede: true,  validityWindow: false },
+    { variant: 'validity_window',        supersede: true,  validityWindow: true  },
+  ];
+  for (const mode of ['oracle-qrel', 'miner-public']) {
+    for (const recordSlotOffset of [0, 8]) {
+      for (const v of baseVariants) {
+        out.push({
+          id: `temporal_${mode}_${v.variant}_slot${recordSlotOffset}`,
+          surface: 'temporal_update',
+          mode, params: { ...v, recordSlotOffset },
+          memoryOperationSignature: 'mark a memory as the current truth for a (subject, attribute) pair; demote prior same-attr memories as stale',
+          publicSignals: mode === 'miner-public'
+            ? ['parsed subject from queryText', 'parsed attribute from queryText', 'doc.kind / doc.text / doc.timestamp']
+            : ['qrels.direct (oracle)', 'qrels.stale (oracle)'],
+          minerDegreesOfFreedom: ['recordSlot index', 'validity window epochs', 'whether to encode supersession chain'],
+          nonIndexerRationale: 'the operation is "current-vs-stale on (subject, attr)"; both anchors come from public structure under miner-public mode',
+          leakageRisks: mode === 'miner-public' ? [] : ['anchor selection reads qrel role labels'],
+          buildUnits: (ctx) => {
+            const { pack, logicalQById, slotCursor, entityRegistry, genericEntityIds } = ctx;
+            const slotBase = (slotCursor?.temporalRecord ?? 0) + recordSlotOffset;
+            if (slotBase >= 96) return { indices: [], newWords: [], reason: 'temporal_slot_exhausted' };
+            const staleSlot = slotBase * 2, curSlot = slotBase * 2 + 1;
+            let curId = null, staleId = null, sourceQueryId = null;
+            if (mode === 'oracle-qrel') {
+              const a = pickAnchorOracle({ pack, logicalQById, family: 'temporal_update', role: 'direct' });
+              if (!a.lq) return { indices: [], newWords: [], reason: 'no_temporal_pack_query' };
+              curId = a.docId;
+              const sQ = a.lq.qrels.find((r) => r.role === 'stale');
+              staleId = sQ?.docId ?? null;
+              sourceQueryId = a.lq.id;
+            } else {
+              // miner-public: iterate pack queries, pick the FIRST one whose
+              // text is a TEMPORAL phrasing ("What is X's current Y?" NOT
+              // "For X, what is Y's current Z?") AND for which we can resolve
+              // a same-attribute prior memory. This mirrors what a miner would
+              // do reading the public query corpus + public doc store.
+              const pi = ensurePublicIndex(ctx);
+              let pickedQ = null, pickedAnchor = null;
+              for (const ev of pack.events) {
+                const lq = logicalQById.get(ev.id);
+                if (!lq) continue;
+                const text = lq.queryText ?? '';
+                if (/^[Ff]or\s+[^,]+,/.test(text)) continue; // skip conflict scope-prefixed queries
+                // require a temporal phrasing — "current X" or "currently <verb>"
+                if (!/current(?:ly)?\s+/.test(text)) continue;
+                const subj = publicResolveSubject(text, entityRegistry, genericEntityIds);
+                const attr = parseTemporalAttribute(text);
+                if (!subj || !attr) continue;
+                const a = publicFindTemporalAnchors(subj, attr, ctx.docById, pi.docsByEntity);
+                if (!a.current) continue;
+                pickedQ = lq; pickedAnchor = a; break;
+              }
+              if (!pickedQ) return { indices: [], newWords: [], reason: 'no_public_temporal_anchor' };
+              curId = pickedAnchor.current; staleId = pickedAnchor.stale;
+              sourceQueryId = pickedQ.id;
+            }
+            const idx = [], nw = [];
+            const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(`mem_${curId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n })[0];
+            idx.push(RANGES.MEMORY_INDEX_START + curSlot); nw.push(cw);
+            if (v.supersede && staleId) {
+              const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(`mem_${staleId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n })[0];
+              idx.push(RANGES.MEMORY_INDEX_START + staleSlot); nw.push(sw);
+            }
+            const tw = encodeTemporalRecord({ recordIndex: slotBase, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: 1n, validUntilEpoch: (2n ** 40n - 1n), currentStaleFlag: true });
+            idx.push(RANGES.TEMPORAL_START + slotBase); nw.push(tw[0]);
+            return { indices: idx, newWords: nw, anchored: curId, anchorMode: mode, sourceQueryId };
+          },
+          profileOverrides: { temporalStaleContrast: true },
+          expectedRendererEffect: 'current doc marked current; stale demoted',
+          expectedRerankerEffect: '+rank on current-asking temporal queries',
+        });
+      }
+    }
+  }
+  return out;
+}
+
+// ─── Conflict grammar (oracle + miner-public) ────────────────────────────────
+
+function conflictCandidates() {
+  const out = [];
+  const variants = [
+    { action: 'boost',    scope: 'conflict_set', feature: POLICY_EVIDENCE_FEATURE.CONTRADICTS_EDGE, budget: 300, target: 'resolved' },
+    { action: 'boost',    scope: 'entity',       feature: POLICY_EVIDENCE_FEATURE.CONTRADICTS_EDGE, budget: 300, target: 'resolved' },
+    { action: 'boost',    scope: 'conflict_set', feature: POLICY_EVIDENCE_FEATURE.SCOPE_DIFFERS_EDGE, budget: 300, target: 'resolved' },
+    { action: 'suppress', scope: 'conflict_set', feature: POLICY_EVIDENCE_FEATURE.CONTRADICTS_EDGE, budget: 300, target: 'candidate' },
+  ];
+  for (const mode of ['oracle-qrel', 'miner-public']) {
+    for (const v of variants) {
+      const tag = `${v.action}_${v.scope}_ef${v.feature}_b${v.budget}_t${v.target}`;
       out.push({
-        id: `temporal_${variant}_slot${recordSlotOffset}`,
-        surface: 'temporal_update',
-        params: { recordSlotOffset, variant },
-        memoryOperationSignature: 'mark a memory as the current truth for a (subject, attribute) pair; demote prior same-attr memories as stale',
-        publicSignals: ['query.family=temporal_update', 'qrels.direct = current doc', 'qrels.stale = prior doc on same (subject, attr)'],
-        minerDegreesOfFreedom: ['recordSlot index', 'validity window epochs', 'whether to encode supersession chain'],
-        nonIndexerRationale: 'patch anchors at the resolved memory event id (public), routes by family=temporal, no doc-id in selector',
-        buildUnits: ({ pack, logicalQById, slotCursor }) => {
-          const lq = pickFirstPackQuery(pack, logicalQById, (q) => q.family === 'temporal_update' && q.qrels?.some((r) => r.role === 'direct'));
-          if (!lq) return { indices: [], newWords: [], reason: 'no_temporal_pack_query' };
-          const direct = lq.qrels.find((r) => r.role === 'direct');
-          const stale = lq.qrels.find((r) => r.role === 'stale');
-          const slotBase = (slotCursor?.temporalRecord ?? 0) + recordSlotOffset;
-          if (slotBase >= 96) return { indices: [], newWords: [], reason: 'temporal_slot_exhausted' };
-          const staleSlot = slotBase * 2, curSlot = slotBase * 2 + 1;
-          const idx = [], nw = [];
-          const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(`mem_${direct.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n })[0];
-          idx.push(RANGES.MEMORY_INDEX_START + curSlot); nw.push(cw);
-          if (variant !== 'current_only_pin' && stale) {
-            const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(`mem_${stale.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n })[0];
-            idx.push(RANGES.MEMORY_INDEX_START + staleSlot); nw.push(sw);
+        id: `conflict_${mode}_${tag}`,
+        surface: 'conflict_lifecycle',
+        mode, params: v,
+        memoryOperationSignature: 'when a query has explicit scope intent ("For X, ..."), surface the resolved-for-scope memory and demote competing candidates',
+        publicSignals: mode === 'miner-public'
+          ? ['parseQueryConflictIntent (public)', 'doc.lifecycleState (public stamp)', 'doc.lifecycleScope (public stamp)', 'public entity registry']
+          : ['qrels.direct (oracle)', 'qrels.conflict (oracle)'],
+        minerDegreesOfFreedom: ['action', 'scope', 'evidence feature', 'budget', 'which side of the conflict to anchor'],
+        nonIndexerRationale: 'CONFLICT_SET_MEMBER selector requires subject overlap; anchor is the lifecycle-stamped resolved doc, not a qrel pointer',
+        leakageRisks: mode === 'miner-public' ? [] : ['anchor selection reads qrel role labels'],
+        buildUnits: (ctx) => {
+          const { pack, logicalQById, eventByDocId, slotCursor, entityRegistry, genericEntityIds } = ctx;
+          let anchorDocId = null, sourceQueryId = null;
+          if (mode === 'oracle-qrel') {
+            const a = pickAnchorOracle({ pack, logicalQById, family: 'conflict_lifecycle', role: v.target === 'resolved' ? 'direct' : 'conflict' });
+            if (!a.lq) return { indices: [], newWords: [], reason: 'no_conflict_pack_query' };
+            anchorDocId = a.docId; sourceQueryId = a.lq.id;
+          } else {
+            const lq = pickFirstPackQuery(pack, logicalQById, (q) => /^[Ff]or [^,]+,/i.test(q.queryText ?? ''));
+            if (!lq) return { indices: [], newWords: [], reason: 'no_conflict_intent_query' };
+            const subj = publicResolveSubject(lq.queryText, entityRegistry, genericEntityIds);
+            const scope = parseConflictScope(lq.queryText);
+            if (!subj || !scope) return { indices: [], newWords: [], reason: 'parse_failed' };
+            const pi = ensurePublicIndex(ctx);
+            const a = publicFindConflictAnchor(subj, scope, pi.docsByEntity);
+            anchorDocId = v.target === 'resolved' ? a.resolved : a.candidate;
+            sourceQueryId = lq.id;
+            if (!anchorDocId) return { indices: [], newWords: [], reason: 'no_public_conflict_anchor' };
           }
-          const validFrom = variant === 'validity_window' ? 1n : 1n;
-          const validUntil = variant === 'validity_window' ? (2n ** 40n - 1n) : (2n ** 40n - 1n);
-          const tw = encodeTemporalRecord({ recordIndex: slotBase, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: validFrom, validUntilEpoch: validUntil, currentStaleFlag: true });
-          idx.push(RANGES.TEMPORAL_START + slotBase); nw.push(tw[0]);
-          return { indices: idx, newWords: nw, anchored: direct.docId };
+          const evId = `mem_${anchorDocId}`;
+          if (eventByDocId && !eventByDocId.has(evId)) return { indices: [], newWords: [], reason: 'event_not_in_corpus' };
+          const slot = slotCursor?.conflictSlot ?? 0;
+          if (slot >= 128) return { indices: [], newWords: [], reason: 'conflict_slot_exhausted' };
+          const memWord = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(evId), family: 'multi_hop_relation', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n })[0];
+          const atomWord = encodePolicyAtom({ atomIndex: slot, family: 'conflict_lifecycle', selector: POLICY_SELECTOR.CONFLICT_SET_MEMBER, evidenceFeature: v.feature, action: v.action, scope: v.scope, targetSlot: slot, budget: v.budget, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
+          return { indices: [RANGES.MEMORY_INDEX_START + slot, RANGES.POLICY_CONFLICT_START + slot], newWords: [memWord, atomWord], anchored: anchorDocId, anchorMode: mode, sourceQueryId };
         },
-        profileOverrides: { temporalStaleContrast: true },
-        expectedRendererEffect: 'current memory rendered with up-to-date marker; stale slot demoted',
-        expectedRerankerEffect: 'Qwen prefers the current doc; stale doc ranks below it on same-attr queries',
+        profileOverrides: { enableConflictLifecycleAtoms: true, policyConflictIntentAdmission: true },
+        expectedRendererEffect: 'resolved-for-scope doc surfaced',
+        expectedRerankerEffect: `${v.action === 'boost' ? '+' : '-'}rank on conflict queries with matching scope`,
       });
     }
   }
   return out;
 }
 
-// ─── conflict grammar (action × scope × evidence feature × budget) ───────────
-
-function conflictCandidates() {
-  const out = [];
-  const variants = [
-    { action: 'boost',    scope: 'conflict_set', feature: POLICY_EVIDENCE_FEATURE.CONTRADICTS_EDGE, budget: 300, target: 'direct' },
-    { action: 'suppress', scope: 'conflict_set', feature: POLICY_EVIDENCE_FEATURE.CONTRADICTS_EDGE, budget: 300, target: 'conflict' },
-    { action: 'boost',    scope: 'entity',       feature: POLICY_EVIDENCE_FEATURE.CONTRADICTS_EDGE, budget: 300, target: 'direct' },
-    { action: 'boost',    scope: 'conflict_set', feature: POLICY_EVIDENCE_FEATURE.SCOPE_DIFFERS_EDGE, budget: 300, target: 'direct' },
-    { action: 'boost',    scope: 'conflict_set', feature: POLICY_EVIDENCE_FEATURE.CONTRADICTS_EDGE, budget: 600, target: 'direct' },
-  ];
-  for (const v of variants) {
-    const tag = `${v.action}_${v.scope}_ef${v.feature}_b${v.budget}_t${v.target}`;
-    out.push({
-      id: `conflict_${tag}`,
-      surface: 'conflict_lifecycle',
-      params: v,
-      memoryOperationSignature: `${v.action === 'boost' ? 'promote' : 'demote'} the ${v.target} member of a conflict set when the query has explicit scope intent`,
-      publicSignals: ['query starts with "For <scope>,"', 'conflict_set qrels (direct=resolved, conflict=candidate, scope_differs)', `policy ${v.feature === 4 ? 'CONTRADICTS_EDGE' : 'SCOPE_DIFFERS_EDGE'}`],
-      minerDegreesOfFreedom: ['action (boost/suppress)', 'scope (entity/conflict_set)', 'evidence feature', 'budget'],
-      nonIndexerRationale: 'patch anchors at a conflict-set member (public role-tagged qrel); CONFLICT_SET_MEMBER selector requires the query subject to actually share a conflict set',
-      buildUnits: ({ pack, logicalQById, eventByDocId, slotCursor }) => {
-        const lq = pickFirstPackQuery(pack, logicalQById, (q) => q.family === 'conflict_lifecycle');
-        if (!lq) return { indices: [], newWords: [], reason: 'no_conflict_pack_query' };
-        const target = lq.qrels?.find((r) => r.role === v.target);
-        if (!target) return { indices: [], newWords: [], reason: `no_${v.target}_qrel` };
-        const evId = `mem_${target.docId}`;
-        if (eventByDocId && !eventByDocId.has(evId)) return { indices: [], newWords: [], reason: 'event_not_in_corpus' };
-        const slot = slotCursor?.conflictSlot ?? 0;
-        if (slot >= 128) return { indices: [], newWords: [], reason: 'conflict_slot_exhausted' };
-        const memWord = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(evId), family: 'multi_hop_relation', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n })[0];
-        const atomWord = encodePolicyAtom({ atomIndex: slot, family: 'conflict_lifecycle', selector: POLICY_SELECTOR.CONFLICT_SET_MEMBER, evidenceFeature: v.feature, action: v.action, scope: v.scope, targetSlot: slot, budget: v.budget, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
-        return { indices: [RANGES.MEMORY_INDEX_START + slot, RANGES.POLICY_CONFLICT_START + slot], newWords: [memWord, atomWord], anchored: target.docId };
-      },
-      profileOverrides: { enableConflictLifecycleAtoms: true, policyConflictIntentAdmission: true },
-      expectedRendererEffect: 'resolved doc marked as current scope-winner in Memory-IR',
-      expectedRerankerEffect: `${v.action === 'boost' ? '+' : '-'}rank delta on conflict_lifecycle queries with matching scope`,
-    });
-  }
-  return out;
-}
-
-// ─── relation/category grammar (edge subsets × entry offset) ─────────────────
+// ─── Relation/category grammar (no qrels — already miner-public) ─────────────
 
 function relationCausalCandidates() {
-  const out = [];
-  const edgeMixes = [
+  const mixes = [
     { edges: ['supports'], offset: 0, name: 'supports_only' },
     { edges: ['causes'], offset: 1, name: 'causes_only' },
     { edges: ['supports', 'causes'], offset: 0, name: 'supports_causes' },
     { edges: ['supports', 'causes', 'supersedes'], offset: 0, name: 'support_cause_super' },
   ];
-  for (const m of edgeMixes) {
-    out.push({
-      id: `relation_causal_${m.name}_off${m.offset}`,
-      surface: 'relation_category_routing',
-      params: m,
-      memoryOperationSignature: `surface causal/support chains from the query subject; admit anchored docs whose public ${m.edges.join(',')} edges match the intent`,
-      publicSignals: ['query relation intent (parseQueryRelationIntent)', `public edges of type {${m.edges.join(', ')}}`, 'query subject = anchor subject'],
-      minerDegreesOfFreedom: ['edge subset', 'lens entry offset (no overlap with other lens entries)'],
-      nonIndexerRationale: 'lens admits PUBLIC edges of typed kind; anchored docs found by subject match, not doc-id',
-      buildUnits: () => relationLensUnits(m.edges, m.offset),
-      profileOverrides: { policyRelationTypedAdmission: true, policyQueryConditionedAdmission: true },
-      expectedRendererEffect: 'evidence path rendered in Memory-IR via category lens',
-      expectedRerankerEffect: '+rank on causal/decision/multi-hop queries with explicit relation intent',
-    });
-  }
-  return out;
+  return mixes.map((m) => ({
+    id: `relation_causal_${m.name}_off${m.offset}`,
+    surface: 'relation_causal', mode: 'miner-public', params: m,
+    memoryOperationSignature: 'surface causal/support chains for the query subject via public typed edges',
+    publicSignals: ['parseQueryRelationIntent', 'public corpus edges of type {' + m.edges.join(', ') + '}'],
+    minerDegreesOfFreedom: ['edge subset', 'lens entry offset'],
+    nonIndexerRationale: 'lens admits typed PUBLIC edges; no doc-id in selector',
+    leakageRisks: [],
+    buildUnits: () => relationLensUnits(m.edges, m.offset),
+    profileOverrides: { policyRelationTypedAdmission: true, policyQueryConditionedAdmission: true },
+    expectedRendererEffect: 'evidence path rendered via category lens',
+    expectedRerankerEffect: '+ on causal / decision / multi-hop queries with relation intent',
+  }));
 }
 
-// ─── relation_lifecycle grammar (supersedes/coreference) ─────────────────────
-
 function relationLifecycleCandidates() {
-  const out = [];
-  const edgeMixes = [
+  const mixes = [
     { edges: ['supersedes'], offset: 2, name: 'supersedes_only' },
     { edges: ['coreference_of'], offset: 3, name: 'coref_only' },
     { edges: ['supersedes', 'coreference_of'], offset: 2, name: 'supersedes_coref' },
   ];
-  for (const m of edgeMixes) {
-    out.push({
-      id: `relation_lifecycle_${m.name}_off${m.offset}`,
-      surface: 'relation_lifecycle',
-      params: m,
-      memoryOperationSignature: 'admit lifecycle edges (supersedes / coreference_of) to surface aliased or superseded prior memories',
-      publicSignals: ['public edge types', 'edge admission via category lens'],
-      minerDegreesOfFreedom: ['edge subset', 'entry offset', 'whether paired with conflict / temporal'],
-      nonIndexerRationale: 'edges are public; lens is reusable across subjects',
-      buildUnits: () => relationLensUnits(m.edges, m.offset),
-      profileOverrides: { policyRelationTypedAdmission: true, policyQueryConditionedAdmission: true },
-      expectedRendererEffect: 'supersession chain visible to renderer',
-      expectedRerankerEffect: '+ on coreference / lifecycle queries; potential off-family interference on pure-temporal queries',
-    });
-  }
-  return out;
+  return mixes.map((m) => ({
+    id: `relation_lifecycle_${m.name}_off${m.offset}`,
+    surface: 'relation_lifecycle', mode: 'miner-public', params: m,
+    memoryOperationSignature: 'admit lifecycle/coref edges to surface superseded or aliased memories',
+    publicSignals: ['public edge types'],
+    minerDegreesOfFreedom: ['edge subset', 'entry offset', 'whether paired with intent gate'],
+    nonIndexerRationale: 'edges are public; lens reusable',
+    leakageRisks: ['supersedes admission floods off-family without a lifecycle-intent gate — see parseQueryLifecycleIntent follow-up'],
+    buildUnits: () => relationLensUnits(m.edges, m.offset),
+    profileOverrides: { policyRelationTypedAdmission: true, policyQueryConditionedAdmission: true },
+    expectedRendererEffect: 'supersession chain visible',
+    expectedRerankerEffect: '+ on coref/lifecycle queries; off-family risk if no intent gate',
+  }));
 }
 
-// ─── coreference grammar (alias / entity continuity) ─────────────────────────
-// Coreference is currently in sandbox per the handoff. We model it as a PURE relation-lens
-// candidate using only the `coreference_of` edge — the coreference-selector-redesign probe
-// established this as the most promising path. The substrate plumbing reuses category-lens
-// machinery; no new slots are needed.
-
 function coreferenceCandidates() {
-  const out = [];
   const variants = [
     { offset: 4, name: 'coref_alias_basic' },
     { offset: 5, name: 'coref_alias_offset' },
   ];
-  for (const v of variants) {
-    out.push({
-      id: `coreference_${v.name}`,
-      surface: 'coreference',
-      params: v,
-      memoryOperationSignature: 'alias resolution: when the query mentions Y but the canonical memory is on X (where X coreference_of Y), surface X',
-      publicSignals: ['public coreference_of edges'],
-      minerDegreesOfFreedom: ['lens entry offset', 'whether to pair with conflict for ambiguity resolution'],
-      nonIndexerRationale: 'edges are public; lens reusable across all aliased subjects',
-      buildUnits: () => relationLensUnits(['coreference_of'], v.offset),
-      profileOverrides: { policyRelationTypedAdmission: true, policyQueryConditionedAdmission: true },
-      expectedRendererEffect: 'canonical alias rendered when query uses non-canonical name',
-      expectedRerankerEffect: '+ on coreference_resolution family queries',
-    });
-  }
-  return out;
+  return variants.map((v) => ({
+    id: `coreference_${v.name}`,
+    surface: 'coreference', mode: 'miner-public', params: v,
+    memoryOperationSignature: 'alias / canonical-name resolution via public coreference_of edges',
+    publicSignals: ['public coreference_of edges'],
+    minerDegreesOfFreedom: ['lens entry offset'],
+    nonIndexerRationale: 'edges are public; lens reusable across aliased subjects',
+    leakageRisks: [],
+    buildUnits: () => relationLensUnits(['coreference_of'], v.offset),
+    profileOverrides: { policyRelationTypedAdmission: true, policyQueryConditionedAdmission: true },
+    expectedRendererEffect: 'canonical alias rendered when query uses non-canonical name',
+    expectedRerankerEffect: '+ on coreference_resolution queries',
+  }));
 }
 
-// ─── aspect_constraint grammar (aspect intent + per-aspect boost) ────────────
-// aspect_constraint is currently scorer-OFF; we test whether its grammar can be admitted
-// with policyAspectIntentAdmission=true + enableAspectConstraintAtoms=true. The scorer
-// expects a parseQueryAspectIntent hit (e.g. "what is the X detail?").
-
 function aspectCandidates() {
-  const out = [];
-  // We do not have a dedicated aspect atom region documented; aspect uses the evidence
-  // PolicyAtom region with aspect scope per the canonical scaffold. We emit one candidate
-  // mirroring the scaffold so we can MEASURE rather than guess.
-  out.push({
+  return [{
     id: 'aspect_intent_admission_scaffold',
-    surface: 'aspect_constraint',
-    params: { offsetEvidence: 0 },
-    memoryOperationSignature: 'when a query asks for ONE facet of a multi-aspect memory (e.g. "what is the runtime detail?"), surface the per-facet memory',
+    surface: 'aspect_constraint', mode: 'miner-public', params: { scaffold: true },
+    memoryOperationSignature: 'when a query asks "what is the X detail?", surface the per-facet memory',
     publicSignals: ['parseQueryAspectIntent', 'public aspect tags'],
-    minerDegreesOfFreedom: ['atom slot', 'budget', 'scope'],
-    nonIndexerRationale: 'aspect tags are public corpus metadata; selector is the parsed query phrase, not a doc-id',
-    buildUnits: ({ pack, logicalQById, eventByDocId, slotCursor }) => {
+    minerDegreesOfFreedom: ['atom slot', 'budget'],
+    nonIndexerRationale: 'aspect tags are public corpus metadata; selector is the parsed query phrase',
+    leakageRisks: ['scaffold encoding uses evidence region pending dedicated aspect atom region'],
+    buildUnits: (ctx) => {
+      const { pack, logicalQById, eventByDocId, slotCursor } = ctx;
       const lq = pickFirstPackQuery(pack, logicalQById, (q) => q.family === 'aspect_constraint');
       if (!lq) return { indices: [], newWords: [], reason: 'no_aspect_pack_query' };
-      const direct = lq.qrels?.find((r) => r.role === 'direct');
-      if (!direct) return { indices: [], newWords: [], reason: 'no_direct_qrel' };
-      const evId = `mem_${direct.docId}`;
-      if (eventByDocId && !eventByDocId.has(evId)) return { indices: [], newWords: [], reason: 'event_not_in_corpus' };
-      // Aspect atoms live in the evidence region per the r5 scaffold; gated by
-      // enableAspectConstraintAtoms + policyAspectIntentAdmission profile flags.
+      // miner-public anchor: top in-supports doc for the subject (no qrel access)
+      const subj = lq.subjectEntityId;
+      if (!subj) return { indices: [], newWords: [], reason: 'no_subject' };
+      const pi = ensurePublicIndex(ctx);
+      const docId = publicTopSupportAnchor(subj, pi.docsByEntity, pi.supportInDegree);
+      if (!docId) return { indices: [], newWords: [], reason: 'no_public_anchor' };
+      const evId = `mem_${docId}`;
+      if (!eventByDocId.has(evId)) return { indices: [], newWords: [], reason: 'event_not_in_corpus' };
       const slot = slotCursor?.aspectSlot ?? 0;
       if (slot >= 128) return { indices: [], newWords: [], reason: 'aspect_slot_exhausted' };
       const memWord = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(evId), family: 'near_collision', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n })[0];
-      // Use evidence_bundle region; selector ANSWER_DENSITY + action 'boost'.
-      // The aspect-specific encoding is not stabilized yet; this is the scaffold the
-      // probe-policyatom-separability and probe-admission-headroom scripts use.
       const atomWord = encodePolicyAtom({ atomIndex: slot, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY, evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'boost', scope: 'aspect', targetSlot: slot, budget: 200, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
-      return { indices: [RANGES.MEMORY_INDEX_START + slot, RANGES.POLICY_EVIDENCE_START + slot], newWords: [memWord, atomWord], anchored: direct.docId };
+      return { indices: [RANGES.MEMORY_INDEX_START + slot, RANGES.POLICY_EVIDENCE_START + slot], newWords: [memWord, atomWord], anchored: docId, anchorMode: 'miner-public' };
     },
     profileOverrides: { enableAspectConstraintAtoms: true, policyAspectIntentAdmission: true },
     expectedRendererEffect: 'aspect-tagged subset surfaced',
-    expectedRerankerEffect: '+ on aspect_constraint queries with parsed aspect phrase; potentially 0 elsewhere',
-  });
-  return out;
+    expectedRerankerEffect: '+ on aspect queries with parsed aspect phrase',
+  }];
 }
 
-// ─── evidence_bundle grammar (action × feature × scope) ──────────────────────
+// ─── Evidence (oracle + miner-public) ───────────────────────────────────────
 
 function evidenceCandidates() {
   const out = [];
   const variants = [
-    { action: 'bundle', feature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, scope: 'relation_path', budget: 250 },
-    { action: 'include', feature: POLICY_EVIDENCE_FEATURE.BRIDGE_HOP, scope: 'relation_path', budget: 250 },
-    { action: 'boost', feature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, scope: 'entity', budget: 250 },
+    { action: 'bundle',  feature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, scope: 'relation_path', budget: 250 },
+    { action: 'include', feature: POLICY_EVIDENCE_FEATURE.BRIDGE_HOP,        scope: 'relation_path', budget: 250 },
+    { action: 'boost',   feature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, scope: 'entity',         budget: 250 },
   ];
-  for (const v of variants) {
-    const tag = `${v.action}_${v.feature}_${v.scope}_b${v.budget}`;
-    out.push({
-      id: `evidence_${tag}`,
-      surface: 'evidence_bundle',
-      params: v,
-      memoryOperationSignature: 'when a query has a support/bridge path, admit the evidence chain so the user sees WHY a memory matters',
-      publicSignals: ['public supports/causes edges', 'in-degree counts', 'edge-typed reach'],
-      minerDegreesOfFreedom: ['action (bundle/include/boost)', 'evidence feature', 'scope', 'budget'],
-      nonIndexerRationale: 'support density is a public structural measurement; not a doc-id pointer',
-      buildUnits: ({ pack, logicalQById, eventByDocId, slotCursor }) => {
-        const lq = pickFirstPackQuery(pack, logicalQById, (q) => q.family === 'multi_session_bridge' || q.family === 'causal_memory_chain' || q.family === 'decision_provenance' || q.family === 'multi_hop_relation');
-        if (!lq) return { indices: [], newWords: [], reason: 'no_relation_query' };
-        const direct = lq.qrels?.find((r) => r.role === 'direct');
-        if (!direct) return { indices: [], newWords: [], reason: 'no_direct_qrel' };
-        const evId = `mem_${direct.docId}`;
-        if (eventByDocId && !eventByDocId.has(evId)) return { indices: [], newWords: [], reason: 'event_not_in_corpus' };
-        const slot = slotCursor?.evidenceSlot ?? 0;
-        if (slot >= 128) return { indices: [], newWords: [], reason: 'evidence_slot_exhausted' };
-        const memWord = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(evId), family: 'multi_hop_relation', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n })[0];
-        const atomWord = encodePolicyAtom({ atomIndex: slot, family: 'evidence_bundle', selector: POLICY_SELECTOR.RELATION_PATH_PRESENT, evidenceFeature: v.feature, action: v.action, scope: v.scope, targetSlot: slot, budget: v.budget, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
-        return { indices: [RANGES.MEMORY_INDEX_START + slot, RANGES.POLICY_EVIDENCE_START + slot], newWords: [memWord, atomWord], anchored: direct.docId };
-      },
-      profileOverrides: { enableEvidenceBundleAtoms: true, policyEvidenceAllowedActions: [v.action], policyRelationTypedAdmission: true, policyQueryConditionedAdmission: true, policyMaxBudgetEvidence: 500 },
-      expectedRendererEffect: 'evidence bridge text appended to Memory-IR',
-      expectedRerankerEffect: '+ on relation queries; potential off-family flood if scope too broad',
-    });
+  for (const mode of ['oracle-qrel', 'miner-public']) {
+    for (const v of variants) {
+      const tag = `${v.action}_${v.feature}_${v.scope}_b${v.budget}`;
+      out.push({
+        id: `evidence_${mode}_${tag}`,
+        surface: 'evidence_bundle', mode, params: v,
+        memoryOperationSignature: 'when a query subject has a supports/bridge path, admit the evidence chain so the answer cites WHY',
+        publicSignals: mode === 'miner-public'
+          ? ['parseQueryRelationIntent', 'public in-degree of supports/causes edges on candidates', 'public entity registry']
+          : ['qrels.direct (oracle)'],
+        minerDegreesOfFreedom: ['action', 'feature', 'scope', 'budget'],
+        nonIndexerRationale: 'support density is a public structural measurement; not a doc-id pointer',
+        leakageRisks: mode === 'miner-public' ? [] : ['anchor selection reads qrel role labels'],
+        buildUnits: (ctx) => {
+          const { pack, logicalQById, eventByDocId, slotCursor, entityRegistry, genericEntityIds } = ctx;
+          let anchorDocId = null, sourceQueryId = null;
+          if (mode === 'oracle-qrel') {
+            const a = pickAnchorOracle({ pack, logicalQById, family: 'multi_session_bridge' });
+            const a2 = a.lq ? a : pickAnchorOracle({ pack, logicalQById, family: 'causal_memory_chain' });
+            const a3 = a2.lq ? a2 : pickAnchorOracle({ pack, logicalQById, family: 'decision_provenance' });
+            const final = (a.lq && a) || (a2.lq && a2) || (a3.lq && a3);
+            if (!final || !final.lq) return { indices: [], newWords: [], reason: 'no_relation_query_oracle' };
+            anchorDocId = final.docId; sourceQueryId = final.lq.id;
+          } else {
+            const lq = pickFirstPackQuery(pack, logicalQById, (q) => q.family === 'multi_session_bridge' || q.family === 'causal_memory_chain' || q.family === 'decision_provenance' || q.family === 'multi_hop_relation');
+            if (!lq) return { indices: [], newWords: [], reason: 'no_relation_query_public' };
+            const subj = lq.subjectEntityId ?? publicResolveSubject(lq.queryText, entityRegistry, genericEntityIds);
+            if (!subj) return { indices: [], newWords: [], reason: 'parse_failed' };
+            const pi = ensurePublicIndex(ctx);
+            anchorDocId = publicTopSupportAnchor(subj, pi.docsByEntity, pi.supportInDegree);
+            sourceQueryId = lq.id;
+            if (!anchorDocId) return { indices: [], newWords: [], reason: 'no_public_evidence_anchor' };
+          }
+          const evId = `mem_${anchorDocId}`;
+          if (!eventByDocId.has(evId)) return { indices: [], newWords: [], reason: 'event_not_in_corpus' };
+          const slot = slotCursor?.evidenceSlot ?? 0;
+          if (slot >= 128) return { indices: [], newWords: [], reason: 'evidence_slot_exhausted' };
+          const memWord = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(evId), family: 'multi_hop_relation', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n })[0];
+          const atomWord = encodePolicyAtom({ atomIndex: slot, family: 'evidence_bundle', selector: POLICY_SELECTOR.RELATION_PATH_PRESENT, evidenceFeature: v.feature, action: v.action, scope: v.scope, targetSlot: slot, budget: v.budget, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
+          return { indices: [RANGES.MEMORY_INDEX_START + slot, RANGES.POLICY_EVIDENCE_START + slot], newWords: [memWord, atomWord], anchored: anchorDocId, anchorMode: mode, sourceQueryId };
+        },
+        profileOverrides: { enableEvidenceBundleAtoms: true, policyEvidenceAllowedActions: [v.action], policyRelationTypedAdmission: true, policyQueryConditionedAdmission: true, policyMaxBudgetEvidence: 500 },
+        expectedRendererEffect: 'evidence bridge text appended to Memory-IR',
+        expectedRerankerEffect: '+ on relation queries; off-family flood risk if scope is too broad',
+      });
+    }
   }
   return out;
 }
 
-// ─── abstention guardrail grammar ────────────────────────────────────────────
-// Always classified as guardrail; no mining lift expected. Included so the harness
-// records its measurement footprint and confirms it remains inert / safe.
+// ─── Abstention guardrail (no qrels) ─────────────────────────────────────────
 
 function abstentionCandidates() {
   const variants = [
@@ -333,17 +482,17 @@ function abstentionCandidates() {
   ];
   return variants.map((v, i) => ({
     id: `abstention_${v.feature}_f${v.flags}`,
-    surface: 'abstention_top1',
-    params: v,
-    memoryOperationSignature: 'refuse to answer when there is no public evidence path AND the top1 confidence is low',
-    publicSignals: ['absence of supports/causes path', 'reranker top1 score below profile threshold'],
+    surface: 'abstention_top1', mode: 'miner-public', params: v,
+    memoryOperationSignature: 'refuse to answer when there is no public evidence path AND top1 confidence is low',
+    publicSignals: ['absence of supports/causes path', 'reranker top1 score below threshold'],
     minerDegreesOfFreedom: ['evidence feature', 'flag bits', 'top1 threshold (operator)'],
-    nonIndexerRationale: 'guardrail: triggers only when public structure says no answer exists; not a routing surface',
+    nonIndexerRationale: 'guardrail: triggers on structural absence of evidence; not a routing surface',
+    leakageRisks: [],
     buildUnits: ({ slotCursor }) => {
       const slot = (slotCursor?.abstentionSlot ?? 0) + i;
       if (slot >= 32) return { indices: [], newWords: [], reason: 'abstention_slot_exhausted' };
       const atomWord = encodePolicyAtom({ atomIndex: slot, family: 'abstention', selector: POLICY_SELECTOR.MISSING_EVIDENCE, evidenceFeature: v.feature, action: 'abstain', scope: 'entity', targetSlot: POLICY_TARGET_NONE, budget: 0, flags: v.flags, validFromEpoch: 0n, expiryEpoch: 0n });
-      return { indices: [RANGES.POLICY_ABSTENTION_START + slot], newWords: [atomWord], anchored: null };
+      return { indices: [RANGES.POLICY_ABSTENTION_START + slot], newWords: [atomWord], anchored: null, anchorMode: 'miner-public' };
     },
     profileOverrides: { enableAbstentionAtoms: true },
     expectedRendererEffect: 'no doc surfaced when guardrail fires',
@@ -351,43 +500,43 @@ function abstentionCandidates() {
   }));
 }
 
-// ─── noise suppression grammar (renderer/reranker hint) ──────────────────────
-// Per the handoff and auditor note, noise suppression is renderer-side first. We
-// model two structural candidates that demote zero-relevance candidates via
-// `policyEvidenceAllowedActions` 'suppress' on weak anchors. The candidate is
-// MARKED renderer-only (no rewardability claim) so it can co-occur with other
-// surfaces in compensated-positive combinations without itself being promoted.
+// ─── Noise suppression (no qrels) ────────────────────────────────────────────
 
 function noiseCandidates() {
-  return [
-    {
-      id: 'noise_suppress_low_support_anchor',
-      surface: 'noise_suppression',
-      params: { mode: 'suppress_low_support' },
-      memoryOperationSignature: 'demote candidates whose public support in-degree is below a threshold; reduces junk without touching gold',
-      publicSignals: ['public in-degree counts', 'no qrel/header dependence'],
-      minerDegreesOfFreedom: ['threshold', 'scope (entity/owner)'],
-      nonIndexerRationale: 'threshold is on public structural count; demoted docs have measurable low support degree',
-      buildUnits: ({ pack, logicalQById, eventByDocId, slotCursor }) => {
-        const lq = pickFirstPackQuery(pack, logicalQById, (q) => Array.isArray(q.qrels) && q.qrels.length > 0);
-        if (!lq) return { indices: [], newWords: [], reason: 'no_pack_query' };
-        const direct = lq.qrels.find((r) => r.role === 'direct');
-        if (!direct) return { indices: [], newWords: [], reason: 'no_direct_qrel' };
-        const evId = `mem_${direct.docId}`;
-        if (eventByDocId && !eventByDocId.has(evId)) return { indices: [], newWords: [], reason: 'event_not_in_corpus' };
-        const slot = slotCursor?.noiseSlot ?? 0;
-        if (slot >= 128) return { indices: [], newWords: [], reason: 'noise_slot_exhausted' };
-        const memWord = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(evId), family: 'multi_hop_relation', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n })[0];
-        // Suppress action on a low-density evidence selector — demotes the bridge if support is weak.
-        const atomWord = encodePolicyAtom({ atomIndex: slot, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY, evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'suppress', scope: 'entity', targetSlot: slot, budget: 200, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
-        return { indices: [RANGES.MEMORY_INDEX_START + slot, RANGES.POLICY_EVIDENCE_START + slot], newWords: [memWord, atomWord], anchored: direct.docId };
-      },
-      profileOverrides: { enableEvidenceBundleAtoms: true, policyEvidenceAllowedActions: ['suppress'] },
-      expectedRendererEffect: 'low-support candidates dropped from rendered shortlist',
-      expectedRerankerEffect: 'reduced junk in top-K; potential temporal recall hit if combined with temporal patch is needed',
-      rewardable: false, // renderer-side only by default
+  return [{
+    id: 'noise_suppress_low_support_anchor',
+    surface: 'noise_suppression', mode: 'miner-public', params: { mode: 'suppress_low_support' },
+    memoryOperationSignature: 'demote candidates whose public support in-degree is below threshold',
+    publicSignals: ['public in-degree counts'],
+    minerDegreesOfFreedom: ['threshold', 'scope'],
+    nonIndexerRationale: 'threshold operates on a public structural count',
+    leakageRisks: [],
+    buildUnits: (ctx) => {
+      const { pack, logicalQById, eventByDocId, slotCursor, entityRegistry, genericEntityIds } = ctx;
+      const lq = pickFirstPackQuery(pack, logicalQById, (q) => Array.isArray(q.qrels) && q.qrels.length > 0);
+      if (!lq) return { indices: [], newWords: [], reason: 'no_pack_query' };
+      // miner-public anchor: pick the lowest-support doc about the subject (the candidate we wish to demote)
+      const subj = lq.subjectEntityId ?? publicResolveSubject(lq.queryText, entityRegistry, genericEntityIds);
+      if (!subj) return { indices: [], newWords: [], reason: 'no_subject' };
+      const pi = ensurePublicIndex(ctx);
+      const docs = pi.docsByEntity.get(subj) ?? [];
+      if (docs.length === 0) return { indices: [], newWords: [], reason: 'no_subject_docs' };
+      docs.sort((a, b) => (pi.supportInDegree.get(a.id) ?? 0) - (pi.supportInDegree.get(b.id) ?? 0));
+      const docId = docs[0]?.id;
+      if (!docId) return { indices: [], newWords: [], reason: 'no_low_support_anchor' };
+      const evId = `mem_${docId}`;
+      if (!eventByDocId.has(evId)) return { indices: [], newWords: [], reason: 'event_not_in_corpus' };
+      const slot = slotCursor?.noiseSlot ?? 0;
+      if (slot >= 128) return { indices: [], newWords: [], reason: 'noise_slot_exhausted' };
+      const memWord = encodeMemoryIndexSlot({ slotIndex: slot, recordId: stableRecordIdFor(evId), family: 'multi_hop_relation', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n })[0];
+      const atomWord = encodePolicyAtom({ atomIndex: slot, family: 'evidence_bundle', selector: POLICY_SELECTOR.ANSWER_DENSITY, evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE, action: 'suppress', scope: 'entity', targetSlot: slot, budget: 200, flags: 0, validFromEpoch: 0n, expiryEpoch: 0n });
+      return { indices: [RANGES.MEMORY_INDEX_START + slot, RANGES.POLICY_EVIDENCE_START + slot], newWords: [memWord, atomWord], anchored: docId, anchorMode: 'miner-public' };
     },
-  ];
+    profileOverrides: { enableEvidenceBundleAtoms: true, policyEvidenceAllowedActions: ['suppress'] },
+    expectedRendererEffect: 'low-support candidates dropped from rendered shortlist',
+    expectedRerankerEffect: 'reduced junk; possible temporal recall hit if uncompensated',
+    rewardable: false,
+  }];
 }
 
 // ─── exports ──────────────────────────────────────────────────────────────────
@@ -412,19 +561,34 @@ export function listAllCandidates() {
   return out;
 }
 
-// ─── Auditor-listed semantic combinations ────────────────────────────────────
+// ─── Dense-pack profiles per surface ─────────────────────────────────────────
 //
-// Each entry is a pair (a, b) of surface keys; the harness runs the union of
-// each pair's first candidate to test whether a tradeoff_positive or
-// compensated_positive emerges. Pairs are intentionally bounded.
+// hiddenPack quota overrides that bias toward the rare families. Use with the
+// existing corpus via deriveQueryPack — no corpus regen required.
+
+export const DENSE_PACKS = {
+  balanced:    { packSize: 64, quotas: undefined }, // sentinel: use profile.hiddenPack
+  'temporal-dense':    { packSize: 64, quotas: [{ stratum: 'family=temporal_update', minCount: 30 }] },
+  'conflict-dense':    { packSize: 64, quotas: [{ stratum: 'family=conflict_lifecycle', minCount: 30 }] },
+  'lifecycle-dense':   { packSize: 64, quotas: [{ stratum: 'family=conflict_lifecycle', minCount: 18 }, { stratum: 'family=multi_session_bridge', minCount: 18 }] },
+  'coref-dense':       { packSize: 64, quotas: [{ stratum: 'family=coreference_resolution', minCount: 24 }] },
+  'aspect-dense':      { packSize: 64, quotas: [{ stratum: 'family=aspect_constraint', minCount: 24 }] },
+  'abstention-dense':  { packSize: 64, quotas: [{ stratum: 'family=abstention_missing', minCount: 30 }] },
+  'relation-dense':    { packSize: 64, quotas: [{ stratum: 'family=multi_session_bridge', minCount: 12 }, { stratum: 'family=causal_memory_chain', minCount: 12 }, { stratum: 'family=decision_provenance', minCount: 12 }] },
+};
+
+// ─── Auditor's 11 semantic combinations ──────────────────────────────────────
+
 export const SEMANTIC_COMBINATIONS = [
-  ['noise_suppression', 'temporal_update'],
-  ['aspect_constraint', 'relation_causal'],
-  ['evidence_bundle',   'relation_causal'],
-  ['relation_lifecycle','conflict_lifecycle'],
-  ['temporal_update',   'conflict_lifecycle'],
-  ['coreference',       'relation_causal'],
-  ['abstention_top1',   'evidence_bundle'],
-  ['temporal_update',   'relation_lifecycle'],
-  ['relation_causal',   'evidence_bundle'],
+  ['temporal_update',    'conflict_lifecycle'],
+  ['temporal_update',    'relation_causal'],
+  ['temporal_update',    'relation_lifecycle'],
+  ['temporal_update',    'noise_suppression'],
+  ['conflict_lifecycle', 'relation_lifecycle'],
+  ['relation_causal',    'evidence_bundle'],
+  ['relation_causal',    'coreference'],
+  ['relation_causal',    'aspect_constraint'],
+  ['evidence_bundle',    'abstention_top1'],
+  ['evidence_bundle',    'noise_suppression'],
+  ['coreference',        'aspect_constraint'],
 ];
