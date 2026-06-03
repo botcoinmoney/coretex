@@ -566,15 +566,30 @@ export function listAllCandidates() {
 // hiddenPack quota overrides that bias toward the rare families. Use with the
 // existing corpus via deriveQueryPack — no corpus regen required.
 
+//
+// Production-event families are BUCKETED (scripts/lib/build-v2-production-corpus.mjs:25):
+//   temporal_update          → temporal
+//   multi_session_bridge     → multi_hop_relation
+//   causal_memory_chain      → multi_hop_relation
+//   decision_provenance      → multi_hop_relation
+//   conflict_lifecycle       → conflict_lifecycle
+//   aspect_constraint        → aspect_constraint
+//   coreference_resolution   → coreference
+//   abstention_missing       → near_collision  (no first-class bucket)
+//
+// Dense-pack quotas MUST use the bucketed names. The reduced launch profile's
+// balanced pack uses {near_collision: 12, temporal: 14, multi_hop_relation: 16,
+// conflict_lifecycle: 10}. We size each dense pack against the bucketed
+// eval_hidden inventory while keeping packSize 64.
 export const DENSE_PACKS = {
-  balanced:    { packSize: 64, quotas: undefined }, // sentinel: use profile.hiddenPack
-  'temporal-dense':    { packSize: 64, quotas: [{ stratum: 'family=temporal_update', minCount: 30 }] },
-  'conflict-dense':    { packSize: 64, quotas: [{ stratum: 'family=conflict_lifecycle', minCount: 30 }] },
-  'lifecycle-dense':   { packSize: 64, quotas: [{ stratum: 'family=conflict_lifecycle', minCount: 18 }, { stratum: 'family=multi_session_bridge', minCount: 18 }] },
-  'coref-dense':       { packSize: 64, quotas: [{ stratum: 'family=coreference_resolution', minCount: 24 }] },
-  'aspect-dense':      { packSize: 64, quotas: [{ stratum: 'family=aspect_constraint', minCount: 24 }] },
-  'abstention-dense':  { packSize: 64, quotas: [{ stratum: 'family=abstention_missing', minCount: 30 }] },
-  'relation-dense':    { packSize: 64, quotas: [{ stratum: 'family=multi_session_bridge', minCount: 12 }, { stratum: 'family=causal_memory_chain', minCount: 12 }, { stratum: 'family=decision_provenance', minCount: 12 }] },
+  balanced:           { packSize: 64, quotas: undefined }, // sentinel: use profile.hiddenPack
+  'temporal-dense':   { packSize: 64, quotas: [{ stratum: 'family=temporal',           minCount: 30 }] },
+  'conflict-dense':   { packSize: 64, quotas: [{ stratum: 'family=conflict_lifecycle', minCount: 30 }] },
+  'lifecycle-dense':  { packSize: 64, quotas: [{ stratum: 'family=conflict_lifecycle', minCount: 16 }, { stratum: 'family=multi_hop_relation', minCount: 16 }] },
+  'coref-dense':      { packSize: 64, quotas: [{ stratum: 'family=coreference',        minCount: 16 }] },
+  'aspect-dense':     { packSize: 64, quotas: [{ stratum: 'family=aspect_constraint',  minCount: 16 }] },
+  'abstention-dense': { packSize: 64, quotas: [{ stratum: 'family=near_collision',     minCount: 24 }] },
+  'relation-dense':   { packSize: 64, quotas: [{ stratum: 'family=multi_hop_relation', minCount: 30 }] },
 };
 
 // ─── Auditor's 11 semantic combinations ──────────────────────────────────────
