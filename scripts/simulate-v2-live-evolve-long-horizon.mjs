@@ -43,7 +43,7 @@ import { evolveCorpusDelta } from './lib/evolve-corpus.mjs';
 import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadMaterializedCorpus } from './lib/load-materialized-corpus.mjs';
 import { embedTexts } from './_embed-v2.mjs';
-import { hseed, mulberry32, randomPatch, relationUnits } from './lib/v2-patch-families.mjs';
+import { hseed, mulberry32, randomPatch, relationUnits, relationUnitsForEdges, temporalUnits, conflictUnits, abstentionUnits } from './lib/v2-patch-families.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
 import { makeInstrumentedReranker } from './lib/instrumented-reranker.mjs';
 import { calibrationProvenance } from './lib/calibration-provenance.mjs';
@@ -408,19 +408,90 @@ function buildIdShuffledPack(pack) {
 // Pack-derived target docId is recorded for provenance only. The patch body itself is
 // anchor-free and doc-id-free: it encodes a reusable public relation category lens.
 const GENESIS_PARENT_ROOT = merkleizeState({ words: new Array(1024).fill(0n) });
-function honestPatchForEpoch(epoch, honestIdx, addedDocs) {
-  const target = addedDocs[honestIdx % Math.max(1, addedDocs.length)];
-  if (!target) return null;
-  const rel = relationUnits(2);
-  const operationFingerprint = 'honest:relation(2):categoryLens:supports,causes';
-  const selectorFingerprint = 'public-edge-category-lens:supports,causes';
-  const fingerprint = `${operationFingerprint}:e${epoch}:h${honestIdx}`;
-  return { patch: {
-    patchType: PATCH_TYPE.MIXED, wordCount: rel.indices.length, scoreDelta: 0,
-    parentStateRoot: GENESIS_PARENT_ROOT,
-    indices: rel.indices,
-    newWords: rel.newWords,
-  }, fingerprint, operationFingerprint, selectorFingerprint, targetDocId: target.id };
+
+// ─── Honest mining: per-epoch patch generator across canonical promoted surfaces ───
+// HONEST_FAMILIES is the cycle of operation fingerprints the endurance harness rotates
+// per epoch. Each slot rolls a deterministic per-family cursor (see honestSlotCursor) so
+// that successive patches occupy disjoint substrate slots and never collide. Surfaces:
+//   - 'relation_causal'       : category-lens(supports, causes) — the original endurance fp.
+//   - 'temporal'              : current/stale TemporalRecord + paired memory slots, mined from
+//                               the pack via temporalUnits(...) (3 words).
+//   - 'conflict'              : conflict_lifecycle PolicyAtom anchored at the resolved doc of
+//                               the next conflict-pack query (2 words).
+//   - 'relation_lifecycle'    : category-lens(supersedes, coreference_of) — disjoint from
+//                               the causal fp so they coexist as separate operations.
+//   - 'abstention'            : MISSING_EVIDENCE PolicyAtom (1 word; pack must contain at
+//                               least one abstention_missing query).
+//
+// Add fingerprints here by name; the loop below dispatches by switch. Each family records a
+// distinct operationFingerprint and selectorFingerprint so per-fp accept/reject is auditable.
+const HONEST_FAMILIES = (flag('honest-families', 'relation_causal,temporal,conflict,relation_lifecycle,abstention').split(',').map((s) => s.trim()).filter(Boolean));
+function makeHonestSlotCursor() {
+  return {
+    temporalRecord: 0,          // TemporalRecord slot index (cap 96)
+    temporalSkipDocs: new Set(), // mined temporal-current doc IDs
+    conflictSlot: 0,            // POLICY_CONFLICT atom slot index (cap 128)
+    conflictSkipDocs: new Set(), // anchored conflict doc IDs
+    abstentionSlot: 0,          // POLICY_ABSTENTION slot index (cap 32)
+    relationCausalEntries: 2,   // bottom 2 entries reserved for supports,causes (entryOffset 0..1)
+    relationLifecycleEntries: 2,// next 2 entries reserved for supersedes,coreference_of (entryOffset 2..3)
+  };
+}
+function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
+  const { pack, logicalQById, eventByDocId, addedDocs, slotCursor } = ctx;
+  const baseFingerprint = (op) => ({
+    operationFingerprint: op,
+    selectorFingerprint: ({
+      'honest:relation(2):causal:supports,causes':                'public-edge-category-lens:supports,causes',
+      'honest:relation(2):lifecycle:supersedes,coreference_of':   'public-edge-category-lens:supersedes,coreference_of',
+      'honest:temporal:current_stale':                            'public-temporal-currentStale-pack-mined',
+      'honest:conflict:CONFLICT_SET_MEMBER:boost':                'public-policy-CONFLICT_SET_MEMBER:CONTRADICTS_EDGE:boost',
+      'honest:abstention:MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH':'public-policy-MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH:abstain',
+    })[op] ?? op,
+  });
+  const target = addedDocs[honestIdx % Math.max(1, addedDocs.length)] ?? null;
+  const makePatchFrom = (units, op, targetDocId, extra) => ({
+    patch: { patchType: PATCH_TYPE.MIXED, wordCount: units.indices.length, scoreDelta: 0, parentStateRoot: GENESIS_PARENT_ROOT, indices: units.indices, newWords: units.newWords },
+    fingerprint: `${op}:e${epoch}:h${honestIdx}`,
+    ...baseFingerprint(op),
+    targetDocId, family,
+    ...(extra ?? {}),
+  });
+  if (family === 'relation_causal') {
+    const u = relationUnitsForEdges(['supports', 'causes'], 0);
+    return makePatchFrom(u, 'honest:relation(2):causal:supports,causes', target?.id ?? null);
+  }
+  if (family === 'relation_lifecycle') {
+    const u = relationUnitsForEdges(['supersedes', 'coreference_of'], 2);
+    return makePatchFrom(u, 'honest:relation(2):lifecycle:supersedes,coreference_of', target?.id ?? null);
+  }
+  if (family === 'temporal') {
+    const u = temporalUnits({ pack, logicalQById, recordSlot: slotCursor.temporalRecord, skipDocIds: slotCursor.temporalSkipDocs });
+    if (!u.indices.length || u.recordsCompiled === 0) {
+      return { skipped: true, family, reason: u.reason ?? 'no_temporal_pack_query_available', fingerprint: `honest:temporal:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:temporal:current_stale', selectorFingerprint: 'public-temporal-currentStale-pack-mined' };
+    }
+    slotCursor.temporalRecord += 1;
+    slotCursor.temporalSkipDocs.add(u.minedDocId);
+    return makePatchFrom(u, 'honest:temporal:current_stale', u.minedDocId, { temporalRecordSlot: slotCursor.temporalRecord - 1 });
+  }
+  if (family === 'conflict') {
+    const u = conflictUnits({ pack, logicalQById, eventByDocId, conflictSlot: slotCursor.conflictSlot, action: 'boost', skipDocIds: slotCursor.conflictSkipDocs });
+    if (!u.indices.length) {
+      return { skipped: true, family, reason: u.reason ?? 'no_conflict_pack_query_available', fingerprint: `honest:conflict:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:conflict:CONFLICT_SET_MEMBER:boost', selectorFingerprint: 'public-policy-CONFLICT_SET_MEMBER:CONTRADICTS_EDGE:boost' };
+    }
+    slotCursor.conflictSlot += 1;
+    slotCursor.conflictSkipDocs.add(u.minedDocId);
+    return makePatchFrom(u, 'honest:conflict:CONFLICT_SET_MEMBER:boost', u.minedDocId, { conflictAtomSlot: u.slot });
+  }
+  if (family === 'abstention') {
+    const u = abstentionUnits({ pack, logicalQById, abstentionSlot: slotCursor.abstentionSlot });
+    if (!u.indices.length) {
+      return { skipped: true, family, reason: u.reason ?? 'no_abstention_pack_query_available', fingerprint: `honest:abstention:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:abstention:MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH', selectorFingerprint: 'public-policy-MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH:abstain' };
+    }
+    slotCursor.abstentionSlot += 1;
+    return makePatchFrom(u, 'honest:abstention:MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH', null, { abstentionAtomSlot: u.slot });
+  }
+  return { skipped: true, family, reason: `unknown_family:${family}`, fingerprint: `honest:unknown:${family}:e${epoch}:h${honestIdx}`, operationFingerprint: `honest:unknown:${family}`, selectorFingerprint: 'unknown' };
 }
 
 // ─── Genesis frontier (BUILD ONCE, step every epoch on the SAME instance) ───
@@ -467,6 +538,15 @@ let acceptedOperationReuseCount = 0;
 let bestState = makeGenesisState();
 const perEpoch = [];
 const baselineFloors = { ...profile.patchAcceptanceFloors, acceptanceThresholdPpm: profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500 };
+// Persistent slot cursor for mixed-fingerprint mining — keeps temporal/conflict/abstention
+// slot indices monotonically advancing across epochs so successive patches occupy disjoint
+// substrate regions and never collide. relation entries are placed at fixed offsets per
+// fingerprint (relation_causal=0..1, relation_lifecycle=2..3).
+const honestSlotCursor = makeHonestSlotCursor();
+// Per-epoch logical query/event-id maps refreshed after evolveCorpusDelta extends currentLogical.
+let logicalQById = new Map(currentLogical.queries.map((q) => [q.id, q]));
+let eventByDocId = new Map();
+for (const ev of currentProd.events) eventByDocId.set(ev.id, ev);
 
 for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   const epochStartMs = Date.now();
@@ -567,12 +647,26 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     ? (activeScorePpm - idShuffledScorePpm) / Math.max(1, activeScorePpm) : null;
   const docIdDependence = qrelShuffleCollapseRatio; // DEPRECATED alias; remove after readers migrate.
 
-  // Honest mining: K patches per epoch, score via canonical evaluateRetrievalBenchmarkPatch.
+  // Honest mining: K patches per epoch across mixed canonical fingerprints. Cycle rotates
+  // through HONEST_FAMILIES so each epoch attempts one patch per promoted surface (plus
+  // wrap-around if HONEST_PER_EPOCH > HONEST_FAMILIES.length).
   let honestAcceptsThisEpoch = 0, qualityAttemptsThisEpoch = 0, honestReuseThisEpoch = 0;
   const honestPerPatch = [];
+  const acceptsByFingerprint = {};
+  const attemptsByFingerprint = {};
+  // Refresh logical-query and event-by-doc maps post-evolve so this epoch's pack-mined patches
+  // can resolve newly-added queries and event ids.
+  logicalQById = new Map(currentLogical.queries.map((q) => [q.id, q]));
+  eventByDocId = new Map(); for (const ev of newProd.events) eventByDocId.set(ev.id, ev);
   for (let h = 0; h < HONEST_PER_EPOCH; h++) {
-    const hp = honestPatchForEpoch(epoch, h, ld.addedDocs);
+    const family = HONEST_FAMILIES[h % HONEST_FAMILIES.length];
+    const hp = honestPatchForEpoch(epoch, h, family, { pack: activePack, logicalQById, eventByDocId, addedDocs: ld.addedDocs, slotCursor: honestSlotCursor });
     if (!hp) break;
+    attemptsByFingerprint[hp.operationFingerprint] = (attemptsByFingerprint[hp.operationFingerprint] ?? 0) + 1;
+    if (hp.skipped) {
+      honestPerPatch.push({ h, family, accepted: false, deltaPpm: 0, heldoutDeltaPpm: null, reason: `skipped:${hp.reason}`, fingerprint: hp.fingerprint, operationFingerprint: hp.operationFingerprint, selectorFingerprint: hp.selectorFingerprint, targetDocId: null, targetDocIdRecordedOnly: true });
+      continue;
+    }
     qualityAttemptsThisEpoch++;
     try {
       const tracePatch = TRACE_DIAGNOSTICS;
@@ -584,6 +678,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
       if (accepted) {
         honestAcceptsThisEpoch++;
         acceptedOperationCount++;
+        acceptsByFingerprint[hp.operationFingerprint] = (acceptsByFingerprint[hp.operationFingerprint] ?? 0) + 1;
         if (operationReuseSet.has(hp.operationFingerprint)) {
           honestReuseThisEpoch++;
           acceptedOperationReuseCount++;
@@ -618,7 +713,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
           .map((c) => buildTraceEntry({ epoch, h, patchProvenance: patchTraceProvenance(hp), comparison: c, query: activeById.get(c.recordId), corpus: newProd, activeImprovement: c, kind: 'active_improvement' })),
       } : undefined;
       honestPerPatch.push({
-        h,
+        h, family,
         accepted,
         deltaPpm: r.deltaPpm ?? 0,
         heldoutDeltaPpm: heldoutPatch ? (heldoutPatch.deltaPpm ?? 0) : null,
@@ -632,7 +727,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
       });
     } catch (e) {
       honestPerPatch.push({
-        h,
+        h, family,
         accepted: false,
         deltaPpm: 0,
         reason: `eval_error:${e.message?.slice(0, 80)}`,
@@ -729,6 +824,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     doc_id_dependence: docIdDependence, // DEPRECATED: alias of qrel_shuffle_collapse_ratio
     honestAttempted: qualityAttemptsThisEpoch, honestAccepted: honestAcceptsThisEpoch,
     operation_reuse_rate: operationReuseRate,
+    attemptsByFingerprint, acceptsByFingerprint,
     honestPerPatch,
     antiCheat: {
       randomProbes: RANDOM_PROBES,
@@ -746,6 +842,10 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   console.log(`[live-evolve] activeScore=${activeScorePpm}ppm heldoutScore=${heldoutScorePpm}ppm idShuffledScore=${idShuffledScorePpm}ppm`);
   console.log(`[live-evolve] cross_frontier_lift=${crossFrontierLift} heldout_frontier_lift=${heldoutFrontierLift} doc_id_dependence=${docIdDependence}`);
   console.log(`[live-evolve] honest: ${honestAcceptsThisEpoch}/${qualityAttemptsThisEpoch} accepted, operation_reuse_rate=${operationReuseRate.toFixed(3)}; antiCheat random=${randomAccepts}/${RANDOM_PROBES} hill=${hillclimbAccepts}/${HILLCLIMB_PROBES}`);
+  for (const fp of Object.keys(attemptsByFingerprint)) {
+    const att = attemptsByFingerprint[fp]; const acc = acceptsByFingerprint[fp] ?? 0;
+    console.log(`[live-evolve]   fp ${fp}: ${acc}/${att}`);
+  }
 
   currentLogical = { ...currentLogical, docs: [...currentLogical.docs, ...ld.addedDocs], relations: [...currentLogical.relations, ...ld.addedRelations], queries: [...currentLogical.queries, ...ld.addedQueries] };
   currentProd = newProd;
@@ -801,7 +901,18 @@ const report = {
     },
   },
   perEpoch,
+  honestFamiliesCycled: HONEST_FAMILIES,
   uniqueHonestOperations: operationReuseSet.size,
+  acceptsByFingerprintTotals: (() => {
+    const out = {};
+    for (const ep of perEpoch) for (const fp of Object.keys(ep.acceptsByFingerprint ?? {})) out[fp] = (out[fp] ?? 0) + ep.acceptsByFingerprint[fp];
+    return out;
+  })(),
+  attemptsByFingerprintTotals: (() => {
+    const out = {};
+    for (const ep of perEpoch) for (const fp of Object.keys(ep.attemptsByFingerprint ?? {})) out[fp] = (out[fp] ?? 0) + ep.attemptsByFingerprint[fp];
+    return out;
+  })(),
   summary: {
     honestAttempts: perEpoch.reduce((s, e) => s + e.honestAttempted, 0),
     honestAccepted: perEpoch.reduce((s, e) => s + e.honestAccepted, 0),

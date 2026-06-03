@@ -16,6 +16,7 @@ import { distIndex } from '../_repo-root.mjs';
 
 const {
   encodeRelationCategoryLens, encodeMemoryIndexSlot, encodeTemporalRecord, stableRecordIdFor,
+  encodePolicyAtom, POLICY_SELECTOR, POLICY_EVIDENCE_FEATURE, POLICY_FLAG, POLICY_TARGET_NONE,
   merkleizeState, PATCH_TYPE, RANGES, RESERVED_MASKS,
 } = await import(distIndex);
 
@@ -30,6 +31,116 @@ export function relationUnits(edgeCount = RELATION_EDGES.length) {
     newWords.push(encodeRelationCategoryLens({ entryIndex: 128 - 1 - i, edgeType: RELATION_EDGES[i], weight: 0x8000 }));
   }
   return { indices, newWords };
+}
+
+/**
+ * relation lever variant: category-lens entries for an explicit edge SUBSET, written into
+ * specific entry slots (starting at `entryOffset` counting down from the high end). Lets the
+ * long-horizon harness rotate distinct relation operation fingerprints over epochs without
+ * overlapping the same lens entries. Each entry is one word; total = `edges.length`.
+ */
+export function relationUnitsForEdges(edges, entryOffset = 0) {
+  const indices = [], newWords = [];
+  for (let i = 0; i < edges.length; i++) {
+    const entryIndex = 128 - 1 - (entryOffset + i);
+    if (entryIndex < 0) break;
+    indices.push(RANGES.RELATIONS_START + entryIndex);
+    newWords.push(encodeRelationCategoryLens({ entryIndex, edgeType: edges[i], weight: 0x8000 }));
+  }
+  return { indices, newWords };
+}
+
+/**
+ * conflict_lifecycle PolicyAtom lever: anchors a CONFLICT_SET_MEMBER atom on the resolved
+ * doc of the next available `conflict_lifecycle` pack query. Two words: one MemoryIndex
+ * slot (policyAnchor for the resolved doc) + one PolicyAtom in POLICY_CONFLICT region.
+ *
+ * `conflictSlot` is the per-epoch cursor — pass an integer that monotonically advances so
+ * successive conflict patches occupy disjoint slots (POLICY_CONFLICT has 128 atoms; the
+ * targetSlot must fit in POLICY_ANCHOR_SLOT_LIMIT = 256). `skipDocIds` keeps the harness
+ * from re-anchoring the same conflict doc across patches.
+ *
+ * Selector pin: CONFLICT_SET_MEMBER + CONTRADICTS_EDGE matches what the conflict-INTENT
+ * scorer admits (see policyConflictIntentAdmission in the reduced launch profile). The
+ * action defaults to 'boost' (favor the resolved doc); pass `action: 'suppress'` to demote
+ * the conflict-candidate instead — both are profile-allowed for the conflict region.
+ */
+export function conflictUnits({ pack, logicalQById, eventByDocId, conflictSlot = 0, action = 'boost', skipDocIds }) {
+  const skip = skipDocIds ?? new Set();
+  const tried = [];
+  for (const ev of pack.events) {
+    const lq = logicalQById.get(ev.id);
+    if (!lq) continue;
+    const fam = lq.family ?? lq.logicalFamily;
+    if (fam !== 'conflict_lifecycle') continue;
+    const resolved = (lq.qrels ?? []).find((r) => r.role === 'direct');
+    if (!resolved) continue;
+    const evId = `mem_${resolved.docId}`;
+    if (skip.has(resolved.docId)) { tried.push(resolved.docId); continue; }
+    if (eventByDocId && !eventByDocId.has(evId)) continue;
+    if (conflictSlot >= 128 || conflictSlot >= 256) {
+      return { indices: [], newWords: [], minedDocId: null, reason: 'conflict_slot_exhausted', conflictQueriesAvailable: tried.length };
+    }
+    const slot = conflictSlot;
+    // SubstrateFamily for MemoryIndex slots is the SCORER's anchor family enum
+    // (near_collision / temporal / long_horizon / multi_hop_relation), NOT the PolicyAtom
+    // family. The conflict_lifecycle PolicyAtom family lives in the conflict region; the
+    // anchor slot uses multi_hop_relation to match the canonical probe-conflict-state-malleability
+    // bucket — the conflict atom itself carries the family identity.
+    const memWord = encodeMemoryIndexSlot({
+      slotIndex: slot, recordId: stableRecordIdFor(evId),
+      family: 'multi_hop_relation', domainBits: 1n,
+      valid: true, revoked: false, protected: false, policyAnchor: true,
+      retrievalSlot: 0, expiryEpoch: 0n,
+    })[0];
+    const atomWord = encodePolicyAtom({
+      atomIndex: slot, family: 'conflict_lifecycle',
+      selector: POLICY_SELECTOR.CONFLICT_SET_MEMBER,
+      evidenceFeature: POLICY_EVIDENCE_FEATURE.CONTRADICTS_EDGE,
+      action, scope: 'conflict_set',
+      targetSlot: slot, budget: 300, flags: 0,
+      validFromEpoch: 0n, expiryEpoch: 0n,
+    });
+    return {
+      indices: [RANGES.MEMORY_INDEX_START + slot, RANGES.POLICY_CONFLICT_START + slot],
+      newWords: [memWord, atomWord],
+      minedDocId: resolved.docId, slot, action,
+    };
+  }
+  return { indices: [], newWords: [], minedDocId: null, reason: 'no_conflict_pack_query_available', conflictQueriesAvailable: tried.length };
+}
+
+/**
+ * abstention_missing PolicyAtom lever: emits a MISSING_EVIDENCE / NO_PUBLIC_EVIDENCE_PATH
+ * atom in POLICY_ABSTENTION region (32 atoms). Only fires if the pack contains at least
+ * one abstention_missing query; otherwise no-op.
+ *
+ * Single-word patch (action='abstain', targetSlot=POLICY_TARGET_NONE) with
+ * REQUIRE_NO_EVIDENCE_PATH flag — the canonical guardrail described in
+ * `_r5PolicyNote._candidateNote` of the reduced launch profile.
+ */
+export function abstentionUnits({ pack, logicalQById, abstentionSlot = 0 }) {
+  const hasAbst = pack.events.some((ev) => {
+    const lq = logicalQById.get(ev.id);
+    if (!lq) return false;
+    const fam = lq.family ?? lq.logicalFamily;
+    return fam === 'abstention_missing' || fam === 'abstention' || fam === 'unanswerable';
+  });
+  if (!hasAbst) return { indices: [], newWords: [], reason: 'no_abstention_pack_query_available' };
+  if (abstentionSlot >= 32) return { indices: [], newWords: [], reason: 'abstention_slot_exhausted' };
+  const atomWord = encodePolicyAtom({
+    atomIndex: abstentionSlot, family: 'abstention',
+    selector: POLICY_SELECTOR.MISSING_EVIDENCE,
+    evidenceFeature: POLICY_EVIDENCE_FEATURE.NO_PUBLIC_EVIDENCE_PATH,
+    action: 'abstain', scope: 'entity',
+    targetSlot: POLICY_TARGET_NONE, budget: 0, flags: POLICY_FLAG.REQUIRE_NO_EVIDENCE_PATH,
+    validFromEpoch: 0n, expiryEpoch: 0n,
+  });
+  return {
+    indices: [RANGES.POLICY_ABSTENTION_START + abstentionSlot],
+    newWords: [atomWord],
+    slot: abstentionSlot,
+  };
 }
 
 /**
