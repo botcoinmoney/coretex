@@ -238,10 +238,17 @@ function aggregateClassification(candidate, perPack) {
   const sumGold = perPack.reduce((s, p) => s + (p.goldDamage ?? 0), 0);
   const anyTrace = perPack.some((p) => p.policyTraceFired);
   // Classifier
+  //
+  // junkMoved alone is NOT unsafe — see SURFACE_SEARCH_HARNESS_REPORT_V2_CORRECTION.md
+  // §2 (relation_causal). The substrate is genuinely admitting plausible docs into
+  // top-K; if those don't displace gold and don't drag off-family worst, the composite
+  // lift is real and the patch is safe. Require junk-flood AND damage-evidence
+  // (goldDamage > 0 OR offFamilyWorst <= -0.05) to trigger UNSAFE on junk alone.
   let label = 'NO_MOVEMENT', reason = `composite ${meanComposite} within noise`;
-  if (meanOffFamWorst <= GATE.UNSAFE_OFF_FAMILY_FLOOR || sumGold > 0 || sumJunk > GATE.JUNK_MOVED_HARD_FLOOR) {
+  const junkFloodWithDamage = sumJunk > GATE.JUNK_MOVED_HARD_FLOOR && (sumGold > 0 || meanOffFamWorst <= -0.05);
+  if (meanOffFamWorst <= GATE.UNSAFE_OFF_FAMILY_FLOOR || sumGold > 0 || junkFloodWithDamage) {
     label = 'UNSAFE';
-    reason = `offFamWorst ${meanOffFamWorst} | goldDamage ${sumGold} | junkMoved ${sumJunk}`;
+    reason = `offFamWorst ${meanOffFamWorst} | goldDamage ${sumGold} | junkMoved ${sumJunk} | junkFloodWithDamage ${junkFloodWithDamage}`;
   } else if (meanComposite >= GATE.CLEAN_MIN_COMPOSITE_PPM && meanOffFamMean > -0.005) {
     label = (anyTrace || candidate.surface === 'noise_suppression' || candidate.surface === 'abstention_top1') ? 'CLEAN_POSITIVE' : 'UNEXPLAINED_POSITIVE';
     reason = `composite +${meanComposite} ppm, offFamilyMean ${meanOffFamMean}, trace=${anyTrace}`;
@@ -339,7 +346,8 @@ function classifyCombination(aSolo, bSolo, combined) {
   const cJunk = combined?.classification?.sumJunkMoved ?? 0;
   const bestSolo = Math.max(aPpm, bPpm);
   if (combined.skipped) return { label: 'NO_SIGNAL', reason: 'combined skipped' };
-  if (cWorst <= GATE.UNSAFE_OFF_FAMILY_FLOOR || cGold > 0 || cJunk > GATE.JUNK_MOVED_HARD_FLOOR) return { label: 'UNSAFE_COMBINATION', reason: `offFamW=${cWorst} gold=${cGold} junk=${cJunk}` };
+  const comboJunkFloodWithDamage = cJunk > GATE.JUNK_MOVED_HARD_FLOOR && (cGold > 0 || cWorst <= -0.05);
+  if (cWorst <= GATE.UNSAFE_OFF_FAMILY_FLOOR || cGold > 0 || comboJunkFloodWithDamage) return { label: 'UNSAFE_COMBINATION', reason: `offFamW=${cWorst} gold=${cGold} junk=${cJunk} junkFloodWithDamage=${comboJunkFloodWithDamage}` };
   if (cPpm < GATE.CLEAN_MIN_COMPOSITE_PPM && bestSolo < GATE.CLEAN_MIN_COMPOSITE_PPM) return { label: 'NO_SIGNAL', reason: `both arms below noise (composite ${cPpm})` };
   if (cPpm > bestSolo + GATE.COMPENSATED_BEATS_BEST_BY) {
     const aBad = aSolo?.classification?.label === 'UNSAFE' || aSolo?.classification?.label === 'TRADEOFF_POSITIVE';
