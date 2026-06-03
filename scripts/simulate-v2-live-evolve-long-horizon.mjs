@@ -450,13 +450,21 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     })[op] ?? op,
   });
   const target = addedDocs[honestIdx % Math.max(1, addedDocs.length)] ?? null;
-  const makePatchFrom = (units, op, targetDocId, extra) => ({
-    patch: { patchType: PATCH_TYPE.MIXED, wordCount: units.indices.length, scoreDelta: 0, parentStateRoot: GENESIS_PARENT_ROOT, indices: units.indices, newWords: units.newWords },
-    fingerprint: `${op}:e${epoch}:h${honestIdx}`,
-    ...baseFingerprint(op),
-    targetDocId, family,
-    ...(extra ?? {}),
-  });
+  const makePatchFrom = (units, op, targetDocId, extra) => {
+    // Pure PolicyAtom writes (abstention) MUST use POLICY_UPDATE per
+    // policyWriteIsCanonicalForState: MIXED requires a MemoryIndex/Relation/Temporal
+    // companion word, which a stand-alone abstention atom does not have.
+    const allPolicyAbstention = units.indices.length > 0
+      && units.indices.every((i) => i >= RANGES.POLICY_EVIDENCE_START && i <= RANGES.POLICY_ABSTENTION_END);
+    const patchType = allPolicyAbstention ? PATCH_TYPE.POLICY_UPDATE : PATCH_TYPE.MIXED;
+    return {
+      patch: { patchType, wordCount: units.indices.length, scoreDelta: 0, parentStateRoot: GENESIS_PARENT_ROOT, indices: units.indices, newWords: units.newWords },
+      fingerprint: `${op}:e${epoch}:h${honestIdx}`,
+      ...baseFingerprint(op),
+      targetDocId, family,
+      ...(extra ?? {}),
+    };
+  };
   if (family === 'relation_causal') {
     const u = relationUnitsForEdges(['supports', 'causes'], 0);
     return makePatchFrom(u, 'honest:relation(2):causal:supports,causes', target?.id ?? null);
