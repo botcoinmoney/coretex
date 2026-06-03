@@ -197,9 +197,25 @@ function summarizeScoringTelemetry(t) {
     queryTotalMs: t.queryTotalMs,
   };
 }
+// Build the policy entity registry from the logical corpus once; the launch profile
+// signs the substrate grammar but does NOT carry the runtime registry (canonical:
+// probe-conflict-state-malleability, probe-r5-relation-typed). Without this, the
+// query-conditioned admission block at retrieval-benchmark.ts:927 is skipped and
+// conflict / abstention PolicyAtoms only fire when their anchored doc happens to
+// already be in first-stage candidates (the eventsInStage1 fallback), which fails
+// reliably under mixed endurance — see CONFLICT_MIXED_ROOT_CAUSE.md.
+function buildPolicyEntityRegistry(logical) {
+  return (logical.entities ?? []).map((e) => ({
+    id: e.id,
+    names: [e.canonicalName, ...(e.aliases ?? [])].filter(Boolean).map((n) => String(n).toLowerCase()),
+  }));
+}
+let policyEntityRegistryCached = buildPolicyEntityRegistry(currentLogical);
 function optsForProd(telemetry = null, trace = false) {
   return {
     ...scoringOptionsFromProfile(profile, rt()),
+    policyEntityRegistry: policyEntityRegistryCached,
+    policyGenericEntityIds: ['e_universe'],
     ...(trace ? { exposeFullRanking: true, policyEmitTraces: true, exposeRenderedCandidates: true } : {}),
     ...(telemetry ? { scoringTelemetry: (e) => recordScoringTelemetry(telemetry, e) } : {}),
   };
@@ -856,6 +872,9 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   }
 
   currentLogical = { ...currentLogical, docs: [...currentLogical.docs, ...ld.addedDocs], relations: [...currentLogical.relations, ...ld.addedRelations], queries: [...currentLogical.queries, ...ld.addedQueries] };
+  // evolveCorpusDelta does not currently emit new entities, but refresh the registry
+  // anyway so any future extension that does is picked up by next-epoch scoring.
+  policyEntityRegistryCached = buildPolicyEntityRegistry(currentLogical);
   currentProd = newProd;
   prevActiveRoot = frontierSnap.activeRoot;
   prevActiveScorePpm = activeScorePpm ?? prevActiveScorePpm;
