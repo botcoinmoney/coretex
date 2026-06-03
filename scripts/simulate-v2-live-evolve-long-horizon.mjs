@@ -24,6 +24,8 @@
  *      prevHonestAccepts + prevQualityAttempts fed into NEXT epoch's stepEpoch.
  *  10. cross_frontier_lift = activeScoreThisEpoch - activeScorePrevEpoch (ppm)
  *      heldout_frontier_lift = heldoutScoreThisEpoch - heldoutScorePrevEpoch (ppm)
+ *                          — SET-DRIFT ONLY unless comparedHeldoutQueries proves overlap.
+ *      stableHeldoutDeltaPpm = same heldout query IDs before/after each patch.
  *      doc_id_dependence = (activeScore - idShuffledActiveScore) / max(1, activeScore)
  *                          — high (~1) ⇒ scoring is real semantic match; low (~0) ⇒ ID-bound or broken eval
  *
@@ -32,7 +34,9 @@
  *     --profile <p> --bundle <b> --corpus <c> --emb <e> --out <outdir> --tag <tag>
  *     [--epochs 12] [--churn-fraction 0.05] [--seed <s>] [--honest-per-epoch 3]
  *     [--random-probes 4] [--hillclimb-probes 2] [--pack-size 64] [--clear-pack-quotas]
- *     [--mock-embeddings]   # CPU mechanics/report smoke only; A100 minis use real embeddings.
+ *     [--mock-embeddings] [--stable-heldout]
+ *       --mock-embeddings   # CPU mechanics/report smoke only; A100 minis use real embeddings.
+ *       --stable-heldout    # score same-query heldout before/after each patch, even without trace.
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -85,6 +89,7 @@ const MOCK_EMBEDDINGS = has('mock-embeddings');
 const TRACE_DIAGNOSTICS = has('trace-diagnostics');
 const TRACE_LIMIT = Number(flag('trace-limit', '5'));
 const DISABLE_QWEN_CACHE = has('disable-qwen-cache');
+const STABLE_HELDOUT = has('stable-heldout') || TRACE_DIAGNOSTICS;
 
 if (!PROFILE_PATH || !BUNDLE_PATH || !CORPUS_PATH || !EMB_PATH || !OUTDIR) {
   console.error('HARD FAIL: --profile, --bundle, --corpus, --emb, --out required');
@@ -251,6 +256,9 @@ function stableSample(items, n, seed) {
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a.slice(0, Math.max(0, n));
+}
+function packEventIdsHash(pack) {
+  return '0x' + createHash('sha256').update((pack.events ?? []).map((e) => e.id).join('\n')).digest('hex');
 }
 function docSnapshots(corpus, docIds) {
   const need = new Set([...docIds].filter(Boolean));
@@ -695,8 +703,8 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     try {
       const tracePatch = TRACE_DIAGNOSTICS;
       const r = await evaluateRetrievalBenchmarkPatch(makeGenesisState(), hp.patch, newProd, activePack, optsForProd(epochScoringTelemetry, tracePatch), baselineFloors);
-      const heldoutPatch = tracePatch && heldoutPack.events.length
-        ? await evaluateRetrievalBenchmarkPatch(makeGenesisState(), hp.patch, newProd, heldoutPack, optsForProd(epochScoringTelemetry, true), baselineFloors)
+      const stableHeldoutPatch = STABLE_HELDOUT && heldoutPack.events.length
+        ? await evaluateRetrievalBenchmarkPatch(makeGenesisState(), hp.patch, newProd, heldoutPack, optsForProd(epochScoringTelemetry, tracePatch), baselineFloors)
         : null;
       const accepted = !!r.accepted;
       if (accepted) {
@@ -719,19 +727,28 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         .sort((a, b) => b.deltaNdcg - a.deltaNdcg)
         .slice(0, TRACE_LIMIT);
       const topActiveImprovement = activeImprovements[0] ?? null;
-      const heldoutComparisons = tracePatch && heldoutPatch ? compareQueries(heldoutPatch.before, heldoutPatch.after) : [];
+      const stableHeldoutComparisons = tracePatch && stableHeldoutPatch ? compareQueries(stableHeldoutPatch.before, stableHeldoutPatch.after) : [];
       const heldoutById = new Map(heldoutPack.events.map((e) => [e.id, e]));
       const activeById = new Map(activePack.events.map((e) => [e.id, e]));
-      const traceDiagnostics = tracePatch ? {
-        worstHeldoutRegressions: heldoutComparisons
+      const worstStableHeldoutRegressions = tracePatch ? stableHeldoutComparisons
           .filter((c) => c.deltaNdcg < 0)
           .sort((a, b) => a.deltaNdcg - b.deltaNdcg)
           .slice(0, TRACE_LIMIT)
           .filter((c) => heldoutById.has(c.recordId))
-          .map((c) => buildTraceEntry({ epoch, h, patchProvenance: patchTraceProvenance(hp), comparison: c, query: heldoutById.get(c.recordId), corpus: newProd, activeImprovement: topActiveImprovement, kind: 'heldout_regression' })),
-        heldoutNonRegressions: stableSample(heldoutComparisons.filter((c) => c.deltaNdcg >= 0), TRACE_LIMIT, `${frontierSeed}:${epoch}:${h}:heldout-nonregression`)
+          .map((c) => buildTraceEntry({ epoch, h, patchProvenance: patchTraceProvenance(hp), comparison: c, query: heldoutById.get(c.recordId), corpus: newProd, activeImprovement: topActiveImprovement, kind: 'stable_heldout_regression' }))
+        : [];
+      const stableHeldoutNonRegressions = tracePatch ? stableSample(stableHeldoutComparisons.filter((c) => c.deltaNdcg >= 0), TRACE_LIMIT, `${frontierSeed}:${epoch}:${h}:heldout-nonregression`)
           .filter((c) => heldoutById.has(c.recordId))
-          .map((c) => buildTraceEntry({ epoch, h, patchProvenance: patchTraceProvenance(hp), comparison: c, query: heldoutById.get(c.recordId), corpus: newProd, activeImprovement: topActiveImprovement, kind: 'heldout_non_regression' })),
+          .map((c) => buildTraceEntry({ epoch, h, patchProvenance: patchTraceProvenance(hp), comparison: c, query: heldoutById.get(c.recordId), corpus: newProd, activeImprovement: topActiveImprovement, kind: 'stable_heldout_non_regression' }))
+        : [];
+      const traceDiagnostics = tracePatch ? {
+        stableHeldoutQueryIdsHash: packEventIdsHash(heldoutPack),
+        worstStableHeldoutRegressions,
+        stableHeldoutNonRegressions,
+        // Back-compat aliases for older readers. These are same-query patch deltas,
+        // not frontier-set comparisons.
+        worstHeldoutRegressions: worstStableHeldoutRegressions,
+        heldoutNonRegressions: stableHeldoutNonRegressions,
         activeImprovements: activeImprovements
           .filter((c) => activeById.has(c.recordId))
           .map((c) => buildTraceEntry({ epoch, h, patchProvenance: patchTraceProvenance(hp), comparison: c, query: activeById.get(c.recordId), corpus: newProd, activeImprovement: c, kind: 'active_improvement' })),
@@ -740,7 +757,12 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         h, family,
         accepted,
         deltaPpm: r.deltaPpm ?? 0,
-        heldoutDeltaPpm: heldoutPatch ? (heldoutPatch.deltaPpm ?? 0) : null,
+        stableHeldoutDeltaPpm: stableHeldoutPatch ? (stableHeldoutPatch.deltaPpm ?? 0) : null,
+        stableHeldoutPackSize: heldoutPack.events.length,
+        stableHeldoutQueryIdsHash: packEventIdsHash(heldoutPack),
+        // Back-compat alias. This is a same-query patch metric, not frontier set drift.
+        heldoutDeltaPpm: stableHeldoutPatch ? (stableHeldoutPatch.deltaPpm ?? 0) : null,
+        heldoutDeltaPpmKind: 'stable_same_query_patch_delta',
         reason: r.reason ?? null,
         fingerprint: hp.fingerprint,
         operationFingerprint: hp.operationFingerprint,
@@ -801,6 +823,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     const patchProvenance = patchTraceProvenance(honestPerPatch.find((p) => p.accepted) ?? null);
     return {
       note: 'Frontier/baseline comparison across epoch boundary; query set changes can affect aggregate heldout_frontier_lift independently of patch causality.',
+      kind: 'frontier_set_drift_not_patch_generalization',
       comparedHeldoutQueries: heldoutComparisons.length,
       worstHeldoutRegressions: heldoutComparisons
         .filter((c) => c.deltaNdcg < 0 && heldoutById.has(c.recordId))
@@ -831,6 +854,8 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
       newEvalIdsInjectedThisEpoch: newEvalAdded,
     },
     activePackSize: activePack.events.length, heldoutPackSize: heldoutPack.events.length,
+    activeQueryIdsHash: packEventIdsHash(activePack),
+    heldoutQueryIdsHash: packEventIdsHash(heldoutPack),
     addedDocs: ld.addedDocs.length, addedQueries: ld.addedQueries.length,
     addedMemDocs: ld.addedDocs.length, addedRelations: ld.addedRelations.length,
     liveChurnRate: ld.liveChurnRate,
@@ -844,6 +869,11 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     activeScorePpm, heldoutScorePpm, idShuffledActiveScorePpm: idShuffledScorePpm,
     cross_frontier_lift: crossFrontierLift,
     heldout_frontier_lift: heldoutFrontierLift,
+    heldout_frontier_lift_kind: 'frontier_set_drift_changed_query_set',
+    heldout_frontier_set_drift_ppm: heldoutFrontierLift,
+    stableHeldoutEnabled: STABLE_HELDOUT,
+    stableHeldoutPatchDeltasPpm: honestPerPatch.map((p) => p.stableHeldoutDeltaPpm).filter((v) => v != null),
+    stableHeldoutWorstRegressionCount: honestPerPatch.reduce((s, p) => s + (p.traceDiagnostics?.worstStableHeldoutRegressions?.length ?? 0), 0),
     qrel_shuffle_collapse_ratio: qrelShuffleCollapseRatio,
     doc_id_dependence: docIdDependence, // DEPRECATED: alias of qrel_shuffle_collapse_ratio
     honestAttempted: qualityAttemptsThisEpoch, honestAccepted: honestAcceptsThisEpoch,
@@ -864,7 +894,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   });
 
   console.log(`[live-evolve] activeScore=${activeScorePpm}ppm heldoutScore=${heldoutScorePpm}ppm idShuffledScore=${idShuffledScorePpm}ppm`);
-  console.log(`[live-evolve] cross_frontier_lift=${crossFrontierLift} heldout_frontier_lift=${heldoutFrontierLift} doc_id_dependence=${docIdDependence}`);
+  console.log(`[live-evolve] cross_frontier_lift=${crossFrontierLift} heldout_frontier_set_drift=${heldoutFrontierLift} doc_id_dependence=${docIdDependence}`);
   console.log(`[live-evolve] honest: ${honestAcceptsThisEpoch}/${qualityAttemptsThisEpoch} accepted, operation_reuse_rate=${operationReuseRate.toFixed(3)}; antiCheat random=${randomAccepts}/${RANDOM_PROBES} hill=${hillclimbAccepts}/${HILLCLIMB_PROBES}`);
   for (const fp of Object.keys(attemptsByFingerprint)) {
     const att = attemptsByFingerprint[fp]; const acc = acceptsByFingerprint[fp] ?? 0;
@@ -910,6 +940,7 @@ const report = {
   baseCorpusRoot: baseBundle.corpus.corpusRoot, finalCorpusRoot: currentProd.corpusRoot,
   finalActiveRoot: prevActiveRoot,
   epochsRun: perEpoch.length, churnFraction: CHURN_FRACTION, seed: frontierSeed,
+  stableHeldoutEnabled: STABLE_HELDOUT,
   traceDiagnosticsEnabled: TRACE_DIAGNOSTICS,
   genesisScoringTelemetry: summarizeScoringTelemetry(genesisScoringTelemetry),
   rerankerTelemetry: {
@@ -952,6 +983,10 @@ const report = {
     antiCheatCleanHillclimb: perEpoch.every((e) => e.antiCheat.hillclimbAccepts === 0),
     crossFrontierLiftPpm: perEpoch.map((e) => e.cross_frontier_lift).filter((v) => v != null),
     heldoutFrontierLiftPpm: perEpoch.map((e) => e.heldout_frontier_lift).filter((v) => v != null),
+    heldoutFrontierLiftSemantics: 'frontier_set_drift_changed_query_set; do not use as same-query patch generalization',
+    heldoutFrontierSetDriftPpm: perEpoch.map((e) => e.heldout_frontier_set_drift_ppm).filter((v) => v != null),
+    stableHeldoutPatchDeltaPpm: perEpoch.flatMap((e) => e.stableHeldoutPatchDeltasPpm ?? []),
+    stableHeldoutWorstRegressionCount: perEpoch.reduce((s, e) => s + (e.stableHeldoutWorstRegressionCount ?? 0), 0),
     liveEvalIdsInjected: perEpoch.reduce((s, e) => s + e.frontierRotation.newEvalIdsInjectedThisEpoch, 0),
     rootCacheUsedAllEpochs: perEpoch.every((e) => e.rootCacheUsed),
     timingSummaryMs,

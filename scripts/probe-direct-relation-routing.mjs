@@ -597,7 +597,9 @@ const report = {
   knobs: { targetPerFam, offPerFam, anchorLimit, categoryLensBudget, categoryLensSeedTopK, scopeRoutingAnchors, maxTargetJunkPerQuery, evaluatedArms: [...evaluatedArms], auditLimit },
   structuralPatchSmoke,
   verdict,
-  passFailSummary: summary.pass ? `PASS: ${targetSurface} direct relation routing shape is positive and clean.` : `FAIL: ${targetSurface} direct relation routing shape is not promotable.`,
+  passFailSummary: summary.pass
+    ? `PASS: ${targetSurface} lensOnly is positive and clean; combined is not separately promoted unless it adds incremental lift over lensOnly.`
+    : `FAIL: ${targetSurface} direct relation routing shape is not promotable.`,
   lowerLayerGateSummary: summary.lowerLayerGate,
   offFamilyDamageSummary: summary.offCombined_meanDelta,
   summary,
