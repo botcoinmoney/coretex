@@ -130,6 +130,34 @@ const GENESIS_PARENT_ROOT = merkleizeState(genesisState);
 
 function makeSlotCursor() { return { temporalRecord: 0, conflictSlot: 0, abstentionSlot: 0, evidenceSlot: 0, noiseSlot: 0, aspectSlot: 0 }; }
 
+// Per-surface slot-namespace offsets so a composer pair never collides on the
+// same word index. Arm A uses the default cursor (zeros). Arm B starts at the
+// offsets below — large enough to clear any reasonable arm A patch.
+//
+// MemoryIndex layout (352 slots total):
+//   temporal arm: slots 0..191  (recordSlot 0..95 maps to 2N, 2N+1)
+//   conflict arm: slots 192..223
+//   evidence/noise: slots 224..255 (also targetSlot for evidence_bundle atom)
+//   aspect arm:   slots 256..287
+//
+// Policy regions are family-scoped, but the atomIndex must not collide either:
+//   conflict atom: POLICY_CONFLICT_START + conflictSlot (0..127)
+//   evidence/noise atom: POLICY_EVIDENCE_START + evidenceSlot/noiseSlot (0..127)
+//   abstention atom: POLICY_ABSTENTION_START + abstentionSlot (0..31)
+//
+// We shift arm B's cursor for whichever family it writes to. The compositor below
+// applies the shift only when the corresponding cursor field is read by arm B.
+function compositorArmBOffsets() {
+  return {
+    temporalRecord: 16,  // arm A uses recordSlot 0..15 max; arm B starts at 16
+    conflictSlot:   32,  // POLICY_CONFLICT + 32 and MemoryIndex 192+32=224 (within 0..255 anchor cap)
+    evidenceSlot:   16,  // POLICY_EVIDENCE + 16, MemoryIndex 224+16=240
+    noiseSlot:      24,
+    aspectSlot:     40,
+    abstentionSlot: 4,   // POLICY_ABSTENTION + 4 (32-slot region)
+  };
+}
+
 function perFamilyMean(perQuery) {
   const buckets = new Map();
   for (const q of (perQuery ?? [])) {
@@ -233,18 +261,29 @@ async function runOneCandidate(candidate) {
   let buildReason = null;
   for (const { name, seed, pack } of packs) {
     const ctx = { pack, logicalQById, eventByDocId, docById, slotCursor, entityRegistry: policyEntityRegistry, genericEntityIds: ['e_universe'], rawDocs: rawCorpus.docs, rawRelations: rawCorpus.relations };
+    let finalState = genesisState;
+    let applyOk = true, applyReason = null;
+    // Candidate can return a single units block OR a `subPatches` array for sequential
+    // application — sequential is the only legal path for >4-word total because the
+    // canonical patch budget hard-caps each STATE_ADVANCE patch at 4 words.
     const u = candidate.buildUnits(ctx);
-    if (!u.indices?.length) { perPack.push({ packName: name, seed, skipped: true, reason: u.reason ?? 'no_units' }); continue; }
-    const patch = { patchType: PATCH_TYPE.MIXED, wordCount: u.indices.length, scoreDelta: 0, parentStateRoot: GENESIS_PARENT_ROOT, indices: u.indices, newWords: u.newWords };
-    const allPolicy = u.indices.every((i) => i >= RANGES.POLICY_EVIDENCE_START && i <= RANGES.POLICY_ABSTENTION_END);
-    if (allPolicy) patch.patchType = PATCH_TYPE.POLICY_UPDATE;
-    const applied = applyPatch(genesisState, patch, true);
-    if (!applied.ok) { perPack.push({ packName: name, seed, skipped: true, reason: `apply_failed:${applied.code}` }); continue; }
+    const subPatches = u.subPatches ?? (u.indices?.length ? [{ indices: u.indices, newWords: u.newWords }] : []);
+    if (subPatches.length === 0) { perPack.push({ packName: name, seed, skipped: true, reason: u.reason ?? 'no_units' }); continue; }
+    for (const sp of subPatches) {
+      if (sp.indices.length === 0) continue;
+      const patch = { patchType: PATCH_TYPE.MIXED, wordCount: sp.indices.length, scoreDelta: 0, parentStateRoot: merkleizeState(finalState), indices: sp.indices, newWords: sp.newWords };
+      const allPolicy = sp.indices.every((i) => i >= RANGES.POLICY_EVIDENCE_START && i <= RANGES.POLICY_ABSTENTION_END);
+      if (allPolicy) patch.patchType = PATCH_TYPE.POLICY_UPDATE;
+      const applied = applyPatch(finalState, patch, true);
+      if (!applied.ok) { applyOk = false; applyReason = `apply_failed:${applied.code}`; break; }
+      finalState = applied.state;
+    }
+    if (!applyOk) { perPack.push({ packName: name, seed, skipped: true, reason: applyReason }); continue; }
     const scoringOpts = { ...baseScoringOpts(), ...candidate.profileOverrides };
     const before = await evaluateRetrievalBenchmarkState(genesisState, currentProd, pack, scoringOpts);
-    const after = await evaluateRetrievalBenchmarkState(applied.state, currentProd, pack, scoringOpts);
+    const after = await evaluateRetrievalBenchmarkState(finalState, currentProd, pack, scoringOpts);
     const metrics = classifyPerPack(candidate, before, after);
-    perPack.push({ packName: name, seed, anchored: u.anchored, anchorMode: u.anchorMode, sourceQueryId: u.sourceQueryId, ...metrics });
+    perPack.push({ packName: name, seed, anchored: u.anchored, anchorMode: u.anchorMode, sourceQueryId: u.sourceQueryId, subPatchCount: subPatches.length, ...metrics });
   }
   const validPacks = perPack.filter((p) => !p.skipped);
   if (validPacks.length === 0) return { candidateId: candidate.id, surface: candidate.surface, mode: candidate.mode, skipped: true, skipReasons: [...new Set(perPack.map((p) => p.reason))], packsTested: packs.length };
@@ -327,18 +366,31 @@ if (!SKIP_COMBINATIONS) {
       for (const bSolo of bTopK) {
         const bCand = SURFACE_GRAMMARS[bKey].candidates.find((c) => c.id === bSolo.candidateId);
         if (!bCand) continue;
+        const armBOffsets = compositorArmBOffsets();
         const composed = {
           id: `combo_${aCand.id}__${bCand.id}`, surface: `${aKey}+${bKey}`, mode: `${aCand.mode}+${bCand.mode}`,
-          params: { a: aCand.id, b: bCand.id },
+          params: { a: aCand.id, b: bCand.id, slotPlan: armBOffsets, slotCollisionAvoided: true },
           memoryOperationSignature: `${aKey}: ${aCand.memoryOperationSignature} || ${bKey}: ${bCand.memoryOperationSignature}`,
           publicSignals: [...new Set([...(aCand.publicSignals ?? []), ...(bCand.publicSignals ?? [])])],
           minerDegreesOfFreedom: ['arm a params', 'arm b params'], nonIndexerRationale: 'both arms read public structure',
           leakageRisks: [...(aCand.leakageRisks ?? []), ...(bCand.leakageRisks ?? [])],
           profileOverrides: { ...aCand.profileOverrides, ...bCand.profileOverrides },
           buildUnits: (ctx) => {
-            const a = aCand.buildUnits(ctx); const b = bCand.buildUnits(ctx);
+            const a = aCand.buildUnits(ctx);
+            // Arm B sees a cursor shifted by the slot-namespace plan so it cannot
+            // collide with arm A on any MemoryIndex / policy region word.
+            const shifted = Object.fromEntries(Object.entries(ctx.slotCursor ?? {}).map(([k, v]) => [k, (v ?? 0) + (armBOffsets[k] ?? 0)]));
+            const ctxB = { ...ctx, slotCursor: shifted };
+            const b = bCand.buildUnits(ctxB);
             if (!a.indices?.length && !b.indices?.length) return { indices: [], newWords: [], reason: `both_skipped:${a.reason ?? '?'}|${b.reason ?? '?'}` };
-            return { indices: [...(a.indices ?? []), ...(b.indices ?? [])], newWords: [...(a.newWords ?? []), ...(b.newWords ?? [])], anchored: { a: a.anchored, b: b.anchored }, anchorMode: `${aCand.mode}+${bCand.mode}` };
+            // Combined patches frequently exceed the 4-word patch budget. Apply each
+            // arm as its OWN STATE_ADVANCE patch in sequence — that matches how miners
+            // would accumulate substrate across epochs. The harness reports it as a
+            // single combined candidate but the apply path uses sequential subPatches.
+            const subPatches = [];
+            if (a.indices?.length) subPatches.push({ indices: a.indices, newWords: a.newWords });
+            if (b.indices?.length) subPatches.push({ indices: b.indices, newWords: b.newWords });
+            return { subPatches, anchored: { a: a.anchored, b: b.anchored }, anchorMode: `${aCand.mode}+${bCand.mode}`, slotPlan: armBOffsets };
           },
           expectedRendererEffect: 'combined arm effect', expectedRerankerEffect: 'combined',
         };
