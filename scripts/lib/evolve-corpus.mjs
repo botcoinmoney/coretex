@@ -154,7 +154,7 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
       addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
         lane: 'deep', family: 'decision_provenance',
         queryText: `Why did ${canonical} choose ${choice} for the ${project}?`,
-        qrels: [{ docId: evidenceId, relevance: 1.0, role: 'direct' }, { docId: decisionId, relevance: 0.5, role: 'bridge' }],
+        qrels: [{ docId: evidenceId, relevance: 1.0, role: 'direct' }, { docId: decisionId, relevance: 0.6, role: 'bridge' }],
         hardNegatives: [], band: 'very_hard', operationFamily: 'decision_provenance', liveUpdateEpoch: epoch });
     } else if (branch === 'abstention') {
       // Abstention_missing guardrail eval: a query whose answer is NOT present in the
