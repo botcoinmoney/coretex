@@ -603,6 +603,8 @@ export const SEMANTIC_COMBINATIONS = [
   ['relation_causal',    'evidence_bundle'],
   ['relation_causal',    'coreference'],
   ['relation_causal',    'aspect_constraint'],
+  ['relation_causal',    'noise_suppression'],  // compensator pair (orchestrator add 2026-06-03)
+  ['relation_lifecycle', 'noise_suppression'],  // compensator pair (orchestrator add 2026-06-03)
   ['evidence_bundle',    'abstention_top1'],
   ['evidence_bundle',    'noise_suppression'],
   ['coreference',        'aspect_constraint'],
