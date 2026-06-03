@@ -109,7 +109,11 @@ function classifyAdded(doc, query, relations, currentDocsById, priorTemporalBefo
     if (hasContradicts) return { label: 'conflict_update', reason: 'paired with contradicts edge', priorDocId: null, lifecycleState: doc.lifecycleState ?? null };
     return { label: 'conflict_update', reason: 'lifecycle_conflict shape but no contradicts edge', priorDocId: null, lifecycleState: doc.lifecycleState ?? null };
   }
-  return { label: 'unrelated_new', reason: `doc kind ${doc.kind} not temporal or conflict`, priorDocId: null };
+  if (/decision_/.test(doc.kind)) {
+    const hasSupports = relations.some((r) => (r.src === doc.id || r.dst === doc.id) && (r.type === 'supports' || r.type === 'causes'));
+    return { label: 'decision_or_causal_extension', reason: hasSupports ? 'paired with supports/causes edge' : 'decision_record without edge', priorDocId: null };
+  }
+  return { label: 'unrelated_new', reason: `doc kind ${doc.kind} not temporal/conflict/decision`, priorDocId: null };
 }
 
 function classifyQuery(query, addedDocsThisEpoch, currentDocsById) {
