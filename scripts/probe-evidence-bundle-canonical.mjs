@@ -459,11 +459,11 @@ const report = {
   verdict,
   passFailSummary: expectDisabled
     ? (summary.pass
-      ? `PASS: ${targetSurface} PolicyAtom arms are disabled/inert under the supplied profile: zero movement, zero traces, zero damage.`
+      ? `PASS: ${targetSurface} PolicyAtom arms are disabled/inert under the supplied profile.`
       : `FAIL: ${targetSurface} PolicyAtom arms moved rankings despite disabled profile.`)
     : (summary.pass
       ? `PASS: ${targetSurface} bundle arm has target lift with clean random/off-family controls.`
-      : `FAIL: ${targetSurface} PolicyAtoms decode/admit/trace, but did not satisfy reward-active lift and safety controls.`),
+      : `FAIL: ${targetSurface} did not satisfy target lift and safety controls.`),
   lowerLayerGateSummary: summary.lowerLayerGate,
   offFamilyDamageSummary: summary.offFamilyBundle_meanDelta,
   summary,
