@@ -88,21 +88,31 @@ function parseConflictScope(queryText) {
 }
 
 function publicFindTemporalAnchors(subjectId, attr, docById, docsByEntity) {
-  // miner-public: only TEMPORAL-kind docs about `subjectId` whose kind OR text
-  // explicitly mentions `attr` as a public attribute marker. Sort by timestamp
-  // descending (newest = current); the stale slot picks the next-oldest doc on
-  // the SAME attribute (so the stale qrel is genuinely same-attribute).
   const attrL = attr.toLowerCase();
   const candidates = (docsByEntity.get(subjectId) ?? []).filter((d) => {
+    if (d.validity) {
+      return d.validity.subjectEntityId === subjectId && String(d.validity.attribute ?? '').toLowerCase() === attrL;
+    }
+    // Back-compat for pre-v16 corpora without validity metadata: only TEMPORAL-kind docs about
+    // `subjectId` whose kind OR text explicitly mentions `attr` as a public attribute marker.
+    // This fallback is not a timestamp-newest selector when validity metadata exists.
     const k = (d.kind ?? '').toLowerCase();
     if (!/temporal/.test(k)) return false;
     const t = (d.text ?? '').toLowerCase();
     return k.endsWith(`_${attrL}`) || k === `temporal_${attrL}` || new RegExp(`\\b${attrL}\\b`).test(t);
   });
   if (candidates.length === 0) return { current: null, stale: null };
+  const withValidity = candidates.filter((d) => d.validity);
+  if (withValidity.length > 0) {
+    const openCurrent = withValidity.find((d) => d.validity?.validUntil === null || d.validity?.validUntil === undefined);
+    const current = openCurrent ?? withValidity.find((d) => !d.validity?.supersededBy) ?? null;
+    const stale = current
+      ? withValidity.find((d) => d.validity?.supersededBy === current.id)
+          ?? withValidity.find((d) => d.validity?.validUntil && d.id !== current.id)
+      : null;
+    return { current: current?.id ?? null, stale: stale?.id ?? null };
+  }
   candidates.sort((a, b) => String(b.timestamp ?? '').localeCompare(String(a.timestamp ?? '')));
-  // miner-public picks current = newest, stale = oldest same-attr (matches the v15
-  // generator's stale qrel, which is the earliest prior on that attribute).
   return { current: candidates[0]?.id ?? null, stale: candidates[candidates.length - 1]?.id ?? null };
 }
 

@@ -28,6 +28,22 @@ function prng(seedStr) { let st = h(seedStr).readUInt32BE(0); return () => { st 
 
 const CITIES = ['Oslo', 'Lagos', 'Quito', 'Hanoi', 'Cairo', 'Lima', 'Riga', 'Accra', 'Sofia', 'Tunis', 'Osaka', 'Perth'];
 const PKGS = ['pnpm', 'npm', 'yarn', 'bun', 'pip', 'poetry', 'cargo', 'maven'];
+const API_HOSTS = ['atlas', 'beacon', 'cedar', 'delta', 'ember', 'falcon', 'granite', 'harbor'];
+
+function slug(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 96);
+}
+
+function publicScopeFor(subj, universe, epoch, label) {
+  const base = slug(`${subj.id}_${epoch}_${label}`);
+  return {
+    projectId: `proj_${base}`,
+    sessionId: `sess_${base}`,
+    topicId: label.includes('math') ? 'topic_math_project' : label.includes('api') ? 'topic_api_migration' : 'topic_memory',
+    taskId: `task_${base}`,
+    userScopeId: universe,
+  };
+}
 
 /**
  * @param {{ baseLogical: any, epoch: number, seed: string, churnFraction?: number }} args
@@ -40,6 +56,24 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
 
   const universe = (baseLogical.entities.find((e) => e.id === 'e_universe') || {}).id || 'e_universe';
   const subjects = baseLogical.entities.filter((e) => e.id !== universe && /_s\d+$/.test(e.id));
+  const hasAtomV16Metadata = baseLogical.dgen1?.atomV16Metadata === true
+    || (baseLogical.queries ?? []).some((q) => q.family === 'validity_atom' || q.family === 'scope_atom' || q.family === 'entity_resolution_atom');
+  const duplicateByName = new Map();
+  for (const e of baseLogical.entities ?? []) {
+    const name = String(e.canonicalName ?? '').toLowerCase();
+    if (!name) continue;
+    const arr = duplicateByName.get(name) ?? [];
+    arr.push(e);
+    duplicateByName.set(name, arr);
+  }
+  const duplicateEntityPairs = [...duplicateByName.values()]
+    .filter((xs) => xs.length >= 2)
+    .map((xs) => {
+      const target = xs.find((e) => (e.roleAliases ?? []).some((r) => /api migration lead|backend lead/i.test(r))) ?? xs[0];
+      const wrong = xs.find((e) => e.id !== target.id) ?? xs[1];
+      return { canonicalName: target.canonicalName, target, wrong };
+    })
+    .filter((p) => p.target && p.wrong);
   // Prior temporal doc per (subject, attribute) — a stale qrel MUST point at a doc that
   // was about the SAME attribute, else the substrate's current/stale contrast is
   // half-meaningless (see CORPUS_EVOLVE_SEMANTIC_AUDIT.md: 92% of supersessions changed
@@ -82,15 +116,15 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
     const isProject = /-svc-/.test(canonical);
     const tagU = [universe, subj.id];
     const idBase = `e${epoch}_${subj.id}`;
-    // 4-branch op mix: 0 = temporal revision, 1 = conflict update,
-    //                  2 = decision/causal extension (supports/causes chain),
-    //                  3 = abstention_missing (no-direct-qrel guardrail eval).
-    // Distribution: temporal:conflict:decision:abstention = 2:2:1:1 (12.5% each for
-    // the latter two; the auditor's "no giant generator" guidance keeps these minimal
-    // additions). Per-subject branch is deterministic from seed+epoch+subject.
-    const op = h(`${seed}:op:${epoch}:${subj.id}`).readUInt32BE(0) % 6;
-    // 0,1 → temporal; 2,3 → conflict; 4 → decision; 5 → abstention
-    const branch = op <= 1 ? 'temporal' : op <= 3 ? 'conflict' : op === 4 ? 'decision' : 'abstention';
+    const op = h(`${seed}:op:${epoch}:${subj.id}`).readUInt32BE(0) % (hasAtomV16Metadata ? 9 : 6);
+    let branch = op <= 1 ? 'temporal'
+      : op <= 3 ? 'conflict'
+      : op === 4 ? 'decision'
+      : op === 5 ? 'abstention'
+      : op === 6 ? 'validity_atom'
+      : op === 7 ? 'scope_atom'
+      : 'entity_resolution_atom';
+    if (branch === 'entity_resolution_atom' && duplicateEntityPairs.length === 0) branch = 'scope_atom';
 
     if (branch === 'temporal') {
       // Same-attribute supersession: PREFER an attribute the subject already has a prior
@@ -169,6 +203,73 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
         queryText: `What is ${canonical}'s ${trivium}?`,
         qrels: [], // intentionally empty — abstain is the correct answer
         hardNegatives: [], band: 'very_hard', operationFamily: 'abstention_missing', liveUpdateEpoch: epoch });
+    } else if (branch === 'validity_atom') {
+      const attr = 'api endpoint';
+      const scope = publicScopeFor(subj, universe, epoch, 'api_migration_validity');
+      const host = API_HOSTS[Math.floor(rnd() * API_HOSTS.length)];
+      const staleId = `d_${idBase}_vs`, curId = `d_${idBase}_vc`, qid = `q_${idBase}_v`;
+      const staleVal = `${host}-legacy-${epoch}.api.internal`;
+      const curVal = `${host}-current-${epoch}.api.internal`;
+      addedDocs.push({ id: staleId, lane: 'deep', kind: 'atom_validity_fact', entityIds: tagU,
+        text: `${canonical}'s API migration endpoint was ${staleVal} before the cutover.`,
+        shape: 'atom_validity_record', timestamp: tsDate, currentStaleFlag: false, scope,
+        validity: { subjectEntityId: subj.id, attribute: attr, validFrom: '2025-01-01', validUntil: tsDate, observedAt: tsDate, supersededBy: curId },
+        liveUpdateEpoch: epoch });
+      addedDocs.push({ id: curId, lane: 'deep', kind: 'atom_validity_fact', entityIds: tagU,
+        text: `${canonical}'s current API migration endpoint is ${curVal}.`,
+        shape: 'atom_validity_record', timestamp: tsDate, currentStaleFlag: true, scope,
+        validity: { subjectEntityId: subj.id, attribute: attr, validFrom: tsDate, observedAt: tsDate },
+        liveUpdateEpoch: epoch });
+      addedRelations.push({ src: curId, dst: staleId, type: 'supersedes', label: 'supersedes' });
+      addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
+        lane: 'deep', family: 'validity_atom',
+        queryText: `What is ${canonical}'s current API endpoint for the API migration session?`,
+        qrels: [{ docId: curId, relevance: 1.0, role: 'direct' }, { docId: staleId, relevance: 0.0, role: 'stale' }],
+        hardNegatives: [{ docId: staleId, category: 'temporal_stale' }],
+        scope, publicIntent: { atom: 'validity_atom', subjectEntityId: subj.id, attribute: attr, queryTime: '2026-06-04', ...scope },
+        band: 'very_hard', operationFamily: 'validity_atom', liveUpdateEpoch: epoch });
+    } else if (branch === 'scope_atom') {
+      const scope = publicScopeFor(subj, universe, epoch, 'math_project_scope');
+      const wrongScope = { ...scope, projectId: `proj_${slug(`${subj.id}_${epoch}_finance_project`)}`, topicId: 'topic_finance_project' };
+      const rightId = `d_${idBase}_sr`, wrongId = `d_${idBase}_sw`, qid = `q_${idBase}_s`;
+      const endpoint = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-solver-${epoch}.internal`;
+      const wrongEndpoint = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-finance-${epoch}.internal`;
+      addedDocs.push({ id: rightId, lane: 'deep', kind: 'atom_scope_fact', entityIds: tagU,
+        text: `${canonical} set ${endpoint} for the math project from last week.`,
+        shape: 'atom_scope_record', timestamp: tsDate, currentStaleFlag: true, scope, liveUpdateEpoch: epoch });
+      addedDocs.push({ id: wrongId, lane: 'deep', kind: 'atom_scope_fact', entityIds: tagU,
+        text: `${canonical} set ${wrongEndpoint} for the finance project from last week.`,
+        shape: 'atom_scope_record', timestamp: tsDate, currentStaleFlag: true, scope: wrongScope, liveUpdateEpoch: epoch });
+      addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
+        lane: 'deep', family: 'scope_atom',
+        queryText: `For ${canonical}, what endpoint belongs to the math project from last week?`,
+        qrels: [{ docId: rightId, relevance: 1.0, role: 'direct' }, { docId: wrongId, relevance: 0.0, role: 'wrong_scope' }],
+        hardNegatives: [{ docId: wrongId, category: 'wrong_scope_near_collision' }],
+        scope, publicIntent: { atom: 'scope_atom', ...scope },
+        band: 'very_hard', operationFamily: 'scope_atom', liveUpdateEpoch: epoch });
+    } else if (branch === 'entity_resolution_atom') {
+      const pair = duplicateEntityPairs[Math.floor(rnd() * duplicateEntityPairs.length)];
+      const roleAlias = (pair.target.roleAliases ?? []).find((r) => /api migration lead|backend lead/i.test(r)) ?? pair.target.roleAliases?.[0] ?? 'API migration lead';
+      const wrongRole = pair.wrong.roleAliases?.[0] ?? 'design lead';
+      const scope = publicScopeFor(subj, universe, epoch, 'entity_resolution_role');
+      const rightId = `d_${idBase}_er`, wrongId = `d_${idBase}_ew`, qid = `q_${idBase}_e`;
+      const retry = `${4 + Math.floor(rnd() * 8)} minutes`;
+      const wrongRetry = `${1 + Math.floor(rnd() * 4)} minutes`;
+      addedDocs.push({ id: rightId, lane: 'deep', kind: 'atom_entity_resolution_fact', entityIds: [universe, pair.target.id],
+        roleAliases: [...(pair.target.roleAliases ?? [])], scope,
+        text: `${pair.canonicalName}, the ${roleAlias}, set the retry window to ${retry}.`,
+        shape: 'atom_entity_resolution_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
+      addedDocs.push({ id: wrongId, lane: 'deep', kind: 'atom_entity_resolution_fact', entityIds: [universe, pair.wrong.id],
+        roleAliases: [...(pair.wrong.roleAliases ?? [wrongRole])], scope,
+        text: `${pair.canonicalName}, the ${wrongRole}, set the retry window to ${wrongRetry}.`,
+        shape: 'atom_entity_resolution_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
+      addedQueries.push({ id: qid, ownerScoped: true, ownerEntityId: universe,
+        lane: 'deep', family: 'entity_resolution_atom',
+        queryText: `What retry window did ${pair.canonicalName} the ${roleAlias} set?`,
+        qrels: [{ docId: rightId, relevance: 1.0, role: 'direct' }, { docId: wrongId, relevance: 0.0, role: 'wrong_entity_same_name' }],
+        hardNegatives: [{ docId: wrongId, category: 'duplicate_name_wrong_role' }],
+        scope, publicIntent: { atom: 'entity_resolution_atom', name: pair.canonicalName, roleAlias, ...scope },
+        band: 'very_hard', operationFamily: 'entity_resolution_atom', liveUpdateEpoch: epoch });
     }
   }
 

@@ -75,6 +75,10 @@ export function buildV2ProductionCorpus({ corpusPath, embPath, bundlePath, junkE
       hardNegatives: [], qrels: [{ documentId: d.id, relevance: 1.0 }], protected: false,
       relations: (relBySrc.get(d.id) ?? []).map((r) => ({ other_id: memId(r.dst), edgeType: r.type, ...(r.label ? { label: r.label } : {}) })),
       ...(Array.isArray(d.entityIds) && d.entityIds.length ? { entityIds: d.entityIds } : {}),
+      ...(d.scope ? { scope: d.scope } : {}),
+      ...(d.validity ? { validity: d.validity } : {}),
+      ...(Array.isArray(d.aliases) && d.aliases.length ? { aliases: d.aliases } : {}),
+      ...(Array.isArray(d.roleAliases) && d.roleAliases.length ? { roleAliases: d.roleAliases } : {}),
       provenance: PROV, embeddings: mkEmb(e, [[d.id, e]], []) });
   }
   // adversarial: inject N random WRONG mem→mem edges (gameability probe).
@@ -91,7 +95,10 @@ export function buildV2ProductionCorpus({ corpusPath, embPath, bundlePath, junkE
       const ev = { id: q.id, family: bucket(q.family), logicalFamily: q.family, domain: q.lane, split: splitForRecord(q.id, PROD_CORPUS_EPOCH), queryText: q.queryText, truthDocuments: [], hardNegatives: negs, qrels: [], protected: false, relations: [],
         ...(q.band ? { band: q.band } : {}),
         ...(q.ownerEntityId !== undefined ? { ownerEntityId: q.ownerEntityId, ownerScoped: q.ownerScoped !== false } : {}),
-        ...(q.subjectEntityId !== undefined ? { subjectEntityId: q.subjectEntityId } : {}), provenance: PROV, embeddings: mkEmb(qEmb.get(q.id), [], negs.map((n) => [n.id, docEmb.get(n.id)])) };
+        ...(q.subjectEntityId !== undefined ? { subjectEntityId: q.subjectEntityId } : {}),
+        ...(q.scope ? { scope: q.scope } : {}),
+        ...(q.publicIntent ? { publicIntent: q.publicIntent } : {}),
+        provenance: PROV, embeddings: mkEmb(qEmb.get(q.id), [], negs.map((n) => [n.id, docEmb.get(n.id)])) };
       events.push(ev); queryEvents.push(ev); continue;
     }
     const truths = (q.qrels ?? []).filter((r) => r.relevance > 0).map((r) => ({ id: r.docId, text: docById.get(r.docId).text, isCurrent: docById.get(r.docId).currentStaleFlag === false ? false : true }));
@@ -101,13 +108,16 @@ export function buildV2ProductionCorpus({ corpusPath, embPath, bundlePath, junkE
       ...(q.band ? { band: q.band } : {}),
       ...(q.grounding ? { grounding: q.grounding } : {}),
       ...(q.ownerEntityId !== undefined ? { ownerEntityId: q.ownerEntityId, ownerScoped: q.ownerScoped !== false } : {}),
-      ...(q.subjectEntityId !== undefined ? { subjectEntityId: q.subjectEntityId } : {}), provenance: PROV, embeddings: mkEmb(qEmb.get(q.id), truths.map((t) => [t.id, docEmb.get(t.id)]), negs.map((n) => [n.id, docEmb.get(n.id)])) };
+      ...(q.subjectEntityId !== undefined ? { subjectEntityId: q.subjectEntityId } : {}),
+      ...(q.scope ? { scope: q.scope } : {}),
+      ...(q.publicIntent ? { publicIntent: q.publicIntent } : {}),
+      provenance: PROV, embeddings: mkEmb(qEmb.get(q.id), truths.map((t) => [t.id, docEmb.get(t.id)]), negs.map((n) => [n.id, docEmb.get(n.id)])) };
     if (ev.family === 'temporal') ev.temporal = { validFromEpoch: 1, validUntilEpoch: Number.MAX_SAFE_INTEGER, currentStaleFlag: false };
     events.push(ev); queryEvents.push(ev);
   }
   const corpusRoot = computeCorpusRoot(events);
   const corpus = { events, byId: new Map(events.map((e) => [e.id, e])), corpusRoot, corpusEpoch: 0,
-    entities: (logical.entities ?? []).map((e) => ({ id: e.id, canonicalName: e.canonicalName, aliases: e.aliases ?? [] })),
+    entities: (logical.entities ?? []).map((e) => ({ id: e.id, canonicalName: e.canonicalName, aliases: e.aliases ?? [], ...(Array.isArray(e.roleAliases) && e.roleAliases.length ? { roleAliases: e.roleAliases } : {}) })),
     biEncoderModelId: BE.modelId, biEncoderRevision: BE.revision, biEncoderRetrievalKeyLayout: LAYOUT,
     labelingModelId: RR.modelId, labelingModelRevision: RR.revision };
   return { corpus, queryEvents, logical, LAYOUT, BE, RR, biEncoderHash, bundlePath: manifestPath };

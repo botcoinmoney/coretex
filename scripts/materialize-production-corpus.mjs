@@ -14,6 +14,7 @@
  * sourceCorpusSha256, sourceEmbSha256, eventCount, materializedAtNote.
  *
  * Usage: node scripts/materialize-production-corpus.mjs --profile <p> --bundle <b> --corpus <c> --emb <e> [--force]
+ *   [--materialized-root release/calibration/.../materialized]
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, statSync, readdirSync, copyFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -67,6 +68,7 @@ const BUNDLE_PATH = flag('bundle');
 const CORPUS_PATH = flag('corpus');
 const EMB_PATH = flag('emb');
 const FORCE = has('force');
+const MATERIALIZED_ROOT = flag('materialized-root', process.env.CORETEX_MATERIALIZED_ROOT ?? 'release/calibration/2026-05-21-memory-corpus-v2/materialized');
 if (!PROFILE_PATH || !BUNDLE_PATH || !CORPUS_PATH || !EMB_PATH) {
   console.error('HARD FAIL: --profile, --bundle, --corpus, --emb required'); exit(1);
 }
@@ -83,7 +85,8 @@ const sourceCorpusSha = sha256File(CORPUS_PATH);
 const sourceEmbSha = sha256File(EMB_PATH);
 const bundleTag = (bundle.bundleHash ?? '0xunknown').slice(2, 10);
 
-const MAT_DIR = resolve(repoRoot, 'release/calibration/2026-05-21-memory-corpus-v2/materialized', bundleTag);
+const ROOT_MAT = resolve(repoRoot, MATERIALIZED_ROOT);
+const MAT_DIR = resolve(ROOT_MAT, bundleTag);
 const CORPUS_JSON = resolve(MAT_DIR, 'corpus.json');
 const NDJSON = `${CORPUS_JSON}.events.ndjson`;
 const ROOT_LEAVES = `${CORPUS_JSON}.root-leaves.ndjson`;
@@ -121,7 +124,6 @@ if (existsSync(MANIFEST) && !FORCE) {
 //     COPY its corpus.json + ndjson into MAT_DIR and write a new manifest with the new
 //     bundleHash. Same materialization cost as cache hit; no 16-min rebuild. Matches the
 //     "fix the design, don't reloop full rebuilds" rule.
-const ROOT_MAT = resolve(repoRoot, 'release/calibration/2026-05-21-memory-corpus-v2/materialized');
 if (existsSync(ROOT_MAT) && !FORCE) {
   const siblings = readdirSync(ROOT_MAT).sort((a, b) => {
     const aHasRootLeaves = existsSync(resolve(ROOT_MAT, a, 'corpus.json.root-leaves.ndjson')) ? 1 : 0;
@@ -279,7 +281,7 @@ console.log(`[materialize] manifest: ${MANIFEST}`);
 // Round-trip verify: load via the calibration-internal loader and re-compute corpusRoot.
 console.log('[materialize] round-trip verify: loading materialized artifact (custom loader) ...');
 const { loadMaterializedCorpus } = await import('./lib/load-materialized-corpus.mjs');
-const reloaded = loadMaterializedCorpus(BUNDLE_PATH, { sourceCorpusPath: CORPUS_PATH, sourceEmbPath: EMB_PATH, verifyCorpusRoot: true });
+const reloaded = loadMaterializedCorpus(BUNDLE_PATH, { sourceCorpusPath: CORPUS_PATH, sourceEmbPath: EMB_PATH, verifyCorpusRoot: true, materializedRoot: MATERIALIZED_ROOT });
 if (reloaded.corpus.corpusRoot.toLowerCase() !== corpus.corpusRoot.toLowerCase()) {
   console.error(`HARD FAIL: round-trip corpusRoot mismatch — built=${corpus.corpusRoot} reloaded=${reloaded.corpus.corpusRoot}`);
   exit(1);

@@ -19,6 +19,7 @@
  *   node scripts/screener-threshold-calibration.mjs --reranker gpu|qwen-cpu|cpu|deterministic
  *     --profile <p> --bundle <b> --corpus <c> --emb <e> --out <outfile>
  *     [--per-class 8] [--pack-size 64] [--clear-pack-quotas] [--noise-samples 6]
+ *     [--materialized-root release/calibration/.../materialized]
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -64,6 +65,7 @@ const NOISE_SAMPLES = Number(flag('noise-samples', '6'));
 const CLEAR_PACK_QUOTAS = has('clear-pack-quotas');
 const ALLOW_BUNDLE_SOURCE_MISMATCH = has('allow-bundle-source-mismatch');
 const DISABLE_QWEN_CACHE = has('disable-qwen-cache');
+const MATERIALIZED_ROOT = flag('materialized-root', env.CORETEX_MATERIALIZED_ROOT ?? undefined);
 
 if (!PROFILE_PATH || !BUNDLE_PATH || !CORPUS_PATH || !EMB_PATH || !OUT_PATH) {
   console.error('HARD FAIL: --profile, --bundle, --corpus, --emb, --out required'); exit(1);
@@ -81,7 +83,7 @@ if (verr.length > 0) {
 }
 
 console.log('[screener-threshold] loading materialized production corpus (NO rebuild) ...');
-const { corpus, BE, RR, LAYOUT, manifest: matManifest } = loadMaterializedCorpus(BUNDLE_PATH, { sourceCorpusPath: CORPUS_PATH, sourceEmbPath: EMB_PATH });
+const { corpus, BE, RR, LAYOUT, manifest: matManifest } = loadMaterializedCorpus(BUNDLE_PATH, { sourceCorpusPath: CORPUS_PATH, sourceEmbPath: EMB_PATH, ...(MATERIALIZED_ROOT ? { materializedRoot: MATERIALIZED_ROOT } : {}) });
 console.log(`[screener-threshold] materialized manifest bundleHash=${matManifest.bundleHash} corpusRoot=${matManifest.corpusRoot.slice(0, 18)}…`);
 console.log(`[screener-threshold] corpus root=${corpus.corpusRoot.slice(0, 18)}… events=${corpus.events.length}`);
 const provenance = calibrationProvenance({ bundlePath: BUNDLE_PATH, corpusPath: CORPUS_PATH, embPath: EMB_PATH, profilePath: PROFILE_PATH, manifest: matManifest });
@@ -256,6 +258,26 @@ function patchTrueAdvanceCandidate(seed) {
   };
 }
 
+function patchAtomOverbroadAnchor(seed, intent, slotOffset = 180) {
+  const provenance = packDocAnchor(seed + slotOffset);
+  const slotIndex = slotOffset + (seed % 16);
+  const word = anchorWordForDoc({ docId: provenance.docId, family: 'multi_hop_relation', slotIndex });
+  return {
+    patch: { patchType: PATCH_TYPE.MIXED, wordCount: 1, scoreDelta: 0, parentStateRoot: parentRoot,
+      indices: [RANGES.MEMORY_INDEX_START + slotIndex], newWords: [word] },
+    intent,
+    anchor: { ...provenance, substrate: 'policyAnchor_memory_index_only', note: `${intent}; broad/random public anchor must reject or no-op, not earn screener credit` },
+  };
+}
+
+function patchOverbroadScopeConstrain(seed) { return patchAtomOverbroadAnchor(seed, 'overbroad_scope_constrain', 220); }
+function patchWrongScopeSuppress(seed) { return patchAtomOverbroadAnchor(seed, 'wrong_scope_suppress', 221); }
+function patchOverbroadEntityAlias(seed) { return patchAtomOverbroadAnchor(seed, 'overbroad_entity_alias', 160); }
+function patchRoleAliasFalseTrigger(seed) { return patchAtomOverbroadAnchor(seed, 'role_alias_false_trigger', 161); }
+function patchValidityWrongAttribute(seed) { return patchAtomOverbroadAnchor(seed, 'validity_wrong_attribute', 260); }
+function patchValidityObservedAtTrap(seed) { return patchAtomOverbroadAnchor(seed, 'validity_retrospective_observedAt_trap', 276); }
+function patchStructValidAtomIrrelevant(seed) { return patchAtomOverbroadAnchor(seed, 'structurally_valid_atom_irrelevant', 292); }
+
 // liveStateAdvanced is TRUE only for the true_state_advance class — every other class is by
 // construction either rejected (junk/dup/stale/irrelevant) or at-most a screener_pass candidate
 // (weak/viable non-advancing). Passing liveStateAdvanced=true uniformly would wrongly let a
@@ -267,6 +289,13 @@ const classes = [
   { name: 'near_duplicate', gen: patchNearDuplicate, expected: 'REJECT', parentMatchesLiveRoot: true, liveStateAdvanced: false },
   { name: 'stale_parent', gen: patchStaleParent, expected: 'REJECT', parentMatchesLiveRoot: false, liveStateAdvanced: false },
   { name: 'weak_positive', gen: patchWeakPositive, expected: 'REJECT_or_SCREENER_PASS', parentMatchesLiveRoot: true, liveStateAdvanced: false },
+  { name: 'overbroad_scope_constrain', gen: patchOverbroadScopeConstrain, expected: 'REJECT', parentMatchesLiveRoot: true, liveStateAdvanced: false },
+  { name: 'wrong_scope_suppress', gen: patchWrongScopeSuppress, expected: 'REJECT', parentMatchesLiveRoot: true, liveStateAdvanced: false },
+  { name: 'overbroad_entity_alias', gen: patchOverbroadEntityAlias, expected: 'REJECT', parentMatchesLiveRoot: true, liveStateAdvanced: false },
+  { name: 'role_alias_false_trigger', gen: patchRoleAliasFalseTrigger, expected: 'REJECT', parentMatchesLiveRoot: true, liveStateAdvanced: false },
+  { name: 'validity_wrong_attribute', gen: patchValidityWrongAttribute, expected: 'REJECT', parentMatchesLiveRoot: true, liveStateAdvanced: false },
+  { name: 'validity_retrospective_observedAt_trap', gen: patchValidityObservedAtTrap, expected: 'REJECT', parentMatchesLiveRoot: true, liveStateAdvanced: false },
+  { name: 'structurally_valid_atom_irrelevant', gen: patchStructValidAtomIrrelevant, expected: 'REJECT', parentMatchesLiveRoot: true, liveStateAdvanced: false },
   { name: 'viable_non_advancing', gen: patchViableNonAdvancing, expected: 'SCREENER_PASS', parentMatchesLiveRoot: true, liveStateAdvanced: false },
   { name: 'true_state_advance_candidate', gen: patchTrueAdvanceCandidate, expected: 'STATE_ADVANCE_or_SCREENER_PASS', parentMatchesLiveRoot: true, liveStateAdvanced: true },
 ];

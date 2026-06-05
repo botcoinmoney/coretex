@@ -53,6 +53,9 @@ const SEED = argVal('--seed', 'dgen1-smoke-2026-05-22');
 const PHASE = argVal('--phase', 'DGEN1');
 const OUT = argVal('--out', 'release/calibration/2026-05-21-memory-corpus-v2/dgen1-smoke-corpus.json');
 const R5_SYNTHESIS = args.includes('--r5-synthesis');            // adds conflict/aspect/abstention operation slices
+const ATOM_V16_METADATA = args.includes('--atom-v16-metadata');  // default-off v16 atom metadata/slices
+const ATOM_V16_SLICE_STRIDE = parseInt(argVal('--atom-v16-slice-stride', '10'), 10);
+const ATOM_V16_MAX_SLICES = parseInt(argVal('--atom-v16-max-slices', '128'), 10);
 
 function hashSeed(s) { let h = 1779033703 ^ s.length; for (let i = 0; i < s.length; i++) { h = Math.imul(h ^ s.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); } return h >>> 0; }
 function mulberry32(a) { return function () { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
@@ -277,6 +280,7 @@ const entities = [];
 const docs = [];
 const relations = [];
 const queries = [];
+const atomSubjectMeta = [];
 let docSeq = 0, qSeq = 0;
 const docId = () => `d${String(docSeq++).padStart(7, '0')}`;
 const qId = () => `q${String(qSeq++).padStart(7, '0')}`;
@@ -339,6 +343,7 @@ for (let ui = 0; ui < N_UNIVERSES; ui++) {
     const tagU = (extra = []) => [universe, subjId, ...extra];
     // Per-subject stable semantic tokens (see subjectTokens definition near banks).
     const tok = subjectTokens(s, SEED);
+    atomSubjectMeta.push({ s, universe, subjId, canonical, isProject, first, job, tok, projCtx });
 
     // v11: intro doc drops "is a ${job}" AND "${first} the ${job}" patterns — the v10 100k
     // miss-dumps showed intro docs flooded multi_session "job of sibling" queries because
@@ -733,13 +738,238 @@ for (const q of queries) {
   for (let i = 0; i < pool.length && added < 3; i++) { const cand = pool[ri(pool.length)]; if (!have.has(cand)) { q.hardNegatives.push({ docId: cand, category: 'near_collision_attribute' }); have.add(cand); added++; } }
 }
 
+function atomSlug(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 96);
+}
+
+function atomScope(meta, label) {
+  const base = atomSlug(`${meta.universe}_${meta.subjId}_${label}`);
+  const topic =
+    label.includes('math') ? 'math_project'
+    : label.includes('api') ? 'api_migration'
+    : label.includes('proof') ? 'proof_rewrite'
+    : label.includes('design') ? 'design_thread'
+    : 'general_memory';
+  return {
+    projectId: `proj_${base}`,
+    sessionId: `sess_${base}`,
+    topicId: `topic_${topic}`,
+    taskId: `task_${base}`,
+    userScopeId: meta.universe,
+  };
+}
+
+function docSubjectId(d) {
+  return (d.entityIds ?? []).find((id) => /^e_.*_s\d+$/.test(id)) ?? null;
+}
+
+function temporalAttributeForKind(kind) {
+  if (kind === 'temporal_diet') return 'diet';
+  if (kind === 'temporal_city') return 'city';
+  if (kind === 'temporal_package manager') return 'package manager';
+  return null;
+}
+
+function firstDirectDocId(q) {
+  return q.qrels?.find((r) => r.role === 'direct' || r.relevance >= 1)?.docId ?? null;
+}
+
+function addAtomQuery(q) {
+  const id = qId();
+  const split = q.split ?? 'eval_hidden';
+  queries.push({ id, split, ownerScoped: true, ...q });
+  return id;
+}
+
+function annotateExistingAtomV16Metadata() {
+  const metaBySubject = new Map(atomSubjectMeta.map((m) => [m.subjId, m]));
+  const supersededBy = new Map();
+  for (const r of relations) {
+    if (r.label === 'supersedes') supersededBy.set(r.dst, r.src);
+  }
+  for (const e of entities) {
+    if (Array.isArray(e.roleAliases) && e.roleAliases.length > 0) continue;
+    const roles = [];
+    for (const alias of e.aliases ?? []) {
+      const m = String(alias).match(/\bthe\s+(.+)$/i);
+      if (m?.[1]) roles.push(m[1].trim());
+    }
+    if (e.canonicalName?.split(/\s+/).length === 4) roles.push('service');
+    const uniq = [...new Set(roles.filter(Boolean))];
+    if (uniq.length > 0) e.roleAliases = uniq;
+  }
+  const roleAliasesByEntity = new Map(entities.map((e) => [e.id, e.roleAliases ?? []]));
+  for (const d of docs) {
+    const subjectId = docSubjectId(d);
+    const meta = subjectId ? metaBySubject.get(subjectId) : null;
+    if (meta && !d.scope) {
+      const kindKey = atomSlug(d.lifecycleScope ?? d.kind ?? 'memory');
+      d.scope = {
+        projectId: `proj_${atomSlug(`${subjectId}_primary`)}`,
+        sessionId: `sess_${atomSlug(`${subjectId}_${kindKey}`)}`,
+        topicId: `topic_${atomSlug(d.kind ?? 'memory')}`,
+        taskId: `task_${atomSlug(`${subjectId}_${kindKey}`)}`,
+        userScopeId: meta.universe,
+      };
+    }
+    if (subjectId && !d.roleAliases) {
+      const roles = roleAliasesByEntity.get(subjectId) ?? [];
+      if (roles.length > 0) d.roleAliases = roles;
+    }
+    const attr = temporalAttributeForKind(d.kind);
+    if (subjectId && attr && !d.validity) {
+      const nextDoc = supersededBy.get(d.id);
+      d.validity = {
+        subjectEntityId: subjectId,
+        attribute: attr,
+        validFrom: d.timestamp,
+        observedAt: d.timestamp,
+        ...(nextDoc && d.currentStaleFlag === false ? { validUntil: docs.find((x) => x.id === nextDoc)?.timestamp ?? d.timestamp, supersededBy: nextDoc } : {}),
+      };
+    }
+  }
+  for (const q of queries) {
+    const subjectId = q.subjectEntityId ?? null;
+    if (q.family === 'temporal_update' && subjectId && !q.publicIntent) {
+      const direct = docs.find((d) => d.id === firstDirectDocId(q));
+      const attr = direct?.validity?.attribute ?? temporalAttributeForKind(direct?.kind);
+      if (attr) q.publicIntent = { atom: 'validity_atom', subjectEntityId: subjectId, attribute: attr, queryTime: '2026-06-04' };
+    }
+    if (q.family === 'coreference_resolution' && subjectId && !q.publicIntent) {
+      const ent = entities.find((e) => e.id === subjectId);
+      const roleAlias = ent?.roleAliases?.[0];
+      q.publicIntent = {
+        atom: 'entity_resolution_atom',
+        name: ent?.canonicalName,
+        ...(roleAlias ? { roleAlias } : {}),
+      };
+    }
+  }
+}
+
+function addScopeAtomSlice(meta, idx) {
+  const rightScope = atomScope(meta, `math_project_last_week_${idx}`);
+  const wrongProjectScope = { ...rightScope, projectId: `proj_${atomSlug(`${meta.subjId}_finance_week_${idx}`)}`, topicId: 'topic_finance_project' };
+  const wrongSessionScope = { ...rightScope, sessionId: `sess_${atomSlug(`${meta.subjId}_design_tuesday_${idx}`)}`, topicId: 'topic_design_thread' };
+  const endpoint = `solver-${idx.toString().padStart(3, '0')}.math.internal`;
+  const oldEndpoint = `solver-old-${idx.toString().padStart(3, '0')}.math.internal`;
+  const wrongEndpoint = `solver-${idx.toString().padStart(3, '0')}.finance.internal`;
+  const designEndpoint = `design-${idx.toString().padStart(3, '0')}.api.internal`;
+  const common = { lane: 'deep', kind: 'atom_scope_fact', entityIds: [meta.universe, meta.subjId], shape: 'atom_scope_record', timestamp: ts(24 + idx), currentStaleFlag: true, split: 'train_visible' };
+  const stale = addDoc({ ...common, text: `${meta.canonical} used ${oldEndpoint} for the math project from last week before the API migration session.`, scope: rightScope, currentStaleFlag: false });
+  const right = addDoc({ ...common, text: `${meta.canonical} set ${endpoint} for the math project from last week during the API migration session and proof rewrite task.`, scope: rightScope });
+  const wrongProject = addDoc({ ...common, text: `${meta.canonical} set ${wrongEndpoint} for the finance project from last week during a separate API migration session.`, scope: wrongProjectScope });
+  const wrongSession = addDoc({ ...common, text: `${meta.canonical} discussed ${designEndpoint} in the design thread from Tuesday, not the math project.`, scope: wrongSessionScope });
+  rel(right, stale, 'supersedes');
+  addAtomQuery({
+    lane: 'deep',
+    family: 'scope_atom',
+    operationFamily: 'scope_atom',
+    queryText: `For ${meta.canonical}, what endpoint belongs to the math project from last week?`,
+    qrels: [{ docId: right, relevance: 1.0, role: 'direct' }, { docId: stale, relevance: 0.2, role: 'stale' }, { docId: wrongProject, relevance: 0, role: 'wrong_scope' }, { docId: wrongSession, relevance: 0, role: 'wrong_scope' }],
+    hardNegatives: [{ docId: wrongProject, category: 'wrong_scope_near_collision' }, { docId: wrongSession, category: 'wrong_scope_near_collision' }, { docId: stale, category: 'stale_same_scope' }],
+    ownerEntityId: meta.universe,
+    subjectEntityId: meta.subjId,
+    scope: rightScope,
+    publicIntent: { atom: 'scope_atom', ...rightScope },
+    band: 'hard',
+  });
+}
+
+function addValidityAtomSlice(meta, idx) {
+  const attr = 'api endpoint';
+  const scope = atomScope(meta, `api_migration_session_${idx}`);
+  const oldVal = `legacy-${idx.toString().padStart(3, '0')}.api.internal`;
+  const curVal = `current-${idx.toString().padStart(3, '0')}.api.internal`;
+  const retrospectiveVal = `retrospective-${idx.toString().padStart(3, '0')}.api.internal`;
+  const common = { lane: 'deep', kind: 'atom_validity_fact', entityIds: [meta.universe, meta.subjId], shape: 'atom_validity_record', scope, split: 'train_visible' };
+  const stale = addDoc({ ...common, timestamp: '2025-02-01', currentStaleFlag: false,
+    text: `${meta.canonical}'s API migration session used ${oldVal} before the endpoint cutover.`,
+    validity: { subjectEntityId: meta.subjId, attribute: attr, validFrom: '2025-01-01', validUntil: '2025-03-01', observedAt: '2025-02-01' } });
+  const current = addDoc({ ...common, timestamp: '2025-03-02', currentStaleFlag: true,
+    text: `${meta.canonical}'s API migration session current endpoint is ${curVal} after the cutover.`,
+    validity: { subjectEntityId: meta.subjId, attribute: attr, validFrom: '2025-03-01', observedAt: '2025-03-02' } });
+  const retrospective = addDoc({ ...common, timestamp: '2025-08-15', currentStaleFlag: false,
+    text: `A later audit observed that ${meta.canonical} once used ${retrospectiveVal} for the API migration session before March.`,
+    validity: { subjectEntityId: meta.subjId, attribute: attr, validFrom: '2025-01-15', validUntil: '2025-02-15', observedAt: '2025-08-15', supersededBy: current } });
+  docs.find((d) => d.id === stale).validity.supersededBy = current;
+  rel(current, stale, 'supersedes');
+  rel(current, retrospective, 'supersedes');
+  addAtomQuery({
+    lane: 'deep',
+    family: 'validity_atom',
+    operationFamily: 'validity_atom',
+    queryText: `What is ${meta.canonical}'s current API endpoint for the API migration session?`,
+    qrels: [{ docId: current, relevance: 1.0, role: 'direct' }, { docId: stale, relevance: 0.0, role: 'stale' }, { docId: retrospective, relevance: 0.0, role: 'retrospective_stale' }],
+    hardNegatives: [{ docId: retrospective, category: 'newer_observed_stale' }, { docId: stale, category: 'temporal_stale' }],
+    ownerEntityId: meta.universe,
+    subjectEntityId: meta.subjId,
+    scope,
+    publicIntent: { atom: 'validity_atom', subjectEntityId: meta.subjId, attribute: attr, queryTime: '2026-06-04', ...scope },
+    band: 'hard',
+  });
+}
+
+function addEntityResolutionAtomSlice(meta, idx) {
+  const names = ['AtomAxiom Vale', 'AtomBeryl Quay', 'AtomCitrine Rowe', 'AtomDorian Pike', 'AtomEldra Knox', 'AtomFennel Shaw'];
+  const qualifiers = ['Atlas', 'Beacon', 'Cedar', 'Delta', 'Ember', 'Falcon', 'Granite', 'Harbor', 'Ion', 'Juniper', 'Keystone', 'Lumen'];
+  const uniqueTail = `${COLORS[idx % COLORS.length]} ${ANIMALS[Math.floor(idx / COLORS.length) % ANIMALS.length]}`;
+  const canonical = `${names[idx % names.length]} ${qualifiers[Math.floor(idx / names.length) % qualifiers.length]} ${uniqueTail}`;
+  const nameSlug = atomSlug(`${canonical}_${idx}`);
+  const backendId = `e_atom_entity_${nameSlug}_backend`;
+  const designId = `e_atom_entity_${nameSlug}_design`;
+  const scope = atomScope(meta, `entity_api_migration_${idx}`);
+  const wrongScope = { ...scope, taskId: `task_${atomSlug(`${meta.subjId}_design_thread_${idx}`)}`, topicId: 'topic_design_thread' };
+  addEntity(backendId, canonical, [`${canonical} the API migration lead`], 'atom_v16');
+  addEntity(designId, canonical, [`${canonical} the design lead`], 'atom_v16');
+  entities.find((e) => e.id === backendId).roleAliases = ['API migration lead', 'backend lead'];
+  entities.find((e) => e.id === designId).roleAliases = ['design lead'];
+  const retryWindow = `${6 + (idx % 5)} minutes`;
+  const designWindow = `${2 + (idx % 4)} minutes`;
+  const target = addDoc({ lane: 'deep', kind: 'atom_entity_resolution_fact', entityIds: [meta.universe, backendId], roleAliases: ['API migration lead', 'backend lead'], scope, split: 'train_visible',
+    text: `${canonical}, the API migration backend lead, set the retry window to ${retryWindow} for the proof rewrite task.`,
+    shape: 'atom_entity_resolution_record', timestamp: ts(26 + idx), currentStaleFlag: true });
+  const wrongRole = addDoc({ lane: 'deep', kind: 'atom_entity_resolution_fact', entityIds: [meta.universe, designId], roleAliases: ['design lead'], scope: wrongScope, split: 'train_visible',
+    text: `${canonical}, the design lead, set the retry window to ${designWindow} for the design thread from Tuesday.`,
+    shape: 'atom_entity_resolution_record', timestamp: ts(26 + idx), currentStaleFlag: true });
+  rel(target, wrongRole, 'coreference_of');
+  addAtomQuery({
+    lane: 'deep',
+    family: 'entity_resolution_atom',
+    operationFamily: 'entity_resolution_atom',
+    queryText: `What retry window did ${canonical} the API migration lead set?`,
+    qrels: [{ docId: target, relevance: 1.0, role: 'direct' }, { docId: wrongRole, relevance: 0.0, role: 'wrong_entity_same_name' }],
+    hardNegatives: [{ docId: wrongRole, category: 'duplicate_name_wrong_role' }],
+    ownerEntityId: meta.universe,
+    scope,
+    publicIntent: { atom: 'entity_resolution_atom', name: canonical, roleAlias: 'API migration lead', ...scope },
+    band: 'hard',
+  });
+}
+
+function appendAtomV16Slices() {
+  const stride = Number.isFinite(ATOM_V16_SLICE_STRIDE) && ATOM_V16_SLICE_STRIDE > 0 ? ATOM_V16_SLICE_STRIDE : 10;
+  const maxSlices = Number.isFinite(ATOM_V16_MAX_SLICES) && ATOM_V16_MAX_SLICES > 0 ? ATOM_V16_MAX_SLICES : 128;
+  const selected = atomSubjectMeta.filter((_, i) => i % stride === 0).slice(0, maxSlices);
+  for (let i = 0; i < selected.length; i++) {
+    addScopeAtomSlice(selected[i], i);
+    addValidityAtomSlice(selected[i], i);
+    addEntityResolutionAtomSlice(selected[i], i);
+  }
+}
+
+if (ATOM_V16_METADATA) {
+  annotateExistingAtomV16Metadata();
+  appendAtomV16Slices();
+}
+
 const out = {
-  specVersion: 'coretex.memory-corpus.dgen1.r1', phase: PHASE, seed: SEED,
+  specVersion: ATOM_V16_METADATA ? 'coretex.memory-corpus.dgen1.r1.atom-v16' : 'coretex.memory-corpus.dgen1.r1', phase: PHASE, seed: SEED,
   generator: 'generate-dgen1-corpus.mjs',
-  params: { subjects: N_SUBJECTS, depth: DEPTH, universes: N_UNIVERSES, r5Synthesis: R5_SYNTHESIS },
+  params: { subjects: N_SUBJECTS, depth: DEPTH, universes: N_UNIVERSES, r5Synthesis: R5_SYNTHESIS, atomV16Metadata: ATOM_V16_METADATA, ...(ATOM_V16_METADATA ? { atomV16SliceStride: ATOM_V16_SLICE_STRIDE, atomV16MaxSlices: ATOM_V16_MAX_SLICES } : {}) },
   splitRatios: { trainVisiblePct: 70, calibrationPct: 10, evalHiddenPct: 15, canaryPct: 5 },
   description: `DGEN-1 generator-native deep-memory longevity corpus: one coherent deep universe, unique in-universe subjects, deep sessions + 3-10 temporal revisions + relation/decision/coreference provenance, dense same-universe distractors, hidden difficulty bands. ${R5_SYNTHESIS ? 'Includes opt-in r5 synthesis slices for conflict lifecycle, aspect constraints, and abstention/no-answer.' : 'NO synthetic re-pooling.'}`,
-  dgen1: { universes, families: ['temporal_update', 'multi_session_bridge', 'causal_memory_chain', 'decision_provenance', 'coreference_resolution', ...(R5_SYNTHESIS ? ['conflict_lifecycle', 'aspect_constraint', 'abstention_missing'] : [])], continuityLabels: Object.keys(EDGE), bands: ['easy', 'medium', 'hard', 'very_hard', 'exhaustion'], r5Synthesis: R5_SYNTHESIS },
+  dgen1: { universes, families: ['temporal_update', 'multi_session_bridge', 'causal_memory_chain', 'decision_provenance', 'coreference_resolution', ...(R5_SYNTHESIS ? ['conflict_lifecycle', 'aspect_constraint', 'abstention_missing'] : []), ...(ATOM_V16_METADATA ? ['validity_atom', 'entity_resolution_atom', 'scope_atom'] : [])], continuityLabels: Object.keys(EDGE), bands: ['easy', 'medium', 'hard', 'very_hard', 'exhaustion'], r5Synthesis: R5_SYNTHESIS, atomV16Metadata: ATOM_V16_METADATA },
   entities, docs, relations, queries,
 };
 writeFileSync(OUT, JSON.stringify(out));

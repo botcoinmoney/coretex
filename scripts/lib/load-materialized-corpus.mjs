@@ -29,10 +29,14 @@ const { computeCorpusRoot, biEncoderModelIdHash, buildCorpusRootLeafCache, build
 function sha256File(p) { return '0x' + createHash('sha256').update(readFileSync(p)).digest('hex'); }
 function hexToU8(hex) { return new Uint8Array(Buffer.from(hex, 'hex')); }
 
-function resolveArtifactPaths(bundlePath) {
+function resolveMaterializedRoot(opts = {}) {
+  return resolve(repoRoot, opts.materializedRoot ?? process.env.CORETEX_MATERIALIZED_ROOT ?? 'release/calibration/2026-05-21-memory-corpus-v2/materialized');
+}
+
+function resolveArtifactPaths(bundlePath, opts = {}) {
   const bundle = JSON.parse(readFileSync(resolve(repoRoot, bundlePath), 'utf8'));
   const tag = (bundle.bundleHash ?? '0xunknown').slice(2, 10);
-  const dir = resolve(repoRoot, 'release/calibration/2026-05-21-memory-corpus-v2/materialized', tag);
+  const dir = resolve(resolveMaterializedRoot(opts), tag);
   return {
     bundle, tag, dir,
     corpusJson: resolve(dir, 'corpus.json'),
@@ -212,10 +216,10 @@ function streamEvents(ndjsonPath, maxN) {
 
 /**
  * @param {string} bundlePath
- * @param {{sourceCorpusPath?:string, sourceEmbPath?:string, verifyCorpusRoot?:boolean}} [opts]
+ * @param {{sourceCorpusPath?:string, sourceEmbPath?:string, verifyCorpusRoot?:boolean, materializedRoot?:string}} [opts]
  */
 export function loadMaterializedCorpus(bundlePath, opts = {}) {
-  const { bundle, manifest, ndjson, corpusJson, rootLeaves } = resolveArtifactPaths(bundlePath);
+  const { bundle, manifest, ndjson, corpusJson, rootLeaves } = resolveArtifactPaths(bundlePath, opts);
   const m = assertManifest(manifest, bundle.bundleHash, opts.sourceCorpusPath, opts.sourceEmbPath);
   if (!existsSync(ndjson)) throw new Error(`HARD FAIL: ndjson sidecar missing: ${ndjson}`);
   const head = JSON.parse(readFileSync(corpusJson, 'utf8'));
@@ -270,7 +274,7 @@ export function loadV2CompatBundle(bundlePath, sourceCorpusPath, sourceEmbPath) 
  * at least some eval_hidden events).
  */
 export function loadMaterializedCorpusSlice(bundlePath, n, opts = {}) {
-  const { bundle, manifest, ndjson } = resolveArtifactPaths(bundlePath);
+  const { bundle, manifest, ndjson } = resolveArtifactPaths(bundlePath, opts);
   const m = assertManifest(manifest, bundle.bundleHash);
   if (!existsSync(ndjson)) throw new Error(`HARD FAIL: ndjson sidecar missing: ${ndjson}`);
   // minEvalHidden guarantees at least M eval_hidden events in the slice (needed for frontier);

@@ -32,6 +32,7 @@
  *     --profile <p> --bundle <b> --corpus <c> --emb <e> --out <outdir> --tag <tag>
  *     [--epochs 12] [--churn-fraction 0.05] [--seed <s>] [--honest-per-epoch 3]
  *     [--random-probes 4] [--hillclimb-probes 2] [--pack-size 64] [--clear-pack-quotas]
+ *     [--materialized-root release/calibration/.../materialized]
  *     [--mock-embeddings]   # CPU mechanics/report smoke only; A100 minis use real embeddings.
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -43,7 +44,7 @@ import { evolveCorpusDelta } from './lib/evolve-corpus.mjs';
 import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadMaterializedCorpus } from './lib/load-materialized-corpus.mjs';
 import { embedTexts } from './_embed-v2.mjs';
-import { hseed, mulberry32, randomPatch, relationUnits, relationUnitsForEdges, temporalUnits, conflictUnits, abstentionUnits } from './lib/v2-patch-families.mjs';
+import { hseed, mulberry32, randomPatch, relationUnits, relationUnitsForEdges, temporalUnits, conflictUnits, abstentionUnits, atomAnchorUnits, buildMemoryEventByDocId } from './lib/v2-patch-families.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
 import { makeInstrumentedReranker } from './lib/instrumented-reranker.mjs';
 import { calibrationProvenance } from './lib/calibration-provenance.mjs';
@@ -80,11 +81,13 @@ const HONEST_PER_EPOCH = Number(flag('honest-per-epoch', '3'));
 const RANDOM_PROBES = Number(flag('random-probes', '4'));
 const HILLCLIMB_PROBES = Number(flag('hillclimb-probes', '2'));
 const PACK_SIZE = Number(flag('pack-size', '64'));
+const LIVE_EVAL_PACK_LIMIT = Number(flag('live-eval-pack-limit', '32'));
 const CLEAR_PACK_QUOTAS = has('clear-pack-quotas');
 const MOCK_EMBEDDINGS = has('mock-embeddings');
 const TRACE_DIAGNOSTICS = has('trace-diagnostics');
 const TRACE_LIMIT = Number(flag('trace-limit', '5'));
 const DISABLE_QWEN_CACHE = has('disable-qwen-cache');
+const MATERIALIZED_ROOT = flag('materialized-root', env.CORETEX_MATERIALIZED_ROOT ?? undefined);
 
 if (!PROFILE_PATH || !BUNDLE_PATH || !CORPUS_PATH || !EMB_PATH || !OUTDIR) {
   console.error('HARD FAIL: --profile, --bundle, --corpus, --emb, --out required');
@@ -94,12 +97,14 @@ if (!PROFILE_PATH || !BUNDLE_PATH || !CORPUS_PATH || !EMB_PATH || !OUTDIR) {
 mkdirSync(resolve(repoRoot, OUTDIR), { recursive: true });
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, PROFILE_PATH), 'utf8'));
+const OLD_CORPUS_DAMAGE_TOLERANCE_PPM = Number(flag('old-corpus-damage-tolerance-ppm', String(profile.replayTolerancePpm ?? 250)));
 const frontierSeed = SEED_OVERRIDE ?? profile.epochFrontier?.seed ?? 'coretex-launch-frontier';
 console.log(`[live-evolve] profile=${PROFILE_PATH} bundle=${BUNDLE_PATH}`);
 console.log(`[live-evolve] corpus=${CORPUS_PATH} epochs=${EPOCHS} churn=${CHURN_FRACTION} seed=${frontierSeed}`);
+console.log(`[live-evolve] old-corpus damage tolerance=${OLD_CORPUS_DAMAGE_TOLERANCE_PPM}ppm`);
 
 console.log('[live-evolve] loading materialized base production corpus (NO rebuild) ...');
-const baseBundle = loadMaterializedCorpus(BUNDLE_PATH, { sourceCorpusPath: CORPUS_PATH, sourceEmbPath: EMB_PATH });
+const baseBundle = loadMaterializedCorpus(BUNDLE_PATH, { sourceCorpusPath: CORPUS_PATH, sourceEmbPath: EMB_PATH, ...(MATERIALIZED_ROOT ? { materializedRoot: MATERIALIZED_ROOT } : {}) });
 let currentProd = baseBundle.corpus;
 const { BE, RR, LAYOUT } = baseBundle;
 const provenance = calibrationProvenance({
@@ -208,6 +213,7 @@ function buildPolicyEntityRegistry(logical) {
   return (logical.entities ?? []).map((e) => ({
     id: e.id,
     names: [e.canonicalName, ...(e.aliases ?? [])].filter(Boolean).map((n) => String(n).toLowerCase()),
+    roleAliases: (e.roleAliases ?? []).filter(Boolean).map((n) => String(n).toLowerCase()),
   }));
 }
 let policyEntityRegistryCached = buildPolicyEntityRegistry(currentLogical);
@@ -226,6 +232,11 @@ async function evaluatePack(prod, pack, telemetry = null, trace = false) {
   const res = await evaluateRetrievalBenchmarkState(makeGenesisState(), prod, pack, opts);
   return { scorePpm: Math.round((res.compositeScore ?? res.composite ?? 0) * 1_000_000), score: res };
 }
+async function evaluateStateOnPack(state, prod, pack, telemetry = null, trace = false) {
+  const opts = optsForProd(telemetry, trace);
+  const res = await evaluateRetrievalBenchmarkState(state, prod, pack, opts);
+  return { scorePpm: Math.round((res.compositeScore ?? res.composite ?? 0) * 1_000_000), score: res };
+}
 async function scoreOnPack(prod, pack, telemetry = null) {
   return (await evaluatePack(prod, pack, telemetry, false)).scorePpm;
 }
@@ -242,6 +253,87 @@ function compareQueries(before, after) {
     out.push({ recordId: q.recordId, family: q.family, before: prev, after: q, deltaNdcg: q.nDCG10 - prev.nDCG10 });
   }
   return out;
+}
+function meanByFamily(score) {
+  const buckets = new Map();
+  for (const q of score?.perQuery ?? []) {
+    const arr = buckets.get(q.family) ?? [];
+    arr.push(q.nDCG10 ?? 0);
+    buckets.set(q.family, arr);
+  }
+  return Object.fromEntries([...buckets.entries()].map(([family, vals]) => [family, vals.reduce((a, b) => a + b, 0) / Math.max(1, vals.length)]));
+}
+function oldFamilyRegression(before, after, familyCatastrophicFloor) {
+  const beforeByFamily = meanByFamily(before);
+  const afterByFamily = meanByFamily(after);
+  const regressions = [];
+  for (const family of Object.keys(beforeByFamily)) {
+    if (family === 'validity_atom' || family === 'scope_atom' || family === 'entity_resolution_atom') continue;
+    const beforeVal = beforeByFamily[family] ?? 0;
+    const afterVal = afterByFamily[family] ?? 0;
+    if (beforeVal > 0 && afterVal < familyCatastrophicFloor * beforeVal) {
+      regressions.push({ family, before: beforeVal, after: afterVal, floor: familyCatastrophicFloor });
+    }
+  }
+  return regressions;
+}
+function worstQueryDelta(before, after) {
+  const deltas = compareQueries(before, after).map((c) => c.deltaNdcg);
+  return deltas.length ? Math.min(...deltas) : 0;
+}
+function stablePackForOldCorpusPair(pack, oldCorpus, newCorpus) {
+  const excluded = [];
+  const events = [];
+  for (const ev of pack.events ?? []) {
+    if (!oldCorpus.byId.has(ev.id) || !newCorpus.byId.has(ev.id)) {
+      excluded.push(ev.id);
+      continue;
+    }
+    events.push(oldCorpus.byId.get(ev.id) ?? ev);
+  }
+  return { pack: { ...pack, events }, excluded };
+}
+async function buildAcceptanceDecomposition({ parentState, candidateState, oldCorpus, newCorpus, oldPack, newPack, newBefore, newAfter, telemetry }) {
+  const oldBefore = await evaluateStateOnPack(parentState, oldCorpus, oldPack, telemetry, false);
+  const oldAfter = await evaluateStateOnPack(candidateState, oldCorpus, oldPack, telemetry, false);
+  const oldCorpusOldStatePpm = oldBefore.scorePpm;
+  const oldCorpusNewStatePpm = oldAfter.scorePpm;
+  const newCorpusOldStatePpm = Math.round((newBefore.compositeScore ?? newBefore.composite ?? 0) * 1_000_000);
+  const newCorpusNewStatePpm = Math.round((newAfter.compositeScore ?? newAfter.composite ?? 0) * 1_000_000);
+  const oldCorpusDamagePpm = oldCorpusNewStatePpm - oldCorpusOldStatePpm;
+  const corpusDriftPpm = newCorpusOldStatePpm - oldCorpusOldStatePpm;
+  const patchRecoveryPpm = newCorpusNewStatePpm - newCorpusOldStatePpm;
+  const netAfterRecoveryPpm = newCorpusNewStatePpm - oldCorpusOldStatePpm;
+  const oldFamilyRegressions = oldFamilyRegression(
+    oldBefore.score,
+    oldAfter.score,
+    profile.patchAcceptanceFloors?.familyCatastrophicFloor ?? 0.85,
+  );
+  const worstOldQueryDeltaNdcg = worstQueryDelta(oldBefore.score, oldAfter.score);
+  const passesRecovery = patchRecoveryPpm > (baselineFloors.acceptanceThresholdPpm ?? baselineFloors.minImprovementPpm ?? 2500);
+  const passesOldCorpusDamage = oldCorpusDamagePpm >= -OLD_CORPUS_DAMAGE_TOLERANCE_PPM;
+  const passesOldFamilyRegression = oldFamilyRegressions.length === 0;
+  const passesGoldDamage = worstOldQueryDeltaNdcg >= -(profile.patchAcceptanceFloors?.protectedRegressionFloor ?? 0.05);
+  return {
+    oldCorpusOldStatePpm,
+    oldCorpusNewStatePpm,
+    newCorpusOldStatePpm,
+    newCorpusNewStatePpm,
+    oldCorpusDamagePpm,
+    corpusDriftPpm,
+    patchRecoveryPpm,
+    netAfterRecoveryPpm,
+    oldCorpusPairQueryCount: oldPack.events.length,
+    newCorpusPairQueryCount: newPack.events.length,
+    worstOldQueryDeltaNdcg,
+    oldFamilyRegressions,
+    acceptanceComponents: {
+      passesRecovery,
+      passesOldCorpusDamage,
+      passesOldFamilyRegression,
+      passesGoldDamage,
+    },
+  };
 }
 function stableSample(items, n, seed) {
   const a = [...items];
@@ -287,6 +379,59 @@ function topK(q, k = 10) {
     categoryLensBonus: r.categoryLensBonus,
     temporalBonus: r.temporalBonus,
   }));
+}
+function rankOfDoc(q, docId) {
+  if (!q || !docId) return null;
+  const hit = (q.finalRankingTop20 ?? []).find((r) => r.docId === docId);
+  return hit?.rank ?? null;
+}
+function targetDocDiagnostics({ targetDocId, before, after, pack, patch }) {
+  if (!targetDocId) return null;
+  const beforeById = queryMap(before);
+  const afterById = queryMap(after);
+  const truthMatches = [];
+  const hardNegativeMatches = [];
+  for (const ev of pack.events ?? []) {
+    const isTruth = (ev.truthDocuments ?? []).some((d) => d.id === targetDocId)
+      || (ev.qrels ?? []).some((q) => q.documentId === targetDocId && (q.relevance ?? 0) > 0);
+    const isHardNegative = (ev.hardNegatives ?? []).some((d) => d.id === targetDocId);
+    if (isTruth) truthMatches.push(ev);
+    if (isHardNegative) hardNegativeMatches.push(ev);
+  }
+  const rows = truthMatches.slice(0, 8).map((ev) => {
+    const beforeQ = beforeById.get(ev.id);
+    const afterQ = afterById.get(ev.id);
+    return {
+      recordId: ev.id,
+      family: ev.logicalFamily ?? ev.family ?? null,
+      queryText: ev.queryText,
+      beforeNdcg: beforeQ?.nDCG10 ?? null,
+      afterNdcg: afterQ?.nDCG10 ?? null,
+      deltaNdcg: beforeQ && afterQ ? afterQ.nDCG10 - beforeQ.nDCG10 : null,
+      beforeTargetRankTop20: rankOfDoc(beforeQ, targetDocId),
+      afterTargetRankTop20: rankOfDoc(afterQ, targetDocId),
+      beforeTemporalRecordDriven: beforeQ?.temporalRecordDriven ?? false,
+      afterTemporalRecordDriven: afterQ?.temporalRecordDriven ?? false,
+      beforeMemoryIRDriven: beforeQ?.memoryIRDriven ?? false,
+      afterMemoryIRDriven: afterQ?.memoryIRDriven ?? false,
+      beforePolicyTraceDriven: beforeQ?.policyTraceDriven ?? false,
+      afterPolicyTraceDriven: afterQ?.policyTraceDriven ?? false,
+      beforeTopK: topK(beforeQ, 5),
+      afterTopK: topK(afterQ, 5),
+    };
+  });
+  return {
+    targetDocId,
+    patchType: patch?.patchType ?? null,
+    patchWordCount: patch?.wordCount ?? null,
+    patchIndices: (patch?.indices ?? []).slice(0, 16),
+    patchNewWordsHex: (patch?.newWords ?? []).slice(0, 16).map((w) => `0x${w.toString(16)}`),
+    activeTruthQueryCount: truthMatches.length,
+    activeHardNegativeQueryCount: hardNegativeMatches.length,
+    activeTruthQueryIds: truthMatches.slice(0, 16).map((ev) => ev.id),
+    activeHardNegativeQueryIds: hardNegativeMatches.slice(0, 16).map((ev) => ev.id),
+    targetTruthQueries: rows,
+  };
 }
 function renderedTop(q, k = 10) {
   return (q?.renderedCandidatesTop20 ?? []).slice(0, k).map((r) => ({
@@ -391,6 +536,24 @@ function filterPackToHeldout(pack, activeIds) {
   const events = pack.events.filter((e) => !activeIds.has(e.id));
   return { ...pack, events };
 }
+function forceActiveLiveEvalEvents(pack, corpus, activeIds, limit = 32) {
+  if (!limit || limit <= 0) return { pack, added: 0, liveEvalInPack: 0 };
+  const existing = new Set(pack.events.map((e) => e.id));
+  const alreadyLive = pack.events.filter((e) => activeIds.has(e.id)
+    && e.split === 'eval_hidden'
+    && e.id.startsWith('zz_e')
+    && !e.id.includes('_mem_')).length;
+  const live = corpus.events
+    .filter((e) => activeIds.has(e.id)
+      && e.split === 'eval_hidden'
+      && e.id.startsWith('zz_e')
+      && !e.id.includes('_mem_')
+      && !existing.has(e.id))
+    .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+    .slice(0, limit);
+  if (!live.length) return { pack, added: 0, liveEvalInPack: alreadyLive };
+  return { pack: { ...pack, events: [...live, ...pack.events] }, added: live.length, liveEvalInPack: alreadyLive + live.length };
+}
 // Permuted-qrels control. Renamed/clarified: this probe MEASURES whether the evaluator
 // uses qrels to compute nDCG (it does — that's by design). It DOES NOT measure whether
 // the scorer depends on doc IDs vs text — the scorer's reranker is text-based, so a real
@@ -438,17 +601,25 @@ const GENESIS_PARENT_ROOT = merkleizeState({ words: new Array(1024).fill(0n) });
 //                               the causal fp so they coexist as separate operations.
 //   - 'abstention'            : MISSING_EVIDENCE PolicyAtom (1 word; pack must contain at
 //                               least one abstention_missing query).
+//   - 'validity_atom'         : TemporalRecord over a validity_atom current/stale pair.
+//   - 'scope_atom'            : policy-anchor MemoryIndex slot selected by public scope metadata.
+//   - 'entity_resolution_atom': policy-anchor MemoryIndex slot selected by duplicate-name role metadata.
 //
 // Add fingerprints here by name; the loop below dispatches by switch. Each family records a
 // distinct operationFingerprint and selectorFingerprint so per-fp accept/reject is auditable.
-const HONEST_FAMILIES = (flag('honest-families', 'relation_causal,temporal,conflict,relation_lifecycle,abstention').split(',').map((s) => s.trim()).filter(Boolean));
+const HONEST_FAMILIES = (flag('honest-families', 'relation_causal,temporal,conflict,relation_lifecycle,abstention,validity_atom,scope_atom,entity_resolution_atom').split(',').map((s) => s.trim()).filter(Boolean));
 function makeHonestSlotCursor() {
   return {
     temporalRecord: 0,          // TemporalRecord slot index (cap 96)
     temporalSkipDocs: new Set(), // mined temporal-current doc IDs
-    conflictSlot: 0,            // POLICY_CONFLICT atom slot index (cap 128)
+    validitySkipDocs: new Set(), // mined validity-current doc IDs
+    conflictSlot: 96,           // POLICY_CONFLICT atom slot index (cap 128); disjoint from temporal memory slots
     conflictSkipDocs: new Set(), // anchored conflict doc IDs
     abstentionSlot: 0,          // POLICY_ABSTENTION slot index (cap 32)
+    scopeSlot: 220,             // MemoryIndex policy-anchor slot for scope_atom
+    scopeSkipDocs: new Set(),
+    entitySlot: 160,            // MemoryIndex policy-anchor slot for entity_resolution_atom
+    entitySkipDocs: new Set(),
     relationCausalEntries: 2,   // bottom 2 entries reserved for supports,causes (entryOffset 0..1)
     relationLifecycleEntries: 2,// next 2 entries reserved for supersedes,coreference_of (entryOffset 2..3)
   };
@@ -463,6 +634,9 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
       'honest:temporal:current_stale':                            'public-temporal-currentStale-pack-mined',
       'honest:conflict:CONFLICT_SET_MEMBER:boost':                'public-policy-CONFLICT_SET_MEMBER:CONTRADICTS_EDGE:boost',
       'honest:abstention:MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH':'public-policy-MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH:abstain',
+      'honest:validity_atom:temporal_record':                     'public-validity-subject-attribute-currentStale-pack-mined',
+      'honest:scope_atom:constrain':                              'public-scope-project-session-topic-task-selector',
+      'honest:entity_resolution_atom:prefer':                     'public-entity-duplicate-name-role-alias-selector',
     })[op] ?? op,
   });
   const target = addedDocs[honestIdx % Math.max(1, addedDocs.length)] ?? null;
@@ -490,13 +664,22 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     return makePatchFrom(u, 'honest:relation(2):lifecycle:supersedes,coreference_of', target?.id ?? null);
   }
   if (family === 'temporal') {
-    const u = temporalUnits({ pack, logicalQById, recordSlot: slotCursor.temporalRecord, skipDocIds: slotCursor.temporalSkipDocs });
+    const u = temporalUnits({ pack, logicalQById, recordSlot: slotCursor.temporalRecord, skipDocIds: slotCursor.temporalSkipDocs, eventByDocId });
     if (!u.indices.length || u.recordsCompiled === 0) {
       return { skipped: true, family, reason: u.reason ?? 'no_temporal_pack_query_available', fingerprint: `honest:temporal:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:temporal:current_stale', selectorFingerprint: 'public-temporal-currentStale-pack-mined' };
     }
     slotCursor.temporalRecord += 1;
     slotCursor.temporalSkipDocs.add(u.minedDocId);
     return makePatchFrom(u, 'honest:temporal:current_stale', u.minedDocId, { temporalRecordSlot: slotCursor.temporalRecord - 1 });
+  }
+  if (family === 'validity_atom') {
+    const u = temporalUnits({ pack, logicalQById, recordSlot: slotCursor.temporalRecord, skipDocIds: slotCursor.validitySkipDocs, eventByDocId, families: ['validity_atom'] });
+    if (!u.indices.length || u.recordsCompiled === 0) {
+      return { skipped: true, family, reason: u.reason ?? 'no_validity_atom_pack_query_available', fingerprint: `honest:validity_atom:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:validity_atom:temporal_record', selectorFingerprint: 'public-validity-subject-attribute-currentStale-pack-mined' };
+    }
+    slotCursor.temporalRecord += 1;
+    slotCursor.validitySkipDocs.add(u.minedDocId);
+    return makePatchFrom(u, 'honest:validity_atom:temporal_record', u.minedDocId, { temporalRecordSlot: slotCursor.temporalRecord - 1 });
   }
   if (family === 'conflict') {
     const u = conflictUnits({ pack, logicalQById, eventByDocId, conflictSlot: slotCursor.conflictSlot, action: 'boost', skipDocIds: slotCursor.conflictSkipDocs });
@@ -515,6 +698,24 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     slotCursor.abstentionSlot += 1;
     return makePatchFrom(u, 'honest:abstention:MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH', null, { abstentionAtomSlot: u.slot });
   }
+  if (family === 'scope_atom') {
+    const u = atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily: 'scope_atom', memorySlot: slotCursor.scopeSlot, skipDocIds: slotCursor.scopeSkipDocs });
+    if (!u.indices.length) {
+      return { skipped: true, family, reason: u.reason ?? 'no_scope_atom_pack_query_available', fingerprint: `honest:scope_atom:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:scope_atom:constrain', selectorFingerprint: 'public-scope-project-session-topic-task-selector' };
+    }
+    slotCursor.scopeSlot += 1;
+    slotCursor.scopeSkipDocs.add(u.minedDocId);
+    return makePatchFrom(u, 'honest:scope_atom:constrain', u.minedDocId, { scopeAtomSlot: u.slot });
+  }
+  if (family === 'entity_resolution_atom') {
+    const u = atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily: 'entity_resolution_atom', memorySlot: slotCursor.entitySlot, skipDocIds: slotCursor.entitySkipDocs });
+    if (!u.indices.length) {
+      return { skipped: true, family, reason: u.reason ?? 'no_entity_resolution_atom_pack_query_available', fingerprint: `honest:entity_resolution_atom:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:entity_resolution_atom:prefer', selectorFingerprint: 'public-entity-duplicate-name-role-alias-selector' };
+    }
+    slotCursor.entitySlot += 1;
+    slotCursor.entitySkipDocs.add(u.minedDocId);
+    return makePatchFrom(u, 'honest:entity_resolution_atom:prefer', u.minedDocId, { entityResolutionAtomSlot: u.slot });
+  }
   return { skipped: true, family, reason: `unknown_family:${family}`, fingerprint: `honest:unknown:${family}:e${epoch}:h${honestIdx}`, operationFingerprint: `honest:unknown:${family}`, selectorFingerprint: 'unknown' };
 }
 
@@ -529,6 +730,7 @@ const bucketFamily = (f) => f === 'temporal_update' ? 'temporal'
   : f === 'conflict_lifecycle' ? 'conflict_lifecycle'
   : f === 'aspect_constraint' ? 'aspect_constraint'
   : f === 'coreference_resolution' ? 'coreference'
+  : (f === 'validity_atom' || f === 'scope_atom' || f === 'entity_resolution_atom') ? f
   : 'near_collision';
 const frontier = makeLaunchFrontier(profile, currentProd);
 if (!frontier) {
@@ -557,8 +759,11 @@ let prevHeldoutDetailed = prevHeldoutEval?.score ?? null;
 console.log(`[live-evolve] genesis activeScore=${prevActiveScorePpm}ppm heldoutScore=${prevHeldoutScorePpm}ppm`);
 
 const operationReuseSet = new Set();
+const selectorReuseSet = new Set();
 let acceptedOperationCount = 0;
 let acceptedOperationReuseCount = 0;
+let acceptedSelectorCount = 0;
+let acceptedSelectorReuseCount = 0;
 let bestState = makeGenesisState();
 const perEpoch = [];
 const baselineFloors = { ...profile.patchAcceptanceFloors, acceptanceThresholdPpm: profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500 };
@@ -569,8 +774,21 @@ const baselineFloors = { ...profile.patchAcceptanceFloors, acceptanceThresholdPp
 const honestSlotCursor = makeHonestSlotCursor();
 // Per-epoch logical query/event-id maps refreshed after evolveCorpusDelta extends currentLogical.
 let logicalQById = new Map(currentLogical.queries.map((q) => [q.id, q]));
+const liveLogicalQByProductionId = new Map();
 let eventByDocId = new Map();
-for (const ev of currentProd.events) eventByDocId.set(ev.id, ev);
+eventByDocId = buildMemoryEventByDocId(currentProd);
+
+function atomFamilyForFingerprint(fp) {
+  if (!fp) return 'unknown';
+  if (fp.includes('validity_atom')) return 'validity_atom';
+  if (fp.includes('scope_atom')) return 'scope_atom';
+  if (fp.includes('entity_resolution_atom')) return 'entity_resolution_atom';
+  if (fp.includes('temporal')) return 'temporal_update';
+  if (fp.includes('conflict')) return 'conflict_lifecycle';
+  if (fp.includes('abstention')) return 'abstention_top1';
+  if (fp.includes('relation')) return 'relation';
+  return 'unknown';
+}
 
 for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   const epochStartMs = Date.now();
@@ -611,6 +829,12 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     addedQueryEmbeddings,
     biEncoder: { modelId: BE.modelId, revision: BE.revision, layout: LAYOUT },
   });
+  const addedLogicalByKey = new Map(ld.addedQueries.map((q) => [`${q.family}\n${q.queryText}`, q]));
+  for (const ev of additions) {
+    if (ev.truthDocuments.length === 1 && ev.id.includes('_mem_')) continue;
+    const q = addedLogicalByKey.get(`${ev.logicalFamily ?? ev.family}\n${ev.queryText}`);
+    if (q) liveLogicalQByProductionId.set(ev.id, q);
+  }
   mark('bridgeLogicalDelta');
 
   const rootCacheBefore = currentProd.corpusRootCache ?? null;
@@ -643,8 +867,11 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   const baselineRecomputedBecause = corpusRootChanged ? 'corpusRootChanged' : (activeRootChanged ? 'activeRootChanged' : null);
 
   const fullPack = deriveQueryPack(0, evalSeedHex, newProd, hiddenPackProfile);
-  const activePack = filterPackToActive(fullPack, frontierSnap.activeIds);
+  let activePack = filterPackToActive(fullPack, frontierSnap.activeIds);
+  const activeLiveEvalPack = forceActiveLiveEvalEvents(activePack, newProd, frontierSnap.activeIds, LIVE_EVAL_PACK_LIMIT);
+  activePack = activeLiveEvalPack.pack;
   const heldoutPack = filterPackToHeldout(fullPack, frontierSnap.activeIds);
+  const oldCorpusPair = stablePackForOldCorpusPair(prevActivePack, currentProd, newProd);
   for (const ev of activePack.events) if (!frontierSnap.activeIds.has(ev.id)) { console.error(`HARD FAIL: epoch ${epoch} activePack contains id ${ev.id} not in frontierSnap.activeIds`); exit(1); }
   const idShuffledActivePack = buildIdShuffledPack(activePack);
   mark('evalPackRefresh');
@@ -678,15 +905,21 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   const honestPerPatch = [];
   const acceptsByFingerprint = {};
   const attemptsByFingerprint = {};
+  const attemptsByAtomFamily = {};
+  const acceptsByAtomFamily = {};
+  const operationReuseByAtomFamily = {};
+  const selectorReuseByAtomFamily = {};
   // Refresh logical-query and event-by-doc maps post-evolve so this epoch's pack-mined patches
   // can resolve newly-added queries and event ids.
-  logicalQById = new Map(currentLogical.queries.map((q) => [q.id, q]));
-  eventByDocId = new Map(); for (const ev of newProd.events) eventByDocId.set(ev.id, ev);
+  logicalQById = new Map([...currentLogical.queries.map((q) => [q.id, q]), ...liveLogicalQByProductionId]);
+  eventByDocId = buildMemoryEventByDocId(newProd);
   for (let h = 0; h < HONEST_PER_EPOCH; h++) {
     const family = HONEST_FAMILIES[h % HONEST_FAMILIES.length];
     const hp = honestPatchForEpoch(epoch, h, family, { pack: activePack, logicalQById, eventByDocId, addedDocs: ld.addedDocs, slotCursor: honestSlotCursor });
     if (!hp) break;
     attemptsByFingerprint[hp.operationFingerprint] = (attemptsByFingerprint[hp.operationFingerprint] ?? 0) + 1;
+    const fpFamily = atomFamilyForFingerprint(hp.operationFingerprint);
+    attemptsByAtomFamily[fpFamily] = (attemptsByAtomFamily[fpFamily] ?? 0) + 1;
     if (hp.skipped) {
       honestPerPatch.push({ h, family, accepted: false, deltaPpm: 0, heldoutDeltaPpm: null, reason: `skipped:${hp.reason}`, fingerprint: hp.fingerprint, operationFingerprint: hp.operationFingerprint, selectorFingerprint: hp.selectorFingerprint, targetDocId: null, targetDocIdRecordedOnly: true });
       continue;
@@ -694,26 +927,75 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     qualityAttemptsThisEpoch++;
     try {
       const tracePatch = TRACE_DIAGNOSTICS;
-      const r = await evaluateRetrievalBenchmarkPatch(makeGenesisState(), hp.patch, newProd, activePack, optsForProd(epochScoringTelemetry, tracePatch), baselineFloors);
+      const parentState = bestState;
+      const candidatePatch = { ...hp.patch, parentStateRoot: merkleizeState(parentState) };
+      const opts = optsForProd(epochScoringTelemetry, tracePatch);
+      const appliedForDecomposition = applyPatch(parentState, candidatePatch, opts.policyAtomsMode === true);
+      if (!appliedForDecomposition?.ok) {
+        honestPerPatch.push({
+          h, family,
+          accepted: false,
+          deltaPpm: 0,
+          heldoutDeltaPpm: null,
+          reason: `apply_failed:${appliedForDecomposition?.code ?? 'unknown'}`,
+          fingerprint: hp.fingerprint,
+          operationFingerprint: hp.operationFingerprint,
+          selectorFingerprint: hp.selectorFingerprint,
+          targetDocId: hp.targetDocId,
+          targetDocIdRecordedOnly: true,
+        });
+        continue;
+      }
+      const r = await evaluateRetrievalBenchmarkPatch(parentState, candidatePatch, newProd, activePack, opts, baselineFloors);
       const heldoutPatch = tracePatch && heldoutPack.events.length
-        ? await evaluateRetrievalBenchmarkPatch(makeGenesisState(), hp.patch, newProd, heldoutPack, optsForProd(epochScoringTelemetry, true), baselineFloors)
+        ? await evaluateRetrievalBenchmarkPatch(parentState, candidatePatch, newProd, heldoutPack, optsForProd(epochScoringTelemetry, true), baselineFloors)
         : null;
-      const accepted = !!r.accepted;
+      const acceptanceDecomposition = await buildAcceptanceDecomposition({
+        parentState,
+        candidateState: appliedForDecomposition.state,
+        oldCorpus: currentProd,
+        newCorpus: newProd,
+        oldPack: oldCorpusPair.pack,
+        newPack: activePack,
+        newBefore: r.before,
+        newAfter: r.after,
+        telemetry: epochScoringTelemetry,
+      });
+      const c = acceptanceDecomposition.acceptanceComponents;
+      const accepted = !!r.accepted
+        && c.passesRecovery
+        && c.passesOldCorpusDamage
+        && c.passesOldFamilyRegression
+        && c.passesGoldDamage;
+      const rejectReason = accepted ? null
+        : (!r.accepted ? (r.reason ?? 'patch_rejected')
+          : (!c.passesOldCorpusDamage ? 'old_corpus_damage'
+            : (!c.passesOldFamilyRegression ? 'old_family_regression'
+              : (!c.passesGoldDamage ? 'gold_damage'
+                : (!c.passesRecovery ? 'no_recovery' : 'decomposition_reject')))));
       if (accepted) {
         honestAcceptsThisEpoch++;
         acceptedOperationCount++;
+        acceptedSelectorCount++;
         acceptsByFingerprint[hp.operationFingerprint] = (acceptsByFingerprint[hp.operationFingerprint] ?? 0) + 1;
+        acceptsByAtomFamily[fpFamily] = (acceptsByAtomFamily[fpFamily] ?? 0) + 1;
         if (operationReuseSet.has(hp.operationFingerprint)) {
           honestReuseThisEpoch++;
           acceptedOperationReuseCount++;
+          operationReuseByAtomFamily[fpFamily] = (operationReuseByAtomFamily[fpFamily] ?? 0) + 1;
         } else {
           operationReuseSet.add(hp.operationFingerprint);
         }
-        const bestPatch = { ...hp.patch, parentStateRoot: merkleizeState(bestState) };
-        const applied = applyPatch(bestState, bestPatch);
-        if (applied?.ok) bestState = applied.state;
+        if (selectorReuseSet.has(hp.selectorFingerprint)) {
+          acceptedSelectorReuseCount++;
+          selectorReuseByAtomFamily[fpFamily] = (selectorReuseByAtomFamily[fpFamily] ?? 0) + 1;
+        } else {
+          selectorReuseSet.add(hp.selectorFingerprint);
+        }
+        bestState = appliedForDecomposition.state;
       }
       const activeComparisons = tracePatch ? compareQueries(r.before, r.after) : [];
+      const targetDiagnostics = targetDocDiagnostics({ targetDocId: hp.targetDocId, before: r.before, after: r.after, pack: activePack, patch: candidatePatch });
       const activeImprovements = activeComparisons
         .filter((c) => c.deltaNdcg > 0)
         .sort((a, b) => b.deltaNdcg - a.deltaNdcg)
@@ -741,12 +1023,20 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         accepted,
         deltaPpm: r.deltaPpm ?? 0,
         heldoutDeltaPpm: heldoutPatch ? (heldoutPatch.deltaPpm ?? 0) : null,
-        reason: r.reason ?? null,
+        reason: rejectReason,
         fingerprint: hp.fingerprint,
         operationFingerprint: hp.operationFingerprint,
         selectorFingerprint: hp.selectorFingerprint,
         targetDocId: hp.targetDocId,
         targetDocIdRecordedOnly: true,
+        temporalRecordSlot: hp.temporalRecordSlot ?? null,
+        conflictAtomSlot: hp.conflictAtomSlot ?? null,
+        scopeAtomSlot: hp.scopeAtomSlot ?? null,
+        entityResolutionAtomSlot: hp.entityResolutionAtomSlot ?? null,
+        oldCorpusPairExcludedQueryCount: oldCorpusPair.excluded.length,
+        oldCorpusPairExcludedQueryIds: oldCorpusPair.excluded.slice(0, 16),
+        acceptanceDecomposition,
+        ...(targetDiagnostics ? { targetDiagnostics } : {}),
         ...(traceDiagnostics ? { traceDiagnostics } : {}),
       });
     } catch (e) {
@@ -781,6 +1071,26 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     if (r.accepted) hillclimbAccepts++;
   }
   mark('antiCheatScoring');
+  const decompositionRows = honestPerPatch.map((p) => p.acceptanceDecomposition).filter(Boolean);
+  const acceptedDecompositionRows = honestPerPatch.filter((p) => p.accepted).map((p) => p.acceptanceDecomposition).filter(Boolean);
+  const mean = (vals) => vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  const oldDamageVals = decompositionRows.map((d) => d.oldCorpusDamagePpm);
+  const recoveryVals = decompositionRows.map((d) => d.patchRecoveryPpm);
+  const decompositionSummary = {
+    oldCorpusDamageTolerancePpm: OLD_CORPUS_DAMAGE_TOLERANCE_PPM,
+    oldCorpusPairQueryCount: oldCorpusPair.pack.events.length,
+    oldCorpusPairExcludedQueryCount: oldCorpusPair.excluded.length,
+    oldCorpusPairExcludedQueryIds: oldCorpusPair.excluded.slice(0, 16),
+    meanOldCorpusDamagePpm: mean(oldDamageVals),
+    worstOldCorpusDamagePpm: oldDamageVals.length ? Math.min(...oldDamageVals) : null,
+    meanPatchRecoveryPpm: mean(recoveryVals),
+    acceptedPatchRecoveryPpm: acceptedDecompositionRows.map((d) => d.patchRecoveryPpm),
+    acceptedOldCorpusDamagePpm: acceptedDecompositionRows.map((d) => d.oldCorpusDamagePpm),
+    rejectedForOldCorpusDamage: honestPerPatch.filter((p) => p.acceptanceDecomposition && !p.acceptanceDecomposition.acceptanceComponents.passesOldCorpusDamage).length,
+    rejectedForNoRecovery: honestPerPatch.filter((p) => p.acceptanceDecomposition && !p.acceptanceDecomposition.acceptanceComponents.passesRecovery).length,
+    rejectedForOldFamilyRegression: honestPerPatch.filter((p) => p.acceptanceDecomposition && !p.acceptanceDecomposition.acceptanceComponents.passesOldFamilyRegression).length,
+    rejectedForGoldDamage: honestPerPatch.filter((p) => p.acceptanceDecomposition && !p.acceptanceDecomposition.acceptanceComponents.passesGoldDamage).length,
+  };
   timingsMs.epochTotal = Date.now() - epochStartMs;
   timingsMs.live_delta_mechanics_ms = (timingsMs.deltaGeneration ?? 0) + (timingsMs.bridgeLogicalDelta ?? 0);
   timingsMs.embedding_ms = (timingsMs.biEncoderEmbedding ?? 0) + (timingsMs.mockEmbedding ?? 0);
@@ -831,6 +1141,8 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
       newEvalIdsInjectedThisEpoch: newEvalAdded,
     },
     activePackSize: activePack.events.length, heldoutPackSize: heldoutPack.events.length,
+    activeLiveEvalForcedIntoPack: activeLiveEvalPack.added,
+    activeLiveEvalPackSize: activeLiveEvalPack.liveEvalInPack,
     addedDocs: ld.addedDocs.length, addedQueries: ld.addedQueries.length,
     addedMemDocs: ld.addedDocs.length, addedRelations: ld.addedRelations.length,
     liveChurnRate: ld.liveChurnRate,
@@ -849,6 +1161,9 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     honestAttempted: qualityAttemptsThisEpoch, honestAccepted: honestAcceptsThisEpoch,
     operation_reuse_rate: operationReuseRate,
     attemptsByFingerprint, acceptsByFingerprint,
+    attemptsByAtomFamily, acceptsByAtomFamily,
+    operationReuseByAtomFamily, selectorReuseByAtomFamily,
+    decompositionSummary,
     honestPerPatch,
     antiCheat: {
       randomProbes: RANDOM_PROBES,
@@ -881,6 +1196,8 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   prevHeldoutScorePpm = heldoutScorePpm ?? prevHeldoutScorePpm;
   prevActiveDetailed = activeDetailed ?? prevActiveDetailed;
   prevHeldoutDetailed = heldoutDetailed ?? prevHeldoutDetailed;
+  prevActivePack = activePack;
+  prevHeldoutPack = heldoutPack;
   prevHonestAccepts = honestAcceptsThisEpoch;        // feed to next epoch's stepEpoch
   prevQualityAttempts = qualityAttemptsThisEpoch;
 }
@@ -930,6 +1247,7 @@ const report = {
   perEpoch,
   honestFamiliesCycled: HONEST_FAMILIES,
   uniqueHonestOperations: operationReuseSet.size,
+  uniqueHonestSelectors: selectorReuseSet.size,
   acceptsByFingerprintTotals: (() => {
     const out = {};
     for (const ep of perEpoch) for (const fp of Object.keys(ep.acceptsByFingerprint ?? {})) out[fp] = (out[fp] ?? 0) + ep.acceptsByFingerprint[fp];
@@ -940,10 +1258,31 @@ const report = {
     for (const ep of perEpoch) for (const fp of Object.keys(ep.attemptsByFingerprint ?? {})) out[fp] = (out[fp] ?? 0) + ep.attemptsByFingerprint[fp];
     return out;
   })(),
+  attemptsByAtomFamilyTotals: (() => {
+    const out = {};
+    for (const ep of perEpoch) for (const fp of Object.keys(ep.attemptsByAtomFamily ?? {})) out[fp] = (out[fp] ?? 0) + ep.attemptsByAtomFamily[fp];
+    return out;
+  })(),
+  acceptsByAtomFamilyTotals: (() => {
+    const out = {};
+    for (const ep of perEpoch) for (const fp of Object.keys(ep.acceptsByAtomFamily ?? {})) out[fp] = (out[fp] ?? 0) + ep.acceptsByAtomFamily[fp];
+    return out;
+  })(),
+  operationReuseByAtomFamilyTotals: (() => {
+    const out = {};
+    for (const ep of perEpoch) for (const fp of Object.keys(ep.operationReuseByAtomFamily ?? {})) out[fp] = (out[fp] ?? 0) + ep.operationReuseByAtomFamily[fp];
+    return out;
+  })(),
+  selectorReuseByAtomFamilyTotals: (() => {
+    const out = {};
+    for (const ep of perEpoch) for (const fp of Object.keys(ep.selectorReuseByAtomFamily ?? {})) out[fp] = (out[fp] ?? 0) + ep.selectorReuseByAtomFamily[fp];
+    return out;
+  })(),
   summary: {
     honestAttempts: perEpoch.reduce((s, e) => s + e.honestAttempted, 0),
     honestAccepted: perEpoch.reduce((s, e) => s + e.honestAccepted, 0),
     acceptedOperationReuseRate: acceptedOperationCount ? acceptedOperationReuseCount / acceptedOperationCount : 0,
+    acceptedSelectorReuseRate: acceptedSelectorCount ? acceptedSelectorReuseCount / acceptedSelectorCount : 0,
     randomProbes: perEpoch.reduce((s, e) => s + e.antiCheat.randomProbes, 0),
     randomAccepts: perEpoch.reduce((s, e) => s + e.antiCheat.randomAccepts, 0),
     hillclimbProbes: perEpoch.reduce((s, e) => s + e.antiCheat.hillclimbProbes, 0),
@@ -954,6 +1293,27 @@ const report = {
     heldoutFrontierLiftPpm: perEpoch.map((e) => e.heldout_frontier_lift).filter((v) => v != null),
     liveEvalIdsInjected: perEpoch.reduce((s, e) => s + e.frontierRotation.newEvalIdsInjectedThisEpoch, 0),
     rootCacheUsedAllEpochs: perEpoch.every((e) => e.rootCacheUsed),
+    decomposition: (() => {
+      const rows = perEpoch.flatMap((e) => (e.honestPerPatch ?? []).map((p) => p.acceptanceDecomposition).filter(Boolean));
+      const acceptedRows = perEpoch.flatMap((e) => (e.honestPerPatch ?? []).filter((p) => p.accepted).map((p) => p.acceptanceDecomposition).filter(Boolean));
+      const oldDamage = rows.map((r) => r.oldCorpusDamagePpm);
+      const recovery = rows.map((r) => r.patchRecoveryPpm);
+      return {
+        oldCorpusDamageTolerancePpm: OLD_CORPUS_DAMAGE_TOLERANCE_PPM,
+        measuredPatchCount: rows.length,
+        acceptedMeasuredPatchCount: acceptedRows.length,
+        meanOldCorpusDamagePpm: oldDamage.length ? oldDamage.reduce((a, b) => a + b, 0) / oldDamage.length : null,
+        worstOldCorpusDamagePpm: oldDamage.length ? Math.min(...oldDamage) : null,
+        meanPatchRecoveryPpm: recovery.length ? recovery.reduce((a, b) => a + b, 0) / recovery.length : null,
+        acceptedPatchRecoveryPpm: acceptedRows.map((r) => r.patchRecoveryPpm),
+        acceptedOldCorpusDamagePpm: acceptedRows.map((r) => r.oldCorpusDamagePpm),
+        acceptedHasMaterialOldCorpusDamage: acceptedRows.some((r) => r.oldCorpusDamagePpm < -OLD_CORPUS_DAMAGE_TOLERANCE_PPM),
+        rejectedForOldCorpusDamage: perEpoch.reduce((s, e) => s + (e.decompositionSummary?.rejectedForOldCorpusDamage ?? 0), 0),
+        rejectedForNoRecovery: perEpoch.reduce((s, e) => s + (e.decompositionSummary?.rejectedForNoRecovery ?? 0), 0),
+        rejectedForOldFamilyRegression: perEpoch.reduce((s, e) => s + (e.decompositionSummary?.rejectedForOldFamilyRegression ?? 0), 0),
+        rejectedForGoldDamage: perEpoch.reduce((s, e) => s + (e.decompositionSummary?.rejectedForGoldDamage ?? 0), 0),
+      };
+    })(),
     timingSummaryMs,
     qrelShuffleCollapseRatioMean: qrelShuffleCollapseValues.length
       ? qrelShuffleCollapseValues.reduce((a, b) => a + b, 0) / qrelShuffleCollapseValues.length
@@ -962,8 +1322,8 @@ const report = {
       patchUsesDirectDocId: false,
       patchUsesCorpusHeaderOrLabel: false,
       targetDocIdRecordedOnly: true,
-      operationFingerprint: 'honest:relation(2):categoryLens:supports,causes',
-      selectorFingerprint: 'public-edge-category-lens:supports,causes',
+      operationFingerprint: 'mixed; see honestFamiliesCycled and attemptsByFingerprintTotals',
+      selectorFingerprint: 'mixed; see per-patch selectorFingerprint',
       qrelShuffleCollapseIsNotDocIdDependence: true,
     },
   },

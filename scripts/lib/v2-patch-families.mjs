@@ -75,9 +75,10 @@ export function conflictUnits({ pack, logicalQById, eventByDocId, conflictSlot =
     if (fam !== 'conflict_lifecycle') continue;
     const resolved = (lq.qrels ?? []).find((r) => r.role === 'direct');
     if (!resolved) continue;
-    const evId = `mem_${resolved.docId}`;
     if (skip.has(resolved.docId)) { tried.push(resolved.docId); continue; }
-    if (eventByDocId && !eventByDocId.has(evId)) continue;
+    const memEv = memoryEventForDocId(resolved.docId, eventByDocId);
+    if (eventByDocId && !memEv) continue;
+    const evId = memEv?.id ?? `mem_${resolved.docId}`;
     if (conflictSlot >= 128 || conflictSlot >= 256) {
       return { indices: [], newWords: [], minedDocId: null, reason: 'conflict_slot_exhausted', conflictQueriesAvailable: tried.length };
     }
@@ -143,6 +144,87 @@ export function abstentionUnits({ pack, logicalQById, abstentionSlot = 0 }) {
   };
 }
 
+function memoryEventForDocId(docId, eventByDocId) {
+  return eventByDocId?.get(docId) ?? eventByDocId?.get(`mem_${docId}`) ?? null;
+}
+
+function recordEventIdForDocId(docId, eventByDocId) {
+  return memoryEventForDocId(docId, eventByDocId)?.id ?? `mem_${docId}`;
+}
+
+export function isMemoryDocEventId(id) {
+  return id.startsWith('mem_') || id.startsWith('zz_mem_') || /^zz_e\d+_mem_/.test(id);
+}
+
+export function buildMemoryEventByDocId(corpusOrEvents) {
+  const events = Array.isArray(corpusOrEvents) ? corpusOrEvents : (corpusOrEvents?.events ?? []);
+  const out = new Map();
+  for (const ev of events) {
+    out.set(ev.id, ev);
+    if (!isMemoryDocEventId(ev.id)) continue;
+    for (const td of ev.truthDocuments ?? []) {
+      out.set(td.id, ev);
+      out.set(`mem_${td.id}`, ev);
+    }
+  }
+  return out;
+}
+
+function liveEpochForEvent(ev, lq) {
+  if (Number.isInteger(lq?.liveUpdateEpoch)) return lq.liveUpdateEpoch;
+  const m = /^zz_e(\d+)_/.exec(ev?.id ?? '');
+  if (!m) return -1;
+  const n = Number(m[1]);
+  return Number.isInteger(n) ? n : -1;
+}
+
+function eventQrels(ev, lq) {
+  if (lq?.qrels?.length) return lq.qrels.map((r) => ({
+    docId: r.docId ?? r.documentId,
+    relevance: r.relevance,
+    role: r.role,
+  })).filter((r) => r.docId);
+  return (ev?.qrels ?? []).map((r) => ({
+    docId: r.docId ?? r.documentId,
+    relevance: r.relevance,
+    role: r.role,
+  })).filter((r) => r.docId);
+}
+
+function eventView(ev, logicalQById) {
+  const lq = logicalQById.get(ev.id);
+  const qrels = eventQrels(ev, lq);
+  const truthDocs = (ev.truthDocuments ?? []).map((d) => d.id).filter(Boolean);
+  const hardNegatives = (ev.hardNegatives ?? []).map((n) => ({
+    docId: n.id ?? n.docId,
+    category: n.category,
+  })).filter((n) => n.docId);
+  return {
+    ev,
+    lq,
+    family: lq?.family ?? ev.logicalFamily ?? ev.family,
+    qrels,
+    truthDocs,
+    hardNegatives,
+    liveUpdateEpoch: liveEpochForEvent(ev, lq),
+  };
+}
+
+function directQrelForView(view) {
+  const direct = view.qrels.find((r) => r.role === 'direct' || r.relevance > 0);
+  if (direct) return direct;
+  const truth = view.truthDocs[0];
+  return truth ? { docId: truth, relevance: 1, role: 'direct' } : null;
+}
+
+function staleQrelForView(view) {
+  const stale = view.qrels.find((r) => r.role === 'stale');
+  if (stale) return stale;
+  const temporalHardNegative = view.hardNegatives.find((n) => /stale/i.test(n.category ?? ''));
+  if (temporalHardNegative) return { docId: temporalHardNegative.docId, relevance: 0, role: 'stale' };
+  return null;
+}
+
 /**
  * temporal lever: compile `maxRecords` temporal_update queries from the pack (starting
  * at the `startIndex`-th temporal query), each as stale+current memory-index slots
@@ -158,9 +240,11 @@ export function abstentionUnits({ pack, logicalQById, abstentionSlot = 0 }) {
  * patches build disjoint substrate.
  */
 // pack temporal queries (have both a current/direct and a stale qrel) — the minable set.
-function packTemporalQueries(pack, logicalQById) {
-  return pack.events.map((ev) => logicalQById.get(ev.id)).filter((lq) => lq && lq.family === 'temporal_update'
-    && (lq.qrels ?? []).find((r) => r.role === 'direct') && (lq.qrels ?? []).find((r) => r.role === 'stale'));
+function packTemporalQueries(pack, logicalQById, families = ['temporal_update']) {
+  const allowed = new Set(families);
+  return pack.events.map((ev) => eventView(ev, logicalQById)).filter((view) => allowed.has(view.family)
+    && directQrelForView(view) && staleQrelForView(view))
+    .sort((a, b) => b.liveUpdateEpoch - a.liveUpdateEpoch);
 }
 
 /**
@@ -180,9 +264,9 @@ export function nextTemporalDocId(pack, logicalQById, skipDocIds = new Set()) {
   return null;
 }
 
-export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex = 0, recordSlot, skipDocIds }) {
+export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex = 0, recordSlot, skipDocIds, eventByDocId, families = ['temporal_update'] }) {
   const indices = [], newWords = [];
-  const tq = packTemporalQueries(pack, logicalQById);
+  const tq = packTemporalQueries(pack, logicalQById, families);
   // ── NEW pack-aligned mode (recordSlot given): mine the first UNCOVERED pack temporal
   // query into the explicit free record slot. Deterministic (first uncovered) so the
   // eval-call and the apply-call build the identical patch. ──
@@ -197,13 +281,13 @@ export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex =
     // one-word slots, so temporal capacity is bounded by the 96-record Temporal region.
     const MEM_SLOTS = 352; // MEMORY_INDEX_SLOT_COUNT (Tier-2 stride-1 repack) — pair cap now Temporal-record-bound (slotBase<96)
     if (slotBase >= 96 || curSlot >= MEM_SLOTS) return { indices, newWords, recordsCompiled: 0, minedDocId: null, temporalQueriesAvailable: tq.length };
-    for (const lq of tq) {
-      const cur = (lq.qrels ?? []).find((r) => r.role === 'direct');
-      const stale = (lq.qrels ?? []).find((r) => r.role === 'stale');
+    for (const view of tq) {
+      const cur = directQrelForView(view);
+      const stale = staleQrelForView(view);
       if (skip.has(cur.docId)) continue;
-      const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(`mem_${stale.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n });
+      const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(recordEventIdForDocId(stale.docId, eventByDocId)), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n });
       indices.push(RANGES.MEMORY_INDEX_START + staleSlot * 1); newWords.push(sw[0]);
-      const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(`mem_${cur.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n });
+      const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(recordEventIdForDocId(cur.docId, eventByDocId)), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: 0, expiryEpoch: 0n });
       indices.push(RANGES.MEMORY_INDEX_START + curSlot * 1); newWords.push(cw[0]);
       const tw = encodeTemporalRecord({ recordIndex: slotBase, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: 1n, validUntilEpoch: (2n ** 40n - 1n), currentStaleFlag: true });
       indices.push(RANGES.TEMPORAL_START + slotBase); newWords.push(tw[0]);
@@ -214,7 +298,7 @@ export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex =
   // ── LEGACY mode (startIndex) — unchanged; used by the response-surface / Monte-Carlo harnesses. ──
   let rec = 0;
   for (let qi = startIndex; qi < tq.length && rec < maxRecords; qi++) {
-    const lq = tq[qi];
+    const view = tq[qi];
     const recIdx = startIndex + rec;          // distinct record per query
     const staleSlot = recIdx * 2, curSlot = recIdx * 2 + 1;
     // Temporal RECORD capacity is 96 (stride-1). But each pair uses two MemoryIndex slots
@@ -222,17 +306,53 @@ export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex =
     // 18 temporal pairs end-to-end (NOT 96). Honest ceiling until MemoryIndex/retrieval-slot
     // coupling is redesigned.
     if (recIdx >= 96 || curSlot >= 36) break;
-    const cur = (lq.qrels ?? []).find((r) => r.role === 'direct');
-    const stale = (lq.qrels ?? []).find((r) => r.role === 'stale');
-    const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(`mem_${stale.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, policyAnchor: true, retrievalSlot: staleSlot, expiryEpoch: 0n });
+    const cur = directQrelForView(view);
+    const stale = staleQrelForView(view);
+    const sw = encodeMemoryIndexSlot({ slotIndex: staleSlot, recordId: stableRecordIdFor(recordEventIdForDocId(stale.docId, eventByDocId)), family: 'temporal', domainBits: 1n, valid: true, revoked: true, protected: false, policyAnchor: true, retrievalSlot: staleSlot, expiryEpoch: 0n });
     indices.push(RANGES.MEMORY_INDEX_START + staleSlot * 1); newWords.push(sw[0]); // nonzero w0 only
-    const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(`mem_${cur.docId}`), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: curSlot, expiryEpoch: 0n });
+    const cw = encodeMemoryIndexSlot({ slotIndex: curSlot, recordId: stableRecordIdFor(recordEventIdForDocId(cur.docId, eventByDocId)), family: 'temporal', domainBits: 1n, valid: true, revoked: false, protected: false, policyAnchor: true, retrievalSlot: curSlot, expiryEpoch: 0n });
     indices.push(RANGES.MEMORY_INDEX_START + curSlot * 1); newWords.push(cw[0]);
     const tw = encodeTemporalRecord({ recordIndex: recIdx, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: 1n, validUntilEpoch: (2n ** 40n - 1n), currentStaleFlag: true });
     indices.push(RANGES.TEMPORAL_START + recIdx); newWords.push(tw[0]); // stride-1 temporal records
     rec++;
   }
   return { indices, newWords, recordsCompiled: rec, temporalQueriesAvailable: tq.length };
+}
+
+export function atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily, memorySlot, skipDocIds }) {
+  const skip = skipDocIds ?? new Set();
+  const candidates = pack.events
+    .map((ev) => eventView(ev, logicalQById))
+    .filter((view) => view.family === atomFamily)
+    .sort((a, b) => b.liveUpdateEpoch - a.liveUpdateEpoch);
+  for (const view of candidates) {
+    const direct = directQrelForView(view);
+    if (!direct || skip.has(direct.docId)) continue;
+    const memEv = memoryEventForDocId(direct.docId, eventByDocId);
+    if (eventByDocId && !memEv) continue;
+    if (memorySlot >= 352) return { indices: [], newWords: [], minedDocId: null, reason: 'memory_slot_exhausted' };
+    const word = encodeMemoryIndexSlot({
+      slotIndex: memorySlot,
+      recordId: stableRecordIdFor(memEv?.id ?? `mem_${direct.docId}`),
+      family: 'multi_hop_relation',
+      domainBits: 1n,
+      valid: true,
+      revoked: false,
+      protected: false,
+      policyAnchor: true,
+      retrievalSlot: 0,
+      expiryEpoch: 0n,
+    })[0];
+    return {
+      indices: [RANGES.MEMORY_INDEX_START + memorySlot],
+      newWords: [word],
+      recordsCompiled: 1,
+      minedDocId: direct.docId,
+      eventId: memEv?.id ?? `mem_${direct.docId}`,
+      slot: memorySlot,
+    };
+  }
+  return { indices: [], newWords: [], minedDocId: null, reason: `no_${atomFamily}_pack_query_available` };
 }
 
 export function makePatch(state, units) {
