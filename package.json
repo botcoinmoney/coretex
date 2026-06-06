@@ -19,7 +19,11 @@
     "test:e2e": "npm run build --workspaces --if-present && node scripts/run-e2e.mjs",
     "build:bundle": "npm run build --workspace @botcoin/cortex && node scripts/build-coretex-bundle.mjs",
     "contracts:build": "forge build --root contracts",
-    "contracts:test": "forge test --root contracts -vvv"
+    "contracts:test": "forge test --root contracts -vvv",
+    "setup:validator": "npm run build --workspace @botcoin/cortex && node scripts/setup-validator-artifacts.mjs",
+    "setup:validator:verify": "npm run build --workspace @botcoin/cortex && node scripts/setup-validator-artifacts.mjs --verify-only",
+    "validator:replay": "npm run build --workspace @botcoin/cortex && node scripts/coretex-validator.mjs replay-patch",
+    "validator:verify-launch": "npm run build --workspace @botcoin/cortex && node scripts/coretex-validator.mjs verify-launch"
   },
   "devDependencies": {
     "@types/node": "^22.19.17",

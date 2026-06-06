@@ -2,9 +2,9 @@
 /**
  * Standalone CoreTex validator / replay client  (Launch hardening L9 + L11).
  *
- * A fresh checkout can run this with NO calibration scratch — it replays the
- * committed deterministic state-root vectors (release/calibration/fixtures/
- * state-root-vectors.json) and verifies a bundle manifest. Replay divergence
+ * Canonical replay first verifies the active launch artifact manifest, including
+ * corpus/embedding payload hashes and the required materialized production corpus cache.
+ * Local dev can bypass with --skip-launch-check. Replay divergence
  * emits a `coretex_replay_divergence` flag artifact (local JSON) — NO chain
  * consequence, exactly per the L11 contract.
  *
@@ -17,16 +17,20 @@
  *       Decode the resulting substrate (temporal / relations / policy atoms).
  *   verify-bundle --bundle <manifest.json>
  *       Run verifyBundleManifest; print the structured error list (empty = ok).
+ *   verify-launch [--manifest <coretex-launch-v16-artifacts.json>]
+ *       Verify payload hashes, bundle/profile hashes, and required materialized cache.
  *
  * Usage:
  *   node scripts/coretex-validator.mjs replay-patch
  *   node scripts/coretex-validator.mjs replay-patch --tamper
  *   node scripts/coretex-validator.mjs inspect-state --vector mixed-relation-conflict
  *   node scripts/coretex-validator.mjs verify-bundle --bundle release/bundle/bundle-manifest-v2-dgen1-policy-r5-candidate.json
+ *   node scripts/coretex-validator.mjs verify-launch
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { argv, exit } from 'node:process';
+import { spawnSync } from 'node:child_process';
 import { distIndex, repoRoot } from './_repo-root.mjs';
 
 const m = await import(distIndex);
@@ -40,6 +44,19 @@ const cmd = args[0];
 const opt = (name, fb) => { const i = args.indexOf(`--${name}`); return i >= 0 && i + 1 < args.length ? args[i + 1] : fb; };
 const has = (name) => args.includes(`--${name}`);
 const FIXTURE = resolve(repoRoot, 'release/calibration/fixtures/state-root-vectors.json');
+const DEFAULT_LAUNCH_ARTIFACTS = 'release/calibration/2026-06-04-memory-atom-v16/coretex-launch-v16-artifacts.json';
+
+function verifyLaunchArtifactsIfRequired() {
+  if (!['replay-patch', 'inspect-state', 'verify-launch'].includes(cmd)) return;
+  if (has('skip-launch-check') || cmd === 'verify-bundle') return;
+  const manifest = opt('manifest', DEFAULT_LAUNCH_ARTIFACTS);
+  const res = spawnSync(process.execPath, ['scripts/setup-validator-artifacts.mjs', '--manifest', manifest, '--verify-only'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    env: process.env,
+  });
+  if (res.status !== 0) exit(res.status ?? 1);
+}
 
 function hexToBytes(hex) { const s = hex.replace(/^0x/, ''); const o = new Uint8Array(s.length / 2); for (let i = 0; i < o.length; i++) o[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16); return o; }
 function genesis() { return { words: new Array(1024).fill(0n) }; }
@@ -139,9 +156,15 @@ function verifyBundle() {
   return 1;
 }
 
+function verifyLaunch() {
+  return 0;
+}
+
 let rc = 0;
+verifyLaunchArtifactsIfRequired();
 if (cmd === 'replay-patch') rc = replayPatch();
 else if (cmd === 'inspect-state') rc = inspectState();
 else if (cmd === 'verify-bundle') rc = verifyBundle();
-else { console.error('usage: coretex-validator.mjs {replay-patch [--tamper]|inspect-state [--vector N]|verify-bundle --bundle P}'); rc = 2; }
+else if (cmd === 'verify-launch') rc = verifyLaunch();
+else { console.error('usage: coretex-validator.mjs {replay-patch [--tamper]|inspect-state [--vector N]|verify-bundle --bundle P|verify-launch} [--skip-launch-check]'); rc = 2; }
 exit(rc);

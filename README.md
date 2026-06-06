@@ -106,6 +106,34 @@ Run the standard suite with:
 npm test
 ```
 
+## Validator Setup
+
+Fresh validators should be able to get to the launch state in two steps:
+
+```bash
+npm install
+npm run setup:validator
+```
+
+`setup:validator` builds CoreTex, verifies the canonical v16 launch artifact manifest, hydrates missing corpus payloads
+from `CORETEX_ARTIFACT_BASE_URL` when needed, checks SHA256/size for the 300k corpus and embeddings, verifies active
+bundle/profile hashes, and materializes the active production corpus cache required for replay/evolve validation.
+
+Required launch manifest:
+
+- `release/calibration/2026-06-04-memory-atom-v16/coretex-launch-v16-artifacts.json`
+
+Useful checks:
+
+```bash
+npm run validator:verify-launch
+npm run validator:replay
+```
+
+Large corpus and embedding payloads are not committed to plain git. Publish them as immutable release/object-storage
+artifacts and set `CORETEX_ARTIFACT_BASE_URL` to that base URL, or place them at the manifest paths before setup. The
+materialized cache is required by setup but is generated locally from verified payloads; it is not the source of truth.
+
 ## Bundle And Profiles
 
 Current candidate launch artifacts live under `release/bundle/`:

@@ -46,10 +46,10 @@ if (MODE !== 'deep' && MODE !== 'parity') {
   console.error(`HARD FAIL: --mode must be 'deep' or 'parity' (got '${MODE}')`);
   exit(1);
 }
-const CORPUS  = flag('corpus',  'release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-300k-final-corpus.json');
-const EMB     = flag('emb',     'release/calibration/2026-05-21-memory-corpus-v2/dgen1-r5-synth-300k-final-embeddings.json');
-const PROFILE = flag('profile', 'release/bundle/evaluator-profile-v2-dgen1-policy-r5-300k.json');
-const BUNDLE  = flag('bundle',  'release/bundle/bundle-manifest-v2-dgen1-policy-r5-300k.json');
+const CORPUS  = flag('corpus',  'release/calibration/2026-06-04-memory-atom-v16/dgen1-r5-synth-300k-atom-v16-corpus.json');
+const EMB     = flag('emb',     'release/calibration/2026-06-04-memory-atom-v16/dgen1-r5-synth-300k-atom-v16-embeddings.json');
+const PROFILE = flag('profile', 'release/calibration/2026-06-04-memory-atom-v16/evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json');
+const BUNDLE  = flag('bundle',  'release/calibration/2026-06-04-memory-atom-v16/bundle-manifest-v2-dgen1-policy-r5-atom-v16-300k-enabled.json');
 
 let pass = true;
 const fails = [];
