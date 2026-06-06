@@ -7,7 +7,7 @@
  *
  *   A) Required public fields present (epochId, parentStateRoot, currentStateRoot,
  *      bundleHash, corpusRoot, pipelineVersion, allowedPatchTypes + wordRanges,
- *      minImprovementPpm, screenerThresholdPpm, perMinerCap, memoryIRSchemaVersion,
+ *      minImprovementPpm, screenerThresholdPpm, perMinerScreenerCap, memoryIRSchemaVersion,
  *      activeSubstrateSurfaces, exampleValidPatch, hiddenEvalWarning).
  *   B) NO hidden leakage: deep scan finds no qrel / answer / truthDocument /
  *      epochSecret / hiddenPack-contents / per-query-failure-stat fields.
@@ -23,6 +23,7 @@
  *   [--bundle release/bundle/bundle-manifest-v2-dgen1-policy-r5-candidate.json]
  *   [--corpus ...dgen1-r5-synth-corpus.json] [--emb ...]
  */
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { argv, exit } from 'node:process';
@@ -31,24 +32,38 @@ import { distIndex, repoRoot } from './_repo-root.mjs';
 const m = await import(distIndex);
 const {
   RANGES, PATCH_TYPE, encodePatch, decodePatch, validatePatchType, encodeRelationCategoryLens,
-  merkleizeState, bytesToHex, computeCoreTexScreenerThresholdPpm, DEFAULT_CORETEX_WORK_POLICY, applyPatch,
+  merkleizeState, bytesToHex, keccak256, computeCoreTexScreenerThresholdPpm, DEFAULT_CORETEX_WORK_POLICY, applyPatch,
+  splitForRecord,
 } = m;
 
-import { buildV2ProductionCorpus } from './lib/build-v2-production-corpus.mjs';
 import { makeLaunchFrontier } from './lib/epoch-frontier.mjs';
 
 const opt = (n, fb) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fb; };
-const base = 'release/calibration/2026-05-21-memory-corpus-v2';
-// Defaults pin the CANONICAL 300k launch candidate (the sole launch corpus). Old compact/9k
-// defaults were stale (off-scale 0.5 qrels). Override with --profile/--bundle/--corpus/--emb.
-const profile = JSON.parse(readFileSync(resolve(repoRoot, opt('profile', 'release/bundle/evaluator-profile-v2-dgen1-policy-r5-300k.json')), 'utf8'));
-const manifest = JSON.parse(readFileSync(resolve(repoRoot, opt('bundle', 'release/bundle/bundle-manifest-v2-dgen1-policy-r5-300k.json')), 'utf8'));
-const corpusPath = opt('corpus', `${base}/dgen1-r5-synth-300k-final-corpus.json`);
+const DEFAULT_ARTIFACT_MANIFEST = 'release/calibration/2026-06-04-memory-atom-v16/coretex-launch-v16-artifacts.json';
+const artifactManifestPath = opt('manifest', DEFAULT_ARTIFACT_MANIFEST);
+const artifactManifest = JSON.parse(readFileSync(resolve(repoRoot, artifactManifestPath), 'utf8'));
+const payloadPath = (role) => artifactManifest.payloads?.find((p) => p.role === role)?.path;
+const profilePath = opt('profile', artifactManifest.profilePath);
+const bundlePath = opt('bundle', artifactManifest.bundlePath);
+const corpusPath = opt('corpus', payloadPath('corpus'));
+const embPath = opt('emb', payloadPath('embeddings'));
+if (!profilePath || !bundlePath || !corpusPath || !embPath) {
+  console.error(`FATAL: ${artifactManifestPath} does not define profile/bundle/corpus/embeddings paths`);
+  exit(1);
+}
+const profile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
+const manifest = JSON.parse(readFileSync(resolve(repoRoot, bundlePath), 'utf8'));
+if (artifactManifest.bundleHash && manifest.bundleHash !== artifactManifest.bundleHash) {
+  console.error(`FATAL: bundleHash drift ${manifest.bundleHash} != artifact manifest ${artifactManifest.bundleHash}`);
+  exit(1);
+}
 let corpusMeta = {};
+let rawCorpus = null;
 try {
   // API contract shape does not depend on qrels/embeddings; read raw metadata so this
   // gate remains useful while stale pre-regen corpora intentionally fail scorer/linter gates.
   const raw = JSON.parse(readFileSync(resolve(repoRoot, corpusPath), 'utf8'));
+  rawCorpus = raw;
   corpusMeta = {
     ...(Array.isArray(raw.docs) ? { docs: raw.docs.length } : {}),
     ...(Array.isArray(raw.queries) ? { queries: raw.queries.length } : {}),
@@ -60,11 +75,31 @@ try {
   corpusMeta = { note: 'corpus metadata unavailable; contract shape only' };
 }
 const corpusRoot = manifest.corpus?.root ?? profile.corpusRoot ?? '0x' + '00'.repeat(32);
+if (artifactManifest.corpusRoot && artifactManifest.corpusRoot.toLowerCase() !== corpusRoot.toLowerCase()) {
+  console.error(`FATAL: corpusRoot drift ${corpusRoot} != artifact manifest ${artifactManifest.corpusRoot}`);
+  exit(1);
+}
 // C3 churn is launch-required. Derive the REAL genesis activeFrontierRoot from the canonical
 // launch corpus + signed profile.epochFrontier. No fallback — V4 rejects bytes32(0), so the
 // public contract MUST carry a real non-zero root. Fail hard if it can't be produced.
-const embPath = opt('emb', `${base}/dgen1-r5-synth-300k-final-embeddings.json`);
-const { corpus: prodCorpus } = buildV2ProductionCorpus({ corpusPath, embPath });
+if (!rawCorpus || !Array.isArray(rawCorpus.queries)) {
+  console.error(`FATAL: cannot derive activeFrontierRoot without logical corpus queries: ${corpusPath}`);
+  exit(1);
+}
+const bucket = (f) => f === 'temporal_update' ? 'temporal'
+  : (f === 'multi_session_bridge' || f === 'causal_memory_chain' || f === 'decision_provenance') ? 'multi_hop_relation'
+  : f === 'conflict_lifecycle' ? 'conflict_lifecycle'
+  : f === 'aspect_constraint' ? 'aspect_constraint'
+  : f === 'coreference_resolution' ? 'coreference'
+  : 'near_collision';
+const prodCorpus = {
+  events: rawCorpus.queries.map((q) => ({
+    id: q.id,
+    split: splitForRecord(q.id, 0),
+    logicalFamily: q.family,
+    family: bucket(q.family),
+  })),
+};
 const launchFrontier = makeLaunchFrontier(profile, prodCorpus);
 if (!launchFrontier) { console.error('FATAL: profile.epochFrontier missing/off — C3 churn is launch-required'); exit(1); }
 const activeFrontierRoot = launchFrontier.stepEpoch(0, null, null).activeRoot;
@@ -73,16 +108,52 @@ if (!activeFrontierRoot || /^0x0+$/.test(activeFrontierRoot)) { console.error('F
 const genesis = { words: new Array(1024).fill(0n) };
 const parentStateRoot = bytesToHex(merkleizeState(genesis));
 
-// active substrate surfaces from the profile (default-off surfaces excluded)
+function canonicalJson(v) {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
+  return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`;
+}
+const hashJson = (v) => bytesToHex(keccak256(new TextEncoder().encode(canonicalJson(v))));
+const profileHash = '0x' + createHash('sha256').update(canonicalJson(profile)).digest('hex');
+const artifactManifestHash = '0x' + createHash('sha256').update(readFileSync(resolve(repoRoot, artifactManifestPath))).digest('hex');
+const rerankerRevision = manifest.model?.reranker?.revision ?? null;
+
+const activeSurfaceSet = new Set(profile.activeSubstrateSurfaces ?? []);
+if (profile.temporalStaleContrast !== false) activeSurfaceSet.add('temporal_update');
+if (profile.policyRelationTypedAdmission === true) activeSurfaceSet.add('relation_category_routing');
+if (profile.enableEvidenceBundleAtoms === true) activeSurfaceSet.add('evidence_bundle');
+if (profile.enableConflictLifecycleAtoms === true) activeSurfaceSet.add('conflict_lifecycle');
+if (profile.enableAbstentionAtoms === true) activeSurfaceSet.add('abstention_top1');
+if (profile.enableValidityAtoms !== false) activeSurfaceSet.add('validity_atom');
+if (profile.enableScopeAtoms === true) activeSurfaceSet.add('scope_atom');
+if (profile.enableEntityResolutionAtoms === true) activeSurfaceSet.add('entity_resolution_atom');
+const activeSubstrateSurfaces = [...activeSurfaceSet];
+
+// Active substrate surfaces from the effective launch profile (default-off surfaces excluded).
 const surfaces = [];
-surfaces.push({ surface: 'temporal', patchType: 'TEMPORAL_UPDATE', wordRange: [RANGES.TEMPORAL_START, RANGES.TEMPORAL_END] });
-if (profile.policyRelationTypedAdmission) surfaces.push({ surface: 'relation_typed_routing', patchType: 'RELATION_UPDATE', wordRange: [RANGES.RELATIONS_START, RANGES.RELATIONS_END] });
+surfaces.push({ surface: 'temporal_update', patchType: 'MIXED', wordRanges: [[RANGES.MEMORY_INDEX_START, RANGES.MEMORY_INDEX_END], [RANGES.TEMPORAL_START, RANGES.TEMPORAL_END]] });
+surfaces.push({ surface: 'validity_atom', patchType: 'MIXED', wordRanges: [[RANGES.MEMORY_INDEX_START, RANGES.MEMORY_INDEX_END], [RANGES.TEMPORAL_START, RANGES.TEMPORAL_END]] });
+if (profile.policyRelationTypedAdmission) surfaces.push({ surface: 'relation_category_routing', patchType: 'RELATION_UPDATE', wordRange: [RANGES.RELATIONS_START, RANGES.RELATIONS_END] });
 if (profile.enableEvidenceBundleAtoms) surfaces.push({ surface: 'evidence_bundle', patchType: 'POLICY_UPDATE', wordRange: [RANGES.POLICY_EVIDENCE_START, RANGES.POLICY_EVIDENCE_END] });
-if (profile.enableAbstentionAtoms) surfaces.push({ surface: 'guarded_abstention', patchType: 'POLICY_UPDATE', wordRange: [RANGES.POLICY_ABSTENTION_START, RANGES.POLICY_ABSTENTION_END] });
-if (profile.enableConflictLifecycleAtoms) surfaces.push({ surface: 'conflict_state', patchType: 'POLICY_UPDATE', wordRange: [RANGES.POLICY_CONFLICT_START, RANGES.POLICY_CONFLICT_END] });
+if (profile.enableAbstentionAtoms) surfaces.push({ surface: 'abstention_top1', patchType: 'POLICY_UPDATE', wordRange: [RANGES.POLICY_ABSTENTION_START, RANGES.POLICY_ABSTENTION_END] });
+if (profile.enableConflictLifecycleAtoms) surfaces.push({ surface: 'conflict_lifecycle', patchType: 'POLICY_UPDATE', wordRange: [RANGES.POLICY_CONFLICT_START, RANGES.POLICY_CONFLICT_END] });
+if (profile.enableScopeAtoms) surfaces.push({ surface: 'scope_atom', patchType: 'MIXED', wordRange: [RANGES.MEMORY_INDEX_START + 192, RANGES.MEMORY_INDEX_START + 255] });
+if (profile.enableEntityResolutionAtoms) surfaces.push({ surface: 'entity_resolution_atom', patchType: 'MIXED', wordRange: [RANGES.MEMORY_INDEX_START + 128, RANGES.MEMORY_INDEX_START + 191] });
 
 const minImprovementPpm = Number(profile.patchAcceptanceFloors.minImprovementPpm);
 const screenerThresholdPpm = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: profile.baselineParentScorePpm, policy: DEFAULT_CORETEX_WORK_POLICY }));
+const baselineManifestHash = hashJson({
+  parentStateRoot,
+  corpusRoot,
+  activeFrontierRoot,
+  bundleHash: manifest.bundleHash,
+  profileHash,
+  rerankerRevision,
+  parentScorePpm: profile.baselineParentScorePpm,
+  variancePpm: profile.baselineVariancePpm,
+  samples: profile.baselineSamples,
+  replayTolerancePpm: profile.replayTolerancePpm,
+});
 
 // example valid patch: one relation category-lens edge (public, structural)
 const exWordIdx = RANGES.RELATIONS_START + 127;
@@ -97,6 +168,10 @@ const challenge = {
   substrateAccess: { byRoot: `/coretex/substrate/${parentStateRoot}`, wordCount: 1024, packedBytes: 32768 },
   bundleHash: manifest.bundleHash,
   coreVersionHash: manifest.bundleHash,
+  artifactManifestHash,
+  profileHash,
+  rerankerRevision,
+  baselineManifestHash,
   profileName: profile.name,
   pipelineVersion: profile.pipelineVersion,
   corpusRoot,
@@ -108,9 +183,9 @@ const challenge = {
   minImprovementPpm,
   replayTolerancePpm: profile.replayTolerancePpm,
   screenerThresholdPpm,
-  perMinerCap: 50, // canonical V4 default coreTexScreenerCapPerMinerPerEpoch (BotcoinMiningV4.sol) — was stale 8
+  perMinerScreenerCap: 50, // canonical V4 default coreTexScreenerCapPerMinerPerEpoch (BotcoinMiningV4.sol) — was stale 8
   memoryIRSchemaVersion: 'memory_ir.v1',
-  activeSubstrateSurfaces: surfaces.map((s) => s.surface),
+  activeSubstrateSurfaces,
   exampleValidPatch: { patchType: examplePatch.patchType, wordCount: 1, indexRange: [RANGES.RELATIONS_START, RANGES.RELATIONS_END], encodedHex: '0x' + Buffer.from(encodePatch(examplePatch)).toString('hex') },
   hiddenEvalWarning: 'Hidden eval query pack, qrels, answer IDs, and epochSecret are NOT public. Patches are scored against a hidden pack derived from a post-submission blockhash + epoch secret.',
 };
@@ -119,9 +194,13 @@ let pass = true; const log = [];
 const check = (n, ok, d = '') => { log.push(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`); if (!ok) pass = false; };
 
 // A) required public fields present
-const required = ['epochId', 'parentStateRoot', 'currentStateRoot', 'bundleHash', 'corpusRoot', 'pipelineVersion', 'allowedPatchTypes', 'patchWordRanges', 'minImprovementPpm', 'screenerThresholdPpm', 'perMinerCap', 'memoryIRSchemaVersion', 'activeSubstrateSurfaces', 'exampleValidPatch', 'hiddenEvalWarning'];
+const required = ['epochId', 'parentStateRoot', 'currentStateRoot', 'bundleHash', 'corpusRoot', 'activeFrontierRoot', 'artifactManifestHash', 'profileHash', 'rerankerRevision', 'baselineManifestHash', 'pipelineVersion', 'allowedPatchTypes', 'patchWordRanges', 'minImprovementPpm', 'screenerThresholdPpm', 'perMinerScreenerCap', 'memoryIRSchemaVersion', 'activeSubstrateSurfaces', 'exampleValidPatch', 'hiddenEvalWarning'];
 const missing = required.filter((k) => challenge[k] === undefined || challenge[k] === null);
 check('A) all required public fields present', missing.length === 0, missing.length ? `missing: ${missing.join(',')}` : `${required.length} fields`);
+// A2) v0 canonical naming — perMinerScreenerCap only; perMinerCap is the deprecated alias and MUST NOT appear.
+check('A2) public challenge uses perMinerScreenerCap (canonical) and not perMinerCap (deprecated)',
+  challenge.perMinerScreenerCap !== undefined && challenge.perMinerCap === undefined,
+  challenge.perMinerCap !== undefined ? 'LEGACY perMinerCap present' : 'OK');
 
 // B) no hidden leakage (deep key + value scan)
 const FORBIDDEN_KEYS = /qrel|truthdoc|hardnegativ|answer|epochsecret|evalseed|hiddenpack|truth|relevance|failurestat|perqueryfail/i;
@@ -139,6 +218,8 @@ const leaks = scan(challenge);
 check('B) no hidden qrel/answer/epochSecret/evalSeed/hiddenPack fields', leaks.length === 0, leaks.length ? `LEAK: ${leaks.join(',')}` : 'clean');
 // also: the served pack itself is NOT embedded
 check('B) challenge does not embed the eval pack / events array', !('events' in challenge) && !('pack' in challenge) && !('queries' in challenge));
+check('B) challenge pins v16 artifact manifest', artifactManifestPath.includes('2026-06-04-memory-atom-v16') && manifest.bundleHash === artifactManifest.bundleHash, artifactManifestPath);
+check('B) active surfaces include promoted v16 atoms', ['validity_atom', 'scope_atom', 'entity_resolution_atom'].every((s) => challenge.activeSubstrateSurfaces.includes(s)), challenge.activeSubstrateSurfaces.join(','));
 
 // C) a valid patch can be built from the challenge contract
 const built = decodePatch(Buffer.from(challenge.exampleValidPatch.encodedHex.slice(2), 'hex'));
@@ -161,6 +242,6 @@ check('D) over-budget (>4 words) → rejected', overBudget !== null, overBudget 
 console.log(log.join('\n'));
 console.log('────────────────────────────────────────────────────────');
 console.log(`challenge fields: ${Object.keys(challenge).length} | activeSurfaces: ${challenge.activeSubstrateSurfaces.join(', ')}`);
-console.log(`minImprovementPpm=${minImprovementPpm} screenerThresholdPpm=${screenerThresholdPpm} perMinerCap=${challenge.perMinerCap} budget=${challenge.patchWordBudget}w`);
+console.log(`minImprovementPpm=${minImprovementPpm} screenerThresholdPpm=${screenerThresholdPpm} perMinerScreenerCap=${challenge.perMinerScreenerCap} budget=${challenge.patchWordBudget}w`);
 console.log(pass ? 'RESULT: ALL PASS ✅ (public contract complete, no hidden leakage)' : 'RESULT: FAIL ❌');
 exit(pass ? 0 : 1);

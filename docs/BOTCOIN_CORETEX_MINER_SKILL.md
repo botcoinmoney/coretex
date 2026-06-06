@@ -12,7 +12,19 @@ metadata: { "openclaw": { "emoji": "🧠" } }
 
 CoreTex is a separate mining lane from the standard solve lane. Instead of answering a challenge document, you submit **substrate patches** that improve the canonical CoreTex state. The coordinator scores each patch, issues an EIP-712 `CoreTexReceipt` classifying it as either a `SCREENER_PASS` (no state change) or a `STATE_ADVANCE` (moves the live root), and you post that receipt to **BotcoinMiningV4** on Base. V4 credits accumulate in the same per-epoch pool as the standard lane and are claimed post-epoch from the same `claim(uint64[])` surface.
 
-Launch status note, reconciled 2026-05-29: the live `/coretex/challenge` is authoritative. Current launch posture is temporal plus top1-only guarded abstention as reward-active surfaces; relation/evidence and conflict r5 atoms are structurally valid but safe-but-not-active unless the live challenge explicitly exposes them.
+Launch status note, reconciled 2026-06-06: CoreTex v16 is the launch posture. The live `/coretex/challenge` is the only source of truth for which surfaces are reward-active in the current epoch. Treat every patch type, word range, screener threshold, and active surface as runtime-dynamic — read them off the live response and do not hardcode any byte or word index from this document or any other.
+
+In v16, `activeSubstrateSurfaces` (in `/coretex/challenge`) may include any combination of:
+`temporal_update`, `conflict_lifecycle`, `relation_causal`, `relation_category_routing`,
+`abstention_top1`, `evidence_bundle`, `coreference`, `relation_lifecycle`,
+`noise_suppression`, `validity_atom`, `scope_atom`, `entity_resolution_atom`. A v16 atom
+is reward-active only when both (a) it appears in `activeSubstrateSurfaces` AND (b) its
+patch type / word range is exposed by `allowedPatchTypes` for the live epoch. Anything
+not in both is structurally legal but will not score above the threshold.
+
+You do **not** need to run a local CoreTex client. The skill operates entirely out of:
+the rules below; `/coretex/challenge`; `/coretex/status`; `/coretex/substrate/:root`;
+`/coretex/submit`. No corpus snapshot, no embeddings, no scorer install on the miner side.
 
 **Minimum tooling:** `curl` + `jq`, plus **one** transaction path of your choice:
 - **Path A (Bankr):** `BANKR_API_KEY`. Bankr handles wallet, signing, and submission. Same pattern as the standard miner skill.
@@ -56,6 +68,7 @@ Both paths are first-class. Choose whichever fits your operational model — the
 | GET | `/coretex/substrate/:stateRoot` | the full 1024-word state by root (off-chain by root; `packedBytes` 32768) |
 | POST | `/coretex/submit` | submit a patch: `{ patchBytesHex, parentStateRoot, minerAddress }` |
 | GET | `/coretex/patch/:hash` | wire bytes by patchHash (for retry / replay) |
+| GET | `/coretex/receipt/:hash` | re-fetch a previously signed coordinator receipt + pre-encoded V4 transaction by patchHash. Use this if you lose the `/coretex/submit` response body before broadcasting. The coordinator returns the same envelope it returned the first time. Receipts are only retained while their `expiresAt` is in the future. |
 | GET | `/coretex/eval-report/:hash` | post-reveal eval report |
 | GET | `/coretex/bundle/by-core-version/:hash` | bundle manifest for the active `coreVersionHash` |
 | GET | `/coretex/health` | liveness |
@@ -93,14 +106,14 @@ The response includes the public pins + the operational rules you must respect. 
 | field | meaning |
 |---|---|
 | `epochId`, `parentStateRoot` / `currentStateRoot` | epoch + the substrate root your patch must build on |
-| `substrateAccess.byRoot` | URL to fetch the full state (`wordCount` 1024, `packedBytes` 32768) |
+| `substrateAccess.byRoot` | URL to fetch the full state (`wordCount` 1024, `packedBytes` 32768). The response carries `{ stateRoot, wordCount, packedBytes, packedHex }`; `packedHex` is the 32 768-byte state as one `0x…` hex string — the easiest shape for a shell/Node consumer to parse without depending on the cortex package. |
 | `bundleHash` / `coreVersionHash`, `corpusRoot`, `activeFrontierRoot` | pinned scoring context (the registry enforces these per epoch) |
 | `allowedPatchTypes` | array of `{ name, byte, wordIndexRange: [start, end] }` — the byte VALUE you put in the wire is `allowedPatchTypes[i].byte` from this live response. **Do not hardcode** byte values from any document; always read them from the live challenge. `wordIndexRange` is inclusive on both ends. |
 | `activeFrontierRoot` | launch C3 churn should provide a non-null frontier root. `null` (or the all-zero sentinel `0x000…0000`) means a smoke, legacy, or explicitly churn-off deployment. Pass it through unchanged on the receipt. |
 | `patchWordBudget` | **4** (max words per `STATE_ADVANCE` patch) |
 | `screenerThresholdPpm` | current dynamic screener threshold (live baseline + noise floor) |
 | `minImprovementPpm` / `replayTolerancePpm` | state-advance acceptance floor + replay tolerance |
-| `perMinerScreenerCap` | on-chain V4 cap (default **50**) — see _On-chain protocol caps_ below |
+| `perMinerScreenerCap` | on-chain V4 cap (default **50**) — see _On-chain protocol caps_ below. To check how much of your cap you have left without re-fetching the whole challenge, GET `/coretex/status?miner=<addr>`; the response includes `perMiner.{screenersThisEpoch, remaining, cap}` for your address. |
 | `exampleValidPatch` | a worked, structurally valid patch you can use as a template |
 | `hiddenEvalWarning` | hidden qrels / eval pack / answer IDs / epochSecret are NOT public |
 
@@ -137,7 +150,7 @@ The challenge payload's `exampleValidPatch` shows the **structural template** (p
 | `E01` | `parentStateRoot` ≠ current live root (stale; re-fetch challenge) |
 | `E02` | word index in reserved range / out of range / wrong patch type |
 | `E03` | wordCount > 4 (oversized wordCount that overruns the wire buffer surfaces as `DECODE` before `E03`) |
-| `E04` | result sets a reserved bit (some bit-pattern combinations are reserved) |
+| `E04` | result sets a reserved bit. Reserved-bit masks differ per substrate region: the per-region grammars are defined in the substrate spec (and on-chain in `_wordMatchesPatchType` + the r5 policy-region validators). The safest way to avoid `E04` is to write *bounded* values (e.g. small unsigned ints, an ASCII slug left-padded with zeros) rather than all-bits-set words. Writing `0xffff…ffff` into a slot that carries a typed sub-field will trip `E04`. |
 | `E05` | no-op (every new word equals the current word at that index) |
 | `DECODE` | wire bytes failed to parse (bad LEB128, wrong length, unpadded word, etc.) |
 
@@ -197,6 +210,30 @@ The envelope is one of three:
 ```
 
 `receipt` is the full `CoreTexReceipt` struct (all 25 fields, including the coordinator EIP-712 `signature`). `transaction` is pre-encoded calldata to `BotcoinMiningV4.submitCoreTexReceipt(...)` — drop into either path verbatim.
+
+The coordinator fills in every receipt field beyond the three you POSTed (`patchBytesHex`, `parentStateRoot`, `minerAddress`). The full enumeration of coordinator-supplied fields, for the curious — none of these are miner-derivable and you do not need to compute or modify them:
+
+| field | what the coordinator commits to |
+|---|---|
+| `epochId` | the current on-chain epoch |
+| `solveIndex` | `V4.nextIndex(miner)` at signing time — the miner's monotonic on-chain receipt counter |
+| `prevReceiptHash` | `V4.lastReceiptHash(miner)` at signing time |
+| `outcome` | `1`=SCREENER_PASS, `2`=STATE_ADVANCE |
+| `challengeId` | coordinator-side per-receipt identifier (used for off-chain dedup) |
+| `parentStateRoot` / `newStateRoot` | for SCREENER_PASS, both equal the parent; for STATE_ADVANCE, `newStateRoot` is `applyPatch(parent, patch)` merkleized |
+| `corpusRoot` / `activeFrontierRoot` / `coreVersionHash` | the v16 pins V4 enforces against the registry |
+| `evalReportHash` / `artifactHash` | hashes the coordinator commits to over its off-chain eval record |
+| `worldSeed` | 128-bit coordinator-side per-receipt nonce |
+| `rulesVersion` / `workPolicyHash` | the on-chain `activeCoreTexRulesVersion` + matching `CoreTexPolicy.policyHash` |
+| `workUnitsBps` | exact value from V4's `computeCoreTexWorkUnitsBps` for this outcome + live difficulty count |
+| `difficultyCountSnapshot` | `V4.qualifiedScreenerPassesSinceLastStateAdvance(epochId)` at signing time |
+| `stateWordCount` | `0` for SCREENER_PASS; for STATE_ADVANCE, the patch's `wordCount` |
+| `scoreBeforePpm` / `scoreAfterPpm` | `0`/`0` for SCREENER_PASS; for STATE_ADVANCE, baseline-relative ppm scores such that `scoreAfter − scoreBefore ≥ minImprovementPpm` |
+| `issuedAt` / `expiresAt` | TTL window (≤ 1 hour); the miner must broadcast inside it |
+| `compactPatchBytes` | the wire bytes the miner submitted |
+| `signature` | EIP-712 signature over all of the above (excluding `compactPatchBytes` and `signature` themselves), keyed by `V4.coordinatorSigner` |
+
+V4 rejects any in-transit modification of these fields via the EIP-712 signature check; the only fields you submit are the three on `/coretex/submit`.
 
 ### D. Post the receipt on-chain
 
