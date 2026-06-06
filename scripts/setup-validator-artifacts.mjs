@@ -30,7 +30,6 @@ const has = (name) => args.includes(`--${name}`);
 const manifestPath = flag('manifest', DEFAULT_MANIFEST);
 const verifyOnly = has('verify-only');
 const noDownload = has('no-download');
-const materializeDisabled = has('materialize-disabled');
 const artifactBaseUrlOverride = flag('artifact-base-url', null);
 
 function readJson(path) {
@@ -137,78 +136,74 @@ async function verifyStaticFile(label, path, sha256) {
 
 async function verifyBundles(manifest) {
   const C = await import(distIndex);
-  for (const [name, profile] of Object.entries(manifest.profiles ?? {})) {
-    await verifyStaticFile(`${name} bundle`, profile.bundlePath, profile.bundleSha256);
-    await verifyStaticFile(`${name} profile`, profile.profilePath, profile.profileSha256);
-    const bundle = readJson(profile.bundlePath);
-    if (bundle.bundleHash !== profile.bundleHash) {
-      throw new Error(`HARD FAIL: ${name} bundleHash drift ${bundle.bundleHash} != ${profile.bundleHash}`);
-    }
-    if ((bundle.corpus?.root ?? '').toLowerCase() !== manifest.corpusRoot.toLowerCase()) {
-      throw new Error(`HARD FAIL: ${name} corpusRoot drift ${bundle.corpus?.root} != ${manifest.corpusRoot}`);
-    }
-    const errors = C.verifyBundleManifest(bundle, repoRoot);
-    if (errors.length) throw new Error(`HARD FAIL: ${name} bundle manifest invalid:\n  - ${errors.join('\n  - ')}`);
-    console.log(`[setup] OK ${name} bundleHash: ${bundle.bundleHash}`);
+  await verifyStaticFile('bundle', manifest.bundlePath, manifest.bundleSha256);
+  await verifyStaticFile('profile', manifest.profilePath, manifest.profileSha256);
+  const bundle = readJson(manifest.bundlePath);
+  if (bundle.bundleHash !== manifest.bundleHash) {
+    throw new Error(`HARD FAIL: bundleHash drift ${bundle.bundleHash} != ${manifest.bundleHash}`);
   }
+  if ((bundle.corpus?.root ?? '').toLowerCase() !== manifest.corpusRoot.toLowerCase()) {
+    throw new Error(`HARD FAIL: corpusRoot drift ${bundle.corpus?.root} != ${manifest.corpusRoot}`);
+  }
+  const errors = C.verifyBundleManifest(bundle, repoRoot);
+  if (errors.length) throw new Error(`HARD FAIL: bundle manifest invalid:\n  - ${errors.join('\n  - ')}`);
+  console.log(`[setup] OK bundleHash: ${bundle.bundleHash}`);
 }
 
-function materialize(manifest, profileName) {
-  const p = manifest.profiles[profileName];
+function materialize(manifest) {
   const corpus = manifest.payloads.find((x) => x.role === 'corpus').path;
   const emb = manifest.payloads.find((x) => x.role === 'embeddings').path;
   const cmd = [
     'scripts/materialize-production-corpus.mjs',
-    '--profile', p.profilePath,
-    '--bundle', p.bundlePath,
+    '--profile', manifest.profilePath,
+    '--bundle', manifest.bundlePath,
     '--corpus', corpus,
     '--emb', emb,
     '--materialized-root', manifest.materializedRoot,
   ];
-  console.log(`[setup] MATERIALIZE ${profileName}: node ${cmd.join(' ')}`);
+  console.log(`[setup] MATERIALIZE: node ${cmd.join(' ')}`);
   const res = spawnSync(process.execPath, cmd, { cwd: repoRoot, stdio: 'inherit', env: process.env });
-  if (res.status !== 0) throw new Error(`HARD FAIL: materialize ${profileName} exited ${res.status}`);
-  const tag = p.bundleHash.slice(2, 10);
+  if (res.status !== 0) throw new Error(`HARD FAIL: materialize exited ${res.status}`);
+  const tag = manifest.bundleHash.slice(2, 10);
   const matManifestPath = `${manifest.materializedRoot}/${tag}/manifest.json`;
   const mat = readJson(matManifestPath);
   if ((mat.corpusRoot ?? '').toLowerCase() !== manifest.corpusRoot.toLowerCase()) {
-    throw new Error(`HARD FAIL: materialized ${profileName} root ${mat.corpusRoot} != ${manifest.corpusRoot}`);
+    throw new Error(`HARD FAIL: materialized root ${mat.corpusRoot} != ${manifest.corpusRoot}`);
   }
-  console.log(`[setup] OK materialized ${profileName}: ${matManifestPath}`);
+  console.log(`[setup] OK materialized: ${matManifestPath}`);
 }
 
-function verifyMaterialized(manifest, profileName) {
-  const p = manifest.profiles[profileName];
+function verifyMaterialized(manifest) {
   const corpus = manifest.payloads.find((x) => x.role === 'corpus');
   const emb = manifest.payloads.find((x) => x.role === 'embeddings');
-  const tag = p.bundleHash.slice(2, 10);
+  const tag = manifest.bundleHash.slice(2, 10);
   const matManifestPath = `${manifest.materializedRoot}/${tag}/manifest.json`;
   const corpusJson = `${manifest.materializedRoot}/${tag}/corpus.json`;
   const ndjson = `${corpusJson}.events.ndjson`;
   if (!existsSync(resolve(repoRoot, matManifestPath))) {
-    throw new Error(`HARD FAIL: materialized ${profileName} cache missing: ${matManifestPath}. Run npm run setup:validator.`);
+    throw new Error(`HARD FAIL: materialized cache missing: ${matManifestPath}. Run npm run setup:validator.`);
   }
   if (!existsSync(resolve(repoRoot, corpusJson)) || !existsSync(resolve(repoRoot, ndjson))) {
-    throw new Error(`HARD FAIL: materialized ${profileName} corpus files missing under ${manifest.materializedRoot}/${tag}`);
+    throw new Error(`HARD FAIL: materialized corpus files missing under ${manifest.materializedRoot}/${tag}`);
   }
   const mat = readJson(matManifestPath);
   const checks = [
-    ['bundleHash', mat.bundleHash, p.bundleHash],
+    ['bundleHash', mat.bundleHash, manifest.bundleHash],
     ['corpusRoot', mat.corpusRoot, manifest.corpusRoot],
     ['sourceCorpusSha256', mat.sourceCorpusSha256, `0x${corpus.sha256}`],
     ['sourceEmbSha256', mat.sourceEmbSha256, `0x${emb.sha256}`],
-    ['sourceProfileSha256', mat.sourceProfileSha256, `0x${p.profileSha256}`],
-    ['sourceBundleSha256', mat.sourceBundleSha256, `0x${p.bundleSha256}`],
+    ['sourceProfileSha256', mat.sourceProfileSha256, `0x${manifest.profileSha256}`],
+    ['sourceBundleSha256', mat.sourceBundleSha256, `0x${manifest.bundleSha256}`],
   ];
   for (const [label, actual, expected] of checks) {
     if ((actual ?? '').toLowerCase() !== expected.toLowerCase()) {
-      throw new Error(`HARD FAIL: materialized ${profileName} ${label} drift ${actual} != ${expected}`);
+      throw new Error(`HARD FAIL: materialized ${label} drift ${actual} != ${expected}`);
     }
   }
   if (typeof mat.eventCount !== 'number' || mat.eventCount <= 0) {
-    throw new Error(`HARD FAIL: materialized ${profileName} eventCount invalid: ${mat.eventCount}`);
+    throw new Error(`HARD FAIL: materialized eventCount invalid: ${mat.eventCount}`);
   }
-  console.log(`[setup] OK materialized ${profileName}: ${matManifestPath}`);
+  console.log(`[setup] OK materialized: ${matManifestPath}`);
 }
 
 async function main() {
@@ -220,15 +215,12 @@ async function main() {
   console.log(`[setup] launch artifact: ${manifest.name}`);
   for (const payload of manifest.payloads ?? []) await ensurePayload(manifest, payload);
   await verifyBundles(manifest);
-  const activeProfile = manifest.active?.profile ?? 'enabled';
   if (verifyOnly) {
-    verifyMaterialized(manifest, activeProfile);
-    if (materializeDisabled) verifyMaterialized(manifest, 'disabled');
+    verifyMaterialized(manifest);
   } else {
-    materialize(manifest, activeProfile);
-    if (materializeDisabled) materialize(manifest, 'disabled');
+    materialize(manifest);
   }
-  console.log(`[setup] READY corpusRoot=${manifest.corpusRoot} bundleHash=${manifest.active.bundleHash}`);
+  console.log(`[setup] READY corpusRoot=${manifest.corpusRoot} bundleHash=${manifest.bundleHash}`);
 }
 
 main().catch((e) => {
