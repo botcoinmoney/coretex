@@ -34,7 +34,9 @@ addresses anywhere.
 
 The `hiddenSeedCommit` preimage lives at
 `/root/botcoin/.coretex-mainnet-secret-DO-NOT-COMMIT.txt` (gitignored). Reveal
-the seed via `registry.revealEpochSecret(106, <preimage>)` at epoch close.
+the seed via `V4.revealEpochSecret(106, <preimage>)` at epoch close
+(BotcoinMiningV4.sol — owner/coordinatorSigner only; the registry has no
+revealEpochSecret entry point).
 
 ## Verification commands
 

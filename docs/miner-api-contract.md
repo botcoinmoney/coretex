@@ -3,13 +3,11 @@
 Public contract a miner uses to construct valid, non-oracle patches without running the
 full CoreTex stack.
 
-Status note, reconciled 2026-05-29: the compact `dgen1-r5-synth` corpus and
-May 27 four-surface launch lock are historical. Current launch posture is in
-`release/calibration/LAUNCH_DOC_RECONCILIATION_2026_05_29.md`: temporal and
-top1-only abstention are reward-active; relation/evidence and conflict r5 atoms
-are safe-but-not-active unless the live challenge explicitly re-promotes them.
-The live `/coretex/challenge` is the source of truth for enabled surfaces and
-allowed patch ranges.
+Status note, reconciled 2026-06-06: CoreTex v16 is the launch posture. The
+live `/coretex/challenge` is the source of truth for enabled surfaces and
+allowed patch ranges; the v16 launch candidate includes temporal, relation,
+evidence, conflict, abstention, and promoted validity/scope/entity atoms when
+they are present in `activeSubstrateSurfaces`.
 
 Validation gate: `scripts/miner-api-contract-gate.mjs` must be rerun against the
 current launch profile, bundle, and corpus before signing.
@@ -23,6 +21,7 @@ Routes (`packages/cortex/src/coordinator/endpoints.ts`):
 | GET | `/coretex/status` | epoch + difficulty status |
 | GET | `/coretex/substrate/:stateRoot` | full 1024-word state by root (off-chain by root) |
 | GET | `/coretex/patch/:hash` | patch bytes by patchHash |
+| GET | `/coretex/receipt/:hash` | re-fetch a previously signed coordinator receipt + pre-encoded V4 transaction by patchHash (lookup by either the miner-submitted patchHash OR the coordinator-rewritten signed patchHash; receipt-cache entry is dropped once `expiresAt` elapses, after which the endpoint returns 404 with `reason: receipt expired`) |
 | GET | `/coretex/patch-received/:hash` | PatchReceivedNotice (anti-delay witness) |
 | GET | `/coretex/eval-report/:hash` | post-reveal eval report for replay |
 | GET | `/coretex/corpus-delta/:epoch` | corpus growth delta |
@@ -46,7 +45,7 @@ Routes (`packages/cortex/src/coordinator/endpoints.ts`):
 | `screenerThresholdPpm` | current dynamic screener threshold (from live baseline + noise floor; recomputes after baseline/churn/corpus/reranker changes) |
 | `perMinerScreenerCap` | on-chain V4 `coreTexScreenerCapPerMinerPerEpoch` (default **50**, adjustable by owner/policyAdmin). Hard ceiling on SCREENER_PASS receipts per miner per epoch; persists across state advances within the epoch; STATE_ADVANCE receipts and standard-lane receipts are not counted. Receipts above the cap revert `CoreTexScreenerCapExceeded`. |
 | `memoryIRSchemaVersion` | the fixed Memory-IR protocol grammar version (renderer is protocol-owned) |
-| `activeSubstrateSurfaces` | the live earned surfaces from the challenge. Current reconciled launch posture is `temporal` + `guarded_abstention_top1`; relation/evidence and conflict atoms are safe-but-not-active unless explicitly present here. |
+| `activeSubstrateSurfaces` | the live earned surfaces from the challenge. For v16 this must include the promoted atom surfaces when active: `validity_atom`, `scope_atom`, and `entity_resolution_atom`. |
 | `exampleValidPatch` | a worked, structurally-valid patch encoding |
 | `hiddenEvalWarning` | explicit notice that hidden qrels / eval pack / answer IDs / epochSecret are not public |
 
