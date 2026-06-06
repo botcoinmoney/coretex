@@ -44,7 +44,7 @@ import { evolveCorpusDelta } from './lib/evolve-corpus.mjs';
 import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadMaterializedCorpus } from './lib/load-materialized-corpus.mjs';
 import { embedTexts } from './_embed-v2.mjs';
-import { hseed, mulberry32, randomPatch, relationUnits, relationUnitsForEdges, temporalUnits, conflictUnits, abstentionUnits, atomAnchorUnits, buildMemoryEventByDocId } from './lib/v2-patch-families.mjs';
+import { hseed, mulberry32, randomPatch, relationUnits, relationUnitsForEdges, temporalUnits, conflictUnits, abstentionUnits, atomAnchorUnits, evidenceBundleUnits, noiseSuppressionUnits, buildMemoryEventByDocId } from './lib/v2-patch-families.mjs';
 import { baselineAtomHardness } from './lib/atom-hardness.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
 import { makeInstrumentedReranker } from './lib/instrumented-reranker.mjs';
@@ -452,11 +452,21 @@ function applyHonestCursorUpdate(slotCursor, update) {
   if (update.abstentionSlotDelta) slotCursor.abstentionSlot += update.abstentionSlotDelta;
   if (update.scopeSlotDelta) slotCursor.scopeSlot += update.scopeSlotDelta;
   if (update.entitySlotDelta) slotCursor.entitySlot += update.entitySlotDelta;
+  if (update.evidenceSlotDelta) slotCursor.evidenceSlot += update.evidenceSlotDelta;
+  if (update.noiseSlotDelta) slotCursor.noiseSlot += update.noiseSlotDelta;
+  if (update.relationCausalOffsetDelta) slotCursor.relationCausalOffset += update.relationCausalOffsetDelta;
+  if (update.relationCausalAttemptDelta) slotCursor.relationCausalAttempt += update.relationCausalAttemptDelta;
+  if (update.relationLifecycleOffsetDelta) slotCursor.relationLifecycleOffset += update.relationLifecycleOffsetDelta;
+  if (update.relationLifecycleAttemptDelta) slotCursor.relationLifecycleAttempt += update.relationLifecycleAttemptDelta;
+  if (update.coreferenceOffsetDelta) slotCursor.coreferenceOffset += update.coreferenceOffsetDelta;
+  if (update.coreferenceAttemptDelta) slotCursor.coreferenceAttempt += update.coreferenceAttemptDelta;
   for (const id of update.addTemporalSkipDocs ?? []) if (id) slotCursor.temporalSkipDocs.add(id);
   for (const id of update.addValiditySkipDocs ?? []) if (id) slotCursor.validitySkipDocs.add(id);
   for (const id of update.addConflictSkipDocs ?? []) if (id) slotCursor.conflictSkipDocs.add(id);
   for (const id of update.addScopeSkipDocs ?? []) if (id) slotCursor.scopeSkipDocs.add(id);
   for (const id of update.addEntitySkipDocs ?? []) if (id) slotCursor.entitySkipDocs.add(id);
+  for (const id of update.addEvidenceSkipDocs ?? []) if (id) slotCursor.evidenceSkipDocs.add(id);
+  for (const id of update.addNoiseSkipDocs ?? []) if (id) slotCursor.noiseSkipDocs.add(id);
   return update;
 }
 function qrelDocId(q) {
@@ -524,6 +534,38 @@ function buildDecodedAtomTrace({ hp, fpFamily, appliedState, corpus }) {
     decodeAttempts: decoded.decodeAttempts,
     decodeFailures: decoded.decodeFailures,
     memoryIndex: slots.map((slot) => decodedMemorySlotTrace(decoded, slot, byRecordId)).filter(Boolean),
+  };
+}
+function buildDecodedPatchTrace({ hp, appliedState, corpus }) {
+  if (!appliedState) return null;
+  const decoded = decodeSubstrate(appliedState, { policyAtomsMode: true, biEncoderModelIdHash: biEncoderHash, retrievalKeyHeaderBytes: LAYOUT.headerBytes });
+  const byRecordId = recordIdIndex(corpus);
+  const memorySlots = [
+    hp.evidenceMemorySlot,
+    hp.noiseMemorySlot,
+    hp.temporalRecordSlot !== undefined ? hp.temporalRecordSlot * 2 : null,
+    hp.temporalRecordSlot !== undefined ? hp.temporalRecordSlot * 2 + 1 : null,
+    hp.conflictAtomSlot,
+    hp.scopeAtomSlot,
+    hp.entityResolutionAtomSlot,
+    ...(hp.scopeAtomSlots ?? []),
+    ...(hp.entityResolutionAtomSlots ?? []),
+  ].filter((slot) => slot !== null && slot !== undefined);
+  const atomSlots = [hp.evidenceAtomSlot, hp.noiseAtomSlot].filter((slot) => slot !== null && slot !== undefined);
+  const lensOffsets = [];
+  if (hp.relationLensOffset !== null && hp.relationLensOffset !== undefined) {
+    for (let i = 0; i < (hp.relationLensEdges?.length ?? 1); i++) lensOffsets.push(127 - (hp.relationLensOffset + i));
+  }
+  return {
+    decodeAttempts: decoded.decodeAttempts,
+    decodeFailures: decoded.decodeFailures,
+    memoryIndex: memorySlots.map((slot) => decodedMemorySlotTrace(decoded, slot, byRecordId)).filter(Boolean),
+    evidenceBundleAtoms: decoded.evidenceBundleAtoms
+      .filter((atom) => atomSlots.includes(atom.atomIndex))
+      .map((atom) => ({ atomIndex: atom.atomIndex, selector: atom.selector, evidenceFeature: atom.evidenceFeature, action: atom.action, scope: atom.scope, targetSlot: atom.targetSlot, budget: atom.budget })),
+    categoryLenses: decoded.categoryLenses
+      .filter((lens) => lensOffsets.includes(lens.entryIndex))
+      .map((lens) => ({ entryIndex: lens.entryIndex, edgeType: lens.edgeType, weight: lens.weight })),
   };
 }
 function atomTracePolicyReceipt(afterQ, fpFamily) {
@@ -775,13 +817,16 @@ const GENESIS_PARENT_ROOT = merkleizeState({ words: new Array(1024).fill(0n) });
 // per epoch. Each slot rolls a deterministic per-family cursor (see honestSlotCursor) so
 // that successive patches occupy disjoint substrate slots and never collide. Surfaces:
 //   - 'relation_causal'       : category-lens(supports, causes) — the original endurance fp.
-//   - 'temporal'              : current/stale TemporalRecord + paired memory slots, mined from
+//   - 'temporal_update'       : current/stale TemporalRecord + paired memory slots, mined from
 //                               the pack via temporalUnits(...) (3 words).
-//   - 'conflict'              : conflict_lifecycle PolicyAtom anchored at the resolved doc of
+//   - 'conflict_lifecycle'    : conflict_lifecycle PolicyAtom anchored at the resolved doc of
 //                               the next conflict-pack query (2 words).
 //   - 'relation_lifecycle'    : category-lens(supersedes, coreference_of) — disjoint from
 //                               the causal fp so they coexist as separate operations.
-//   - 'abstention'            : MISSING_EVIDENCE PolicyAtom (1 word; pack must contain at
+//   - 'evidence_bundle'       : evidence_bundle PolicyAtom anchored to a relation evidence doc.
+//   - 'coreference'           : category-lens(coreference_of), disjoint from lifecycle fp.
+//   - 'noise_suppression'     : evidence_bundle suppress atom on a pack distractor / hard negative.
+//   - 'abstention_top1'       : MISSING_EVIDENCE PolicyAtom (1 word; pack must contain at
 //                               least one abstention_missing query).
 //   - 'validity_atom'         : TemporalRecord over a validity_atom current/stale pair.
 //   - 'scope_atom'            : policy-anchor MemoryIndex slot selected by public scope metadata.
@@ -789,7 +834,7 @@ const GENESIS_PARENT_ROOT = merkleizeState({ words: new Array(1024).fill(0n) });
 //
 // Add fingerprints here by name; the loop below dispatches by switch. Each family records a
 // distinct operationFingerprint and selectorFingerprint so per-fp accept/reject is auditable.
-const HONEST_FAMILIES = (flag('honest-families', 'relation_causal,temporal,conflict,relation_lifecycle,abstention,validity_atom,scope_atom,entity_resolution_atom').split(',').map((s) => s.trim()).filter(Boolean));
+const HONEST_FAMILIES = (flag('honest-families', 'temporal_update,conflict_lifecycle,relation_causal,evidence_bundle,coreference,relation_lifecycle,noise_suppression,validity_atom,scope_atom,entity_resolution_atom,abstention_top1').split(',').map((s) => s.trim()).filter(Boolean));
 function makeHonestSlotCursor() {
   return {
     temporalRecord: 0,          // TemporalRecord slot index (cap 96)
@@ -798,12 +843,20 @@ function makeHonestSlotCursor() {
     conflictSlot: 96,           // POLICY_CONFLICT atom slot index (cap 128); disjoint from temporal memory slots
     conflictSkipDocs: new Set(), // anchored conflict doc IDs
     abstentionSlot: 0,          // POLICY_ABSTENTION slot index (cap 32)
-    scopeSlot: 220,             // MemoryIndex policy-anchor slot for scope_atom
+    scopeSlot: 192,             // MemoryIndex policy-anchor slot for scope_atom
     scopeSkipDocs: new Set(),
-    entitySlot: 160,            // MemoryIndex policy-anchor slot for entity_resolution_atom
+    entitySlot: 128,            // MemoryIndex policy-anchor slot for entity_resolution_atom
     entitySkipDocs: new Set(),
-    relationCausalEntries: 2,   // bottom 2 entries reserved for supports,causes (entryOffset 0..1)
-    relationLifecycleEntries: 2,// next 2 entries reserved for supersedes,coreference_of (entryOffset 2..3)
+    evidenceSlot: 224,          // MemoryIndex anchors 224..239, evidence atoms 0..15
+    evidenceSkipDocs: new Set(),
+    noiseSlot: 240,             // MemoryIndex anchors 240..255, evidence atoms 16..31
+    noiseSkipDocs: new Set(),
+    relationCausalOffset: 0,    // relation lens offsets 0..47
+    relationCausalAttempt: 0,
+    relationLifecycleOffset: 48,// relation lens offsets 48..79
+    relationLifecycleAttempt: 0,
+    coreferenceOffset: 80,      // relation lens offsets 80..95
+    coreferenceAttempt: 0,
   };
 }
 function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
@@ -811,15 +864,22 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
   const baseFingerprint = (op) => ({
     operationFingerprint: op,
     selectorFingerprint: ({
-      'honest:relation(2):causal:supports,causes':                'public-edge-category-lens:supports,causes',
-      'honest:relation(2):lifecycle:supersedes,coreference_of':   'public-edge-category-lens:supersedes,coreference_of',
-      'honest:temporal:current_stale':                            'public-temporal-currentStale-pack-mined',
-      'honest:conflict:CONFLICT_SET_MEMBER:boost':                'public-policy-CONFLICT_SET_MEMBER:CONTRADICTS_EDGE:boost',
+      'honest:relation_causal:supports,causes':                    'public-edge-category-lens:supports,causes',
+      'honest:relation_causal:supports':                           'public-edge-category-lens:supports',
+      'honest:relation_causal:causes':                             'public-edge-category-lens:causes',
+      'honest:relation_lifecycle:supersedes,coreference_of':       'public-edge-category-lens:supersedes,coreference_of',
+      'honest:relation_lifecycle:supersedes':                      'public-edge-category-lens:supersedes',
+      'honest:relation_lifecycle:coreference_of':                  'public-edge-category-lens:coreference_of',
+      'honest:coreference:coreference_of':                         'public-edge-category-lens:coreference_of',
+      'honest:temporal:current_stale':                             'public-temporal-currentStale-pack-mined',
+      'honest:conflict:CONFLICT_SET_MEMBER:boost':                 'public-policy-CONFLICT_SET_MEMBER:CONTRADICTS_EDGE:boost',
+      'honest:evidence_bundle:RELATION_PATH_PRESENT:bundle':       'public-policy-RELATION_PATH_PRESENT:SUPPORT_IN_DEGREE:bundle',
+      'honest:noise_suppression:ANSWER_DENSITY:suppress':          'public-policy-ANSWER_DENSITY:SUPPORT_IN_DEGREE:suppress',
       'honest:abstention:MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH':'public-policy-MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH:abstain',
       'honest:validity_atom:temporal_record':                     'public-validity-subject-attribute-currentStale-pack-mined',
-      'honest:scope_atom:constrain':                              'public-scope-project-session-topic-task-selector',
-      'honest:entity_resolution_atom:prefer':                     'public-entity-duplicate-name-role-alias-selector',
-    })[op] ?? op,
+      'honest:scope_atom:constrain':                               'public-scope-project-session-topic-task-selector',
+      'honest:entity_resolution_atom:prefer':                      'public-entity-duplicate-name-role-alias-selector',
+    })[op.replace(/:off\d+$/, '')] ?? op,
   });
   const target = addedDocs[honestIdx % Math.max(1, addedDocs.length)] ?? null;
   const makePatchFrom = (units, op, targetDocId, extra) => {
@@ -838,14 +898,54 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     };
   };
   if (family === 'relation_causal') {
-    const u = relationUnitsForEdges(['supports', 'causes'], 0);
-    return makePatchFrom(u, 'honest:relation(2):causal:supports,causes', target?.id ?? null);
+    const variants = [
+      { edges: ['supports', 'causes'], name: 'supports,causes' },
+      { edges: ['supports'], name: 'supports' },
+      { edges: ['causes'], name: 'causes' },
+    ];
+    const v = variants[slotCursor.relationCausalAttempt % variants.length];
+    const offset = slotCursor.relationCausalOffset;
+    if (offset + v.edges.length > 48) {
+      return { skipped: true, family, reason: 'relation_causal_entries_exhausted', fingerprint: `honest:relation_causal:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:relation_causal:entries_exhausted', selectorFingerprint: 'public-edge-category-lens:exhausted' };
+    }
+    const u = relationUnitsForEdges(v.edges, offset);
+    return makePatchFrom(u, `honest:relation_causal:${v.name}:off${offset}`, target?.id ?? null, {
+      relationLensOffset: offset,
+      relationLensEdges: v.edges,
+      cursorUpdate: { relationCausalOffsetDelta: v.edges.length, relationCausalAttemptDelta: 1 },
+    });
   }
   if (family === 'relation_lifecycle') {
-    const u = relationUnitsForEdges(['supersedes', 'coreference_of'], 2);
-    return makePatchFrom(u, 'honest:relation(2):lifecycle:supersedes,coreference_of', target?.id ?? null);
+    const variants = [
+      { edges: ['supersedes', 'coreference_of'], name: 'supersedes,coreference_of' },
+      { edges: ['supersedes'], name: 'supersedes' },
+      { edges: ['coreference_of'], name: 'coreference_of' },
+    ];
+    const v = variants[slotCursor.relationLifecycleAttempt % variants.length];
+    const offset = slotCursor.relationLifecycleOffset;
+    if (offset + v.edges.length > 80) {
+      return { skipped: true, family, reason: 'relation_lifecycle_entries_exhausted', fingerprint: `honest:relation_lifecycle:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:relation_lifecycle:entries_exhausted', selectorFingerprint: 'public-edge-category-lens:exhausted' };
+    }
+    const u = relationUnitsForEdges(v.edges, offset);
+    return makePatchFrom(u, `honest:relation_lifecycle:${v.name}:off${offset}`, target?.id ?? null, {
+      relationLensOffset: offset,
+      relationLensEdges: v.edges,
+      cursorUpdate: { relationLifecycleOffsetDelta: v.edges.length, relationLifecycleAttemptDelta: 1 },
+    });
   }
-  if (family === 'temporal') {
+  if (family === 'coreference') {
+    const offset = slotCursor.coreferenceOffset;
+    if (offset >= 96) {
+      return { skipped: true, family, reason: 'coreference_entries_exhausted', fingerprint: `honest:coreference:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:coreference:entries_exhausted', selectorFingerprint: 'public-edge-category-lens:exhausted' };
+    }
+    const u = relationUnitsForEdges(['coreference_of'], offset);
+    return makePatchFrom(u, `honest:coreference:coreference_of:off${offset}`, target?.id ?? null, {
+      relationLensOffset: offset,
+      relationLensEdges: ['coreference_of'],
+      cursorUpdate: { coreferenceOffsetDelta: 1, coreferenceAttemptDelta: 1 },
+    });
+  }
+  if (family === 'temporal' || family === 'temporal_update') {
     const u = temporalUnits({ pack, logicalQById, recordSlot: slotCursor.temporalRecord, skipDocIds: slotCursor.temporalSkipDocs, eventByDocId });
     if (!u.indices.length || u.recordsCompiled === 0) {
       return { skipped: true, family, reason: u.reason ?? 'no_temporal_pack_query_available', fingerprint: `honest:temporal:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:temporal:current_stale', selectorFingerprint: 'public-temporal-currentStale-pack-mined' };
@@ -865,7 +965,7 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
       cursorUpdate: { temporalRecordDelta: 1, addValiditySkipDocs: [u.minedDocId] },
     });
   }
-  if (family === 'conflict') {
+  if (family === 'conflict' || family === 'conflict_lifecycle') {
     const u = conflictUnits({ pack, logicalQById, eventByDocId, conflictSlot: slotCursor.conflictSlot, action: 'boost', skipDocIds: slotCursor.conflictSkipDocs });
     if (!u.indices.length) {
       return { skipped: true, family, reason: u.reason ?? 'no_conflict_pack_query_available', fingerprint: `honest:conflict:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:conflict:CONFLICT_SET_MEMBER:boost', selectorFingerprint: 'public-policy-CONFLICT_SET_MEMBER:CONTRADICTS_EDGE:boost' };
@@ -875,7 +975,32 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
       cursorUpdate: { conflictSlotDelta: 1, addConflictSkipDocs: [u.minedDocId] },
     });
   }
-  if (family === 'abstention') {
+  if (family === 'evidence_bundle') {
+    const u = evidenceBundleUnits({ pack, logicalQById, eventByDocId, memorySlot: slotCursor.evidenceSlot, skipDocIds: slotCursor.evidenceSkipDocs, action: 'bundle' });
+    if (!u.indices.length) {
+      return { skipped: true, family, reason: u.reason ?? 'no_evidence_bundle_pack_query_available', fingerprint: `honest:evidence_bundle:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:evidence_bundle:RELATION_PATH_PRESENT:bundle', selectorFingerprint: 'public-policy-RELATION_PATH_PRESENT:SUPPORT_IN_DEGREE:bundle' };
+    }
+    return makePatchFrom(u, 'honest:evidence_bundle:RELATION_PATH_PRESENT:bundle', u.minedDocId, {
+      evidenceMemorySlot: u.memorySlot,
+      evidenceAtomSlot: u.atomSlot,
+      evidenceSourceQueryId: u.sourceQueryId,
+      cursorUpdate: { evidenceSlotDelta: 1, addEvidenceSkipDocs: [u.minedDocId] },
+    });
+  }
+  if (family === 'noise_suppression') {
+    const u = noiseSuppressionUnits({ pack, logicalQById, eventByDocId, memorySlot: slotCursor.noiseSlot, skipDocIds: slotCursor.noiseSkipDocs });
+    if (!u.indices.length) {
+      return { skipped: true, family, reason: u.reason ?? 'no_noise_suppression_pack_query_available', fingerprint: `honest:noise_suppression:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:noise_suppression:ANSWER_DENSITY:suppress', selectorFingerprint: 'public-policy-ANSWER_DENSITY:SUPPORT_IN_DEGREE:suppress' };
+    }
+    return makePatchFrom(u, 'honest:noise_suppression:ANSWER_DENSITY:suppress', u.minedDocId, {
+      noiseMemorySlot: u.memorySlot,
+      noiseAtomSlot: u.atomSlot,
+      noiseSourceQueryId: u.sourceQueryId,
+      noiseCategory: u.noiseCategory,
+      cursorUpdate: { noiseSlotDelta: 1, addNoiseSkipDocs: [u.minedDocId] },
+    });
+  }
+  if (family === 'abstention' || family === 'abstention_top1') {
     const u = abstentionUnits({ pack, logicalQById, abstentionSlot: slotCursor.abstentionSlot });
     if (!u.indices.length) {
       return { skipped: true, family, reason: u.reason ?? 'no_abstention_pack_query_available', fingerprint: `honest:abstention:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:abstention:MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH', selectorFingerprint: 'public-policy-MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH:abstain' };
@@ -886,7 +1011,7 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     });
   }
   if (family === 'scope_atom') {
-    const u = atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily: 'scope_atom', memorySlot: slotCursor.scopeSlot, skipDocIds: slotCursor.scopeSkipDocs, maxRecords: 4 });
+    const u = atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily: 'scope_atom', memorySlot: slotCursor.scopeSlot, skipDocIds: slotCursor.scopeSkipDocs, maxRecords: 1 });
     if (!u.indices.length) {
       return { skipped: true, family, reason: u.reason ?? 'no_scope_atom_pack_query_available', fingerprint: `honest:scope_atom:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:scope_atom:constrain', selectorFingerprint: 'public-scope-project-session-topic-task-selector' };
     }
@@ -899,7 +1024,7 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     });
   }
   if (family === 'entity_resolution_atom') {
-    const u = atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily: 'entity_resolution_atom', memorySlot: slotCursor.entitySlot, skipDocIds: slotCursor.entitySkipDocs, maxRecords: 4 });
+    const u = atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily: 'entity_resolution_atom', memorySlot: slotCursor.entitySlot, skipDocIds: slotCursor.entitySkipDocs, maxRecords: 1 });
     if (!u.indices.length) {
       return { skipped: true, family, reason: u.reason ?? 'no_entity_resolution_atom_pack_query_available', fingerprint: `honest:entity_resolution_atom:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:entity_resolution_atom:prefer', selectorFingerprint: 'public-entity-duplicate-name-role-alias-selector' };
     }
@@ -979,10 +1104,15 @@ function atomFamilyForFingerprint(fp) {
   if (fp.includes('validity_atom')) return 'validity_atom';
   if (fp.includes('scope_atom')) return 'scope_atom';
   if (fp.includes('entity_resolution_atom')) return 'entity_resolution_atom';
+  if (fp.includes('evidence_bundle')) return 'evidence_bundle';
+  if (fp.includes('noise_suppression')) return 'noise_suppression';
   if (fp.includes('temporal')) return 'temporal_update';
   if (fp.includes('conflict')) return 'conflict_lifecycle';
   if (fp.includes('abstention')) return 'abstention_top1';
-  if (fp.includes('relation')) return 'relation';
+  if (fp.includes('relation_lifecycle')) return 'relation_lifecycle';
+  if (fp.includes('relation_causal')) return 'relation_causal';
+  if (fp.includes('honest:coreference')) return 'coreference';
+  if (fp.includes('relation')) return 'relation_causal';
   return 'unknown';
 }
 
@@ -1285,6 +1415,9 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
           .slice(0, TRACE_LIMIT)
           .filter((c) => heldoutById.has(c.recordId))
           .map((c) => buildTraceEntry({ epoch, h, patchProvenance: patchTraceProvenance(hp), comparison: c, query: heldoutById.get(c.recordId), corpus: newProd, activeImprovement: topActiveImprovement, kind: 'heldout_regression' })),
+        activeNonRegressions: stableSample(activeComparisons.filter((c) => c.deltaNdcg >= 0), TRACE_LIMIT, `${frontierSeed}:${epoch}:${h}:active-nonregression`)
+          .filter((c) => activeById.has(c.recordId))
+          .map((c) => buildTraceEntry({ epoch, h, patchProvenance: patchTraceProvenance(hp), comparison: c, query: activeById.get(c.recordId), corpus: newProd, activeImprovement: topActiveImprovement, kind: 'active_non_regression' })),
         heldoutNonRegressions: stableSample(heldoutComparisons.filter((c) => c.deltaNdcg >= 0), TRACE_LIMIT, `${frontierSeed}:${epoch}:${h}:heldout-nonregression`)
           .filter((c) => heldoutById.has(c.recordId))
           .map((c) => buildTraceEntry({ epoch, h, patchProvenance: patchTraceProvenance(hp), comparison: c, query: heldoutById.get(c.recordId), corpus: newProd, activeImprovement: topActiveImprovement, kind: 'heldout_non_regression' })),
@@ -1305,6 +1438,15 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         targetDocIdRecordedOnly: true,
         temporalRecordSlot: hp.temporalRecordSlot ?? null,
         conflictAtomSlot: hp.conflictAtomSlot ?? null,
+        evidenceMemorySlot: hp.evidenceMemorySlot ?? null,
+        evidenceAtomSlot: hp.evidenceAtomSlot ?? null,
+        evidenceSourceQueryId: hp.evidenceSourceQueryId ?? null,
+        noiseMemorySlot: hp.noiseMemorySlot ?? null,
+        noiseAtomSlot: hp.noiseAtomSlot ?? null,
+        noiseSourceQueryId: hp.noiseSourceQueryId ?? null,
+        noiseCategory: hp.noiseCategory ?? null,
+        relationLensOffset: hp.relationLensOffset ?? null,
+        relationLensEdges: hp.relationLensEdges ?? null,
         scopeAtomSlot: hp.scopeAtomSlot ?? null,
         scopeAtomSlots: hp.scopeAtomSlots ?? null,
         entityResolutionAtomSlot: hp.entityResolutionAtomSlot ?? null,
@@ -1315,6 +1457,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         oldCorpusPairExcludedQueryCount: oldCorpusPair.excluded.length,
         oldCorpusPairExcludedQueryIds: oldCorpusPair.excluded.slice(0, 16),
         acceptanceDecomposition,
+        ...(tracePatch ? { decodedPatchTrace: buildDecodedPatchTrace({ hp, appliedState: appliedForDecomposition.state, corpus: newProd }) } : {}),
         ...(hp.atomHardness ? { atomHardness: hp.atomHardness } : {}),
         ...(targetDiagnostics ? { targetDiagnostics } : {}),
         ...(atomTraceDiagnostics ? { atomTraceDiagnostics } : {}),

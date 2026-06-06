@@ -374,6 +374,132 @@ export function atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily, 
   return { indices: [], newWords: [], minedDocId: null, reason: `no_${atomFamily}_pack_query_available` };
 }
 
+export function evidenceBundleUnits({
+  pack,
+  logicalQById,
+  eventByDocId,
+  memorySlot = 224,
+  skipDocIds,
+  action = 'bundle',
+}) {
+  const skip = skipDocIds ?? new Set();
+  if (memorySlot < 224 || memorySlot >= 240) {
+    return { indices: [], newWords: [], minedDocId: null, reason: 'evidence_slot_exhausted' };
+  }
+  const relationFamilies = new Set(['multi_session_bridge', 'causal_memory_chain', 'decision_provenance', 'multi_hop_relation']);
+  for (const ev of pack.events) {
+    const view = eventView(ev, logicalQById);
+    if (!relationFamilies.has(view.family)) continue;
+    const direct = directQrelForView(view);
+    if (!direct || skip.has(direct.docId)) continue;
+    const memEv = memoryEventForDocId(direct.docId, eventByDocId);
+    if (eventByDocId && !memEv) continue;
+    const atomSlot = memorySlot - 224;
+    const memWord = encodeMemoryIndexSlot({
+      slotIndex: memorySlot,
+      recordId: stableRecordIdFor(memEv?.id ?? `mem_${direct.docId}`),
+      family: 'multi_hop_relation',
+      domainBits: 1n,
+      valid: true,
+      revoked: false,
+      protected: false,
+      policyAnchor: true,
+      retrievalSlot: 0,
+      expiryEpoch: 0n,
+    })[0];
+    const atomWord = encodePolicyAtom({
+      atomIndex: atomSlot,
+      family: 'evidence_bundle',
+      selector: POLICY_SELECTOR.RELATION_PATH_PRESENT,
+      evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE,
+      action,
+      scope: 'relation_path',
+      targetSlot: memorySlot,
+      budget: 250,
+      flags: 0,
+      validFromEpoch: 0n,
+      expiryEpoch: 0n,
+    });
+    return {
+      indices: [RANGES.MEMORY_INDEX_START + memorySlot, RANGES.POLICY_EVIDENCE_START + atomSlot],
+      newWords: [memWord, atomWord],
+      minedDocId: direct.docId,
+      memorySlot,
+      atomSlot,
+      action,
+      sourceQueryId: view.ev.id,
+      relationFamily: view.family,
+    };
+  }
+  return { indices: [], newWords: [], minedDocId: null, reason: 'no_evidence_relation_pack_query_available' };
+}
+
+function noiseDocForView(view) {
+  const categoryRank = (n) => /wrong|scope|entity|relation|distract|near|noise/i.test(n.category ?? '') ? 0 : 1;
+  const hard = [...view.hardNegatives].sort((a, b) => categoryRank(a) - categoryRank(b))[0];
+  if (hard?.docId) return { docId: hard.docId, category: hard.category ?? null, source: 'hard_negative' };
+  const qrel = view.qrels.find((r) => (r.relevance ?? 0) <= 0);
+  if (qrel?.docId) return { docId: qrel.docId, category: qrel.role ?? null, source: 'qrel_nonpositive' };
+  return null;
+}
+
+export function noiseSuppressionUnits({
+  pack,
+  logicalQById,
+  eventByDocId,
+  memorySlot = 240,
+  skipDocIds,
+}) {
+  const skip = skipDocIds ?? new Set();
+  if (memorySlot < 240 || memorySlot >= 256) {
+    return { indices: [], newWords: [], minedDocId: null, reason: 'noise_slot_exhausted' };
+  }
+  for (const ev of pack.events) {
+    const view = eventView(ev, logicalQById);
+    const noise = noiseDocForView(view);
+    if (!noise || skip.has(noise.docId)) continue;
+    const memEv = memoryEventForDocId(noise.docId, eventByDocId);
+    if (eventByDocId && !memEv) continue;
+    const atomSlot = memorySlot - 224;
+    const memWord = encodeMemoryIndexSlot({
+      slotIndex: memorySlot,
+      recordId: stableRecordIdFor(memEv?.id ?? `mem_${noise.docId}`),
+      family: 'multi_hop_relation',
+      domainBits: 1n,
+      valid: true,
+      revoked: false,
+      protected: false,
+      policyAnchor: true,
+      retrievalSlot: 0,
+      expiryEpoch: 0n,
+    })[0];
+    const atomWord = encodePolicyAtom({
+      atomIndex: atomSlot,
+      family: 'evidence_bundle',
+      selector: POLICY_SELECTOR.ANSWER_DENSITY,
+      evidenceFeature: POLICY_EVIDENCE_FEATURE.SUPPORT_IN_DEGREE,
+      action: 'suppress',
+      scope: 'entity',
+      targetSlot: memorySlot,
+      budget: 200,
+      flags: 0,
+      validFromEpoch: 0n,
+      expiryEpoch: 0n,
+    });
+    return {
+      indices: [RANGES.MEMORY_INDEX_START + memorySlot, RANGES.POLICY_EVIDENCE_START + atomSlot],
+      newWords: [memWord, atomWord],
+      minedDocId: noise.docId,
+      memorySlot,
+      atomSlot,
+      sourceQueryId: view.ev.id,
+      noiseCategory: noise.category,
+      noiseSource: noise.source,
+    };
+  }
+  return { indices: [], newWords: [], minedDocId: null, reason: 'no_noise_candidate_available' };
+}
+
 export function makePatch(state, units) {
   return { patchType: PATCH_TYPE.MIXED, wordCount: units.indices.length, scoreDelta: 0n, parentStateRoot: merkleizeState(state), indices: units.indices, newWords: units.newWords };
 }
