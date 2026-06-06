@@ -29,6 +29,7 @@ function prng(seedStr) { let st = h(seedStr).readUInt32BE(0); return () => { st 
 const CITIES = ['Oslo', 'Lagos', 'Quito', 'Hanoi', 'Cairo', 'Lima', 'Riga', 'Accra', 'Sofia', 'Tunis', 'Osaka', 'Perth'];
 const PKGS = ['pnpm', 'npm', 'yarn', 'bun', 'pip', 'poetry', 'cargo', 'maven'];
 const API_HOSTS = ['atlas', 'beacon', 'cedar', 'delta', 'ember', 'falcon', 'granite', 'harbor'];
+const VALIDITY_SHADOW_COLORS = ['amber', 'silver', 'copper', 'violet'];
 
 function slug(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 96);
@@ -107,6 +108,7 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
 
   const addedDocs = [], addedRelations = [], addedQueries = [], churnedSubjects = [];
   const tsDate = new Date(new Date('2024-01-01').getTime() + (40 + epoch) * 30 * 86400000).toISOString().slice(0, 10);
+  const priorDate = new Date(new Date(tsDate).getTime() - 86400000).toISOString().slice(0, 10);
 
   for (const subj of subjects) {
     if (unit(`${seed}:churn:${epoch}:${subj.id}`) >= churnFraction) continue; // deterministic selection
@@ -208,25 +210,59 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
       const scope = publicScopeFor(subj, universe, epoch, 'api_migration_validity');
       const host = API_HOSTS[Math.floor(rnd() * API_HOSTS.length)];
       const staleId = `d_${idBase}_vs`, curId = `d_${idBase}_vc`, qid = `q_${idBase}_v`;
-      const staleVal = `${host}-legacy-${epoch}.api.internal`;
-      const curVal = `${host}-current-${epoch}.api.internal`;
+      const shadowIds = VALIDITY_SHADOW_COLORS.map((_, i) => `d_${idBase}_vx${i}`);
+      const staleVal = `${host}-blue-${epoch}.api.internal`;
+      const curVal = `${host}-green-${epoch}.api.internal`;
       addedDocs.push({ id: staleId, lane: 'deep', kind: 'atom_validity_fact', entityIds: tagU,
-        text: `${canonical}'s API migration endpoint was ${staleVal} before the cutover.`,
+        text: `${canonical}'s rollout slot endpoint token ${staleVal} appeared in the API migration ledger with review stamp ${tsDate}.`,
         shape: 'atom_validity_record', timestamp: tsDate, currentStaleFlag: false, scope,
-        validity: { subjectEntityId: subj.id, attribute: attr, validFrom: '2025-01-01', validUntil: tsDate, observedAt: tsDate, supersededBy: curId },
+        validity: { subjectEntityId: subj.id, attribute: attr, validFrom: '2025-01-01', validUntil: priorDate, observedAt: tsDate, supersededBy: curId },
         liveUpdateEpoch: epoch });
+      for (let i = 0; i < shadowIds.length; i++) {
+        const shadowId = shadowIds[i];
+        const shadowVal = `${host}-${VALIDITY_SHADOW_COLORS[i]}-${epoch}.api.internal`;
+        addedDocs.push({ id: shadowId, lane: 'deep', kind: 'atom_validity_fact', entityIds: tagU,
+          text: `${canonical}'s rollout slot endpoint token ${shadowVal} appeared in the API migration ledger with review stamp ${tsDate}.`,
+          shape: 'atom_validity_record', timestamp: tsDate, currentStaleFlag: false, scope,
+          validity: { subjectEntityId: subj.id, attribute: attr, validFrom: `2025-0${Math.min(9, i + 2)}-01`, validUntil: priorDate, observedAt: tsDate, supersededBy: curId },
+          liveUpdateEpoch: epoch });
+      }
       addedDocs.push({ id: curId, lane: 'deep', kind: 'atom_validity_fact', entityIds: tagU,
-        text: `${canonical}'s current API migration endpoint is ${curVal}.`,
+        text: `${canonical}'s rollout slot endpoint token ${curVal} appeared in the API migration ledger with review stamp ${priorDate}.`,
         shape: 'atom_validity_record', timestamp: tsDate, currentStaleFlag: true, scope,
-        validity: { subjectEntityId: subj.id, attribute: attr, validFrom: tsDate, observedAt: tsDate },
+        validity: { subjectEntityId: subj.id, attribute: attr, validFrom: tsDate, observedAt: priorDate },
         liveUpdateEpoch: epoch });
       addedRelations.push({ src: curId, dst: staleId, type: 'supersedes', label: 'supersedes' });
+      for (const shadowId of shadowIds) addedRelations.push({ src: curId, dst: shadowId, type: 'supersedes', label: 'supersedes' });
+      const validityQrels = [
+        { docId: curId, relevance: 1.0, role: 'direct' },
+        { docId: staleId, relevance: 0.0, role: 'stale' },
+        ...shadowIds.map((docId) => ({ docId, relevance: 0.0, role: 'stale_distractor' })),
+      ];
+      const validityHardNegatives = [
+        { docId: staleId, category: 'temporal_stale' },
+        ...shadowIds.map((docId) => ({ docId, category: 'temporal_stale' })),
+      ];
       addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
         lane: 'deep', family: 'validity_atom',
-        queryText: `What is ${canonical}'s current API endpoint for the API migration session?`,
-        qrels: [{ docId: curId, relevance: 1.0, role: 'direct' }, { docId: staleId, relevance: 0.0, role: 'stale' }],
-        hardNegatives: [{ docId: staleId, category: 'temporal_stale' }],
-        scope, publicIntent: { atom: 'validity_atom', subjectEntityId: subj.id, attribute: attr, queryTime: '2026-06-04', ...scope },
+        queryText: `Which rollout slot API endpoint applies to ${canonical} on ${tsDate}?`,
+        qrels: validityQrels,
+        hardNegatives: validityHardNegatives,
+        scope, publicIntent: { atom: 'validity_atom', subjectEntityId: subj.id, attribute: attr, queryTime: tsDate, ...scope },
+        band: 'very_hard', operationFamily: 'validity_atom', liveUpdateEpoch: epoch });
+      addedQueries.push({ id: `${qid}_confirm`, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
+        lane: 'deep', family: 'validity_atom',
+        queryText: `For ${canonical}'s rollout slot on ${tsDate}, what API endpoint should be used?`,
+        qrels: validityQrels,
+        hardNegatives: validityHardNegatives,
+        scope, publicIntent: { atom: 'validity_atom', subjectEntityId: subj.id, attribute: attr, queryTime: tsDate, ...scope },
+        band: 'very_hard', operationFamily: 'validity_atom', liveUpdateEpoch: epoch });
+      addedQueries.push({ id: `${qid}_active`, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
+        lane: 'deep', family: 'validity_atom',
+        queryText: `What API migration endpoint is in force for ${canonical}'s rollout slot on ${tsDate}?`,
+        qrels: validityQrels,
+        hardNegatives: validityHardNegatives,
+        scope, publicIntent: { atom: 'validity_atom', subjectEntityId: subj.id, attribute: attr, queryTime: tsDate, ...scope },
         band: 'very_hard', operationFamily: 'validity_atom', liveUpdateEpoch: epoch });
     } else if (branch === 'scope_atom') {
       const scope = publicScopeFor(subj, universe, epoch, 'math_project_scope');
@@ -235,10 +271,10 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
       const endpoint = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-solver-${epoch}.internal`;
       const wrongEndpoint = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-finance-${epoch}.internal`;
       addedDocs.push({ id: rightId, lane: 'deep', kind: 'atom_scope_fact', entityIds: tagU,
-        text: `${canonical} set ${endpoint} for the math project from last week.`,
+        text: `${canonical} set ${endpoint} as the project endpoint for last week's working session.`,
         shape: 'atom_scope_record', timestamp: tsDate, currentStaleFlag: true, scope, liveUpdateEpoch: epoch });
       addedDocs.push({ id: wrongId, lane: 'deep', kind: 'atom_scope_fact', entityIds: tagU,
-        text: `${canonical} set ${wrongEndpoint} for the finance project from last week.`,
+        text: `${canonical} set ${wrongEndpoint} as the project endpoint for last week's finance modeling session.`,
         shape: 'atom_scope_record', timestamp: tsDate, currentStaleFlag: true, scope: wrongScope, liveUpdateEpoch: epoch });
       addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
         lane: 'deep', family: 'scope_atom',
@@ -257,18 +293,18 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
       const wrongRetry = `${1 + Math.floor(rnd() * 4)} minutes`;
       addedDocs.push({ id: rightId, lane: 'deep', kind: 'atom_entity_resolution_fact', entityIds: [universe, pair.target.id],
         roleAliases: [...(pair.target.roleAliases ?? [])], scope,
-        text: `${pair.canonicalName}, the ${roleAlias}, set the retry window to ${retry}.`,
+        text: `${pair.canonicalName} recorded ${retry} for the retry window in the migration workspace.`,
         shape: 'atom_entity_resolution_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
       addedDocs.push({ id: wrongId, lane: 'deep', kind: 'atom_entity_resolution_fact', entityIds: [universe, pair.wrong.id],
         roleAliases: [...(pair.wrong.roleAliases ?? [wrongRole])], scope,
-        text: `${pair.canonicalName}, the ${wrongRole}, set the retry window to ${wrongRetry}.`,
+        text: `${pair.canonicalName} recorded ${wrongRetry} for the retry window in the design workspace.`,
         shape: 'atom_entity_resolution_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
-      addedQueries.push({ id: qid, ownerScoped: true, ownerEntityId: universe,
+      addedQueries.push({ id: qid, ownerScoped: true, ownerEntityId: universe, subjectEntityId: pair.target.id,
         lane: 'deep', family: 'entity_resolution_atom',
         queryText: `What retry window did ${pair.canonicalName} the ${roleAlias} set?`,
         qrels: [{ docId: rightId, relevance: 1.0, role: 'direct' }, { docId: wrongId, relevance: 0.0, role: 'wrong_entity_same_name' }],
         hardNegatives: [{ docId: wrongId, category: 'duplicate_name_wrong_role' }],
-        scope, publicIntent: { atom: 'entity_resolution_atom', name: pair.canonicalName, roleAlias, ...scope },
+        scope, publicIntent: { atom: 'entity_resolution_atom', subjectEntityId: pair.target.id, name: pair.canonicalName, roleAlias, ...scope },
         band: 'very_hard', operationFamily: 'entity_resolution_atom', liveUpdateEpoch: epoch });
     }
   }

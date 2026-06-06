@@ -319,20 +319,31 @@ export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex =
   return { indices, newWords, recordsCompiled: rec, temporalQueriesAvailable: tq.length };
 }
 
-export function atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily, memorySlot, skipDocIds }) {
+export function atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily, memorySlot, skipDocIds, maxRecords = 1 }) {
   const skip = skipDocIds ?? new Set();
+  const slotRange = atomFamily === 'entity_resolution_atom'
+    ? { start: 128, end: 192 }
+    : atomFamily === 'scope_atom'
+      ? { start: 192, end: 256 }
+      : { start: 128, end: 256 };
+  if (memorySlot < slotRange.start || memorySlot >= slotRange.end) {
+    return { indices: [], newWords: [], minedDocId: null, reason: `${atomFamily}_slot_exhausted` };
+  }
   const candidates = pack.events
     .map((ev) => eventView(ev, logicalQById))
     .filter((view) => view.family === atomFamily)
     .sort((a, b) => b.liveUpdateEpoch - a.liveUpdateEpoch);
+  const indices = [], newWords = [], minedDocIds = [], eventIds = [], slots = [];
   for (const view of candidates) {
     const direct = directQrelForView(view);
     if (!direct || skip.has(direct.docId)) continue;
     const memEv = memoryEventForDocId(direct.docId, eventByDocId);
     if (eventByDocId && !memEv) continue;
-    if (memorySlot >= 352) return { indices: [], newWords: [], minedDocId: null, reason: 'memory_slot_exhausted' };
+    if (indices.length >= maxRecords) break;
+    const slot = memorySlot + indices.length;
+    if (slot >= slotRange.end) break;
     const word = encodeMemoryIndexSlot({
-      slotIndex: memorySlot,
+      slotIndex: slot,
       recordId: stableRecordIdFor(memEv?.id ?? `mem_${direct.docId}`),
       family: 'multi_hop_relation',
       domainBits: 1n,
@@ -343,15 +354,23 @@ export function atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily, 
       retrievalSlot: 0,
       expiryEpoch: 0n,
     })[0];
-    return {
-      indices: [RANGES.MEMORY_INDEX_START + memorySlot],
-      newWords: [word],
-      recordsCompiled: 1,
-      minedDocId: direct.docId,
-      eventId: memEv?.id ?? `mem_${direct.docId}`,
-      slot: memorySlot,
-    };
+    indices.push(RANGES.MEMORY_INDEX_START + slot);
+    newWords.push(word);
+    minedDocIds.push(direct.docId);
+    eventIds.push(memEv?.id ?? `mem_${direct.docId}`);
+    slots.push(slot);
   }
+  if (indices.length > 0) return {
+    indices,
+    newWords,
+    recordsCompiled: indices.length,
+    minedDocId: minedDocIds[0],
+    minedDocIds,
+    eventId: eventIds[0],
+    eventIds,
+    slot: slots[0],
+    slots,
+  };
   return { indices: [], newWords: [], minedDocId: null, reason: `no_${atomFamily}_pack_query_available` };
 }
 

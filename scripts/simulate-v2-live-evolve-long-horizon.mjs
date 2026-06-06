@@ -45,6 +45,7 @@ import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadMaterializedCorpus } from './lib/load-materialized-corpus.mjs';
 import { embedTexts } from './_embed-v2.mjs';
 import { hseed, mulberry32, randomPatch, relationUnits, relationUnitsForEdges, temporalUnits, conflictUnits, abstentionUnits, atomAnchorUnits, buildMemoryEventByDocId } from './lib/v2-patch-families.mjs';
+import { baselineAtomHardness } from './lib/atom-hardness.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
 import { makeInstrumentedReranker } from './lib/instrumented-reranker.mjs';
 import { calibrationProvenance } from './lib/calibration-provenance.mjs';
@@ -59,7 +60,7 @@ const {
   applyPatch,
   createDeterministicReranker,
   encodePolicyAtom, POLICY_SELECTOR, POLICY_EVIDENCE_FEATURE,
-  merkleizeState,
+  merkleizeState, decodeSubstrate, stableRecordIdFor,
   // CANONICAL: live-update logical-delta → production additions bridge. The harness used to
   // inline this 50-line mapping; it now lives in packages/cortex/src/corpus/logical-delta-bridge.ts.
   bridgeLogicalDeltaToProductionEvents,
@@ -85,7 +86,9 @@ const LIVE_EVAL_PACK_LIMIT = Number(flag('live-eval-pack-limit', '32'));
 const CLEAR_PACK_QUOTAS = has('clear-pack-quotas');
 const MOCK_EMBEDDINGS = has('mock-embeddings');
 const TRACE_DIAGNOSTICS = has('trace-diagnostics');
+const ATOM_TRACE = has('atom-trace') || TRACE_DIAGNOSTICS;
 const TRACE_LIMIT = Number(flag('trace-limit', '5'));
+const ATOM_TRACE_LIMIT_PER_FAMILY = Number(flag('atom-trace-limit-per-family', '1'));
 const DISABLE_QWEN_CACHE = has('disable-qwen-cache');
 const MATERIALIZED_ROOT = flag('materialized-root', env.CORETEX_MATERIALIZED_ROOT ?? undefined);
 
@@ -293,8 +296,8 @@ function stablePackForOldCorpusPair(pack, oldCorpus, newCorpus) {
   }
   return { pack: { ...pack, events }, excluded };
 }
-async function buildAcceptanceDecomposition({ parentState, candidateState, oldCorpus, newCorpus, oldPack, newPack, newBefore, newAfter, telemetry }) {
-  const oldBefore = await evaluateStateOnPack(parentState, oldCorpus, oldPack, telemetry, false);
+async function buildAcceptanceDecomposition({ parentState, candidateState, oldCorpus, newCorpus, oldPack, newPack, newBefore, newAfter, telemetry, oldBeforeEval = null }) {
+  const oldBefore = oldBeforeEval ?? await evaluateStateOnPack(parentState, oldCorpus, oldPack, telemetry, false);
   const oldAfter = await evaluateStateOnPack(candidateState, oldCorpus, oldPack, telemetry, false);
   const oldCorpusOldStatePpm = oldBefore.scorePpm;
   const oldCorpusNewStatePpm = oldAfter.scorePpm;
@@ -334,6 +337,14 @@ async function buildAcceptanceDecomposition({ parentState, candidateState, oldCo
       passesGoldDamage,
     },
   };
+}
+
+async function cachedStateEval(cache, key, state, prod, pack, telemetry, trace = false) {
+  const cacheKey = `${key}:${trace ? 'trace' : 'plain'}`;
+  if (cache.has(cacheKey)) return cache.get(cacheKey);
+  const score = await evaluateStateOnPack(state, prod, pack, telemetry, trace);
+  cache.set(cacheKey, score);
+  return score;
 }
 function stableSample(items, n, seed) {
   const a = [...items];
@@ -385,6 +396,7 @@ function rankOfDoc(q, docId) {
   const hit = (q.finalRankingTop20 ?? []).find((r) => r.docId === docId);
   return hit?.rank ?? null;
 }
+const ATOM_CHURN_FAMILIES = new Set(['validity_atom', 'scope_atom', 'entity_resolution_atom']);
 function targetDocDiagnostics({ targetDocId, before, after, pack, patch }) {
   if (!targetDocId) return null;
   const beforeById = queryMap(before);
@@ -431,6 +443,154 @@ function targetDocDiagnostics({ targetDocId, before, after, pack, patch }) {
     activeTruthQueryIds: truthMatches.slice(0, 16).map((ev) => ev.id),
     activeHardNegativeQueryIds: hardNegativeMatches.slice(0, 16).map((ev) => ev.id),
     targetTruthQueries: rows,
+  };
+}
+function applyHonestCursorUpdate(slotCursor, update) {
+  if (!update) return null;
+  if (update.temporalRecordDelta) slotCursor.temporalRecord += update.temporalRecordDelta;
+  if (update.conflictSlotDelta) slotCursor.conflictSlot += update.conflictSlotDelta;
+  if (update.abstentionSlotDelta) slotCursor.abstentionSlot += update.abstentionSlotDelta;
+  if (update.scopeSlotDelta) slotCursor.scopeSlot += update.scopeSlotDelta;
+  if (update.entitySlotDelta) slotCursor.entitySlot += update.entitySlotDelta;
+  for (const id of update.addTemporalSkipDocs ?? []) if (id) slotCursor.temporalSkipDocs.add(id);
+  for (const id of update.addValiditySkipDocs ?? []) if (id) slotCursor.validitySkipDocs.add(id);
+  for (const id of update.addConflictSkipDocs ?? []) if (id) slotCursor.conflictSkipDocs.add(id);
+  for (const id of update.addScopeSkipDocs ?? []) if (id) slotCursor.scopeSkipDocs.add(id);
+  for (const id of update.addEntitySkipDocs ?? []) if (id) slotCursor.entitySkipDocs.add(id);
+  return update;
+}
+function qrelDocId(q) {
+  return q?.docId ?? q?.documentId ?? q?.id ?? null;
+}
+function relevantDocIds(ev) {
+  const ids = new Set((ev.truthDocuments ?? []).map((d) => d.id).filter(Boolean));
+  for (const q of ev.qrels ?? []) {
+    const id = qrelDocId(q);
+    if (id && (q.relevance ?? 0) > 0) ids.add(id);
+  }
+  return ids;
+}
+function hardNegativeDocIds(ev) {
+  const ids = new Set((ev.hardNegatives ?? []).map((d) => qrelDocId(d)).filter(Boolean));
+  for (const q of ev.qrels ?? []) {
+    const id = qrelDocId(q);
+    if (id && (q.relevance ?? 0) <= 0) ids.add(id);
+  }
+  return ids;
+}
+function rankRows(q, docIds) {
+  return [...new Set([...docIds].filter(Boolean))].map((docId) => ({ docId, rank: rankOfDoc(q, docId) }));
+}
+function recordIdIndex(corpus) {
+  const out = new Map();
+  for (const ev of corpus.events ?? []) out.set(stableRecordIdFor(ev.id), ev);
+  return out;
+}
+function decodedMemorySlotTrace(decoded, slot, byRecordId) {
+  const mem = slot !== null && slot !== undefined ? decoded?.memoryIndex?.[slot] : null;
+  if (!mem) return null;
+  const ev = byRecordId.get(mem.recordId) ?? null;
+  return {
+    slot,
+    recordId: mem.recordId,
+    resolvedEventId: ev?.id ?? null,
+    resolvedDocIds: (ev?.truthDocuments ?? []).map((d) => d.id),
+    family: mem.family,
+    revoked: mem.revoked,
+    policyAnchor: mem.policyAnchor,
+    retrievalSlot: mem.retrievalSlot,
+  };
+}
+function buildDecodedAtomTrace({ hp, fpFamily, appliedState, corpus }) {
+  if (!appliedState) return null;
+  const decoded = decodeSubstrate(appliedState, { policyAtomsMode: true, biEncoderModelIdHash: biEncoderHash, retrievalKeyHeaderBytes: LAYOUT.headerBytes });
+  const byRecordId = recordIdIndex(corpus);
+  if (fpFamily === 'validity_atom' || hp.temporalRecordSlot !== undefined) {
+    const rec = decoded.temporal.find((r) => r.recordIndex === hp.temporalRecordSlot) ?? null;
+    return {
+      decodeAttempts: decoded.decodeAttempts,
+      decodeFailures: decoded.decodeFailures,
+      temporalRecord: rec,
+      staleMemoryIndex: rec ? decodedMemorySlotTrace(decoded, rec.memorySlot, byRecordId) : null,
+      currentMemoryIndex: rec ? decodedMemorySlotTrace(decoded, rec.supersededBy, byRecordId) : null,
+    };
+  }
+  const slots = fpFamily === 'entity_resolution_atom'
+    ? (hp.entityResolutionAtomSlots ?? (hp.entityResolutionAtomSlot !== undefined ? [hp.entityResolutionAtomSlot] : []))
+    : fpFamily === 'scope_atom'
+      ? (hp.scopeAtomSlots ?? (hp.scopeAtomSlot !== undefined ? [hp.scopeAtomSlot] : []))
+      : [];
+  return {
+    decodeAttempts: decoded.decodeAttempts,
+    decodeFailures: decoded.decodeFailures,
+    memoryIndex: slots.map((slot) => decodedMemorySlotTrace(decoded, slot, byRecordId)).filter(Boolean),
+  };
+}
+function atomTracePolicyReceipt(afterQ, fpFamily) {
+  const traces = (afterQ?.policyTraces ?? []).filter((t) => t.atomFamily === fpFamily);
+  return {
+    policyTraceDriven: afterQ?.policyTraceDriven ?? false,
+    policyTraces: traces,
+    selectorPredicatesUsed: [...new Set(traces.flatMap((t) => t.selectorPredicatesUsed ?? t.scopePredicatesUsed ?? []))].sort(),
+    admittedDocIds: [...new Set(traces.flatMap((t) => t.admittedDocIds ?? []))].sort(),
+    admittedEventIds: [...new Set(traces.flatMap((t) => t.admittedEventIds ?? []))].sort(),
+  };
+}
+function buildAtomTraceDiagnostics({ epoch, h, hp, fpFamily, pack, activeIds, corpus, appliedState, before, after }) {
+  const targets = [...new Set((hp.atomMinedDocIds ?? [hp.targetDocId]).filter(Boolean))];
+  const beforeById = queryMap(before);
+  const afterById = queryMap(after);
+  const rows = [];
+  for (const ev of pack.events ?? []) {
+    const positives = relevantDocIds(ev);
+    const hardNegs = hardNegativeDocIds(ev);
+    const selectedTargets = targets.filter((id) => positives.has(id));
+    const selectedHardNegs = [...hardNegs];
+    if (!selectedTargets.length && !selectedHardNegs.some((id) => targets.includes(id))) continue;
+    const bq = beforeById.get(ev.id);
+    const aq = afterById.get(ev.id);
+    rows.push({
+      queryId: ev.id,
+      split: ev.split,
+      family: ev.family,
+      logicalFamily: ev.logicalFamily ?? ev.family ?? null,
+      activeFrontierMember: activeIds.has(ev.id),
+      activePackMember: true,
+      queryText: ev.queryText,
+      subjectEntityId: ev.subjectEntityId ?? null,
+      publicIntent: ev.publicIntent ?? null,
+      scope: ev.scope ?? null,
+      selectedQrels: (ev.qrels ?? []).filter((q) => selectedTargets.includes(qrelDocId(q)) || selectedHardNegs.includes(qrelDocId(q))),
+      selectedHardNegatives: (ev.hardNegatives ?? []).filter((n) => selectedHardNegs.includes(qrelDocId(n))),
+      baselineTargetRanks: rankRows(bq, selectedTargets),
+      baselineHardNegativeRanks: rankRows(bq, selectedHardNegs),
+      afterTargetRanks: rankRows(aq, selectedTargets),
+      afterHardNegativeRanks: rankRows(aq, selectedHardNegs),
+      beforeTemporalRecordDriven: bq?.temporalRecordDriven ?? false,
+      afterTemporalRecordDriven: aq?.temporalRecordDriven ?? false,
+      beforePolicyTraceDriven: bq?.policyTraceDriven ?? false,
+      afterPolicyTraceDriven: aq?.policyTraceDriven ?? false,
+      beforeTop10: topK(bq, 10),
+      afterTop10: topK(aq, 10),
+      policyReceipt: atomTracePolicyReceipt(aq, fpFamily),
+    });
+  }
+  return {
+    epoch,
+    patchIndex: h,
+    atomFamily: fpFamily,
+    generatedDocIds: targets,
+    generatedQueryIds: rows.map((r) => r.queryId),
+    activeFrontierMembershipAll: rows.every((r) => r.activeFrontierMember),
+    activePackMembershipAll: rows.every((r) => r.activePackMember),
+    patch: {
+      indices: hp.patch?.indices ?? [],
+      newWordsHex: (hp.patch?.newWords ?? []).map((w) => `0x${w.toString(16)}`),
+      wordCount: hp.patch?.wordCount ?? null,
+      patchType: hp.patch?.patchType ?? null,
+    },
+    decoded: buildDecodedAtomTrace({ hp, fpFamily, appliedState, corpus }),
+    queryTraces: rows,
   };
 }
 function renderedTop(q, k = 10) {
@@ -537,22 +697,44 @@ function filterPackToHeldout(pack, activeIds) {
   return { ...pack, events };
 }
 function forceActiveLiveEvalEvents(pack, corpus, activeIds, limit = 32) {
-  if (!limit || limit <= 0) return { pack, added: 0, liveEvalInPack: 0 };
+  if (!limit || limit <= 0) return { pack, added: 0, liveEvalInPack: 0, familyCounts: {} };
   const existing = new Set(pack.events.map((e) => e.id));
   const alreadyLive = pack.events.filter((e) => activeIds.has(e.id)
     && e.split === 'eval_hidden'
     && e.id.startsWith('zz_e')
     && !e.id.includes('_mem_')).length;
+  const familyPriority = new Map(HONEST_FAMILIES.map((f, i) => [f, i]));
+  const familyOf = (e) => e.logicalFamily ?? e.family ?? 'unknown';
   const live = corpus.events
     .filter((e) => activeIds.has(e.id)
       && e.split === 'eval_hidden'
       && e.id.startsWith('zz_e')
       && !e.id.includes('_mem_')
       && !existing.has(e.id))
-    .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+    .sort((a, b) => {
+      const pa = familyPriority.get(familyOf(a)) ?? 999;
+      const pb = familyPriority.get(familyOf(b)) ?? 999;
+      if (pa !== pb) return pa - pb;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    })
     .slice(0, limit);
-  if (!live.length) return { pack, added: 0, liveEvalInPack: alreadyLive };
-  return { pack: { ...pack, events: [...live, ...pack.events] }, added: live.length, liveEvalInPack: alreadyLive + live.length };
+  const finalEvents = live.length ? [...live, ...pack.events] : pack.events;
+  const familyCounts = {};
+  for (const e of finalEvents) {
+    if (!(activeIds.has(e.id) && e.split === 'eval_hidden' && e.id.startsWith('zz_e') && !e.id.includes('_mem_'))) continue;
+    const fam = familyOf(e);
+    familyCounts[fam] = (familyCounts[fam] ?? 0) + 1;
+  }
+  if (!live.length) return { pack, added: 0, liveEvalInPack: alreadyLive, familyCounts };
+  return { pack: { ...pack, events: finalEvents }, added: live.length, liveEvalInPack: alreadyLive + live.length, familyCounts };
+}
+function eventFamilyCounts(events) {
+  const out = {};
+  for (const e of events ?? []) {
+    const fam = e.logicalFamily ?? e.family ?? 'unknown';
+    out[fam] = (out[fam] ?? 0) + 1;
+  }
+  return out;
 }
 // Permuted-qrels control. Renamed/clarified: this probe MEASURES whether the evaluator
 // uses qrels to compute nDCG (it does — that's by design). It DOES NOT measure whether
@@ -668,53 +850,66 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     if (!u.indices.length || u.recordsCompiled === 0) {
       return { skipped: true, family, reason: u.reason ?? 'no_temporal_pack_query_available', fingerprint: `honest:temporal:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:temporal:current_stale', selectorFingerprint: 'public-temporal-currentStale-pack-mined' };
     }
-    slotCursor.temporalRecord += 1;
-    slotCursor.temporalSkipDocs.add(u.minedDocId);
-    return makePatchFrom(u, 'honest:temporal:current_stale', u.minedDocId, { temporalRecordSlot: slotCursor.temporalRecord - 1 });
+    return makePatchFrom(u, 'honest:temporal:current_stale', u.minedDocId, {
+      temporalRecordSlot: slotCursor.temporalRecord,
+      cursorUpdate: { temporalRecordDelta: 1, addTemporalSkipDocs: [u.minedDocId] },
+    });
   }
   if (family === 'validity_atom') {
     const u = temporalUnits({ pack, logicalQById, recordSlot: slotCursor.temporalRecord, skipDocIds: slotCursor.validitySkipDocs, eventByDocId, families: ['validity_atom'] });
     if (!u.indices.length || u.recordsCompiled === 0) {
       return { skipped: true, family, reason: u.reason ?? 'no_validity_atom_pack_query_available', fingerprint: `honest:validity_atom:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:validity_atom:temporal_record', selectorFingerprint: 'public-validity-subject-attribute-currentStale-pack-mined' };
     }
-    slotCursor.temporalRecord += 1;
-    slotCursor.validitySkipDocs.add(u.minedDocId);
-    return makePatchFrom(u, 'honest:validity_atom:temporal_record', u.minedDocId, { temporalRecordSlot: slotCursor.temporalRecord - 1 });
+    return makePatchFrom(u, 'honest:validity_atom:temporal_record', u.minedDocId, {
+      temporalRecordSlot: slotCursor.temporalRecord,
+      cursorUpdate: { temporalRecordDelta: 1, addValiditySkipDocs: [u.minedDocId] },
+    });
   }
   if (family === 'conflict') {
     const u = conflictUnits({ pack, logicalQById, eventByDocId, conflictSlot: slotCursor.conflictSlot, action: 'boost', skipDocIds: slotCursor.conflictSkipDocs });
     if (!u.indices.length) {
       return { skipped: true, family, reason: u.reason ?? 'no_conflict_pack_query_available', fingerprint: `honest:conflict:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:conflict:CONFLICT_SET_MEMBER:boost', selectorFingerprint: 'public-policy-CONFLICT_SET_MEMBER:CONTRADICTS_EDGE:boost' };
     }
-    slotCursor.conflictSlot += 1;
-    slotCursor.conflictSkipDocs.add(u.minedDocId);
-    return makePatchFrom(u, 'honest:conflict:CONFLICT_SET_MEMBER:boost', u.minedDocId, { conflictAtomSlot: u.slot });
+    return makePatchFrom(u, 'honest:conflict:CONFLICT_SET_MEMBER:boost', u.minedDocId, {
+      conflictAtomSlot: u.slot,
+      cursorUpdate: { conflictSlotDelta: 1, addConflictSkipDocs: [u.minedDocId] },
+    });
   }
   if (family === 'abstention') {
     const u = abstentionUnits({ pack, logicalQById, abstentionSlot: slotCursor.abstentionSlot });
     if (!u.indices.length) {
       return { skipped: true, family, reason: u.reason ?? 'no_abstention_pack_query_available', fingerprint: `honest:abstention:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:abstention:MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH', selectorFingerprint: 'public-policy-MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH:abstain' };
     }
-    slotCursor.abstentionSlot += 1;
-    return makePatchFrom(u, 'honest:abstention:MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH', null, { abstentionAtomSlot: u.slot });
+    return makePatchFrom(u, 'honest:abstention:MISSING_EVIDENCE:NO_PUBLIC_EVIDENCE_PATH', null, {
+      abstentionAtomSlot: u.slot,
+      cursorUpdate: { abstentionSlotDelta: 1 },
+    });
   }
   if (family === 'scope_atom') {
-    const u = atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily: 'scope_atom', memorySlot: slotCursor.scopeSlot, skipDocIds: slotCursor.scopeSkipDocs });
+    const u = atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily: 'scope_atom', memorySlot: slotCursor.scopeSlot, skipDocIds: slotCursor.scopeSkipDocs, maxRecords: 4 });
     if (!u.indices.length) {
       return { skipped: true, family, reason: u.reason ?? 'no_scope_atom_pack_query_available', fingerprint: `honest:scope_atom:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:scope_atom:constrain', selectorFingerprint: 'public-scope-project-session-topic-task-selector' };
     }
-    slotCursor.scopeSlot += 1;
-    slotCursor.scopeSkipDocs.add(u.minedDocId);
-    return makePatchFrom(u, 'honest:scope_atom:constrain', u.minedDocId, { scopeAtomSlot: u.slot });
+    return makePatchFrom(u, 'honest:scope_atom:constrain', u.minedDocId, {
+      scopeAtomSlot: u.slot,
+      scopeAtomSlots: u.slots ?? [u.slot],
+      atomRecordsCompiled: u.recordsCompiled ?? 1,
+      atomMinedDocIds: u.minedDocIds ?? [u.minedDocId],
+      cursorUpdate: { scopeSlotDelta: u.recordsCompiled ?? 1, addScopeSkipDocs: u.minedDocIds ?? [u.minedDocId] },
+    });
   }
   if (family === 'entity_resolution_atom') {
-    const u = atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily: 'entity_resolution_atom', memorySlot: slotCursor.entitySlot, skipDocIds: slotCursor.entitySkipDocs });
+    const u = atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily: 'entity_resolution_atom', memorySlot: slotCursor.entitySlot, skipDocIds: slotCursor.entitySkipDocs, maxRecords: 4 });
     if (!u.indices.length) {
       return { skipped: true, family, reason: u.reason ?? 'no_entity_resolution_atom_pack_query_available', fingerprint: `honest:entity_resolution_atom:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:entity_resolution_atom:prefer', selectorFingerprint: 'public-entity-duplicate-name-role-alias-selector' };
     }
-    slotCursor.entitySlot += 1;
-    slotCursor.entitySkipDocs.add(u.minedDocId);
-    return makePatchFrom(u, 'honest:entity_resolution_atom:prefer', u.minedDocId, { entityResolutionAtomSlot: u.slot });
+    return makePatchFrom(u, 'honest:entity_resolution_atom:prefer', u.minedDocId, {
+      entityResolutionAtomSlot: u.slot,
+      entityResolutionAtomSlots: u.slots ?? [u.slot],
+      atomRecordsCompiled: u.recordsCompiled ?? 1,
+      atomMinedDocIds: u.minedDocIds ?? [u.minedDocId],
+      cursorUpdate: { entitySlotDelta: u.recordsCompiled ?? 1, addEntitySkipDocs: u.minedDocIds ?? [u.minedDocId] },
+    });
   }
   return { skipped: true, family, reason: `unknown_family:${family}`, fingerprint: `honest:unknown:${family}:e${epoch}:h${honestIdx}`, operationFingerprint: `honest:unknown:${family}`, selectorFingerprint: 'unknown' };
 }
@@ -772,6 +967,7 @@ const baselineFloors = { ...profile.patchAcceptanceFloors, acceptanceThresholdPp
 // substrate regions and never collide. relation entries are placed at fixed offsets per
 // fingerprint (relation_causal=0..1, relation_lifecycle=2..3).
 const honestSlotCursor = makeHonestSlotCursor();
+const atomTraceCounts = new Map();
 // Per-epoch logical query/event-id maps refreshed after evolveCorpusDelta extends currentLogical.
 let logicalQById = new Map(currentLogical.queries.map((q) => [q.id, q]));
 const liveLogicalQByProductionId = new Map();
@@ -854,6 +1050,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   // production-event build time; many will be eval_hidden. Filter to those whose canonical
   // split is eval_hidden using the same splitForRecord the bridge uses.
   const newEvalIds = additions.filter((ev) => ev.split === 'eval_hidden').map((ev) => ev.id);
+  const newEvalIdsByFamily = eventFamilyCounts(newEvalIds.map((id) => newProd.byId.get(id)).filter(Boolean));
   const newEvalAdded = newEvalIds.length > 0 ? frontier.addReserveIds(newEvalIds, (id) => {
     const ev = newProd.byId.get(id);
     return ev ? bucketFamily(ev.logicalFamily ?? ev.family ?? 'unknown') : 'unknown';
@@ -870,6 +1067,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   let activePack = filterPackToActive(fullPack, frontierSnap.activeIds);
   const activeLiveEvalPack = forceActiveLiveEvalEvents(activePack, newProd, frontierSnap.activeIds, LIVE_EVAL_PACK_LIMIT);
   activePack = activeLiveEvalPack.pack;
+  if (activeLiveEvalPack.added > 0) console.log(`[live-evolve] active live eval pack: +${activeLiveEvalPack.added} forced, families=${JSON.stringify(activeLiveEvalPack.familyCounts)}`);
   const heldoutPack = filterPackToHeldout(fullPack, frontierSnap.activeIds);
   const oldCorpusPair = stablePackForOldCorpusPair(prevActivePack, currentProd, newProd);
   for (const ev of activePack.events) if (!frontierSnap.activeIds.has(ev.id)) { console.error(`HARD FAIL: epoch ${epoch} activePack contains id ${ev.id} not in frontierSnap.activeIds`); exit(1); }
@@ -880,13 +1078,19 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   let activeDetailed = null, heldoutDetailed = null;
   if (baselineRecomputedBecause) {
     console.log(`[live-evolve] scoring active(${activePack.events.length}) + heldout(${heldoutPack.events.length}) + idShuffled control ...`);
+    console.log(`[live-evolve]   scoring active baseline ...`);
     const activeEval = activePack.events.length ? await evaluatePack(newProd, activePack, epochScoringTelemetry, TRACE_DIAGNOSTICS) : null;
+    console.log(`[live-evolve]   active baseline done`);
+    console.log(`[live-evolve]   scoring heldout baseline ...`);
     const heldoutEval = heldoutPack.events.length ? await evaluatePack(newProd, heldoutPack, epochScoringTelemetry, TRACE_DIAGNOSTICS) : null;
+    console.log(`[live-evolve]   heldout baseline done`);
     activeScorePpm = activeEval?.scorePpm ?? null;
     heldoutScorePpm = heldoutEval?.scorePpm ?? null;
     activeDetailed = activeEval?.score ?? null;
     heldoutDetailed = heldoutEval?.score ?? null;
+    console.log(`[live-evolve]   scoring idShuffled control ...`);
     idShuffledScorePpm = idShuffledActivePack.events.length ? await scoreOnPack(newProd, idShuffledActivePack, epochScoringTelemetry) : null;
+    console.log(`[live-evolve]   idShuffled control done`);
   }
   mark('baselineScoring');
 
@@ -907,8 +1111,13 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   const attemptsByFingerprint = {};
   const attemptsByAtomFamily = {};
   const acceptsByAtomFamily = {};
+  const easySkipsByAtomFamily = {};
+  const easySkipsByFingerprint = {};
   const operationReuseByAtomFamily = {};
   const selectorReuseByAtomFamily = {};
+  const activeStateEvalCache = new Map();
+  const oldStateEvalCache = new Map();
+  if (activeDetailed) activeStateEvalCache.set(`${GENESIS_PARENT_ROOT}:plain`, { scorePpm: activeScorePpm, score: activeDetailed });
   // Refresh logical-query and event-by-doc maps post-evolve so this epoch's pack-mined patches
   // can resolve newly-added queries and event ids.
   logicalQById = new Map([...currentLogical.queries.map((q) => [q.id, q]), ...liveLogicalQByProductionId]);
@@ -917,21 +1126,71 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     const family = HONEST_FAMILIES[h % HONEST_FAMILIES.length];
     const hp = honestPatchForEpoch(epoch, h, family, { pack: activePack, logicalQById, eventByDocId, addedDocs: ld.addedDocs, slotCursor: honestSlotCursor });
     if (!hp) break;
+    console.log(`[live-evolve]   honest ${h + 1}/${HONEST_PER_EPOCH} family=${family} fingerprint=${hp.operationFingerprint ?? hp.fingerprint ?? 'unknown'}`);
     attemptsByFingerprint[hp.operationFingerprint] = (attemptsByFingerprint[hp.operationFingerprint] ?? 0) + 1;
     const fpFamily = atomFamilyForFingerprint(hp.operationFingerprint);
     attemptsByAtomFamily[fpFamily] = (attemptsByAtomFamily[fpFamily] ?? 0) + 1;
     if (hp.skipped) {
+      console.log(`[live-evolve]   honest ${h + 1}/${HONEST_PER_EPOCH} skipped:${hp.reason}`);
       honestPerPatch.push({ h, family, accepted: false, deltaPpm: 0, heldoutDeltaPpm: null, reason: `skipped:${hp.reason}`, fingerprint: hp.fingerprint, operationFingerprint: hp.operationFingerprint, selectorFingerprint: hp.selectorFingerprint, targetDocId: null, targetDocIdRecordedOnly: true });
       continue;
     }
+    const shouldAtomTrace = ATOM_TRACE
+      && (fpFamily === 'validity_atom' || fpFamily === 'entity_resolution_atom')
+      && ((atomTraceCounts.get(fpFamily) ?? 0) < ATOM_TRACE_LIMIT_PER_FAMILY);
+    if (ATOM_CHURN_FAMILIES.has(fpFamily)) {
+      const hardness = baselineAtomHardness({ targetDocId: hp.targetDocId, targetDocIds: hp.atomMinedDocIds, pack: activePack, baselineScore: activeDetailed });
+      if (!hardness.hard) {
+        easySkipsByAtomFamily[fpFamily] = (easySkipsByAtomFamily[fpFamily] ?? 0) + 1;
+        easySkipsByFingerprint[hp.operationFingerprint] = (easySkipsByFingerprint[hp.operationFingerprint] ?? 0) + 1;
+        console.log(`[live-evolve]   honest ${h + 1}/${HONEST_PER_EPOCH} skipped:${hardness.reason}`);
+        let atomTraceDiagnostics = null;
+        if (shouldAtomTrace) {
+          const parentState = bestState;
+          const parentStateRoot = merkleizeState(parentState);
+          const candidatePatch = { ...hp.patch, parentStateRoot };
+          const appliedTrace = applyPatch(parentState, candidatePatch, optsForProd(null, true).policyAtomsMode === true);
+          const traceBeforeEval = await cachedStateEval(activeStateEvalCache, parentStateRoot, parentState, newProd, activePack, epochScoringTelemetry, true);
+          atomTraceDiagnostics = buildAtomTraceDiagnostics({
+            epoch, h, hp, fpFamily, pack: activePack, activeIds: frontierSnap.activeIds, corpus: newProd,
+            appliedState: appliedTrace?.ok ? appliedTrace.state : null,
+            before: traceBeforeEval.score,
+            after: null,
+          });
+          atomTraceCounts.set(fpFamily, (atomTraceCounts.get(fpFamily) ?? 0) + 1);
+          console.log(`[live-evolve]   atom-trace emitted family=${fpFamily} reason=${hardness.reason}`);
+        }
+        honestPerPatch.push({
+          h, family,
+          accepted: false,
+          deltaPpm: 0,
+          heldoutDeltaPpm: null,
+          reason: `skipped:${hardness.reason}`,
+          fingerprint: hp.fingerprint,
+          operationFingerprint: hp.operationFingerprint,
+          selectorFingerprint: hp.selectorFingerprint,
+          targetDocId: hp.targetDocId,
+          targetDocIdRecordedOnly: true,
+          temporalRecordSlot: hp.temporalRecordSlot ?? null,
+          scopeAtomSlot: hp.scopeAtomSlot ?? null,
+          entityResolutionAtomSlot: hp.entityResolutionAtomSlot ?? null,
+          atomHardness: hardness,
+          ...(atomTraceDiagnostics ? { atomTraceDiagnostics } : {}),
+        });
+        continue;
+      }
+      hp.atomHardness = hardness;
+    }
     qualityAttemptsThisEpoch++;
     try {
-      const tracePatch = TRACE_DIAGNOSTICS;
+      const tracePatch = TRACE_DIAGNOSTICS || shouldAtomTrace;
       const parentState = bestState;
-      const candidatePatch = { ...hp.patch, parentStateRoot: merkleizeState(parentState) };
+      const parentStateRoot = merkleizeState(parentState);
+      const candidatePatch = { ...hp.patch, parentStateRoot };
       const opts = optsForProd(epochScoringTelemetry, tracePatch);
       const appliedForDecomposition = applyPatch(parentState, candidatePatch, opts.policyAtomsMode === true);
       if (!appliedForDecomposition?.ok) {
+        console.log(`[live-evolve]   honest ${h + 1}/${HONEST_PER_EPOCH} apply_failed:${appliedForDecomposition?.code ?? 'unknown'}`);
         honestPerPatch.push({
           h, family,
           accepted: false,
@@ -946,10 +1205,12 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         });
         continue;
       }
-      const r = await evaluateRetrievalBenchmarkPatch(parentState, candidatePatch, newProd, activePack, opts, baselineFloors);
-      const heldoutPatch = tracePatch && heldoutPack.events.length
+      const activeBeforeEval = await cachedStateEval(activeStateEvalCache, parentStateRoot, parentState, newProd, activePack, epochScoringTelemetry, tracePatch);
+      const r = await evaluateRetrievalBenchmarkPatch(parentState, candidatePatch, newProd, activePack, opts, baselineFloors, activeBeforeEval.score);
+      const heldoutPatch = TRACE_DIAGNOSTICS && heldoutPack.events.length
         ? await evaluateRetrievalBenchmarkPatch(parentState, candidatePatch, newProd, heldoutPack, optsForProd(epochScoringTelemetry, true), baselineFloors)
         : null;
+      const oldBeforeEval = await cachedStateEval(oldStateEvalCache, parentStateRoot, parentState, currentProd, oldCorpusPair.pack, epochScoringTelemetry, false);
       const acceptanceDecomposition = await buildAcceptanceDecomposition({
         parentState,
         candidateState: appliedForDecomposition.state,
@@ -960,6 +1221,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         newBefore: r.before,
         newAfter: r.after,
         telemetry: epochScoringTelemetry,
+        oldBeforeEval,
       });
       const c = acceptanceDecomposition.acceptanceComponents;
       const accepted = !!r.accepted
@@ -994,8 +1256,20 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         }
         bestState = appliedForDecomposition.state;
       }
+      const cursorUpdateApplied = applyHonestCursorUpdate(honestSlotCursor, hp.cursorUpdate);
+      console.log(`[live-evolve]   honest ${h + 1}/${HONEST_PER_EPOCH} ${accepted ? 'accepted' : `rejected:${rejectReason}`} delta=${r.deltaPpm ?? 0}ppm recovery=${acceptanceDecomposition.patchRecoveryPpm}ppm oldDamage=${acceptanceDecomposition.oldCorpusDamagePpm}ppm`);
       const activeComparisons = tracePatch ? compareQueries(r.before, r.after) : [];
       const targetDiagnostics = targetDocDiagnostics({ targetDocId: hp.targetDocId, before: r.before, after: r.after, pack: activePack, patch: candidatePatch });
+      const atomTraceDiagnostics = shouldAtomTrace ? buildAtomTraceDiagnostics({
+        epoch, h, hp, fpFamily, pack: activePack, activeIds: frontierSnap.activeIds, corpus: newProd,
+        appliedState: appliedForDecomposition.state,
+        before: r.before,
+        after: r.after,
+      }) : null;
+      if (atomTraceDiagnostics) {
+        atomTraceCounts.set(fpFamily, (atomTraceCounts.get(fpFamily) ?? 0) + 1);
+        console.log(`[live-evolve]   atom-trace emitted family=${fpFamily} accepted=${accepted}`);
+      }
       const activeImprovements = activeComparisons
         .filter((c) => c.deltaNdcg > 0)
         .sort((a, b) => b.deltaNdcg - a.deltaNdcg)
@@ -1032,14 +1306,22 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         temporalRecordSlot: hp.temporalRecordSlot ?? null,
         conflictAtomSlot: hp.conflictAtomSlot ?? null,
         scopeAtomSlot: hp.scopeAtomSlot ?? null,
+        scopeAtomSlots: hp.scopeAtomSlots ?? null,
         entityResolutionAtomSlot: hp.entityResolutionAtomSlot ?? null,
+        entityResolutionAtomSlots: hp.entityResolutionAtomSlots ?? null,
+        atomRecordsCompiled: hp.atomRecordsCompiled ?? null,
+        atomMinedDocIds: hp.atomMinedDocIds ?? null,
+        cursorUpdateApplied,
         oldCorpusPairExcludedQueryCount: oldCorpusPair.excluded.length,
         oldCorpusPairExcludedQueryIds: oldCorpusPair.excluded.slice(0, 16),
         acceptanceDecomposition,
+        ...(hp.atomHardness ? { atomHardness: hp.atomHardness } : {}),
         ...(targetDiagnostics ? { targetDiagnostics } : {}),
+        ...(atomTraceDiagnostics ? { atomTraceDiagnostics } : {}),
         ...(traceDiagnostics ? { traceDiagnostics } : {}),
       });
     } catch (e) {
+      console.log(`[live-evolve]   honest ${h + 1}/${HONEST_PER_EPOCH} eval_error:${e.message?.slice(0, 120)}`);
       honestPerPatch.push({
         h, family,
         accepted: false,
@@ -1139,10 +1421,13 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
       cumulativeActivated: frontierSnap.cumulativeActivated,
       cumulativeRetired: frontierSnap.cumulativeRetired,
       newEvalIdsInjectedThisEpoch: newEvalAdded,
+      newEvalIdsByFamily,
     },
     activePackSize: activePack.events.length, heldoutPackSize: heldoutPack.events.length,
+    activePackFamilyCounts: eventFamilyCounts(activePack.events),
     activeLiveEvalForcedIntoPack: activeLiveEvalPack.added,
     activeLiveEvalPackSize: activeLiveEvalPack.liveEvalInPack,
+    activeLiveEvalPackFamilyCounts: activeLiveEvalPack.familyCounts,
     addedDocs: ld.addedDocs.length, addedQueries: ld.addedQueries.length,
     addedMemDocs: ld.addedDocs.length, addedRelations: ld.addedRelations.length,
     liveChurnRate: ld.liveChurnRate,
@@ -1162,6 +1447,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     operation_reuse_rate: operationReuseRate,
     attemptsByFingerprint, acceptsByFingerprint,
     attemptsByAtomFamily, acceptsByAtomFamily,
+    easySkipsByFingerprint, easySkipsByAtomFamily,
     operationReuseByAtomFamily, selectorReuseByAtomFamily,
     decompositionSummary,
     honestPerPatch,
@@ -1181,6 +1467,9 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   console.log(`[live-evolve] activeScore=${activeScorePpm}ppm heldoutScore=${heldoutScorePpm}ppm idShuffledScore=${idShuffledScorePpm}ppm`);
   console.log(`[live-evolve] cross_frontier_lift=${crossFrontierLift} heldout_frontier_lift=${heldoutFrontierLift} doc_id_dependence=${docIdDependence}`);
   console.log(`[live-evolve] honest: ${honestAcceptsThisEpoch}/${qualityAttemptsThisEpoch} accepted, operation_reuse_rate=${operationReuseRate.toFixed(3)}; antiCheat random=${randomAccepts}/${RANDOM_PROBES} hill=${hillclimbAccepts}/${HILLCLIMB_PROBES}`);
+  if (Object.keys(easySkipsByFingerprint).length > 0) {
+    console.log(`[live-evolve] atom easy skips: ${JSON.stringify(easySkipsByFingerprint)}`);
+  }
   for (const fp of Object.keys(attemptsByFingerprint)) {
     const att = attemptsByFingerprint[fp]; const acc = acceptsByFingerprint[fp] ?? 0;
     console.log(`[live-evolve]   fp ${fp}: ${acc}/${att}`);
@@ -1268,6 +1557,16 @@ const report = {
     for (const ep of perEpoch) for (const fp of Object.keys(ep.acceptsByAtomFamily ?? {})) out[fp] = (out[fp] ?? 0) + ep.acceptsByAtomFamily[fp];
     return out;
   })(),
+  easySkipsByFingerprintTotals: (() => {
+    const out = {};
+    for (const ep of perEpoch) for (const fp of Object.keys(ep.easySkipsByFingerprint ?? {})) out[fp] = (out[fp] ?? 0) + ep.easySkipsByFingerprint[fp];
+    return out;
+  })(),
+  easySkipsByAtomFamilyTotals: (() => {
+    const out = {};
+    for (const ep of perEpoch) for (const fp of Object.keys(ep.easySkipsByAtomFamily ?? {})) out[fp] = (out[fp] ?? 0) + ep.easySkipsByAtomFamily[fp];
+    return out;
+  })(),
   operationReuseByAtomFamilyTotals: (() => {
     const out = {};
     for (const ep of perEpoch) for (const fp of Object.keys(ep.operationReuseByAtomFamily ?? {})) out[fp] = (out[fp] ?? 0) + ep.operationReuseByAtomFamily[fp];
@@ -1279,8 +1578,11 @@ const report = {
     return out;
   })(),
   summary: {
+    atomHardnessFilterEnabled: true,
+    honestCandidateSelections: perEpoch.reduce((s, e) => s + Object.values(e.attemptsByAtomFamily ?? {}).reduce((a, b) => a + b, 0), 0),
     honestAttempts: perEpoch.reduce((s, e) => s + e.honestAttempted, 0),
     honestAccepted: perEpoch.reduce((s, e) => s + e.honestAccepted, 0),
+    atomEasySkips: perEpoch.reduce((s, e) => s + Object.values(e.easySkipsByAtomFamily ?? {}).reduce((a, b) => a + b, 0), 0),
     acceptedOperationReuseRate: acceptedOperationCount ? acceptedOperationReuseCount / acceptedOperationCount : 0,
     acceptedSelectorReuseRate: acceptedSelectorCount ? acceptedSelectorReuseCount / acceptedSelectorCount : 0,
     randomProbes: perEpoch.reduce((s, e) => s + e.antiCheat.randomProbes, 0),
@@ -1339,7 +1641,7 @@ const report = {
   ],
 };
 const outPath = resolve(repoRoot, OUTDIR, `V2_LIVE_EVOLVE_LONG_HORIZON_${TAG}_qwen.json`);
-writeFileSync(outPath, JSON.stringify(report, null, 2));
+writeFileSync(outPath, JSON.stringify(report, (_key, value) => typeof value === 'bigint' ? value.toString() : value, 2));
 console.log(`\n[live-evolve] wrote ${outPath}`);
 console.log(`[live-evolve] epochsRun=${perEpoch.length} uniqueHonestOps=${operationReuseSet.size}`);
 

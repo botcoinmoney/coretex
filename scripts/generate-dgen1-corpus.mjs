@@ -941,8 +941,9 @@ function addEntityResolutionAtomSlice(meta, idx) {
     qrels: [{ docId: target, relevance: 1.0, role: 'direct' }, { docId: wrongRole, relevance: 0.0, role: 'wrong_entity_same_name' }],
     hardNegatives: [{ docId: wrongRole, category: 'duplicate_name_wrong_role' }],
     ownerEntityId: meta.universe,
+    subjectEntityId: backendId,
     scope,
-    publicIntent: { atom: 'entity_resolution_atom', name: canonical, roleAlias: 'API migration lead', ...scope },
+    publicIntent: { atom: 'entity_resolution_atom', subjectEntityId: backendId, name: canonical, roleAlias: 'API migration lead', ...scope },
     band: 'hard',
   });
 }

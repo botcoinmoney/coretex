@@ -49,6 +49,7 @@ export function makeInstrumentedReranker({
   const resolvedCachePath = cachePath ? resolve(repoRoot, cachePath) : null;
   if (resolvedCachePath) mkdirSync(dirname(resolvedCachePath), { recursive: true });
   const cache = loadCache(resolvedCachePath);
+  const backendBatchSize = Number.isFinite(batchSize) && batchSize > 0 ? Math.floor(batchSize) : null;
   const uniquePairKeys = new Set();
   const batchSizes = [];
   const stats = {
@@ -107,8 +108,10 @@ export function makeInstrumentedReranker({
         }
       }
 
-      if (misses.length > 0) {
-        const backendPairs = misses.map((m) => m.pair);
+      for (let startIdx = 0; startIdx < misses.length; startIdx += (backendBatchSize ?? misses.length)) {
+        const chunk = misses.slice(startIdx, startIdx + (backendBatchSize ?? misses.length));
+        if (!chunk.length) continue;
+        const backendPairs = chunk.map((m) => m.pair);
         const start = Date.now();
         const scores = await reranker.score(backendPairs);
         const wall = Date.now() - start;
@@ -116,13 +119,13 @@ export function makeInstrumentedReranker({
         stats.backendPairs += backendPairs.length;
         stats.backendWallMs += wall;
         if (scores.length !== backendPairs.length) throw new Error(`instrumented reranker expected ${backendPairs.length} scores, got ${scores.length}`);
-        for (let i = 0; i < misses.length; i++) {
+        for (let i = 0; i < chunk.length; i++) {
           const score = scores[i];
           if (typeof score !== 'number' || !Number.isFinite(score)) throw new Error(`instrumented reranker got non-finite score at miss ${i}`);
-          const row = { key: misses[i].key, score, ...misses[i].material };
+          const row = { key: chunk[i].key, score, ...chunk[i].material };
           cache.set(row.key, row);
           persist(row);
-          for (const pos of misses[i].positions) out[pos] = score;
+          for (const pos of chunk[i].positions) out[pos] = score;
         }
       }
       return out;
