@@ -101,7 +101,9 @@ export interface RateLimitBudgetAccessor {
   consumeBudget(miner: string, lane: string): Promise<void>;
   /**
    * Returns the current on-chain tier credits for a miner.
-   * Backed by BotcoinMiningV3.getTier() / _creditsForBalance().
+   * V4 cutover: tier is sourced from BotcoinMiningV3.getTier() / _creditsForBalance()
+   * (V3 remains the canonical stake/tier registry; V4 reads the same schedule via
+   * `V4.stakeSource == V3`). The tier number itself doesn't change at cutover.
    */
   getMinerTier(miner: string): Promise<{ tier: number; creditsPerSolve: number }>;
 }
@@ -113,7 +115,14 @@ export interface CortexHandlerDeps {
   epochState: EpochStateAccessor;
   /** Shared rate-limit budget accessor. */
   rateLimitBudget: RateLimitBudgetAccessor;
-  /** Current BotcoinMiningV3 nextIndex/lastReceiptHash cursor. */
+  /**
+   * Current BotcoinMiningV4 nextIndex/lastReceiptHash cursor. V4 is the unified
+   * receipt chain for both standard and CoreTex lanes after cutover; the SWCP
+   * coordinator's ReceiptChainAccessor MUST read these from V4, not V3.
+   * (V3 retains its own nextIndex/lastReceiptHash for any residual V3 receipts
+   * that may still be signed, but those credits land in V3's now-inert pool and
+   * are not part of the v0 launch ledger.)
+   */
   receiptChain: ReceiptChainAccessor;
   /** Optional: path to the cortex-store SQLite DB. Defaults to CORTEX_STORE_DB_PATH env. */
   cortexStorePath?: string;

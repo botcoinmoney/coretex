@@ -72,6 +72,27 @@ For the v0 launch coord (reference implementation:
 4. Run a watcher (poll or filter) that re-applies the same checks on every new
    landed event. On any parity mismatch, set unhealthy + refuse to sign.
 
+## V3 launch posture — economically inert
+
+V3 remains callable on-chain (it cannot be turned off without a signer
+rotation). The launch gate is that V3 is **economically inert** after V4
+cutover:
+
+- **No V3 reward deposits.** Reward funding goes only to V4's epoch pool.
+- **No V3 epoch finalization.** Finalization happens on V4 only.
+- **No V3 claim flow in miner docs / UI / skill.** All miner-facing claim
+  paths target `V4.claim(uint64[])`.
+- **V4 is the sole funded / finalized / claimed reward ledger.**
+- **V3 is the stake / epoch / tier source** for V4 (`V4.stakeSource ==
+  V3`; `V4.currentEpoch()` mirrors V3; `V4.tierCreditsOf(miner)` reads
+  V3's tier schedule).
+
+A coordinator that accidentally kept signing V3 standard-lane receipts
+would NOT lose tx (V3 may still accept) but those credits would land
+in V3's pool with no path to claim — they would be permanently
+stranded. Production coord cutover MUST ensure the standard-receipt
+signer targets V4's contract address + EIP-712 v4 domain only.
+
 ## Rollback
 
 ```bash
