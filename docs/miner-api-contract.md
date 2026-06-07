@@ -4,7 +4,7 @@ Public contract a miner uses to construct valid, non-oracle patches without runn
 full CoreTex stack.
 
 Status note, reconciled 2026-06-06: CoreTex v16 is the launch posture. The
-live `/coretex/challenge` is the source of truth for enabled surfaces and
+live `/coretex/status` is the source of truth for enabled surfaces and
 allowed patch ranges; the v16 launch candidate includes temporal, relation,
 evidence, conflict, abstention, and promoted validity/scope/entity atoms when
 they are present in `activeSubstrateSurfaces`.
@@ -12,23 +12,24 @@ they are present in `activeSubstrateSurfaces`.
 Validation gate: `scripts/miner-api-contract-gate.mjs` must be rerun against the
 current launch profile, bundle, and corpus before signing.
 
-Routes (`packages/cortex/src/coordinator/endpoints.ts`):
+Routes (`packages/cortex/src/coordinator/endpoints.ts`) — v0 canonical surface
+(exactly 5; anything not in this list is removed from public v0):
 
 | method | path | purpose |
 |---|---|---|
-| GET | `/coretex/challenge` | the public challenge payload (below) |
-| POST | `/coretex/submit` | submit a patch (wire bytes + parentStateRoot + minerAddress) |
-| GET | `/coretex/status` | epoch + difficulty status |
-| GET | `/coretex/substrate/:stateRoot` | full 1024-word state by root (off-chain by root) |
-| GET | `/coretex/patch/:hash` | patch bytes by patchHash |
-| GET | `/coretex/receipt/:hash` | re-fetch a previously signed coordinator receipt + pre-encoded V4 transaction by patchHash (lookup by either the miner-submitted patchHash OR the coordinator-rewritten signed patchHash; receipt-cache entry is dropped once `expiresAt` elapses, after which the endpoint returns 404 with `reason: receipt expired`) |
-| GET | `/coretex/patch-received/:hash` | PatchReceivedNotice (anti-delay witness) |
-| GET | `/coretex/eval-report/:hash` | post-reveal eval report for replay |
-| GET | `/coretex/corpus-delta/:epoch` | corpus growth delta |
-| GET | `/coretex/bundle/:bundleHash` / `/coretex/bundle/by-core-version/:hash` | bundle manifest |
-| GET | `/coretex/health` | liveness |
+| GET | `/coretex/health` | coordinator system health — version, epoch, chainId, confirmation depth, chain live root, confirmed live root, finality lag, epoch pins, `acceptingSubmissions`. No miner-specific data. |
+| GET | `/coretex/status` | per-miner dynamic context (pass `?miner=0x…`). Folds in every field the legacy `/coretex/challenge` carried plus per-miner counters (`nextIndex`, `lastReceiptHash`, `screenersThisEpoch`, `remaining`, `cap`). |
+| GET | `/coretex/substrate/:stateRoot` | full 1024-word substrate state by root (off-chain by root). Only chain-confirmed roots are served. |
+| POST | `/coretex/submit` | submit a patch (wire bytes + parentStateRoot + minerAddress). Returns either a signed receipt envelope or a rejection. |
+| GET | `/coretex/receipt/:hash` | re-fetch a previously signed coordinator receipt + pre-encoded V4 transaction by patchHash. Works for BOTH the miner-submitted (original) hash AND the coordinator-rewritten signed hash. Returns `200` for pending/confirmed (envelope tagged with state), `409` + `PendingReceiptStale` for stale (no transaction handed back), `404 + "receipt expired"` once the receipt's `expiresAt` elapses. |
 
-## Challenge payload — MUST include (public only)
+The following routes are NOT part of the v0 public surface and the gate
+(`scripts/miner-api-contract-gate.mjs`) fails the build if they reappear:
+`/coretex/challenge`, `/coretex/patch/:hash`, `/coretex/patch-received/:hash`,
+`/coretex/eval-report/:hash`, `/coretex/corpus-delta/:epoch`,
+`/coretex/bundle/:bundleHash`, `/coretex/bundle/by-core-version/:hash`.
+
+## Status payload — MUST include (public only)
 
 | field | meaning |
 |---|---|
@@ -45,11 +46,11 @@ Routes (`packages/cortex/src/coordinator/endpoints.ts`):
 | `screenerThresholdPpm` | current dynamic screener threshold (from live baseline + noise floor; recomputes after baseline/churn/corpus/reranker changes) |
 | `perMinerScreenerCap` | on-chain V4 `coreTexScreenerCapPerMinerPerEpoch` (default **50**, adjustable by owner/policyAdmin). Hard ceiling on SCREENER_PASS receipts per miner per epoch; persists across state advances within the epoch; STATE_ADVANCE receipts and standard-lane receipts are not counted. Receipts above the cap revert `CoreTexScreenerCapExceeded`. |
 | `memoryIRSchemaVersion` | the fixed Memory-IR protocol grammar version (renderer is protocol-owned) |
-| `activeSubstrateSurfaces` | the live earned surfaces from the challenge. For v16 this must include the promoted atom surfaces when active: `validity_atom`, `scope_atom`, and `entity_resolution_atom`. |
+| `activeSubstrateSurfaces` | the live earned surfaces from the status response. For v16 this must include the promoted atom surfaces when active: `validity_atom`, `scope_atom`, and `entity_resolution_atom`. |
 | `exampleValidPatch` | a worked, structurally-valid patch encoding |
 | `hiddenEvalWarning` | explicit notice that hidden qrels / eval pack / answer IDs / epochSecret are not public |
 
-## Challenge payload — MUST NOT include
+## Status payload — MUST NOT include
 
 - hidden eval query-pack contents (the `events`/`pack`/`queries` arrays)
 - hidden qrels, `truthDocuments`, `relevance`, answer IDs
@@ -80,7 +81,7 @@ the dedup cache.
 ## On-chain protocol caps (V4 + Registry)
 
 Two explicit on-chain rules a miner sees in addition to per-patch evaluation. Both are exposed in the
-challenge payload (above) and queryable on-chain.
+status payload (above) and queryable on-chain.
 
 - **`coreTexScreenerCapPerMinerPerEpoch`** (V4, default **50**): per-miner, per-epoch hard cap on
   SCREENER_PASS receipts. Persists across state advances within an epoch — a state advance resets only
@@ -108,7 +109,7 @@ prevent format-guessing; they are not all reward-active launch surfaces. Patch b
 > `0xff` (universal/MIXED). `0x07` (POLICY_UPDATE) targets indices `384–671` (the three r5
 > PolicyAtom regions: evidence-bundle 384–511, conflict 512–639, abstention 640–671). At
 > wire-encoding time the on-chain byte is determined by the *word-index range* your patch
-> writes into — read `allowedPatchTypes[*].byte` from the live `/coretex/challenge` and pick
+> writes into — read `allowedPatchTypes[*].byte` from the live `/coretex/status` and pick
 > the byte whose `wordIndexRange` contains your write indices, or use `0xff` to bypass the
 > per-type range check. The `(0xNN)` annotations in the section titles below ARE the wire
 > byte you put at offset 0 of `patchBytes`.
@@ -126,7 +127,7 @@ prevent format-guessing; they are not all reward-active launch surfaces. Patch b
 - **Public data seen:** public relation graph (supports/causes/supersedes/…) + the query's parsed relation-intent.
 - **Patch:** index `[799]` = one `supports` category-lens edge. `wire 0x0401…`.
 - **Forbidden:** flooding all edge types; relying on the entity-only (untyped) selector; query→answer edges.
-- **Current launch posture:** safe-but-not-active as a positive lift surface after 100k scale findings unless the live challenge explicitly enables it.
+- **Current launch posture:** safe-but-not-active as a positive lift surface after 100k scale findings unless the live status response explicitly enables it.
 - **If it fires:** `categoryLensBFS` admits the matched anchor reach; bounded by `policyMaxBudgetEvidence` (beta 0.25).
 
 ### 3. evidence_bundle bootstrap structural example — `MIXED (0xFF)`, 2 words
@@ -139,7 +140,7 @@ prevent format-guessing; they are not all reward-active launch surfaces. Patch b
 - **Public data seen:** public `contradicts` / `scope_differs` edge DIRECTION (src = resolving/asserting doc, dst = contradicted candidate); the anchor MemoryIndex slot.
 - **Patch:** one MemoryIndex policy anchor plus index `[512]` = conflict atom `selector=CONFLICT_SET_MEMBER, evidenceFeature=CONTRADICTS_EDGE, action=boost, scope=conflict_set, targetSlot=anchor`. Add a second atom `action=suppress` for the candidate. If the anchor already exists, an atom-only update uses `POLICY_UPDATE`; bootstrapping anchor+atom uses `MIXED`.
 - **Forbidden:** using the corpus `lifecycleState` label or qrels (selector reads PUBLIC edge direction only); firing on non-conflict queries (the conflict-INTENT gate `policyConflictIntentAdmission` prevents off-family damage); wrong-direction (boost candidate) — provably HURTS.
-- **Current launch posture:** safe-but-not-active as a positive lift surface after 300k scale findings unless the live challenge explicitly enables it.
+- **Current launch posture:** safe-but-not-active as a positive lift surface after 300k scale findings unless the live status response explicitly enables it.
 - **If it fires:** conflict-atom trace `boost@contradicts-src / suppress@contradicts-dst`, query-local (top-K gate), bounded `±budget/1000·spread`.
 
 ### 5. guarded abstention  — `POLICY_UPDATE (0x07)`, 1 word

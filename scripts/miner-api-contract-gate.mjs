@@ -193,14 +193,46 @@ const challenge = {
 let pass = true; const log = [];
 const check = (n, ok, d = '') => { log.push(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`); if (!ok) pass = false; };
 
-// A) required public fields present
+// A) required public fields present in the canonical /coretex/status payload
 const required = ['epochId', 'parentStateRoot', 'currentStateRoot', 'bundleHash', 'corpusRoot', 'activeFrontierRoot', 'artifactManifestHash', 'profileHash', 'rerankerRevision', 'baselineManifestHash', 'pipelineVersion', 'allowedPatchTypes', 'patchWordRanges', 'minImprovementPpm', 'screenerThresholdPpm', 'perMinerScreenerCap', 'memoryIRSchemaVersion', 'activeSubstrateSurfaces', 'exampleValidPatch', 'hiddenEvalWarning'];
 const missing = required.filter((k) => challenge[k] === undefined || challenge[k] === null);
-check('A) all required public fields present', missing.length === 0, missing.length ? `missing: ${missing.join(',')}` : `${required.length} fields`);
+check('A) all required public fields present in /coretex/status', missing.length === 0, missing.length ? `missing: ${missing.join(',')}` : `${required.length} fields`);
 // A2) v0 canonical naming — perMinerScreenerCap only; perMinerCap is the deprecated alias and MUST NOT appear.
-check('A2) public challenge uses perMinerScreenerCap (canonical) and not perMinerCap (deprecated)',
+check('A2) public status uses perMinerScreenerCap (canonical) and not perMinerCap (deprecated)',
   challenge.perMinerScreenerCap !== undefined && challenge.perMinerCap === undefined,
   challenge.perMinerCap !== undefined ? 'LEGACY perMinerCap present' : 'OK');
+
+// A3) Canonical v0 route surface — exactly 5 endpoints. The production router (CORETEX_ENDPOINTS
+// in packages/cortex/src/coordinator/endpoints.ts) MUST match this set, and removed routes MUST
+// NOT reappear. The gate fails the build if either condition is violated.
+const CANONICAL_V0_ROUTES = [
+  'GET /coretex/health',
+  'GET /coretex/status',
+  'GET /coretex/substrate/:stateRoot',
+  'POST /coretex/submit',
+  'GET /coretex/receipt/:hash',
+];
+const REMOVED_V0_ROUTES = [
+  'GET /coretex/challenge',
+  'GET /coretex/patch/:hash',
+  'GET /coretex/patch-received/:hash',
+  'GET /coretex/eval-report/:hash',
+  'GET /coretex/corpus-delta/:epoch',
+  'GET /coretex/bundle/:bundleHash',
+  'GET /coretex/bundle/by-core-version/:coreVersionHash',
+];
+const { CORETEX_ENDPOINTS: routerRoutes } = m;
+const routerSet = new Set((routerRoutes ?? []).map((r) => `${r.method} ${r.path}`));
+const missingFromRouter = CANONICAL_V0_ROUTES.filter((r) => !routerSet.has(r));
+const extraInRouter = [...routerSet].filter((r) => !CANONICAL_V0_ROUTES.includes(r));
+const removedReappeared = REMOVED_V0_ROUTES.filter((r) => routerSet.has(r));
+check('A3.a) production router exposes EXACTLY the 5 canonical v0 routes',
+  missingFromRouter.length === 0 && extraInRouter.length === 0,
+  missingFromRouter.length ? `missing in router: ${missingFromRouter.join(',')}` :
+  extraInRouter.length ? `extra in router: ${extraInRouter.join(',')}` : 'OK');
+check('A3.b) production router does NOT expose any removed v0 route',
+  removedReappeared.length === 0,
+  removedReappeared.length ? `LEGACY ROUTES REAPPEARED: ${removedReappeared.join(',')}` : 'OK');
 
 // B) no hidden leakage (deep key + value scan)
 const FORBIDDEN_KEYS = /qrel|truthdoc|hardnegativ|answer|epochsecret|evalseed|hiddenpack|truth|relevance|failurestat|perqueryfail/i;
