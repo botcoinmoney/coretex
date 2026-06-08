@@ -98,6 +98,10 @@ const FAMILY_MAX_ATTEMPT_SHARE = Number(flag('family-max-attempt-share', '0.20')
 const WEAK_FAMILY_MAX_ATTEMPT_SHARE = Number(flag('weak-family-max-attempt-share', '0.05'));
 const WEAK_FAMILY_GROUP_MAX_ATTEMPT_SHARE = Number(flag('weak-family-group-max-attempt-share', '0.15'));
 const ATOM_EASY_SKIP_FAMILY_CAP = Number(flag('atom-easy-skip-family-cap', '3'));
+const SLOT_PACING = !has('no-slot-pacing');
+const SLOT_PACING_HORIZON_EPOCHS = Number(flag('slot-pacing-horizon-epochs', String(EPOCHS)));
+const SLOT_PACING_TEMPORAL_SHARE = Number(flag('slot-pacing-temporal-share', '0.67'));
+const SLOT_PACING_VALIDITY_SHARE = Number(flag('slot-pacing-validity-share', '0.33'));
 const COMPACT_PATCH_TRACES = has('compact-patch-traces');
 const SUPPLY_CENSUS_GATE_ENABLED = (has('supply-census-gate') || TRACE_LOW_MOVEMENT) && !has('no-supply-census-gate');
 const ATOM_TRACE = has('atom-trace') || TRACE_DIAGNOSTICS;
@@ -481,6 +485,100 @@ function targetDocDiagnostics({ targetDocId, before, after, pack, patch }) {
     activeTruthQueryIds: truthMatches.slice(0, 16).map((ev) => ev.id),
     activeHardNegativeQueryIds: hardNegativeMatches.slice(0, 16).map((ev) => ev.id),
     targetTruthQueries: rows,
+  };
+}
+function patchSourceQueryId(hp) {
+  return hp?.evidenceSourceQueryId
+    ?? hp?.relationLensSourceQueryId
+    ?? hp?.noiseSourceQueryId
+    ?? hp?.scopeSourceQueryId
+    ?? hp?.entityResolutionSourceQueryId
+    ?? hp?.temporalSourceQueryId
+    ?? hp?.conflictSourceQueryId
+    ?? null;
+}
+function patchHardNegativeDocId(hp) {
+  return hp?.relationLensHardNegativeDocId
+    ?? hp?.noiseHardNegativeDocId
+    ?? hp?.scopeHardNegativeDocId
+    ?? hp?.entityResolutionHardNegativeDocId
+    ?? hp?.temporalHardNegativeDocId
+    ?? hp?.conflictHardNegativeDocId
+    ?? null;
+}
+function compactDocSnapshots(corpus, docIds) {
+  return docSnapshots(corpus, docIds).map((d) => ({
+    ...d,
+    text: typeof d.text === 'string' ? d.text.slice(0, 360) : d.text,
+  }));
+}
+function queryTracePresent(q, family) {
+  if (!q) return false;
+  if ((q.policyTraces ?? []).some((t) => !family || t.atomFamily === family || t.atomFamily === 'relation_category_routing')) return true;
+  return q.temporalRecordDriven === true || q.memoryIRDriven === true || q.policyTraceDriven === true;
+}
+function buildCandidateQueryTrace({ family, hp, pack, before, after, corpus, acceptanceDecomposition }) {
+  const beforeById = queryMap(before);
+  const afterById = queryMap(after);
+  const sourceQueryId = patchSourceQueryId(hp);
+  const selectedTargets = [...new Set([hp?.targetDocId, ...(hp?.atomMinedDocIds ?? [])].filter(Boolean))];
+  const explicitHardNegative = patchHardNegativeDocId(hp);
+  const selectedDocs = [...new Set([...selectedTargets, explicitHardNegative].filter(Boolean))];
+  const matched = [];
+  if (sourceQueryId) {
+    const ev = (pack.events ?? []).find((e) => e.id === sourceQueryId);
+    if (ev) matched.push(ev);
+  }
+  for (const ev of pack.events ?? []) {
+    if (matched.includes(ev)) continue;
+    const positives = relevantDocIds(ev);
+    const hardNegs = hardNegativeDocIds(ev);
+    if (selectedDocs.some((id) => positives.has(id) || hardNegs.has(id))) matched.push(ev);
+    if (matched.length >= 3) break;
+  }
+  const rows = matched.slice(0, 3).map((ev) => {
+    const positives = relevantDocIds(ev);
+    const hardNegs = hardNegativeDocIds(ev);
+    const targetDocId = selectedTargets.find((id) => positives.has(id)) ?? selectedTargets[0] ?? null;
+    const hardNegativeDocId = explicitHardNegative && hardNegs.has(explicitHardNegative)
+      ? explicitHardNegative
+      : [...hardNegs][0] ?? explicitHardNegative ?? null;
+    const bq = beforeById.get(ev.id);
+    const aq = afterById.get(ev.id);
+    return {
+      queryId: ev.id,
+      queryText: ev.queryText,
+      family: ev.logicalFamily ?? ev.family ?? null,
+      targetDocId,
+      hardNegativeDocId,
+      beforeTargetRankTop20: rankOfDoc(bq, targetDocId),
+      beforeHardNegativeRankTop20: rankOfDoc(bq, hardNegativeDocId),
+      afterTargetRankTop20: rankOfDoc(aq, targetDocId),
+      afterHardNegativeRankTop20: rankOfDoc(aq, hardNegativeDocId),
+      beforeNdcg10: bq?.nDCG10 ?? null,
+      afterNdcg10: aq?.nDCG10 ?? null,
+      renderedSignalPresent: hasRenderedSignal(bq, [targetDocId, hardNegativeDocId]) || hasRenderedSignal(aq, [targetDocId, hardNegativeDocId]),
+      policyOrRelationTracePresent: queryTracePresent(bq, family) || queryTracePresent(aq, family),
+      beforeTop10: topK(bq, 10),
+      afterTop10: topK(aq, 10),
+      renderedCandidatesBefore: renderedTop(bq, 8),
+      renderedCandidatesAfter: renderedTop(aq, 8),
+      documentSnapshots: compactDocSnapshots(corpus, [targetDocId, hardNegativeDocId]),
+    };
+  });
+  const components = acceptanceDecomposition?.acceptanceComponents ?? null;
+  return {
+    family,
+    sourceQueryId,
+    sourceQueryFound: rows.length > 0,
+    selectedDocIds: selectedDocs,
+    oldCorpusDamage: components ? !components.passesOldCorpusDamage : null,
+    goldDamage: components ? !components.passesGoldDamage : null,
+    oldFamilyRegression: components ? !components.passesOldFamilyRegression : null,
+    recoveryPpm: acceptanceDecomposition?.patchRecoveryPpm ?? null,
+    oldCorpusDamagePpm: acceptanceDecomposition?.oldCorpusDamagePpm ?? null,
+    worstOldQueryDeltaNdcg: acceptanceDecomposition?.worstOldQueryDeltaNdcg ?? null,
+    queries: rows,
   };
 }
 function applyHonestCursorUpdate(slotCursor, update) {
@@ -921,6 +1019,51 @@ function makeHonestSlotCursor() {
     coreferenceSkipDocs: new Set(),
   };
 }
+function pacingEpochsRemaining(epoch) {
+  const horizon = Number.isFinite(SLOT_PACING_HORIZON_EPOCHS) && SLOT_PACING_HORIZON_EPOCHS > 0
+    ? SLOT_PACING_HORIZON_EPOCHS
+    : EPOCHS;
+  return Math.max(1, horizon - epoch + 1);
+}
+function slotPacingDecision({ family, epoch, slotCursor, attemptsByFamily }) {
+  if (!SLOT_PACING || !FINGERPRINT_QUOTAS || epoch < FINGERPRINT_QUOTA_START_EPOCH) return null;
+  const remainingEpochs = pacingEpochsRemaining(epoch);
+  const attempts = (f) => attemptsByFamily[f] ?? 0;
+  if (family === 'temporal_update' || family === 'validity_atom') {
+    const remainingSlots = Math.max(0, 96 - (slotCursor.temporalRecord ?? 0));
+    if (remainingSlots <= 0) return { blocked: true, reason: 'slot_pacing_exhausted:temporal_record', cap: 0 };
+    const sharedCap = Math.max(1, Math.floor(remainingSlots / remainingEpochs));
+    const temporalCap = Math.max(1, Math.floor(sharedCap * SLOT_PACING_TEMPORAL_SHARE));
+    const validityCap = Math.max(1, Math.floor(sharedCap * SLOT_PACING_VALIDITY_SHARE));
+    const familyCap = family === 'temporal_update' ? temporalCap : validityCap;
+    const sharedAttempts = attempts('temporal_update') + attempts('validity_atom');
+    if (sharedAttempts >= sharedCap) return { blocked: true, reason: 'slot_pacing_shared_cap:temporal_record', cap: sharedCap };
+    if (attempts(family) >= familyCap) return { blocked: true, reason: `slot_pacing_family_cap:${family}`, cap: familyCap };
+    return { blocked: false, cap: familyCap, sharedCap };
+  }
+  if (family === 'conflict_lifecycle') {
+    const remainingSlots = Math.max(0, 128 - (slotCursor.conflictSlot ?? 96));
+    if (remainingSlots <= 0) return { blocked: true, reason: 'slot_pacing_exhausted:conflict_lifecycle', cap: 0 };
+    const cap = Math.max(1, Math.floor(remainingSlots / remainingEpochs));
+    if (attempts(family) >= cap) return { blocked: true, reason: `slot_pacing_family_cap:${family}`, cap };
+    return { blocked: false, cap };
+  }
+  if (family === 'entity_resolution_atom') {
+    const remainingSlots = Math.max(0, 192 - (slotCursor.entitySlot ?? 128));
+    if (remainingSlots <= 0) return { blocked: true, reason: 'slot_pacing_exhausted:entity_resolution_atom', cap: 0 };
+    const cap = Math.max(1, Math.floor(remainingSlots / remainingEpochs));
+    if (attempts(family) >= cap) return { blocked: true, reason: `slot_pacing_family_cap:${family}`, cap };
+    return { blocked: false, cap };
+  }
+  if (family === 'scope_atom') {
+    const remainingSlots = Math.max(0, 256 - (slotCursor.scopeSlot ?? 192));
+    if (remainingSlots <= 0) return { blocked: true, reason: 'slot_pacing_exhausted:scope_atom', cap: 0 };
+    const cap = Math.max(1, Math.floor(remainingSlots / remainingEpochs));
+    if (attempts(family) >= cap) return { blocked: true, reason: `slot_pacing_family_cap:${family}`, cap };
+    return { blocked: false, cap };
+  }
+  return null;
+}
 function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
   const { pack, logicalQById, eventByDocId, addedDocs, slotCursor } = ctx;
   const token = (value, fallback = 'generic') => String(value ?? fallback)
@@ -1199,6 +1342,7 @@ function honestPatchForAttempt(epoch, honestIdx, ctx, attemptsByFingerprint, att
     : Infinity;
   let firstSkipped = null;
   let firstQuotaSkipped = null;
+  let firstProvenQuotaSkipped = null;
   for (let i = 0; i < HONEST_FAMILIES.length; i++) {
     const family = HONEST_FAMILIES[(honestIdx + i) % HONEST_FAMILIES.length];
     const hp = honestPatchForEpoch(epoch, honestIdx, family, ctx);
@@ -1209,8 +1353,23 @@ function honestPatchForAttempt(epoch, honestIdx, ctx, attemptsByFingerprint, att
     }
     const fp = hp.operationFingerprint ?? hp.fingerprint ?? 'unknown';
     const fpFamily = atomFamilyForFingerprint(fp);
+    const slotPacing = slotPacingDecision({ family: fpFamily, epoch, slotCursor: ctx.slotCursor, attemptsByFamily });
+    if (slotPacing?.blocked) {
+      const skipped = {
+        skipped: true,
+        family,
+        reason: slotPacing.reason,
+        fingerprint: `honest:${family}:slot-pacing:e${epoch}:h${honestIdx}`,
+        operationFingerprint: fp,
+        selectorFingerprint: hp.selectorFingerprint ?? fp,
+        quotaCap: slotPacing.cap,
+      };
+      if (WEAK_RUNWAY_FAMILIES.has(fpFamily)) firstQuotaSkipped ??= skipped;
+      else firstProvenQuotaSkipped ??= skipped;
+      continue;
+    }
     if (quotaBlockedFamilies.has(fpFamily)) {
-      firstQuotaSkipped ??= {
+      const skipped = {
         skipped: true,
         family,
         reason: `family_easy_skip_quota_exceeded:${fpFamily}`,
@@ -1219,6 +1378,8 @@ function honestPatchForAttempt(epoch, honestIdx, ctx, attemptsByFingerprint, att
         selectorFingerprint: hp.selectorFingerprint ?? fp,
         quotaCap: ATOM_EASY_SKIP_FAMILY_CAP,
       };
+      if (WEAK_RUNWAY_FAMILIES.has(fpFamily)) firstQuotaSkipped ??= skipped;
+      else firstProvenQuotaSkipped ??= skipped;
       continue;
     }
     if (WEAK_RUNWAY_FAMILIES.has(fpFamily)) {
@@ -1263,7 +1424,7 @@ function honestPatchForAttempt(epoch, honestIdx, ctx, attemptsByFingerprint, att
       }
     }
     if ((attemptsByFamily[fpFamily] ?? 0) >= familyCap) {
-      firstQuotaSkipped ??= {
+      const skipped = {
         skipped: true,
         family,
         reason: `family_quota_exceeded:${fpFamily}`,
@@ -1272,10 +1433,12 @@ function honestPatchForAttempt(epoch, honestIdx, ctx, attemptsByFingerprint, att
         selectorFingerprint: hp.selectorFingerprint ?? fp,
         quotaCap: familyCap,
       };
+      if (WEAK_RUNWAY_FAMILIES.has(fpFamily)) firstQuotaSkipped ??= skipped;
+      else firstProvenQuotaSkipped ??= skipped;
       continue;
     }
     if ((attemptsByFingerprint[fp] ?? 0) >= cap) {
-      firstQuotaSkipped ??= {
+      const skipped = {
         skipped: true,
         family,
         reason: `fingerprint_quota_exceeded:${fp}`,
@@ -1284,11 +1447,13 @@ function honestPatchForAttempt(epoch, honestIdx, ctx, attemptsByFingerprint, att
         selectorFingerprint: hp.selectorFingerprint ?? fp,
         quotaCap: cap,
       };
+      if (WEAK_RUNWAY_FAMILIES.has(fpFamily)) firstQuotaSkipped ??= skipped;
+      else firstProvenQuotaSkipped ??= skipped;
       continue;
     }
     return hp;
   }
-  return firstQuotaSkipped ?? firstSkipped;
+  return firstProvenQuotaSkipped ?? firstQuotaSkipped ?? firstSkipped;
 }
 
 // ─── Genesis frontier (BUILD ONCE, step every epoch on the SAME instance) ───
@@ -1452,12 +1617,15 @@ function firstFailureBucketFromReason(reason) {
   if (r.includes('already_solved')) return 'already_solved';
   if (r.includes('target_absent')) return 'too_hard_target_absent';
   if (r.includes('slot_exhausted') || r.includes('entries_exhausted')) return 'slot_exhaustion';
+  if (r.includes('slot_pacing_exhausted')) return 'slot_exhaustion';
   if (
     r.includes('fingerprint_quota')
     || r.includes('family_quota')
     || r.includes('family_easy_skip_quota')
     || r.includes('weak_family_group_quota')
     || r.includes('weak_family_rotation_deferred')
+    || r.includes('slot_pacing_family_cap')
+    || r.includes('slot_pacing_shared_cap')
   ) return 'fingerprint_exhaustion';
   if (r.includes('no_') && r.includes('pack_query')) return 'pack_starved';
   if (r.includes('no_') && r.includes('candidate')) return 'too_hard_target_absent';
@@ -2189,6 +2357,15 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
       const activeComparisons = persistPatchTraceDetails ? compareQueries(r.before, r.after) : [];
       recordCandidateMovementCensus({ family: fpFamily, hp, pack: activePack, before: r.before, after: r.after });
       const targetDiagnostics = persistPatchTraceDetails ? targetDocDiagnostics({ targetDocId: hp.targetDocId, before: r.before, after: r.after, pack: activePack, patch: candidatePatch }) : null;
+      const candidateQueryTrace = TRACE_DIAGNOSTICS ? buildCandidateQueryTrace({
+        family: fpFamily,
+        hp,
+        pack: activePack,
+        before: r.before,
+        after: r.after,
+        corpus: newProd,
+        acceptanceDecomposition,
+      }) : null;
       const atomTraceDiagnostics = shouldAtomTrace ? buildAtomTraceDiagnostics({
         epoch, h, hp, fpFamily, pack: activePack, activeIds: frontierSnap.activeIds, corpus: newProd,
         appliedState: appliedForDecomposition.state,
@@ -2270,6 +2447,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         ...(persistPatchTraceDetails ? { decodedPatchTrace: buildDecodedPatchTrace({ hp, appliedState: appliedForDecomposition.state, corpus: newProd }) } : {}),
         ...(hp.atomHardness ? { atomHardness: hp.atomHardness } : {}),
         ...(targetDiagnostics ? { targetDiagnostics } : {}),
+        ...(candidateQueryTrace ? { candidateQueryTrace } : {}),
         ...(atomTraceDiagnostics ? { atomTraceDiagnostics } : {}),
         ...(traceDiagnostics ? { traceDiagnostics } : {}),
       });
@@ -2413,6 +2591,10 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
       weakFamilyMaxAttemptShare: WEAK_FAMILY_MAX_ATTEMPT_SHARE,
       weakFamilyGroupMaxAttemptShare: WEAK_FAMILY_GROUP_MAX_ATTEMPT_SHARE,
       atomEasySkipFamilyCap: ATOM_EASY_SKIP_FAMILY_CAP,
+      slotPacingEnabled: SLOT_PACING,
+      slotPacingHorizonEpochs: SLOT_PACING_HORIZON_EPOCHS,
+      slotPacingTemporalShare: SLOT_PACING_TEMPORAL_SHARE,
+      slotPacingValidityShare: SLOT_PACING_VALIDITY_SHARE,
     },
     attemptsByFingerprint, acceptsByFingerprint,
     attemptsByAtomFamily, acceptsByAtomFamily,
@@ -2502,6 +2684,10 @@ const report = {
   weakFamilyMaxAttemptShare: WEAK_FAMILY_MAX_ATTEMPT_SHARE,
   weakFamilyGroupMaxAttemptShare: WEAK_FAMILY_GROUP_MAX_ATTEMPT_SHARE,
   atomEasySkipFamilyCap: ATOM_EASY_SKIP_FAMILY_CAP,
+  slotPacingEnabled: SLOT_PACING,
+  slotPacingHorizonEpochs: SLOT_PACING_HORIZON_EPOCHS,
+  slotPacingTemporalShare: SLOT_PACING_TEMPORAL_SHARE,
+  slotPacingValidityShare: SLOT_PACING_VALIDITY_SHARE,
   supplyCensusFamilies: SUPPLY_CENSUS_FAMILIES,
   supplyCensusGate,
   supplyCensus: finalizedSupplyCensus,
@@ -2548,6 +2734,10 @@ const report = {
       weakFamilyMaxAttemptShare: WEAK_FAMILY_MAX_ATTEMPT_SHARE,
       weakFamilyGroupMaxAttemptShare: WEAK_FAMILY_GROUP_MAX_ATTEMPT_SHARE,
       atomEasySkipFamilyCap: ATOM_EASY_SKIP_FAMILY_CAP,
+      slotPacingEnabled: SLOT_PACING,
+      slotPacingHorizonEpochs: SLOT_PACING_HORIZON_EPOCHS,
+      slotPacingTemporalShare: SLOT_PACING_TEMPORAL_SHARE,
+      slotPacingValidityShare: SLOT_PACING_VALIDITY_SHARE,
     };
   })(),
   acceptsByFingerprintTotals: (() => {

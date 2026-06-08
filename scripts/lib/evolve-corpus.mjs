@@ -31,16 +31,16 @@ const PKGS = ['pnpm', 'npm', 'yarn', 'bun', 'pip', 'poetry', 'cargo', 'maven'];
 const API_HOSTS = ['atlas', 'beacon', 'cedar', 'delta', 'ember', 'falcon', 'granite', 'harbor'];
 const VALIDITY_SHADOW_COLORS = ['amber', 'silver', 'copper', 'violet'];
 const V16_BRANCH_WEIGHTS = [
-  ['temporal', 20],
-  ['conflict', 20],
-  ['validity_atom', 18],
-  ['entity_resolution_atom', 14],
-  ['scope_atom', 13],
-  ['decision', 5],
-  ['relation_lifecycle', 3],
-  ['coreference', 2],
-  ['noise_suppression', 2],
-  ['abstention', 3],
+  ['temporal', 23],
+  ['conflict', 21],
+  ['validity_atom', 20],
+  ['entity_resolution_atom', 17],
+  ['scope_atom', 14],
+  ['decision', 1],
+  ['relation_lifecycle', 1],
+  ['coreference', 1],
+  ['noise_suppression', 1],
+  ['abstention', 1],
 ];
 
 function slug(s) {
@@ -167,16 +167,22 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
       if (!attr) attr = candidateAttrs[Math.floor(rnd() * candidateAttrs.length)];
       const bank = isProject && attr === 'package manager' ? PKGS : CITIES;
       const val = bank[Math.floor(rnd() * bank.length)];
-      const docId = `d_${idBase}_t`, qid = `q_${idBase}_t`;
+      let staleVal = bank[Math.floor(rnd() * bank.length)];
+      if (staleVal === val) staleVal = bank[(bank.indexOf(val) + 1) % bank.length] ?? `${val}-prior`;
+      const docId = `d_${idBase}_t`, staleShadowId = `d_${idBase}_tx`, qid = `q_${idBase}_t`;
       addedDocs.push({ id: docId, lane: 'deep', kind: `temporal_${attr}`, entityIds: tagU,
-        text: isProject ? `${canonical} switched its ${attr} to ${val}.` : `${canonical} updated their ${attr} to ${val}.`,
+        text: isProject ? `${canonical}'s supersession ledger sets ${attr} ${val}.` : `${canonical}'s supersession ledger sets ${attr} ${val}.`,
         shape: 'temporal_update_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
+      addedDocs.push({ id: staleShadowId, lane: 'deep', kind: `temporal_${attr}`, entityIds: tagU,
+        text: isProject ? `What is ${canonical}'s current ${attr}? The current ${attr} is ${staleVal} according to the older rollout note.`
+          : `What is ${canonical}'s current ${attr}? The current ${attr} is ${staleVal} according to the older profile note.`,
+        shape: 'temporal_update_record', timestamp: priorDate, currentStaleFlag: false, liveUpdateEpoch: epoch });
       const prior = priorTemporalByAttr.get(`${subj.id}::${attr}`);
       if (prior) addedRelations.push({ src: docId, dst: prior, type: 'supersedes', label: 'supersedes' });
       addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
         lane: 'deep', family: 'temporal_update', queryText: `What is ${canonical}'s current ${attr}?`,
-        qrels: [{ docId, relevance: 1.0, role: 'direct' }, ...(prior ? [{ docId: prior, relevance: 0.2, role: 'stale' }] : [])],
-        hardNegatives: prior ? [{ docId: prior, category: 'temporal_stale' }] : [], band: 'very_hard', liveUpdateEpoch: epoch });
+        qrels: [{ docId, relevance: 1.0, role: 'direct' }, { docId: staleShadowId, relevance: 0.0, role: 'stale_shadow' }, ...(prior ? [{ docId: prior, relevance: 0.2, role: 'stale' }] : [])],
+        hardNegatives: [{ docId: staleShadowId, category: 'temporal_stale_exact_terms' }, ...(prior ? [{ docId: prior, category: 'temporal_stale' }] : [])], band: 'very_hard', liveUpdateEpoch: epoch });
       // Carry the new same-attr prior forward so within-epoch later iterations align.
       priorTemporalByAttr.set(`${subj.id}::${attr}`, docId);
     } else if (branch === 'conflict') {
@@ -386,7 +392,7 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
       const wrongRetry = `${1 + Math.floor(rnd() * 4)} minutes`;
       addedDocs.push({ id: rightId, lane: 'deep', kind: 'atom_entity_resolution_fact', entityIds: [universe, pair.target.id],
         roleAliases: [...(pair.target.roleAliases ?? [])], scope,
-        text: `The migration workspace record for the ${roleAlias} sets the approved retry window to ${retry}.`,
+        text: `${pair.canonicalName} serving as ${roleAlias} set the approved retry window to ${retry} in the migration workspace record.`,
         shape: 'atom_entity_resolution_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
       addedDocs.push({ id: wrongId, lane: 'deep', kind: 'atom_entity_resolution_fact', entityIds: [universe, pair.wrong.id],
         roleAliases: [...new Set([...(pair.wrong.roleAliases ?? [wrongRole]), roleAlias])], scope,

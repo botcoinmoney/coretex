@@ -317,6 +317,18 @@ function packTemporalQueries(pack, logicalQById, families = ['temporal_update'])
     .sort((a, b) => b.liveUpdateEpoch - a.liveUpdateEpoch);
 }
 
+function publicTemporalDescriptor(view, curEvent) {
+  const text = String(view?.ev?.queryText ?? view?.lq?.queryText ?? view?.lq?.text ?? '');
+  const publicIntent = view?.ev?.publicIntent ?? view?.lq?.publicIntent ?? {};
+  const fromIntent = publicIntent.attribute ?? publicIntent.atom ?? publicIntent.field ?? publicIntent.relation;
+  if (fromIntent) return String(fromIntent);
+  const currentMatch = /\bcurrent\s+([a-z][a-z0-9_-]{1,48})\b/i.exec(text);
+  if (currentMatch?.[1]) return currentMatch[1];
+  const latestMatch = /\b(?:latest|active|valid)\s+([a-z][a-z0-9_-]{1,48})\b/i.exec(text);
+  if (latestMatch?.[1]) return latestMatch[1];
+  return String(curEvent?.truthDocuments?.[0]?.kind ?? curEvent?.kind ?? '').replace(/^temporal_/, '') || null;
+}
+
 /**
  * PACK-ALIGNED incremental mining (long-horizon production-faithful mode). Returns the
  * current-doc id of the first pack temporal query NOT yet covered by the substrate
@@ -363,7 +375,7 @@ export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex =
       indices.push(RANGES.TEMPORAL_START + slotBase); newWords.push(tw[0]);
       const curEvent = memoryEventForDocId(cur.docId, eventByDocId);
       const staleEvent = memoryEventForDocId(stale.docId, eventByDocId);
-      const attr = String(curEvent?.truthDocuments?.[0]?.kind ?? curEvent?.kind ?? '').replace(/^temporal_/, '') || null;
+      const attr = publicTemporalDescriptor(view, curEvent);
       return {
         indices,
         newWords,
