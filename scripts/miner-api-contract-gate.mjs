@@ -2,16 +2,16 @@
 /**
  * Miner-facing API contract gate  (Launch hardening L10).
  *
- * Builds the PUBLIC challenge payload a miner fetches (from bundle + profile +
+ * Builds the PUBLIC status payload a miner fetches (from bundle + profile +
  * corpus + parent state — public inputs only) and proves the contract:
  *
- *   A) Required public fields present (epochId, parentStateRoot, currentStateRoot,
+ *   A) Required public fields present (epochId, currentStateRoot,
  *      bundleHash, corpusRoot, pipelineVersion, allowedPatchTypes + wordRanges,
  *      minImprovementPpm, screenerThresholdPpm, perMinerScreenerCap, memoryIRSchemaVersion,
  *      activeSubstrateSurfaces, exampleValidPatch, hiddenEvalWarning).
  *   B) NO hidden leakage: deep scan finds no qrel / answer / truthDocument /
  *      epochSecret / hiddenPack-contents / per-query-failure-stat fields.
- *   C) A miner can build a VALID patch from the challenge's allowed types +
+ *   C) A miner can build a VALID patch from the status payload's allowed types +
  *      word ranges → encodePatch/decodePatch round-trips and validatePatchType ok.
  *   D) Stable error taxonomy: a structurally invalid patch (reserved-range index,
  *      over-budget, type/range mismatch) maps to a stable E0x code.
@@ -160,12 +160,11 @@ const exWordIdx = RANGES.RELATIONS_START + 127;
 const exWord = encodeRelationCategoryLens({ entryIndex: 127, edgeType: 'supports', weight: 0x8000 });
 const examplePatch = { patchType: PATCH_TYPE.RELATION_UPDATE, wordCount: 1, scoreDelta: 0n, parentStateRoot: merkleizeState(genesis), indices: [exWordIdx], newWords: [exWord] };
 
-// ── the PUBLIC challenge payload (public inputs only) ───────────────────────
+// ── the PUBLIC status payload (public inputs only) ──────────────────────────
 const challenge = {
   epochId: 0,
-  parentStateRoot,
   currentStateRoot: parentStateRoot,
-  substrateAccess: { byRoot: `/coretex/substrate/${parentStateRoot}`, wordCount: 1024, packedBytes: 32768 },
+  substrate: { uri: `/coretex/substrate/${parentStateRoot}` },
   bundleHash: manifest.bundleHash,
   coreVersionHash: manifest.bundleHash,
   artifactManifestHash,
@@ -194,13 +193,15 @@ let pass = true; const log = [];
 const check = (n, ok, d = '') => { log.push(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`); if (!ok) pass = false; };
 
 // A) required public fields present in the canonical /coretex/status payload
-const required = ['epochId', 'parentStateRoot', 'currentStateRoot', 'bundleHash', 'corpusRoot', 'activeFrontierRoot', 'artifactManifestHash', 'profileHash', 'rerankerRevision', 'baselineManifestHash', 'pipelineVersion', 'allowedPatchTypes', 'patchWordRanges', 'minImprovementPpm', 'screenerThresholdPpm', 'perMinerScreenerCap', 'memoryIRSchemaVersion', 'activeSubstrateSurfaces', 'exampleValidPatch', 'hiddenEvalWarning'];
+const required = ['epochId', 'currentStateRoot', 'substrate', 'bundleHash', 'corpusRoot', 'activeFrontierRoot', 'artifactManifestHash', 'profileHash', 'rerankerRevision', 'baselineManifestHash', 'pipelineVersion', 'allowedPatchTypes', 'patchWordRanges', 'minImprovementPpm', 'screenerThresholdPpm', 'perMinerScreenerCap', 'memoryIRSchemaVersion', 'activeSubstrateSurfaces', 'exampleValidPatch', 'hiddenEvalWarning'];
 const missing = required.filter((k) => challenge[k] === undefined || challenge[k] === null);
 check('A) all required public fields present in /coretex/status', missing.length === 0, missing.length ? `missing: ${missing.join(',')}` : `${required.length} fields`);
-// A2) v0 canonical naming — perMinerScreenerCap only; perMinerCap is the deprecated alias and MUST NOT appear.
-check('A2) public status uses perMinerScreenerCap (canonical) and not perMinerCap (deprecated)',
-  challenge.perMinerScreenerCap !== undefined && challenge.perMinerCap === undefined,
-  challenge.perMinerCap !== undefined ? 'LEGACY perMinerCap present' : 'OK');
+// A2) v0 canonical naming — perMinerScreenerCap only; perMinerCap is removed and MUST NOT appear.
+check('A2) public status uses perMinerScreenerCap (canonical) and not perMinerCap (removed)',
+  challenge.perMinerScreenerCap !== undefined && challenge.perMinerCap === undefined && challenge.stateRoot === undefined && challenge.transitionCount === undefined,
+  challenge.perMinerCap !== undefined ? 'REMOVED perMinerCap present' :
+  challenge.stateRoot !== undefined ? 'REMOVED stateRoot alias present' :
+  challenge.transitionCount !== undefined ? 'REMOVED transitionCount alias present' : 'OK');
 
 // A3) Canonical v0 route surface — exactly 5 endpoints. The production router (CORETEX_ENDPOINTS
 // in packages/cortex/src/coordinator/endpoints.ts) MUST match this set, and removed routes MUST
@@ -249,11 +250,11 @@ function scan(obj, path = '') {
 const leaks = scan(challenge);
 check('B) no hidden qrel/answer/epochSecret/evalSeed/hiddenPack fields', leaks.length === 0, leaks.length ? `LEAK: ${leaks.join(',')}` : 'clean');
 // also: the served pack itself is NOT embedded
-check('B) challenge does not embed the eval pack / events array', !('events' in challenge) && !('pack' in challenge) && !('queries' in challenge));
-check('B) challenge pins v16 artifact manifest', artifactManifestPath.includes('2026-06-04-memory-atom-v16') && manifest.bundleHash === artifactManifest.bundleHash, artifactManifestPath);
+check('B) status does not embed the eval pack / events array', !('events' in challenge) && !('pack' in challenge) && !('queries' in challenge));
+check('B) status pins v16 artifact manifest', artifactManifestPath.includes('2026-06-04-memory-atom-v16') && manifest.bundleHash === artifactManifest.bundleHash, artifactManifestPath);
 check('B) active surfaces include promoted v16 atoms', ['validity_atom', 'scope_atom', 'entity_resolution_atom'].every((s) => challenge.activeSubstrateSurfaces.includes(s)), challenge.activeSubstrateSurfaces.join(','));
 
-// C) a valid patch can be built from the challenge contract
+// C) a valid patch can be built from the status contract
 const built = decodePatch(Buffer.from(challenge.exampleValidPatch.encodedHex.slice(2), 'hex'));
 const vt = validatePatchType(built.patchType, built.indices);
 const inRange = built.indices.every((i) => i >= RANGES.RELATIONS_START && i <= RANGES.RELATIONS_END);
@@ -273,7 +274,7 @@ check('D) over-budget (>4 words) → rejected', overBudget !== null, overBudget 
 
 console.log(log.join('\n'));
 console.log('────────────────────────────────────────────────────────');
-console.log(`challenge fields: ${Object.keys(challenge).length} | activeSurfaces: ${challenge.activeSubstrateSurfaces.join(', ')}`);
+console.log(`status fields: ${Object.keys(challenge).length} | activeSurfaces: ${challenge.activeSubstrateSurfaces.join(', ')}`);
 console.log(`minImprovementPpm=${minImprovementPpm} screenerThresholdPpm=${screenerThresholdPpm} perMinerScreenerCap=${challenge.perMinerScreenerCap} budget=${challenge.patchWordBudget}w`);
 console.log(pass ? 'RESULT: ALL PASS ✅ (public contract complete, no hidden leakage)' : 'RESULT: FAIL ❌');
 exit(pass ? 0 : 1);

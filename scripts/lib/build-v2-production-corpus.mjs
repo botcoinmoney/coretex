@@ -26,7 +26,7 @@ const bucket = (f) => f === 'temporal_update' ? 'temporal'
   : (f === 'multi_session_bridge' || f === 'causal_memory_chain' || f === 'decision_provenance') ? 'multi_hop_relation'
   : f === 'conflict_lifecycle' ? 'conflict_lifecycle'
   : f === 'aspect_constraint' ? 'aspect_constraint'
-  : f === 'coreference_resolution' ? 'coreference'
+  : (f === 'coreference' || f === 'coreference_resolution') ? 'coreference'
   : 'near_collision';
 
 /**

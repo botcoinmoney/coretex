@@ -36,7 +36,7 @@
  *     [--mock-embeddings]   # CPU mechanics/report smoke only; A100 minis use real embeddings.
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, extname, resolve } from 'node:path';
 import { argv, env, exit } from 'node:process';
 import { createHash } from 'node:crypto';
 import { distIndex, repoRoot } from './_repo-root.mjs';
@@ -44,7 +44,7 @@ import { evolveCorpusDelta } from './lib/evolve-corpus.mjs';
 import { inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { loadMaterializedCorpus } from './lib/load-materialized-corpus.mjs';
 import { embedTexts } from './_embed-v2.mjs';
-import { hseed, mulberry32, randomPatch, relationUnits, relationUnitsForEdges, temporalUnits, conflictUnits, abstentionUnits, atomAnchorUnits, evidenceBundleUnits, noiseSuppressionUnits, buildMemoryEventByDocId } from './lib/v2-patch-families.mjs';
+import { hseed, mulberry32, randomPatch, relationLensUnitsForPackQuery, temporalUnits, conflictUnits, abstentionUnits, atomAnchorUnits, evidenceBundleUnits, noiseSuppressionUnits, buildMemoryEventByDocId } from './lib/v2-patch-families.mjs';
 import { baselineAtomHardness } from './lib/atom-hardness.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
 import { makeInstrumentedReranker } from './lib/instrumented-reranker.mjs';
@@ -55,7 +55,7 @@ const {
   RANGES, PATCH_TYPE,
   buildCorpusDelta, applyCorpusDelta, makeLaunchFrontier,
   splitForRecord, biEncoderModelIdHash,
-  scoringOptionsFromProfile, deriveQueryPack,
+  scoringOptionsFromProfile, deriveQueryPack, admitActiveLiveEvalEvents,
   evaluateRetrievalBenchmarkState, evaluateRetrievalBenchmarkPatch,
   applyPatch,
   createDeterministicReranker,
@@ -86,6 +86,9 @@ const LIVE_EVAL_PACK_LIMIT = Number(flag('live-eval-pack-limit', '32'));
 const CLEAR_PACK_QUOTAS = has('clear-pack-quotas');
 const MOCK_EMBEDDINGS = has('mock-embeddings');
 const TRACE_DIAGNOSTICS = has('trace-diagnostics');
+const TRACE_LOW_MOVEMENT = has('trace-low-movement');
+const COMPACT_PATCH_TRACES = has('compact-patch-traces');
+const SUPPLY_CENSUS_GATE_ENABLED = (has('supply-census-gate') || TRACE_LOW_MOVEMENT) && !has('no-supply-census-gate');
 const ATOM_TRACE = has('atom-trace') || TRACE_DIAGNOSTICS;
 const TRACE_LIMIT = Number(flag('trace-limit', '5'));
 const ATOM_TRACE_LIMIT_PER_FAMILY = Number(flag('atom-trace-limit-per-family', '1'));
@@ -97,7 +100,10 @@ if (!PROFILE_PATH || !BUNDLE_PATH || !CORPUS_PATH || !EMB_PATH || !OUTDIR) {
   exit(1);
 }
 
-mkdirSync(resolve(repoRoot, OUTDIR), { recursive: true });
+const OUT_IS_FILE = extname(OUTDIR) === '.json';
+const OUT_BASE_DIR = OUT_IS_FILE ? dirname(OUTDIR) : OUTDIR;
+mkdirSync(resolve(repoRoot, OUT_BASE_DIR), { recursive: true });
+const JSON_REPLACER = (_key, value) => typeof value === 'bigint' ? value.toString() : value;
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, PROFILE_PATH), 'utf8'));
 const OLD_CORPUS_DAMAGE_TOLERANCE_PPM = Number(flag('old-corpus-damage-tolerance-ppm', String(profile.replayTolerancePpm ?? 250)));
@@ -127,7 +133,7 @@ const docTextById = new Map(currentLogical.docs.map((d) => [d.id, d]));
 
 const PROV = { source: 'synthetic_challenge', sourceHash: '0x' + '00'.repeat(32) };
 const memId = (id) => `mem_${id}`;
-const bucket = (f) => f === 'temporal_update' ? 'temporal' : (f === 'multi_session_bridge' || f === 'causal_memory_chain' || f === 'decision_provenance') ? 'multi_hop_relation' : f === 'conflict_lifecycle' ? 'conflict_lifecycle' : f === 'aspect_constraint' ? 'aspect_constraint' : f === 'coreference_resolution' ? 'coreference' : 'near_collision';
+const bucket = (f) => f === 'temporal_update' ? 'temporal' : (f === 'multi_session_bridge' || f === 'causal_memory_chain' || f === 'decision_provenance') ? 'multi_hop_relation' : f === 'conflict_lifecycle' ? 'conflict_lifecycle' : f === 'aspect_constraint' ? 'aspect_constraint' : (f === 'coreference' || f === 'coreference_resolution') ? 'coreference' : 'near_collision';
 
 function int8Bytes(vec) {
   let m = 0; for (const v of vec) m = Math.max(m, Math.abs(v));
@@ -147,7 +153,7 @@ const rawReranker = RERANKER === 'gpu'
   ? makeStreamReranker({ model: RR.modelId, revision: RR.revision, python: env.CORETEX_RERANKER_PYTHON ?? '/usr/bin/python3', allowCuda: true })
   : await createDeterministicReranker();
 const profileHash = '0x' + createHash('sha256').update(readFileSync(resolve(repoRoot, PROFILE_PATH))).digest('hex');
-const qwenCachePath = DISABLE_QWEN_CACHE ? null : flag('qwen-cache', `${OUTDIR}/qwen-score-cache.jsonl`);
+const qwenCachePath = DISABLE_QWEN_CACHE ? null : flag('qwen-cache', `${OUT_BASE_DIR}/qwen-score-cache.jsonl`);
 const reranker = makeInstrumentedReranker({
   reranker: rawReranker,
   modelId: RR.modelId,
@@ -284,6 +290,25 @@ function worstQueryDelta(before, after) {
   const deltas = compareQueries(before, after).map((c) => c.deltaNdcg);
   return deltas.length ? Math.min(...deltas) : 0;
 }
+function worstQueryRegressions(before, after, corpus, limit = 5) {
+  return compareQueries(before, after)
+    .filter((c) => c.deltaNdcg < 0)
+    .sort((a, b) => a.deltaNdcg - b.deltaNdcg)
+    .slice(0, limit)
+    .map((c) => {
+      const ev = corpus.byId.get(c.recordId);
+      return {
+        recordId: c.recordId,
+        family: ev?.logicalFamily ?? ev?.family ?? c.family ?? null,
+        queryText: ev?.queryText ?? null,
+        beforeNdcg: c.before?.nDCG10 ?? null,
+        afterNdcg: c.after?.nDCG10 ?? null,
+        deltaNdcg: c.deltaNdcg,
+        beforeTopK: topK(c.before, 10),
+        afterTopK: topK(c.after, 10),
+      };
+    });
+}
 function stablePackForOldCorpusPair(pack, oldCorpus, newCorpus) {
   const excluded = [];
   const events = [];
@@ -313,6 +338,7 @@ async function buildAcceptanceDecomposition({ parentState, candidateState, oldCo
     profile.patchAcceptanceFloors?.familyCatastrophicFloor ?? 0.85,
   );
   const worstOldQueryDeltaNdcg = worstQueryDelta(oldBefore.score, oldAfter.score);
+  const worstOldQueryRegressions = worstQueryRegressions(oldBefore.score, oldAfter.score, oldCorpus);
   const passesRecovery = patchRecoveryPpm > (baselineFloors.acceptanceThresholdPpm ?? baselineFloors.minImprovementPpm ?? 2500);
   const passesOldCorpusDamage = oldCorpusDamagePpm >= -OLD_CORPUS_DAMAGE_TOLERANCE_PPM;
   const passesOldFamilyRegression = oldFamilyRegressions.length === 0;
@@ -329,6 +355,7 @@ async function buildAcceptanceDecomposition({ parentState, candidateState, oldCo
     oldCorpusPairQueryCount: oldPack.events.length,
     newCorpusPairQueryCount: newPack.events.length,
     worstOldQueryDeltaNdcg,
+    worstOldQueryRegressions,
     oldFamilyRegressions,
     acceptanceComponents: {
       passesRecovery,
@@ -467,6 +494,9 @@ function applyHonestCursorUpdate(slotCursor, update) {
   for (const id of update.addEntitySkipDocs ?? []) if (id) slotCursor.entitySkipDocs.add(id);
   for (const id of update.addEvidenceSkipDocs ?? []) if (id) slotCursor.evidenceSkipDocs.add(id);
   for (const id of update.addNoiseSkipDocs ?? []) if (id) slotCursor.noiseSkipDocs.add(id);
+  for (const id of update.addRelationCausalSkipDocs ?? []) if (id) slotCursor.relationCausalSkipDocs.add(id);
+  for (const id of update.addRelationLifecycleSkipDocs ?? []) if (id) slotCursor.relationLifecycleSkipDocs.add(id);
+  for (const id of update.addCoreferenceSkipDocs ?? []) if (id) slotCursor.coreferenceSkipDocs.add(id);
   return update;
 }
 function qrelDocId(q) {
@@ -726,6 +756,10 @@ function patchTraceProvenance(hp) {
     operationFingerprint: hp.operationFingerprint ?? null,
     selectorFingerprint: hp.selectorFingerprint ?? null,
     targetDocId: hp.targetDocId ?? null,
+    hardNegativeDocId: hp.relationLensHardNegativeDocId ?? null,
+    sourceQueryId: hp.relationLensSourceQueryId ?? null,
+    relationLensEdges: hp.relationLensEdges ?? null,
+    relationLensWeight: hp.relationLensWeight ?? null,
     targetDocIdRecordedOnly: hp.targetDocIdRecordedOnly ?? true,
   };
 }
@@ -737,38 +771,6 @@ function filterPackToActive(pack, activeIds) {
 function filterPackToHeldout(pack, activeIds) {
   const events = pack.events.filter((e) => !activeIds.has(e.id));
   return { ...pack, events };
-}
-function forceActiveLiveEvalEvents(pack, corpus, activeIds, limit = 32) {
-  if (!limit || limit <= 0) return { pack, added: 0, liveEvalInPack: 0, familyCounts: {} };
-  const existing = new Set(pack.events.map((e) => e.id));
-  const alreadyLive = pack.events.filter((e) => activeIds.has(e.id)
-    && e.split === 'eval_hidden'
-    && e.id.startsWith('zz_e')
-    && !e.id.includes('_mem_')).length;
-  const familyPriority = new Map(HONEST_FAMILIES.map((f, i) => [f, i]));
-  const familyOf = (e) => e.logicalFamily ?? e.family ?? 'unknown';
-  const live = corpus.events
-    .filter((e) => activeIds.has(e.id)
-      && e.split === 'eval_hidden'
-      && e.id.startsWith('zz_e')
-      && !e.id.includes('_mem_')
-      && !existing.has(e.id))
-    .sort((a, b) => {
-      const pa = familyPriority.get(familyOf(a)) ?? 999;
-      const pb = familyPriority.get(familyOf(b)) ?? 999;
-      if (pa !== pb) return pa - pb;
-      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-    })
-    .slice(0, limit);
-  const finalEvents = live.length ? [...live, ...pack.events] : pack.events;
-  const familyCounts = {};
-  for (const e of finalEvents) {
-    if (!(activeIds.has(e.id) && e.split === 'eval_hidden' && e.id.startsWith('zz_e') && !e.id.includes('_mem_'))) continue;
-    const fam = familyOf(e);
-    familyCounts[fam] = (familyCounts[fam] ?? 0) + 1;
-  }
-  if (!live.length) return { pack, added: 0, liveEvalInPack: alreadyLive, familyCounts };
-  return { pack: { ...pack, events: finalEvents }, added: live.length, liveEvalInPack: alreadyLive + live.length, familyCounts };
 }
 function eventFamilyCounts(events) {
   const out = {};
@@ -834,7 +836,21 @@ const GENESIS_PARENT_ROOT = merkleizeState({ words: new Array(1024).fill(0n) });
 //
 // Add fingerprints here by name; the loop below dispatches by switch. Each family records a
 // distinct operationFingerprint and selectorFingerprint so per-fp accept/reject is auditable.
-const HONEST_FAMILIES = (flag('honest-families', 'temporal_update,conflict_lifecycle,relation_causal,evidence_bundle,coreference,relation_lifecycle,noise_suppression,validity_atom,scope_atom,entity_resolution_atom,abstention_top1').split(',').map((s) => s.trim()).filter(Boolean));
+const DEFAULT_HONEST_FAMILIES = 'temporal_update,conflict_lifecycle,relation_causal,evidence_bundle,coreference,relation_lifecycle,noise_suppression,validity_atom,scope_atom,entity_resolution_atom,abstention_top1';
+const HONEST_FAMILY_FLAG = flag('honest-families', flag('families', DEFAULT_HONEST_FAMILIES));
+const HONEST_FAMILIES = HONEST_FAMILY_FLAG.split(',').map((s) => s.trim()).filter(Boolean);
+const DEFAULT_LOW_MOVEMENT_FAMILIES = 'coreference,relation_lifecycle,noise_suppression,scope_atom';
+const SUPPLY_CENSUS_FAMILIES = (flag(
+  'supply-census-families',
+  TRACE_LOW_MOVEMENT ? flag('families', DEFAULT_LOW_MOVEMENT_FAMILIES) : flag('families', ''),
+) ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+const SUPPLY_CENSUS_SET = new Set(SUPPLY_CENSUS_FAMILIES);
+const SUPPLY_LOGICAL_FAMILY_ALIASES = {
+  relation_causal: ['multi_session_bridge', 'causal_memory_chain', 'decision_provenance', 'multi_hop_relation'],
+  evidence_bundle: ['multi_session_bridge', 'causal_memory_chain', 'decision_provenance', 'multi_hop_relation'],
+  abstention_top1: ['abstention_missing', 'abstention', 'unanswerable'],
+};
+const SUPPLY_TARGET_ABSENT_EXEMPT = new Set(['abstention_top1']);
 function makeHonestSlotCursor() {
   return {
     temporalRecord: 0,          // TemporalRecord slot index (cap 96)
@@ -853,10 +869,13 @@ function makeHonestSlotCursor() {
     noiseSkipDocs: new Set(),
     relationCausalOffset: 0,    // relation lens offsets 0..47
     relationCausalAttempt: 0,
+    relationCausalSkipDocs: new Set(),
     relationLifecycleOffset: 48,// relation lens offsets 48..79
     relationLifecycleAttempt: 0,
+    relationLifecycleSkipDocs: new Set(),
     coreferenceOffset: 80,      // relation lens offsets 80..95
     coreferenceAttempt: 0,
+    coreferenceSkipDocs: new Set(),
   };
 }
 function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
@@ -871,6 +890,7 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
       'honest:relation_lifecycle:supersedes':                      'public-edge-category-lens:supersedes',
       'honest:relation_lifecycle:coreference_of':                  'public-edge-category-lens:coreference_of',
       'honest:coreference:coreference_of':                         'public-edge-category-lens:coreference_of',
+      'honest:coreference:coreference_of:w10':                     'public-edge-category-lens:coreference_of:bounded-weight',
       'honest:temporal:current_stale':                             'public-temporal-currentStale-pack-mined',
       'honest:conflict:CONFLICT_SET_MEMBER:boost':                 'public-policy-CONFLICT_SET_MEMBER:CONTRADICTS_EDGE:boost',
       'honest:evidence_bundle:RELATION_PATH_PRESENT:bundle':       'public-policy-RELATION_PATH_PRESENT:SUPPORT_IN_DEGREE:bundle',
@@ -905,32 +925,61 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     ];
     const v = variants[slotCursor.relationCausalAttempt % variants.length];
     const offset = slotCursor.relationCausalOffset;
-    if (offset + v.edges.length > 48) {
+    if (offset >= 48) {
       return { skipped: true, family, reason: 'relation_causal_entries_exhausted', fingerprint: `honest:relation_causal:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:relation_causal:entries_exhausted', selectorFingerprint: 'public-edge-category-lens:exhausted' };
     }
-    const u = relationUnitsForEdges(v.edges, offset);
-    return makePatchFrom(u, `honest:relation_causal:${v.name}:off${offset}`, target?.id ?? null, {
+    const u = relationLensUnitsForPackQuery({
+      pack,
+      logicalQById,
+      eventByDocId,
+      families: ['multi_session_bridge', 'causal_memory_chain', 'decision_provenance', 'multi_hop_relation'],
+      edgeTypes: v.edges,
+      entryOffset: offset,
+      weight: 0x0100,
+      skipDocIds: slotCursor.relationCausalSkipDocs,
+    });
+    if (!u.indices.length) {
+      return { skipped: true, family, reason: u.reason ?? 'no_relation_causal_pack_query_available', fingerprint: `honest:relation_causal:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:relation_causal:pack_mined', selectorFingerprint: 'public-edge-category-lens:pack-mined' };
+    }
+    return makePatchFrom(u, `honest:relation_causal:${v.name}:off${offset}`, u.minedDocId, {
       relationLensOffset: offset,
-      relationLensEdges: v.edges,
-      cursorUpdate: { relationCausalOffsetDelta: v.edges.length, relationCausalAttemptDelta: 1 },
+      relationLensEdges: [u.edgeType],
+      relationLensWeight: u.weight,
+      relationLensAllowedEdges: v.edges,
+      relationLensSourceQueryId: u.sourceQueryId,
+      relationLensSourceFamily: u.sourceFamily,
+      relationLensHardNegativeDocId: u.hardNegativeDocId,
+      relationLensDirectRelationEdges: u.directRelationEdges,
+      relationLensHardNegativeRelationEdges: u.hardNegativeRelationEdges,
+      cursorUpdate: { relationCausalOffsetDelta: 1, relationCausalAttemptDelta: 1, addRelationCausalSkipDocs: [u.minedDocId] },
     });
   }
   if (family === 'relation_lifecycle') {
-    const variants = [
-      { edges: ['supersedes', 'coreference_of'], name: 'supersedes,coreference_of' },
-      { edges: ['supersedes'], name: 'supersedes' },
-      { edges: ['coreference_of'], name: 'coreference_of' },
-    ];
-    const v = variants[slotCursor.relationLifecycleAttempt % variants.length];
     const offset = slotCursor.relationLifecycleOffset;
-    if (offset + v.edges.length > 80) {
+    if (offset >= 80) {
       return { skipped: true, family, reason: 'relation_lifecycle_entries_exhausted', fingerprint: `honest:relation_lifecycle:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:relation_lifecycle:entries_exhausted', selectorFingerprint: 'public-edge-category-lens:exhausted' };
     }
-    const u = relationUnitsForEdges(v.edges, offset);
-    return makePatchFrom(u, `honest:relation_lifecycle:${v.name}:off${offset}`, target?.id ?? null, {
+    const u = relationLensUnitsForPackQuery({
+      pack,
+      logicalQById,
+      eventByDocId,
+      families: ['relation_lifecycle'],
+      edgeTypes: ['supersedes', 'coreference_of'],
+      entryOffset: offset,
+      skipDocIds: slotCursor.relationLifecycleSkipDocs,
+    });
+    if (!u.indices.length) {
+      return { skipped: true, family, reason: u.reason ?? 'no_relation_lifecycle_pack_query_available', fingerprint: `honest:relation_lifecycle:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:relation_lifecycle:pack_mined', selectorFingerprint: 'public-edge-category-lens:pack-mined' };
+    }
+    return makePatchFrom(u, `honest:relation_lifecycle:${u.edgeType}:off${offset}`, u.minedDocId, {
       relationLensOffset: offset,
-      relationLensEdges: v.edges,
-      cursorUpdate: { relationLifecycleOffsetDelta: v.edges.length, relationLifecycleAttemptDelta: 1 },
+      relationLensEdges: [u.edgeType],
+      relationLensSourceQueryId: u.sourceQueryId,
+      relationLensSourceFamily: u.sourceFamily,
+      relationLensHardNegativeDocId: u.hardNegativeDocId,
+      relationLensDirectRelationEdges: u.directRelationEdges,
+      relationLensHardNegativeRelationEdges: u.hardNegativeRelationEdges,
+      cursorUpdate: { relationLifecycleOffsetDelta: 1, relationLifecycleAttemptDelta: 1, addRelationLifecycleSkipDocs: [u.minedDocId] },
     });
   }
   if (family === 'coreference') {
@@ -938,11 +987,29 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     if (offset >= 96) {
       return { skipped: true, family, reason: 'coreference_entries_exhausted', fingerprint: `honest:coreference:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:coreference:entries_exhausted', selectorFingerprint: 'public-edge-category-lens:exhausted' };
     }
-    const u = relationUnitsForEdges(['coreference_of'], offset);
-    return makePatchFrom(u, `honest:coreference:coreference_of:off${offset}`, target?.id ?? null, {
+    const u = relationLensUnitsForPackQuery({
+      pack,
+      logicalQById,
+      eventByDocId,
+      families: ['coreference', 'coreference_resolution'],
+      edgeTypes: ['coreference_of'],
+      entryOffset: offset,
+      weight: 0x10,
+      skipDocIds: slotCursor.coreferenceSkipDocs,
+    });
+    if (!u.indices.length) {
+      return { skipped: true, family, reason: u.reason ?? 'no_coreference_pack_query_available', fingerprint: `honest:coreference:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:coreference:pack_mined', selectorFingerprint: 'public-edge-category-lens:pack-mined' };
+    }
+    return makePatchFrom(u, `honest:coreference:coreference_of:w10:off${offset}`, u.minedDocId, {
       relationLensOffset: offset,
       relationLensEdges: ['coreference_of'],
-      cursorUpdate: { coreferenceOffsetDelta: 1, coreferenceAttemptDelta: 1 },
+      relationLensWeight: u.weight,
+      relationLensSourceQueryId: u.sourceQueryId,
+      relationLensSourceFamily: u.sourceFamily,
+      relationLensHardNegativeDocId: u.hardNegativeDocId,
+      relationLensDirectRelationEdges: u.directRelationEdges,
+      relationLensHardNegativeRelationEdges: u.hardNegativeRelationEdges,
+      cursorUpdate: { coreferenceOffsetDelta: 1, coreferenceAttemptDelta: 1, addCoreferenceSkipDocs: [u.minedDocId] },
     });
   }
   if (family === 'temporal' || family === 'temporal_update') {
@@ -988,7 +1055,7 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     });
   }
   if (family === 'noise_suppression') {
-    const u = noiseSuppressionUnits({ pack, logicalQById, eventByDocId, memorySlot: slotCursor.noiseSlot, skipDocIds: slotCursor.noiseSkipDocs });
+    const u = noiseSuppressionUnits({ pack, logicalQById, eventByDocId, memorySlot: slotCursor.noiseSlot, skipDocIds: slotCursor.noiseSkipDocs, families: ['noise_suppression'] });
     if (!u.indices.length) {
       return { skipped: true, family, reason: u.reason ?? 'no_noise_suppression_pack_query_available', fingerprint: `honest:noise_suppression:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:noise_suppression:ANSWER_DENSITY:suppress', selectorFingerprint: 'public-policy-ANSWER_DENSITY:SUPPORT_IN_DEGREE:suppress' };
     }
@@ -1048,8 +1115,10 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
 const bucketFamily = (f) => f === 'temporal_update' ? 'temporal'
   : (f === 'multi_session_bridge' || f === 'causal_memory_chain' || f === 'decision_provenance') ? 'multi_hop_relation'
   : f === 'conflict_lifecycle' ? 'conflict_lifecycle'
+  : f === 'relation_lifecycle' ? 'relation_lifecycle'
+  : f === 'noise_suppression' ? 'noise_suppression'
   : f === 'aspect_constraint' ? 'aspect_constraint'
-  : f === 'coreference_resolution' ? 'coreference'
+  : (f === 'coreference' || f === 'coreference_resolution') ? 'coreference'
   : (f === 'validity_atom' || f === 'scope_atom' || f === 'entity_resolution_atom') ? f
   : 'near_collision';
 const frontier = makeLaunchFrontier(profile, currentProd);
@@ -1116,6 +1185,249 @@ function atomFamilyForFingerprint(fp) {
   return 'unknown';
 }
 
+function makeSupplyCensusRow(family) {
+  return {
+    family,
+    evolveGeneratedQueries: 0,
+    evolveGeneratedDocs: 0,
+    bridgeEvents: 0,
+    reserveInjected: 0,
+    activeFrontierCount: 0,
+    hiddenPackCount: 0,
+    candidateSelections: 0,
+    evaluatedCandidates: 0,
+    easySkipsAlreadySolved: 0,
+    targetAbsent: 0,
+    targetAlreadyRank1: 0,
+    targetBelowHardNegative: 0,
+    renderedSignalPresent: 0,
+    policyTracePresent: 0,
+    accepted: 0,
+  };
+}
+const supplyCensusRows = new Map(SUPPLY_CENSUS_FAMILIES.map((family) => [family, makeSupplyCensusRow(family)]));
+const supplyCensusSets = new Map(SUPPLY_CENSUS_FAMILIES.map((family) => [family, {
+  evolvedDocIds: new Set(),
+  reserveIds: new Set(),
+  activeFrontierIds: new Set(),
+  hiddenPackIds: new Set(),
+}]));
+function censusRow(family) {
+  if (!SUPPLY_CENSUS_SET.has(family)) return null;
+  if (!supplyCensusRows.has(family)) supplyCensusRows.set(family, makeSupplyCensusRow(family));
+  if (!supplyCensusSets.has(family)) supplyCensusSets.set(family, { evolvedDocIds: new Set(), reserveIds: new Set(), activeFrontierIds: new Set(), hiddenPackIds: new Set() });
+  return supplyCensusRows.get(family);
+}
+function supplyFamiliesForLogicalFamily(logicalFamily) {
+  const out = new Set();
+  if (SUPPLY_CENSUS_SET.has(logicalFamily)) out.add(logicalFamily);
+  for (const family of SUPPLY_CENSUS_FAMILIES) {
+    const aliases = SUPPLY_LOGICAL_FAMILY_ALIASES[family] ?? [];
+    if (aliases.includes(logicalFamily)) out.add(family);
+  }
+  return [...out];
+}
+function censusRowsForLogicalFamily(logicalFamily) {
+  return supplyFamiliesForLogicalFamily(logicalFamily).map((family) => censusRow(family)).filter(Boolean);
+}
+function docIdsForLogicalQuery(q) {
+  return [...new Set([
+    ...(q.qrels ?? []).map((r) => r.docId),
+    ...(q.hardNegatives ?? []).map((n) => n.docId),
+  ].filter(Boolean))];
+}
+function recordEvolveSupply(ld) {
+  const docsByFamily = new Map();
+  for (const q of ld.addedQueries ?? []) {
+    for (const family of supplyFamiliesForLogicalFamily(q.family)) {
+      const row = censusRow(family);
+      if (!row) continue;
+      row.evolveGeneratedQueries++;
+      const set = docsByFamily.get(family) ?? new Set();
+      for (const docId of docIdsForLogicalQuery(q)) set.add(docId);
+      docsByFamily.set(family, set);
+    }
+  }
+  for (const [family, docIds] of docsByFamily) {
+    const sets = supplyCensusSets.get(family);
+    const row = censusRow(family);
+    if (!sets || !row) continue;
+    for (const docId of docIds) sets.evolvedDocIds.add(docId);
+    row.evolveGeneratedDocs = sets.evolvedDocIds.size;
+  }
+}
+function isQueryAddition(ev) {
+  return ev && !String(ev.id).includes('_mem_');
+}
+function recordBridgeSupply(additions) {
+  for (const ev of additions ?? []) {
+    if (!isQueryAddition(ev)) continue;
+    for (const row of censusRowsForLogicalFamily(ev.logicalFamily ?? ev.family ?? 'unknown')) row.bridgeEvents++;
+  }
+}
+function recordReserveSupply(newEvalIds, corpus) {
+  for (const id of newEvalIds ?? []) {
+    const ev = corpus.byId.get(id);
+    for (const family of supplyFamiliesForLogicalFamily(ev?.logicalFamily ?? ev?.family ?? 'unknown')) {
+      const row = censusRow(family);
+      const sets = supplyCensusSets.get(family);
+      if (!row || !sets) continue;
+      sets.reserveIds.add(id);
+      row.reserveInjected = sets.reserveIds.size;
+    }
+  }
+}
+function recordActiveFrontierSupply(corpus, activeIds) {
+  for (const family of SUPPLY_CENSUS_FAMILIES) {
+    const row = censusRow(family);
+    const sets = supplyCensusSets.get(family);
+    if (!row || !sets) continue;
+    for (const id of sets.reserveIds) {
+      if (!activeIds.has(id)) continue;
+      if (corpus.byId.has(id)) sets.activeFrontierIds.add(id);
+    }
+    row.activeFrontierCount = sets.activeFrontierIds.size;
+  }
+}
+function recordHiddenPackSupply(fullPack) {
+  for (const ev of fullPack.events ?? []) {
+    for (const family of supplyFamiliesForLogicalFamily(ev.logicalFamily ?? ev.family ?? 'unknown')) {
+      const row = censusRow(family);
+      const sets = supplyCensusSets.get(family);
+      if (!row || !sets) continue;
+      if (sets.reserveIds.has(ev.id)) sets.hiddenPackIds.add(ev.id);
+      row.hiddenPackCount = sets.hiddenPackIds.size;
+    }
+  }
+}
+function hasRenderedSignal(q, docIds) {
+  const ids = new Set(docIds.filter(Boolean));
+  if (!ids.size) return false;
+  const pools = [
+    q?.renderedCandidatesTop20 ?? [],
+    q?.rerankerInputCandidates ?? [],
+    q?.finalRankingTop20 ?? [],
+  ];
+  return pools.some((rows) => rows.some((r) => ids.has(r.docId)));
+}
+function recordCandidateMovementCensus({ family, hp, pack, before, after }) {
+  const row = censusRow(family);
+  if (!row) return;
+  const selected = [...new Set([...(hp.atomMinedDocIds ?? []), hp.targetDocId].filter(Boolean))];
+  if (!selected.length) {
+    row.targetAbsent++;
+    return;
+  }
+  const beforeById = queryMap(before);
+  const afterById = queryMap(after);
+  let matched = false;
+  let targetAlreadyRank1 = false;
+  let targetBelowHardNegative = false;
+  let renderedSignalPresent = false;
+  let policyTracePresent = false;
+  for (const ev of pack.events ?? []) {
+    const positives = relevantDocIds(ev);
+    const hardNegs = hardNegativeDocIds(ev);
+    const selectedPositive = selected.filter((id) => positives.has(id));
+    const selectedHardNeg = selected.filter((id) => hardNegs.has(id));
+    if (!selectedPositive.length && !selectedHardNeg.length) continue;
+    matched = true;
+    const bq = beforeById.get(ev.id);
+    const aq = afterById?.get(ev.id);
+    const posRanks = [...positives].map((id) => ({ id, rank: rankOfDoc(bq, id) })).filter((r) => r.rank !== null);
+    const hardRanks = [...hardNegs].map((id) => ({ id, rank: rankOfDoc(bq, id) })).filter((r) => r.rank !== null);
+    for (const id of selectedPositive) {
+      const rank = rankOfDoc(bq, id);
+      if (rank === 1) targetAlreadyRank1 = true;
+      if (hardRanks.some((r) => rank === null || r.rank < rank)) targetBelowHardNegative = true;
+    }
+    for (const id of selectedHardNeg) {
+      const hardRank = rankOfDoc(bq, id);
+      if (posRanks.some((r) => r.rank === 1)) targetAlreadyRank1 = true;
+      if (posRanks.some((r) => hardRank !== null && hardRank < r.rank)) targetBelowHardNegative = true;
+    }
+    renderedSignalPresent = renderedSignalPresent || hasRenderedSignal(bq, selected) || hasRenderedSignal(aq, selected);
+    policyTracePresent = policyTracePresent || (bq?.policyTraces?.length ?? 0) > 0 || (aq?.policyTraces?.length ?? 0) > 0;
+  }
+  if (!matched) row.targetAbsent++;
+  if (targetAlreadyRank1) row.targetAlreadyRank1++;
+  if (targetBelowHardNegative) row.targetBelowHardNegative++;
+  if (renderedSignalPresent) row.renderedSignalPresent++;
+  if (policyTracePresent) row.policyTracePresent++;
+}
+function finalizeSupplyCensus() {
+  for (const [family, row] of supplyCensusRows) {
+    const sets = supplyCensusSets.get(family);
+    if (!sets) continue;
+    row.evolveGeneratedDocs = sets.evolvedDocIds.size;
+    row.reserveInjected = sets.reserveIds.size;
+    row.activeFrontierCount = sets.activeFrontierIds.size;
+    row.hiddenPackCount = sets.hiddenPackIds.size;
+  }
+  return [...supplyCensusRows.values()];
+}
+function writePartialCheckpoint() {
+  const checkpointPath = OUT_IS_FILE
+    ? resolve(repoRoot, OUTDIR.replace(/\.json$/i, '.partial.json'))
+    : resolve(repoRoot, OUTDIR, `V2_LIVE_EVOLVE_LONG_HORIZON_${TAG}_qwen.partial.json`);
+  const partial = {
+    schema: 'coretex.live-evolve-long-horizon.v2.partial',
+    ...provenance,
+    tag: TAG,
+    command: ['node', 'scripts/simulate-v2-live-evolve-long-horizon.mjs', ...process.argv.slice(2)].join(' '),
+    commandArgs: process.argv.slice(2),
+    rerankerMode: RERANKER,
+    profile: PROFILE_PATH,
+    bundle: BUNDLE_PATH,
+    corpus: CORPUS_PATH,
+    embeddings: EMB_PATH,
+    epochsRun: perEpoch.length,
+    compactPatchTracesEnabled: COMPACT_PATCH_TRACES,
+    supplyCensusFamilies: SUPPLY_CENSUS_FAMILIES,
+    supplyCensus: finalizeSupplyCensus(),
+    perEpoch,
+    summary: {
+      honestAttempts: perEpoch.reduce((s, e) => s + e.honestAttempted, 0),
+      honestAccepted: perEpoch.reduce((s, e) => s + e.honestAccepted, 0),
+      randomProbes: perEpoch.reduce((s, e) => s + e.antiCheat.randomProbes, 0),
+      randomAccepts: perEpoch.reduce((s, e) => s + e.antiCheat.randomAccepts, 0),
+      hillclimbProbes: perEpoch.reduce((s, e) => s + e.antiCheat.hillclimbProbes, 0),
+      hillclimbAccepts: perEpoch.reduce((s, e) => s + e.antiCheat.hillclimbAccepts, 0),
+      liveEvalIdsInjected: perEpoch.reduce((s, e) => s + e.frontierRotation.newEvalIdsInjectedThisEpoch, 0),
+      uniqueHonestOperations: operationReuseSet.size,
+      uniqueHonestSelectors: selectorReuseSet.size,
+    },
+  };
+  writeFileSync(checkpointPath, JSON.stringify(partial, JSON_REPLACER, 2));
+  console.log(`[live-evolve] checkpoint wrote ${checkpointPath}`);
+}
+function evaluateSupplyCensusGate(rows) {
+  if (!SUPPLY_CENSUS_GATE_ENABLED || !rows.length) {
+    return { enabled: SUPPLY_CENSUS_GATE_ENABLED, passed: true, failures: [] };
+  }
+  const failures = [];
+  for (const row of rows) {
+    const reasons = [];
+    if (row.evolveGeneratedQueries <= 0) reasons.push('evolveGeneratedQueries<=0');
+    if (row.reserveInjected <= 0) reasons.push('reserveInjected<=0');
+    if (row.activeFrontierCount <= 0) reasons.push('activeFrontierCount<=0');
+    if (row.evaluatedCandidates <= 0) reasons.push('evaluatedCandidates<=0');
+    const targetAbsentRate = row.evaluatedCandidates > 0 ? row.targetAbsent / row.evaluatedCandidates : 1;
+    if (!SUPPLY_TARGET_ABSENT_EXEMPT.has(row.family) && targetAbsentRate > 0.10) reasons.push('targetAbsentRate>0.10');
+    if (reasons.length) failures.push({
+      family: row.family,
+      reasons,
+      evolveGeneratedQueries: row.evolveGeneratedQueries,
+      reserveInjected: row.reserveInjected,
+      activeFrontierCount: row.activeFrontierCount,
+      evaluatedCandidates: row.evaluatedCandidates,
+      targetAbsent: row.targetAbsent,
+      targetAbsentRate,
+    });
+  }
+  return { enabled: true, passed: failures.length === 0, failures };
+}
+
 for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   const epochStartMs = Date.now();
   const epochScoringTelemetry = makeScoringTelemetry(`epoch-${epoch}`);
@@ -1130,6 +1442,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   const ld = evolveCorpusDelta({ baseLogical: currentLogical, epoch, seed: frontierSeed, churnFraction: CHURN_FRACTION });
   mark('deltaGeneration');
   console.log(`[live-evolve] evolveCorpusDelta: +${ld.addedDocs.length} docs / +${ld.addedRelations.length} rels / +${ld.addedQueries.length} queries / churnRate=${ld.liveChurnRate.toFixed(4)}`);
+  recordEvolveSupply(ld);
 
   if (!ld.addedDocs.length) { console.warn(`[live-evolve] epoch ${epoch}: no churn signal at fraction=${CHURN_FRACTION}; skipping`); continue; }
 
@@ -1161,6 +1474,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     const q = addedLogicalByKey.get(`${ev.logicalFamily ?? ev.family}\n${ev.queryText}`);
     if (q) liveLogicalQByProductionId.set(ev.id, q);
   }
+  recordBridgeSupply(additions);
   mark('bridgeLogicalDelta');
 
   const rootCacheBefore = currentProd.corpusRootCache ?? null;
@@ -1186,18 +1500,25 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     return ev ? bucketFamily(ev.logicalFamily ?? ev.family ?? 'unknown') : 'unknown';
   }) : 0;
   if (newEvalAdded > 0) console.log(`[live-evolve] frontier.addReserveIds: injected ${newEvalAdded} new eval_hidden ids into reserve`);
+  recordReserveSupply(newEvalIds, newProd);
   // CANONICAL stepEpoch: NUMERIC honest-accepts + quality-attempts (NEVER roots).
   // Step the PERSISTED frontier instance — preserves reservePtr / cumulative counts.
   const frontierSnap = frontier.stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts);
+  recordActiveFrontierSupply(newProd, frontierSnap.activeIds);
   mark('frontierUpdate');
   const activeRootChanged = frontierSnap.activeRoot !== prevActiveRoot;
   const baselineRecomputedBecause = corpusRootChanged ? 'corpusRootChanged' : (activeRootChanged ? 'activeRootChanged' : null);
 
-  const fullPack = deriveQueryPack(0, evalSeedHex, newProd, hiddenPackProfile);
+  const baseFullPack = deriveQueryPack(0, evalSeedHex, newProd, hiddenPackProfile);
+  const activeLiveEvalPack = admitActiveLiveEvalEvents(baseFullPack, newProd, {
+    activeIds: frontierSnap.activeIds,
+    limit: LIVE_EVAL_PACK_LIMIT,
+    familyPriority: HONEST_FAMILIES,
+  });
+  const fullPack = activeLiveEvalPack.pack;
+  recordHiddenPackSupply(fullPack);
   let activePack = filterPackToActive(fullPack, frontierSnap.activeIds);
-  const activeLiveEvalPack = forceActiveLiveEvalEvents(activePack, newProd, frontierSnap.activeIds, LIVE_EVAL_PACK_LIMIT);
-  activePack = activeLiveEvalPack.pack;
-  if (activeLiveEvalPack.added > 0) console.log(`[live-evolve] active live eval pack: +${activeLiveEvalPack.added} forced, families=${JSON.stringify(activeLiveEvalPack.familyCounts)}`);
+  if (activeLiveEvalPack.added > 0) console.log(`[live-evolve] active live eval pack: +${activeLiveEvalPack.added} canonical, families=${JSON.stringify(activeLiveEvalPack.familyCounts)}`);
   const heldoutPack = filterPackToHeldout(fullPack, frontierSnap.activeIds);
   const oldCorpusPair = stablePackForOldCorpusPair(prevActivePack, currentProd, newProd);
   for (const ev of activePack.events) if (!frontierSnap.activeIds.has(ev.id)) { console.error(`HARD FAIL: epoch ${epoch} activePack contains id ${ev.id} not in frontierSnap.activeIds`); exit(1); }
@@ -1260,12 +1581,14 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     attemptsByFingerprint[hp.operationFingerprint] = (attemptsByFingerprint[hp.operationFingerprint] ?? 0) + 1;
     const fpFamily = atomFamilyForFingerprint(hp.operationFingerprint);
     attemptsByAtomFamily[fpFamily] = (attemptsByAtomFamily[fpFamily] ?? 0) + 1;
+    const supplyRow = censusRow(fpFamily);
+    if (supplyRow) supplyRow.candidateSelections++;
     if (hp.skipped) {
       console.log(`[live-evolve]   honest ${h + 1}/${HONEST_PER_EPOCH} skipped:${hp.reason}`);
       honestPerPatch.push({ h, family, accepted: false, deltaPpm: 0, heldoutDeltaPpm: null, reason: `skipped:${hp.reason}`, fingerprint: hp.fingerprint, operationFingerprint: hp.operationFingerprint, selectorFingerprint: hp.selectorFingerprint, targetDocId: null, targetDocIdRecordedOnly: true });
       continue;
     }
-    const shouldAtomTrace = ATOM_TRACE
+    const shouldAtomTrace = !COMPACT_PATCH_TRACES && ATOM_TRACE
       && (fpFamily === 'validity_atom' || fpFamily === 'entity_resolution_atom')
       && ((atomTraceCounts.get(fpFamily) ?? 0) < ATOM_TRACE_LIMIT_PER_FAMILY);
     if (ATOM_CHURN_FAMILIES.has(fpFamily)) {
@@ -1273,6 +1596,12 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
       if (!hardness.hard) {
         easySkipsByAtomFamily[fpFamily] = (easySkipsByAtomFamily[fpFamily] ?? 0) + 1;
         easySkipsByFingerprint[hp.operationFingerprint] = (easySkipsByFingerprint[hp.operationFingerprint] ?? 0) + 1;
+        const row = censusRow(fpFamily);
+        if (row && hardness.reason === 'already_solved_by_qwen') {
+          row.easySkipsAlreadySolved++;
+          row.targetAlreadyRank1++;
+          if ((hardness.rows ?? []).some((r) => r.hardNegativeAboveTarget)) row.targetBelowHardNegative++;
+        }
         console.log(`[live-evolve]   honest ${h + 1}/${HONEST_PER_EPOCH} skipped:${hardness.reason}`);
         let atomTraceDiagnostics = null;
         if (shouldAtomTrace) {
@@ -1314,6 +1643,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     qualityAttemptsThisEpoch++;
     try {
       const tracePatch = TRACE_DIAGNOSTICS || shouldAtomTrace;
+      const persistPatchTraceDetails = tracePatch && !COMPACT_PATCH_TRACES;
       const parentState = bestState;
       const parentStateRoot = merkleizeState(parentState);
       const candidatePatch = { ...hp.patch, parentStateRoot };
@@ -1335,9 +1665,11 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         });
         continue;
       }
-      const activeBeforeEval = await cachedStateEval(activeStateEvalCache, parentStateRoot, parentState, newProd, activePack, epochScoringTelemetry, tracePatch);
+      const evalSupplyRow = censusRow(fpFamily);
+      if (evalSupplyRow) evalSupplyRow.evaluatedCandidates++;
+      const activeBeforeEval = await cachedStateEval(activeStateEvalCache, parentStateRoot, parentState, newProd, activePack, epochScoringTelemetry, persistPatchTraceDetails);
       const r = await evaluateRetrievalBenchmarkPatch(parentState, candidatePatch, newProd, activePack, opts, baselineFloors, activeBeforeEval.score);
-      const heldoutPatch = TRACE_DIAGNOSTICS && heldoutPack.events.length
+      const heldoutPatch = persistPatchTraceDetails && heldoutPack.events.length
         ? await evaluateRetrievalBenchmarkPatch(parentState, candidatePatch, newProd, heldoutPack, optsForProd(epochScoringTelemetry, true), baselineFloors)
         : null;
       const oldBeforeEval = await cachedStateEval(oldStateEvalCache, parentStateRoot, parentState, currentProd, oldCorpusPair.pack, epochScoringTelemetry, false);
@@ -1371,6 +1703,8 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         acceptedSelectorCount++;
         acceptsByFingerprint[hp.operationFingerprint] = (acceptsByFingerprint[hp.operationFingerprint] ?? 0) + 1;
         acceptsByAtomFamily[fpFamily] = (acceptsByAtomFamily[fpFamily] ?? 0) + 1;
+        const acceptedSupplyRow = censusRow(fpFamily);
+        if (acceptedSupplyRow) acceptedSupplyRow.accepted++;
         if (operationReuseSet.has(hp.operationFingerprint)) {
           honestReuseThisEpoch++;
           acceptedOperationReuseCount++;
@@ -1388,8 +1722,9 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
       }
       const cursorUpdateApplied = applyHonestCursorUpdate(honestSlotCursor, hp.cursorUpdate);
       console.log(`[live-evolve]   honest ${h + 1}/${HONEST_PER_EPOCH} ${accepted ? 'accepted' : `rejected:${rejectReason}`} delta=${r.deltaPpm ?? 0}ppm recovery=${acceptanceDecomposition.patchRecoveryPpm}ppm oldDamage=${acceptanceDecomposition.oldCorpusDamagePpm}ppm`);
-      const activeComparisons = tracePatch ? compareQueries(r.before, r.after) : [];
-      const targetDiagnostics = targetDocDiagnostics({ targetDocId: hp.targetDocId, before: r.before, after: r.after, pack: activePack, patch: candidatePatch });
+      const activeComparisons = persistPatchTraceDetails ? compareQueries(r.before, r.after) : [];
+      recordCandidateMovementCensus({ family: fpFamily, hp, pack: activePack, before: r.before, after: r.after });
+      const targetDiagnostics = persistPatchTraceDetails ? targetDocDiagnostics({ targetDocId: hp.targetDocId, before: r.before, after: r.after, pack: activePack, patch: candidatePatch }) : null;
       const atomTraceDiagnostics = shouldAtomTrace ? buildAtomTraceDiagnostics({
         epoch, h, hp, fpFamily, pack: activePack, activeIds: frontierSnap.activeIds, corpus: newProd,
         appliedState: appliedForDecomposition.state,
@@ -1405,10 +1740,10 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         .sort((a, b) => b.deltaNdcg - a.deltaNdcg)
         .slice(0, TRACE_LIMIT);
       const topActiveImprovement = activeImprovements[0] ?? null;
-      const heldoutComparisons = tracePatch && heldoutPatch ? compareQueries(heldoutPatch.before, heldoutPatch.after) : [];
+      const heldoutComparisons = persistPatchTraceDetails && heldoutPatch ? compareQueries(heldoutPatch.before, heldoutPatch.after) : [];
       const heldoutById = new Map(heldoutPack.events.map((e) => [e.id, e]));
       const activeById = new Map(activePack.events.map((e) => [e.id, e]));
-      const traceDiagnostics = tracePatch ? {
+      const traceDiagnostics = persistPatchTraceDetails ? {
         worstHeldoutRegressions: heldoutComparisons
           .filter((c) => c.deltaNdcg < 0)
           .sort((a, b) => a.deltaNdcg - b.deltaNdcg)
@@ -1447,6 +1782,12 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         noiseCategory: hp.noiseCategory ?? null,
         relationLensOffset: hp.relationLensOffset ?? null,
         relationLensEdges: hp.relationLensEdges ?? null,
+        relationLensWeight: hp.relationLensWeight ?? null,
+        relationLensSourceQueryId: hp.relationLensSourceQueryId ?? null,
+        relationLensSourceFamily: hp.relationLensSourceFamily ?? null,
+        relationLensHardNegativeDocId: hp.relationLensHardNegativeDocId ?? null,
+        relationLensDirectRelationEdges: hp.relationLensDirectRelationEdges ?? null,
+        relationLensHardNegativeRelationEdges: hp.relationLensHardNegativeRelationEdges ?? null,
         scopeAtomSlot: hp.scopeAtomSlot ?? null,
         scopeAtomSlots: hp.scopeAtomSlots ?? null,
         entityResolutionAtomSlot: hp.entityResolutionAtomSlot ?? null,
@@ -1457,7 +1798,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         oldCorpusPairExcludedQueryCount: oldCorpusPair.excluded.length,
         oldCorpusPairExcludedQueryIds: oldCorpusPair.excluded.slice(0, 16),
         acceptanceDecomposition,
-        ...(tracePatch ? { decodedPatchTrace: buildDecodedPatchTrace({ hp, appliedState: appliedForDecomposition.state, corpus: newProd }) } : {}),
+        ...(persistPatchTraceDetails ? { decodedPatchTrace: buildDecodedPatchTrace({ hp, appliedState: appliedForDecomposition.state, corpus: newProd }) } : {}),
         ...(hp.atomHardness ? { atomHardness: hp.atomHardness } : {}),
         ...(targetDiagnostics ? { targetDiagnostics } : {}),
         ...(atomTraceDiagnostics ? { atomTraceDiagnostics } : {}),
@@ -1606,6 +1947,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     },
     stepEpochInputs: { prevHonestAccepts, prevQualityAttempts },
   });
+  writePartialCheckpoint();
 
   console.log(`[live-evolve] activeScore=${activeScorePpm}ppm heldoutScore=${heldoutScorePpm}ppm idShuffledScore=${idShuffledScorePpm}ppm`);
   console.log(`[live-evolve] cross_frontier_lift=${crossFrontierLift} heldout_frontier_lift=${heldoutFrontierLift} doc_id_dependence=${docIdDependence}`);
@@ -1643,6 +1985,8 @@ const timingSummaryMs = Object.fromEntries(timingKeys.map((key) => {
     mean: vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null,
   }];
 }));
+const finalizedSupplyCensus = finalizeSupplyCensus();
+const supplyCensusGate = evaluateSupplyCensusGate(finalizedSupplyCensus);
 const report = {
   schema: 'coretex.live-evolve-long-horizon.v2',
   ...provenance,
@@ -1660,6 +2004,11 @@ const report = {
   finalActiveRoot: prevActiveRoot,
   epochsRun: perEpoch.length, churnFraction: CHURN_FRACTION, seed: frontierSeed,
   traceDiagnosticsEnabled: TRACE_DIAGNOSTICS,
+  traceLowMovementEnabled: TRACE_LOW_MOVEMENT,
+  compactPatchTracesEnabled: COMPACT_PATCH_TRACES,
+  supplyCensusFamilies: SUPPLY_CENSUS_FAMILIES,
+  supplyCensusGate,
+  supplyCensus: finalizedSupplyCensus,
   genesisScoringTelemetry: summarizeScoringTelemetry(genesisScoringTelemetry),
   rerankerTelemetry: {
     ...reranker.telemetrySnapshot?.(),
@@ -1781,12 +2130,17 @@ const report = {
     'makeLaunchFrontier(profile, prod).stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts)',
     'evaluateRetrievalBenchmarkState(state, corpus, pack, opts)',
     'evaluateRetrievalBenchmarkPatch(state, patch, corpus, pack, opts, floors)',
+    'admitActiveLiveEvalEvents(basePack, corpus, {activeIds, limit, familyPriority})',
   ],
 };
-const outPath = resolve(repoRoot, OUTDIR, `V2_LIVE_EVOLVE_LONG_HORIZON_${TAG}_qwen.json`);
-writeFileSync(outPath, JSON.stringify(report, (_key, value) => typeof value === 'bigint' ? value.toString() : value, 2));
+const outPath = OUT_IS_FILE ? resolve(repoRoot, OUTDIR) : resolve(repoRoot, OUTDIR, `V2_LIVE_EVOLVE_LONG_HORIZON_${TAG}_qwen.json`);
+writeFileSync(outPath, JSON.stringify(report, JSON_REPLACER, 2));
 console.log(`\n[live-evolve] wrote ${outPath}`);
 console.log(`[live-evolve] epochsRun=${perEpoch.length} uniqueHonestOps=${operationReuseSet.size}`);
 
 await reranker.close?.();
+if (supplyCensusGate.enabled && !supplyCensusGate.passed) {
+  console.error(`[live-evolve] HARD FAIL: supply census gate failed ${JSON.stringify(supplyCensusGate.failures)}`);
+  exit(2);
+}
 exit(0);

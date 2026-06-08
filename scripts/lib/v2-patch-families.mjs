@@ -39,13 +39,13 @@ export function relationUnits(edgeCount = RELATION_EDGES.length) {
  * long-horizon harness rotate distinct relation operation fingerprints over epochs without
  * overlapping the same lens entries. Each entry is one word; total = `edges.length`.
  */
-export function relationUnitsForEdges(edges, entryOffset = 0) {
+export function relationUnitsForEdges(edges, entryOffset = 0, weight = 0x8000) {
   const indices = [], newWords = [];
   for (let i = 0; i < edges.length; i++) {
     const entryIndex = 128 - 1 - (entryOffset + i);
     if (entryIndex < 0) break;
     indices.push(RANGES.RELATIONS_START + entryIndex);
-    newWords.push(encodeRelationCategoryLens({ entryIndex, edgeType: edges[i], weight: 0x8000 }));
+    newWords.push(encodeRelationCategoryLens({ entryIndex, edgeType: edges[i], weight }));
   }
   return { indices, newWords };
 }
@@ -223,6 +223,70 @@ function staleQrelForView(view) {
   const temporalHardNegative = view.hardNegatives.find((n) => /stale/i.test(n.category ?? ''));
   if (temporalHardNegative) return { docId: temporalHardNegative.docId, relevance: 0, role: 'stale' };
   return null;
+}
+
+function hardNegativeForView(view) {
+  const hard = view.hardNegatives[0];
+  if (hard?.docId) return { docId: hard.docId, relevance: 0, role: hard.category ?? 'hard_negative' };
+  const nonPositive = view.qrels.find((r) => (r.relevance ?? 0) <= 0);
+  return nonPositive?.docId ? nonPositive : null;
+}
+
+function publicRelationEdgesForDoc(docId, eventByDocId) {
+  const memEv = memoryEventForDocId(docId, eventByDocId);
+  return (memEv?.relations ?? []).map((r) => r.edgeType ?? r.type).filter(Boolean);
+}
+
+/**
+ * Pack-mined relation lens selection for runway measurement.
+ *
+ * The patch body remains a public category-lens edge write. The active-pack scan is only
+ * the harness choosing which public relation edge to try next and which target/hard-negative
+ * docs to record for diagnostics; qrels/doc IDs are not encoded into the patch.
+ */
+export function relationLensUnitsForPackQuery({
+  pack,
+  logicalQById,
+  eventByDocId,
+  families,
+  edgeTypes,
+  entryOffset = 0,
+  weight = 0x8000,
+  skipDocIds,
+}) {
+  const allowedFamilies = new Set(families);
+  const allowedEdges = new Set(edgeTypes);
+  const skip = skipDocIds ?? new Set();
+  if (entryOffset >= 128) {
+    return { indices: [], newWords: [], minedDocId: null, reason: 'relation_entries_exhausted' };
+  }
+  const candidates = pack.events
+    .map((ev) => eventView(ev, logicalQById))
+    .filter((view) => allowedFamilies.has(view.family))
+    .sort((a, b) => b.liveUpdateEpoch - a.liveUpdateEpoch);
+  for (const view of candidates) {
+    const direct = directQrelForView(view);
+    if (!direct?.docId || skip.has(direct.docId)) continue;
+    const hard = hardNegativeForView(view);
+    const directEdges = publicRelationEdgesForDoc(direct.docId, eventByDocId).filter((e) => allowedEdges.has(e));
+    const hardEdges = hard?.docId ? publicRelationEdgesForDoc(hard.docId, eventByDocId).filter((e) => allowedEdges.has(e)) : [];
+    const edgeType = directEdges[0] ?? hardEdges[0] ?? edgeTypes[0];
+    if (!edgeType) continue;
+    const units = relationUnitsForEdges([edgeType], entryOffset, weight);
+    if (!units.indices.length) return { indices: [], newWords: [], minedDocId: null, reason: 'relation_entries_exhausted' };
+    return {
+      ...units,
+      minedDocId: direct.docId,
+      hardNegativeDocId: hard?.docId ?? null,
+      sourceQueryId: view.ev.id,
+      sourceFamily: view.family,
+      edgeType,
+      weight,
+      directRelationEdges: directEdges,
+      hardNegativeRelationEdges: hardEdges,
+    };
+  }
+  return { indices: [], newWords: [], minedDocId: null, reason: 'no_relation_pack_query_available' };
 }
 
 /**
@@ -449,13 +513,16 @@ export function noiseSuppressionUnits({
   eventByDocId,
   memorySlot = 240,
   skipDocIds,
+  families,
 }) {
   const skip = skipDocIds ?? new Set();
+  const allowedFamilies = families ? new Set(families) : null;
   if (memorySlot < 240 || memorySlot >= 256) {
     return { indices: [], newWords: [], minedDocId: null, reason: 'noise_slot_exhausted' };
   }
   for (const ev of pack.events) {
     const view = eventView(ev, logicalQById);
+    if (allowedFamilies && !allowedFamilies.has(view.family)) continue;
     const noise = noiseDocForView(view);
     if (!noise || skip.has(noise.docId)) continue;
     const memEv = memoryEventForDocId(noise.docId, eventByDocId);
@@ -481,7 +548,7 @@ export function noiseSuppressionUnits({
       action: 'suppress',
       scope: 'entity',
       targetSlot: memorySlot,
-      budget: 200,
+      budget: 250,
       flags: 0,
       validFromEpoch: 0n,
       expiryEpoch: 0n,

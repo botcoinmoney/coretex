@@ -19,7 +19,7 @@
  * Override --out only when you want the re-pinned manifest written to a different
  * path (e.g. for diffing against the original).
  */
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import { argv, exit } from 'node:process';
@@ -44,16 +44,26 @@ function streamSha256(p) {
   return createHash('sha256').update(readFileSync(abs)).digest('hex');
 }
 
+function fileBytes(p) {
+  const abs = resolve(repoRoot, p);
+  if (!existsSync(abs)) throw new Error(`pinned file missing: ${p}`);
+  return statSync(abs).size;
+}
+
 const updated = { changed: [], unchanged: [] };
 function repinList(list, label) {
   if (!Array.isArray(list)) return list;
   return list.map((file) => {
     if (typeof file !== 'object' || !file.path || !file.sha256) return file;
     const got = streamSha256(file.path);
+    const bytes = fileBytes(file.path);
     const oldSha = file.sha256.toLowerCase();
-    if (got !== oldSha) updated.changed.push({ list: label, path: file.path, oldSha, newSha: got });
+    const oldBytes = file.bytes;
+    if (got !== oldSha || oldBytes !== bytes) {
+      updated.changed.push({ list: label, path: file.path, oldSha, newSha: got, oldBytes, newBytes: bytes });
+    }
     else updated.unchanged.push(file.path);
-    return { ...file, sha256: got };
+    return { ...file, sha256: got, bytes };
   });
 }
 

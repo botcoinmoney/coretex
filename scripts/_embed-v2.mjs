@@ -15,7 +15,7 @@ import { resolve } from 'node:path';
 import { cpus } from 'node:os';
 import { repoRoot } from './_repo-root.mjs';
 
-const MANIFEST = resolve(repoRoot, 'release/bundle/bundle-manifest-v2-ownerscope-candidate.json');
+const MANIFEST = resolve(repoRoot, process.env.CORETEX_BUNDLE_MANIFEST ?? 'release/bundle/bundle-manifest-v2-ownerscope-candidate.json');
 const CACHE_DIR = process.env.CORTEX_LOCAL_MODEL_CACHE ?? '/var/lib/coretex/model-cache';
 const PYTHON = process.env.CORETEX_BIENCODER_PYTHON ?? resolve(repoRoot, '.venv/bin/python');
 

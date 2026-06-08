@@ -57,6 +57,7 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
 
   const universe = (baseLogical.entities.find((e) => e.id === 'e_universe') || {}).id || 'e_universe';
   const subjects = baseLogical.entities.filter((e) => e.id !== universe && /_s\d+$/.test(e.id));
+  const subjectIndexById = new Map(subjects.map((s, i) => [s.id, i]));
   const hasAtomV16Metadata = baseLogical.dgen1?.atomV16Metadata === true
     || (baseLogical.queries ?? []).some((q) => q.family === 'validity_atom' || q.family === 'scope_atom' || q.family === 'entity_resolution_atom');
   const duplicateByName = new Map();
@@ -109,6 +110,13 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
   const addedDocs = [], addedRelations = [], addedQueries = [], churnedSubjects = [];
   const tsDate = new Date(new Date('2024-01-01').getTime() + (40 + epoch) * 30 * 86400000).toISOString().slice(0, 10);
   const priorDate = new Date(new Date(tsDate).getTime() - 86400000).toISOString().slice(0, 10);
+  const aliasFor = (entity) => (entity.aliases ?? []).find(Boolean) ?? String(entity.canonicalName ?? '').split(/\s+/)[0] ?? entity.id;
+  const otherSubjectFor = (subj, rnd) => {
+    if (subjects.length <= 1) return subj;
+    const idx = subjectIndexById.get(subj.id) ?? 0;
+    const off = 1 + Math.floor(rnd() * (subjects.length - 1));
+    return subjects[(idx + off) % subjects.length] ?? subj;
+  };
 
   for (const subj of subjects) {
     if (unit(`${seed}:churn:${epoch}:${subj.id}`) >= churnFraction) continue; // deterministic selection
@@ -118,14 +126,17 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
     const isProject = /-svc-/.test(canonical);
     const tagU = [universe, subj.id];
     const idBase = `e${epoch}_${subj.id}`;
-    const op = h(`${seed}:op:${epoch}:${subj.id}`).readUInt32BE(0) % (hasAtomV16Metadata ? 9 : 6);
+    const op = h(`${seed}:op:${epoch}:${subj.id}`).readUInt32BE(0) % (hasAtomV16Metadata ? 12 : 6);
     let branch = op <= 1 ? 'temporal'
       : op <= 3 ? 'conflict'
       : op === 4 ? 'decision'
       : op === 5 ? 'abstention'
       : op === 6 ? 'validity_atom'
       : op === 7 ? 'scope_atom'
-      : 'entity_resolution_atom';
+      : op === 8 ? 'entity_resolution_atom'
+      : op === 9 ? 'coreference'
+      : op === 10 ? 'relation_lifecycle'
+      : 'noise_suppression';
     if (branch === 'entity_resolution_atom' && duplicateEntityPairs.length === 0) branch = 'scope_atom';
 
     if (branch === 'temporal') {
@@ -271,18 +282,81 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
       const endpoint = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-solver-${epoch}.internal`;
       const wrongEndpoint = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-finance-${epoch}.internal`;
       addedDocs.push({ id: rightId, lane: 'deep', kind: 'atom_scope_fact', entityIds: tagU,
-        text: `${canonical} set ${endpoint} as the project endpoint for last week's working session.`,
+        text: `${canonical}'s algebra workspace approved ${endpoint} as the solver endpoint for last week's scoped session.`,
         shape: 'atom_scope_record', timestamp: tsDate, currentStaleFlag: true, scope, liveUpdateEpoch: epoch });
       addedDocs.push({ id: wrongId, lane: 'deep', kind: 'atom_scope_fact', entityIds: tagU,
-        text: `${canonical} set ${wrongEndpoint} as the project endpoint for last week's finance modeling session.`,
+        text: `For ${canonical}'s math project from last week, the project endpoint note listed ${wrongEndpoint}, but that note belonged to the finance modeling scope.`,
         shape: 'atom_scope_record', timestamp: tsDate, currentStaleFlag: true, scope: wrongScope, liveUpdateEpoch: epoch });
       addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
         lane: 'deep', family: 'scope_atom',
-        queryText: `For ${canonical}, what endpoint belongs to the math project from last week?`,
+        queryText: `For ${canonical}, what endpoint belongs to the math project scope from last week?`,
         qrels: [{ docId: rightId, relevance: 1.0, role: 'direct' }, { docId: wrongId, relevance: 0.0, role: 'wrong_scope' }],
         hardNegatives: [{ docId: wrongId, category: 'wrong_scope_near_collision' }],
         scope, publicIntent: { atom: 'scope_atom', ...scope },
         band: 'very_hard', operationFamily: 'scope_atom', liveUpdateEpoch: epoch });
+    } else if (branch === 'coreference') {
+      const wrong = otherSubjectFor(subj, rnd);
+      const alias = aliasFor(subj);
+      const wrongAlias = aliasFor(wrong);
+      const ticket = `cr-${epoch}-${Math.floor(rnd() * 900 + 100)}`;
+      const wrongTicket = `cr-${epoch}-${Math.floor(rnd() * 900 + 100)}`;
+      const aliasId = `d_${idBase}_cf_alias`, rightId = `d_${idBase}_cf_ref`, wrongAliasId = `d_${idBase}_cf_wa`, wrongId = `d_${idBase}_cf_w`;
+      addedDocs.push({ id: aliasId, lane: 'deep', kind: 'coreference_alias_record', entityIds: tagU,
+        aliases: [alias], text: `${alias} opened rollback memo ${ticket} for ${canonical}'s migration workspace.`,
+        shape: 'coreference_alias_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
+      addedDocs.push({ id: rightId, lane: 'deep', kind: 'coreference_reference_record', entityIds: tagU,
+        text: `They confirmed that ${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-owner-${epoch} owns the rollback checklist for memo ${ticket}.`,
+        shape: 'coreference_reference_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
+      addedDocs.push({ id: wrongAliasId, lane: 'deep', kind: 'coreference_alias_record', entityIds: [universe, wrong.id],
+        aliases: [wrongAlias], text: `${wrongAlias} opened rollback memo ${wrongTicket} for ${wrong.canonicalName}'s migration workspace.`,
+        shape: 'coreference_alias_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
+      addedDocs.push({ id: wrongId, lane: 'deep', kind: 'coreference_reference_record', entityIds: [universe, wrong.id],
+        text: `They confirmed that ${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-owner-${epoch} owns the rollback checklist for memo ${wrongTicket}.`,
+        shape: 'coreference_reference_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
+      addedRelations.push({ src: rightId, dst: aliasId, type: 'coreference_of', label: 'coreference_of' });
+      addedRelations.push({ src: wrongId, dst: wrongAliasId, type: 'coreference_of', label: 'coreference_of' });
+      addedQueries.push({ id: `q_${idBase}_cf`, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
+        lane: 'deep', family: 'coreference',
+        queryText: `For ${canonical}, who owns the rollback checklist confirmed in the follow-up memo?`,
+        qrels: [{ docId: rightId, relevance: 1.0, role: 'direct' }, { docId: aliasId, relevance: 0.6, role: 'alias_bridge' }, { docId: wrongId, relevance: 0.0, role: 'wrong_alias' }],
+        hardNegatives: [{ docId: wrongId, category: 'wrong_alias_near_collision' }],
+        band: 'very_hard', operationFamily: 'coreference', liveUpdateEpoch: epoch });
+    } else if (branch === 'relation_lifecycle') {
+      const scopeLabel = isProject ? 'deployment escalation' : 'care escalation';
+      const oldDep = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-legacy-${epoch}`;
+      const newDep = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-active-${epoch}`;
+      const oldId = `d_${idBase}_rl_old`, curId = `d_${idBase}_rl_cur`, qid = `q_${idBase}_rl`;
+      addedDocs.push({ id: oldId, lane: 'deep', kind: 'relation_lifecycle_record', entityIds: tagU,
+        text: `${canonical}'s current escalation relation for ${scopeLabel} points to ${oldDep} according to a late audit note.`,
+        shape: 'relation_lifecycle_record', timestamp: tsDate, currentStaleFlag: false, lifecycleState: 'superseded_relation', liveUpdateEpoch: epoch });
+      addedDocs.push({ id: curId, lane: 'deep', kind: 'relation_lifecycle_record', entityIds: tagU,
+        text: `The replacement ledger sets ${newDep} as the active dependency for ${canonical}'s ${scopeLabel}, replacing the superseded late audit relation.`,
+        shape: 'relation_lifecycle_record', timestamp: priorDate, currentStaleFlag: true, lifecycleState: 'current_relation', liveUpdateEpoch: epoch });
+      addedRelations.push({ src: curId, dst: oldId, type: 'supersedes', label: 'supersedes' });
+      addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
+        lane: 'deep', family: 'relation_lifecycle',
+        queryText: `What current escalation relation replaced ${canonical}'s superseded late audit relation for ${scopeLabel}?`,
+        qrels: [{ docId: curId, relevance: 1.0, role: 'direct' }, { docId: oldId, relevance: 0.2, role: 'stale_relation' }],
+        hardNegatives: [{ docId: oldId, category: 'stale_relation_high_overlap' }],
+        band: 'very_hard', operationFamily: 'relation_lifecycle', liveUpdateEpoch: epoch });
+    } else if (branch === 'noise_suppression') {
+      const scopeLabel = isProject ? 'rollback drill' : 'handoff drill';
+      const owner = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-clear-${epoch}`;
+      const wrongOwner = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-draft-${epoch}`;
+      const rightId = `d_${idBase}_ns_r`, wrongId = `d_${idBase}_ns_w`, qid = `q_${idBase}_ns`;
+      addedDocs.push({ id: rightId, lane: 'deep', kind: 'noise_suppression_answer', entityIds: tagU,
+        text: `For ${canonical}'s ${scopeLabel}, the approved owner is ${owner} in the current signed handoff ledger.`,
+        shape: 'noise_suppression_answer', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
+      addedDocs.push({ id: wrongId, lane: 'deep', kind: 'noise_suppression_distractor', entityIds: tagU,
+        text: `For ${canonical}'s ${scopeLabel}, the current approved owner is ${wrongOwner}; this retired draft used the exact query wording but was rejected.`,
+        shape: 'noise_suppression_distractor', timestamp: tsDate, currentStaleFlag: false, liveUpdateEpoch: epoch });
+      addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
+        lane: 'deep', family: 'noise_suppression',
+        queryText: `What is the current approved owner for ${canonical}'s ${scopeLabel}?`,
+        qrels: [{ docId: rightId, relevance: 1.0, role: 'direct' }, { docId: wrongId, relevance: 0.0, role: 'lexical_noise' }],
+        hardNegatives: [{ docId: wrongId, category: 'lexical_distractor_exact_terms' }],
+        publicIntent: { atom: 'noise_suppression', subjectEntityId: subj.id, selector: 'ANSWER_DENSITY', action: 'suppress' },
+        band: 'very_hard', operationFamily: 'noise_suppression', liveUpdateEpoch: epoch });
     } else if (branch === 'entity_resolution_atom') {
       const pair = duplicateEntityPairs[Math.floor(rnd() * duplicateEntityPairs.length)];
       const roleAlias = (pair.target.roleAliases ?? []).find((r) => /api migration lead|backend lead/i.test(r)) ?? pair.target.roleAliases?.[0] ?? 'API migration lead';

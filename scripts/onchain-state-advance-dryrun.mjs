@@ -23,22 +23,56 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 import { argv, exit } from 'node:process';
 import { distIndex, repoRoot } from './_repo-root.mjs';
-import { buildV2ProductionCorpus } from './lib/build-v2-production-corpus.mjs';
 import { makeLaunchFrontier } from './lib/epoch-frontier.mjs';
 
 const m = await import(distIndex);
-const { merkleizeState, bytesToHex, decodePatch, applyPatch, computePatchHash, keccak256, deriveQueryPack } = m;
+const { merkleizeState, bytesToHex, decodePatch, applyPatch, computePatchHash, keccak256, deriveQueryPack, splitForRecord } = m;
 
-const base = 'release/calibration/2026-05-21-memory-corpus-v2';
-const OUT = resolve(repoRoot, `${base}/onchain-state-advance-dryrun.json`);
+const opt = (n, fb) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fb; };
+const DEFAULT_ARTIFACT_MANIFEST = 'release/calibration/2026-06-04-memory-atom-v16/coretex-launch-v16-artifacts.json';
+const artifactManifestPath = opt('manifest', DEFAULT_ARTIFACT_MANIFEST);
+const artifactManifest = JSON.parse(readFileSync(resolve(repoRoot, artifactManifestPath), 'utf8'));
+const payloadPath = (role) => artifactManifest.payloads?.find((p) => p.role === role)?.path;
+const base = 'release/calibration/2026-06-04-memory-atom-v16';
+const OUT = resolve(repoRoot, opt('out', `${base}/onchain-state-advance-dryrun.json`));
 const emit = argv.includes('--emit');
 
 const fx = JSON.parse(readFileSync(resolve(repoRoot, 'release/calibration/fixtures/state-root-vectors.json'), 'utf8'));
-const manifest = JSON.parse(readFileSync(resolve(repoRoot, 'release/bundle/bundle-manifest-v2-dgen1-policy-r5-candidate.json'), 'utf8'));
-const profile = JSON.parse(readFileSync(resolve(repoRoot, 'release/bundle/evaluator-profile-v2-dgen1-policy-r5.json'), 'utf8'));
-const { corpus } = buildV2ProductionCorpus({ corpusPath: `${base}/dgen1-r5-synth-corpus.json`, embPath: `${base}/dgen1-r5-synth-embeddings.json` });
+const manifest = JSON.parse(readFileSync(resolve(repoRoot, opt('bundle', artifactManifest.bundlePath)), 'utf8'));
+const profile = JSON.parse(readFileSync(resolve(repoRoot, opt('profile', artifactManifest.profilePath)), 'utf8'));
+const corpusPath = opt('corpus', payloadPath('corpus'));
+const embPath = opt('emb', payloadPath('embeddings'));
+if (!corpusPath || !embPath) throw new Error(`dry-run: ${artifactManifestPath} does not define corpus/embeddings payloads`);
+if (artifactManifest.bundleHash && manifest.bundleHash !== artifactManifest.bundleHash) {
+  throw new Error(`dry-run: bundleHash drift ${manifest.bundleHash} != artifact manifest ${artifactManifest.bundleHash}`);
+}
+const logicalCorpus = JSON.parse(readFileSync(resolve(repoRoot, corpusPath), 'utf8'));
+const bucket = (f) => f === 'temporal_update' ? 'temporal'
+  : (f === 'multi_session_bridge' || f === 'causal_memory_chain' || f === 'decision_provenance') ? 'multi_hop_relation'
+  : f === 'conflict_lifecycle' ? 'conflict_lifecycle'
+  : f === 'aspect_constraint' ? 'aspect_constraint'
+  : f === 'coreference_resolution' ? 'coreference'
+  : 'near_collision';
+const corpusRootFromManifest = manifest.corpus?.root ?? artifactManifest.corpusRoot;
+const corpus = {
+  corpusRoot: corpusRootFromManifest,
+  events: (logicalCorpus.queries ?? []).map((q) => ({
+    id: q.id,
+    family: bucket(q.family),
+    logicalFamily: q.family,
+    split: splitForRecord(q.id, 0),
+    queryText: q.queryText ?? '',
+    truthDocuments: [],
+    hardNegatives: [],
+    qrels: [],
+    protected: false,
+    relations: [],
+    ...(q.band ? { band: q.band } : {}),
+  })),
+};
 
 const hexToBytes = (h) => { const s = h.replace(/^0x/, ''); const o = new Uint8Array(s.length / 2); for (let i = 0; i < o.length; i++) o[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16); return o; };
 const kjson = (v) => bytesToHex(keccak256(new TextEncoder().encode(canonical(v))));
@@ -60,12 +94,31 @@ if (!child.ok) throw new Error('dry-run: advance patch did not apply');
 
 // public roots
 const corpusRoot = corpus.corpusRoot;
+if (artifactManifest.corpusRoot && artifactManifest.corpusRoot.toLowerCase() !== corpusRoot.toLowerCase()) {
+  throw new Error(`dry-run: corpusRoot drift ${corpusRoot} != artifact manifest ${artifactManifest.corpusRoot}`);
+}
 // C3 churn is launch-required → derive the genesis activeFrontierRoot (V4 rejects bytes32(0)).
 const activeFrontierRoot = makeLaunchFrontier(profile, corpus)?.stepEpoch(0, null, null).activeRoot ?? null;
+if (!activeFrontierRoot || /^0x0+$/.test(activeFrontierRoot)) throw new Error('dry-run: activeFrontierRoot missing/zero');
 const evalSeedHex = profile.baselineEvalSeedHex;
 const pack = deriveQueryPack(0, evalSeedHex, corpus, { ...profile.hiddenPack, packSize: 64, quotas: [] });
 const queryPackRoot = bytesToHex(keccak256(new TextEncoder().encode(pack.events.map((e) => e.id).sort().join('\n'))));
-const baselineManifest = { parentStateRoot: adv.parentStateRoot, corpusRoot, queryPackRoot, parentScorePpm: profile.baselineParentScorePpm, variancePpm: profile.baselineVariancePpm, samples: 3, evalSeedHex };
+const profileHash = '0x' + createHash('sha256').update(canonical(profile)).digest('hex');
+const artifactManifestHash = '0x' + createHash('sha256').update(readFileSync(resolve(repoRoot, artifactManifestPath))).digest('hex');
+const rerankerRevision = manifest.model?.reranker?.revision ?? null;
+const baselineManifest = {
+  parentStateRoot: adv.parentStateRoot,
+  corpusRoot,
+  activeFrontierRoot,
+  bundleHash: manifest.bundleHash,
+  profileHash,
+  rerankerRevision,
+  queryPackRoot,
+  parentScorePpm: profile.baselineParentScorePpm,
+  variancePpm: profile.baselineVariancePpm,
+  samples: profile.baselineSamples ?? 3,
+  replayTolerancePpm: profile.replayTolerancePpm,
+};
 const baselineManifestHash = kjson(baselineManifest);
 
 // synthetic anti-pre-testing witnesses (flagged) — real values come from chain + reveal
@@ -81,6 +134,9 @@ const receipt = {
   patchBytesHash: adv.patchHash,         // domain-separated keccak (coretex-patch-hash-v1)
   minerAddress: SYNTH.minerAddress,
   bundleHash: manifest.bundleHash,
+  artifactManifestHash,
+  profileHash,
+  rerankerRevision,
   corpusRoot,
   activeFrontierRoot,                    // C3 launch-required: derived genesis frontier root (non-zero)
   queryPackRoot,
@@ -114,7 +170,9 @@ const dryrun = {
     'onChain.CoreTexStateAdvanced.evalReportHash': 'replay: keccak256(canonical(offChainReceipt)) must equal this — binds the scoring context',
     'onChain.CoretexPatchBytes.patchBytes': 'replay: the wire bytes decoded + applied',
     'offChainReceipt.bundleHash': 'replay: pins scoring/controller/model behavior (verifyBundleManifest)',
+    'offChainReceipt.artifactManifestHash/profileHash/rerankerRevision': 'replay: rejects stale validator/client scoring context before accepting the receipt envelope',
     'offChainReceipt.corpusRoot': 'replay: pins the corpus the pack + scores were computed over',
+    'offChainReceipt.activeFrontierRoot': 'replay: must equal the epoch activeFrontierRoot pinned in CoreTexRegistry',
     'offChainReceipt.queryPackRoot': 'replay: pins which hidden queries were scored (derived from blockhash+epochSecret)',
     'offChainReceipt.baselineManifestHash': 'replay: pins the baseline the delta was measured against (no stale baseline)',
     'offChainReceipt.blockhash': 'replay: must equal rpc.getBlockHash(targetBlock) — anti-forgery',
@@ -127,8 +185,8 @@ const dryrun = {
     'no fake blockhash': 'replay verifies blockhash == rpc.getBlockHash(targetBlock)',
     'no stale parent': 'parentStateRoot must equal the live root; applyPatch rejects E01 otherwise',
     'state-root continuity': 'transitionIndex ordering + parent==prior-newStateRoot enforced on replay',
-    'no profile/bundle drift': 'bundleHash pins every scoring-affecting knob (bundle-attestation-smoke)',
-    'no stale baseline': 'baselineManifestHash pins the comparison point (baseline-recalibration-e2e)',
+    'no profile/bundle drift': 'bundleHash + profileHash + artifactManifestHash pin every scoring-affecting knob (bundle-attestation-smoke)',
+    'no stale baseline': 'baselineManifestHash pins the comparison point, active frontier, profile, reranker, and bundle',
   },
 };
 

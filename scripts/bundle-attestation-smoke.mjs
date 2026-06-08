@@ -20,7 +20,7 @@
  *      policyConflictIntentAdmission selector) flips the hash → the conflict-
  *      intent knobs are attested whenever conflict_state is active.
  *
- * Usage: node scripts/bundle-attestation-smoke.mjs [--bundle <manifest.json>]
+ * Usage: node scripts/bundle-attestation-smoke.mjs [--manifest <launch-artifacts.json>] [--bundle <manifest.json>]
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -30,8 +30,15 @@ import { distIndex, repoRoot } from './_repo-root.mjs';
 const { computeBundleHashFromManifest } = await import(distIndex);
 
 const opt = (name, fb) => { const i = argv.indexOf(`--${name}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fb; };
-const bundlePath = opt('bundle', 'release/bundle/bundle-manifest-v2-dgen1-policy-r5-candidate.json');
+const DEFAULT_ARTIFACT_MANIFEST = 'release/calibration/2026-06-04-memory-atom-v16/coretex-launch-v16-artifacts.json';
+const artifactManifestPath = opt('manifest', DEFAULT_ARTIFACT_MANIFEST);
+const artifactManifest = JSON.parse(readFileSync(resolve(repoRoot, artifactManifestPath), 'utf8'));
+const bundlePath = opt('bundle', artifactManifest.bundlePath);
 const manifest = JSON.parse(readFileSync(resolve(repoRoot, bundlePath), 'utf8'));
+if (artifactManifest.bundleHash && manifest.bundleHash !== artifactManifest.bundleHash) {
+  console.error(`FATAL: bundleHash drift ${manifest.bundleHash} != artifact manifest ${artifactManifest.bundleHash}`);
+  exit(1);
+}
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const hashOf = (mf) => { const { bundleHash, ...rest } = mf; return computeBundleHashFromManifest(rest); };
 
@@ -73,6 +80,11 @@ mutateAndCheck('model.reranker adapter ADDED (tuned-reranker promotion cannot be
 mutateAndCheck('enableConflictLifecycleAtoms toggle', (p) => { p.enableConflictLifecycleAtoms = !(p.enableConflictLifecycleAtoms ?? false); });
 mutateAndCheck('policyConflictIntentAdmission toggle (strict selector)', (p) => { p.policyConflictIntentAdmission = !(p.policyConflictIntentAdmission ?? false); });
 mutateAndCheck('policyMaxBudgetConflict', (p) => { p.policyMaxBudgetConflict = (p.policyMaxBudgetConflict ?? 1000) + 1; });
+mutateAndCheck('enableValidityAtoms toggle', (p) => { p.enableValidityAtoms = p.enableValidityAtoms === false; });
+mutateAndCheck('enableScopeAtoms toggle', (p) => { p.enableScopeAtoms = !(p.enableScopeAtoms ?? false); });
+mutateAndCheck('enableEntityResolutionAtoms toggle', (p) => { p.enableEntityResolutionAtoms = !(p.enableEntityResolutionAtoms ?? false); });
+mutateAndCheck('policyMaxBudgetScope', (p) => { p.policyMaxBudgetScope = (p.policyMaxBudgetScope ?? 300) + 1; });
+mutateAndCheck('policyMaxBudgetEntity', (p) => { p.policyMaxBudgetEntity = (p.policyMaxBudgetEntity ?? 300) + 1; });
 // aspect_constraint EXPERIMENTAL knobs (default-off; A100 candidate) are attested: enabling the
 // experimental aspect surface or changing its boost flips the hash → it can never be silently toggled on.
 mutateAndCheck('aspect experimental enable (enableAspectConstraintAtoms+policyAspectIntentAdmission+boost)', (p) => { p.enableAspectConstraintAtoms = true; p.policyAspectIntentAdmission = true; p.policyAspectBoost = 0.1; });
@@ -83,6 +95,7 @@ mutateAndCheck('epochFrontier.mode (churn controller)', (p) => { p.epochFrontier
 
 console.log(log.join('\n'));
 console.log('────────────────────────────────────────────────────────');
+console.log(`artifact    ${artifactManifestPath}`);
 console.log(`bundle      ${bundlePath}`);
 console.log(`bundleHash  ${manifest.bundleHash}`);
 console.log(`pipelineVersion ${manifest.evaluator.profile.pipelineVersion} | conflict_state enabled: ${manifest.evaluator.profile.enableConflictLifecycleAtoms === true}`);

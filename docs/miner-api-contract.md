@@ -18,7 +18,7 @@ Routes (`packages/cortex/src/coordinator/endpoints.ts`) — v0 canonical surface
 | method | path | purpose |
 |---|---|---|
 | GET | `/coretex/health` | coordinator system health — version, epoch, chainId, confirmation depth, chain live root, confirmed live root, finality lag, epoch pins, `acceptingSubmissions`. No miner-specific data. |
-| GET | `/coretex/status` | per-miner dynamic context (pass `?miner=0x…`). Folds in every field the legacy `/coretex/challenge` carried plus per-miner counters (`nextIndex`, `lastReceiptHash`, `screenersThisEpoch`, `remaining`, `cap`). |
+| GET | `/coretex/status` | per-miner dynamic context (pass `?miner=0x…`): epoch/root pins, allowed patch types, thresholds, `nextIndex`, `lastReceiptHash`, `screenersThisEpoch`, `remaining`, and `cap`. |
 | GET | `/coretex/substrate/:stateRoot` | full 1024-word substrate state by root (off-chain by root). Only chain-confirmed roots are served. |
 | POST | `/coretex/submit` | submit a patch (wire bytes + parentStateRoot + minerAddress). Returns either a signed receipt envelope or a rejection. |
 | GET | `/coretex/receipt/:hash` | re-fetch a previously signed coordinator receipt + pre-encoded V4 transaction by patchHash. Works for BOTH the miner-submitted (original) hash AND the coordinator-rewritten signed hash. Returns `200` for pending/confirmed (envelope tagged with state), `409` + `PendingReceiptStale` for stale (no transaction handed back), `404 + "receipt expired"` once the receipt's `expiresAt` elapses. |
@@ -34,8 +34,9 @@ The following routes are NOT part of the v0 public surface and the gate
 | field | meaning |
 |---|---|
 | `epochId` | current epoch |
-| `parentStateRoot` / `currentStateRoot` | substrate root to patch against (keccak256 binary-Merkle over 1024 BE uint256 leaves) |
-| `substrateAccess.byRoot` | URL to fetch the full state by root; `wordCount` 1024, `packedBytes` 32768 |
+| `currentStateRoot` | substrate root to patch against (keccak256 binary-Merkle over 1024 BE uint256 leaves). `stateRoot` is not a v0 alias. |
+| `confirmedTransitionCount` | chain-confirmed CoreTex state-advance count for the current epoch. `transitionCount` is not a v0 alias. |
+| `substrate.uri` | URL to fetch the full state by root; response carries `wordCount` 1024 and `packedHex` |
 | `bundleHash` / `coreVersionHash` | pins the exact scoring/controller/model behavior (see `bundle-attestation-smoke.mjs`) |
 | `profileName` / `pipelineVersion` | e.g. `coretex-retrieval-v2-policy-r5` (selects r4 vs r5 atom interpretation) |
 | `corpusRoot` + `corpusMeta` | Merkle commitment over validator production events, including hidden qrels and embedding bytes; miners receive only the root/hash metadata plus bi-encoder model id/revision |
