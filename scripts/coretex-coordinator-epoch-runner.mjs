@@ -40,6 +40,9 @@ function rel(path) {
 function bytes32FromString(s) {
   return `0x${createHash('sha256').update(s).digest('hex')}`;
 }
+function bytes32FromBytes(bytes) {
+  return `0x${createHash('sha256').update(bytes).digest('hex')}`;
+}
 function asNonNegativeNumber(v, fallback = 0) {
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
@@ -226,6 +229,23 @@ function runEpochEvolve({ manifestPath, outDir, decision, s3Prefix }) {
   return JSON.parse(readFileSync(resolve(outDir, `epoch-evolve-output-${epoch}.json`), 'utf8'));
 }
 
+function publicKeyMetadata({ outDir, evolveOut }) {
+  const publicKeyPath = flag('public-key', evolveOut.artifacts?.devPublicKey ?? null);
+  const publicKeyPem = publicKeyPath ? readFileSync(resolve(repoRoot, publicKeyPath)) : null;
+  const rotationPath = resolve(outDir, `epoch-rotation-${evolveOut.epoch}.json`);
+  let signerKeyId = flag('key-id', null);
+  try {
+    const rotation = JSON.parse(readFileSync(rotationPath, 'utf8'));
+    signerKeyId = rotation.signer?.keyId ?? signerKeyId;
+  } catch {
+    // The evolve command already verified the signature; metadata is best-effort for public status.
+  }
+  return {
+    ...(signerKeyId ? { epochSigningPublicKeyId: signerKeyId } : {}),
+    ...(publicKeyPem ? { epochSigningPublicKeyFingerprint: bytes32FromBytes(publicKeyPem) } : {}),
+  };
+}
+
 function buildStatus({ manifest, manifestPath, outDir, evolveOut, decision, awsIdentity }) {
   const rotationRef = evolveOut.artifacts.rotationManifest;
   const deltaRef = evolveOut.artifacts.delta ?? evolveOut.artifacts.corpusDelta;
@@ -248,6 +268,7 @@ function buildStatus({ manifest, manifestPath, outDir, evolveOut, decision, awsI
     corpusDeltaUrl: deltaUrl,
     rotationManifestRef: rotationRef,
     corpusDeltaRef: deltaRef,
+    ...publicKeyMetadata({ outDir, evolveOut }),
     hiddenSeedCommit: evolveOut.startEpochParams.hiddenSeedCommit,
     startEpochParams: evolveOut.startEpochParams,
     nextEpochReadiness: {

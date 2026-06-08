@@ -189,6 +189,9 @@ if (evolveOut.startEpochParams.corpusRoot.toLowerCase() !== evolveOut.nextCorpus
 if (evolveOut.startEpochParams.baselineManifestHash.toLowerCase() !== evolveOut.rotationManifestHash.toLowerCase()) fail('rotation manifest hash not bound through baselineManifestHash');
 if (coordinatorStatus.startEpochParams.corpusRoot.toLowerCase() !== evolveOut.nextCorpusRoot.toLowerCase()) fail('coordinator status corpus root mismatch');
 if (coordinatorStatus.nextEpochReadiness.ready !== true) fail('coordinator status not ready');
+if (coordinatorStatus.epochSigningPublicKeyId !== 'epoch-e2e') fail('coordinator status public key id mismatch');
+const publicKeyFingerprint = `0x${createHash('sha256').update(readFileSync(publicKeyPath)).digest('hex')}`;
+if (coordinatorStatus.epochSigningPublicKeyFingerprint !== publicKeyFingerprint) fail('coordinator status public key fingerprint mismatch');
 
 const statePath = resolve(outRoot, 'validator-state.json');
 writeFileSync(statePath, JSON.stringify({
