@@ -20,9 +20,12 @@
     "build:bundle": "npm run build --workspace @botcoin/cortex && node scripts/build-coretex-bundle.mjs",
     "contracts:build": "forge build --root contracts",
     "contracts:test": "forge test --root contracts -vvv",
+    "coretex:epoch-evolve": "npm run build --workspace @botcoin/cortex && node scripts/coretex-epoch-evolve.mjs",
+    "coretex:epoch-evolve:e2e": "npm run build --workspace @botcoin/cortex && node scripts/coretex-epoch-evolve-sync-e2e.mjs",
     "setup:validator": "npm run build --workspace @botcoin/cortex && node scripts/setup-validator-artifacts.mjs",
     "setup:validator:verify": "npm run build --workspace @botcoin/cortex && node scripts/setup-validator-artifacts.mjs --verify-only",
     "validator:replay": "npm run build --workspace @botcoin/cortex && node scripts/coretex-validator.mjs replay-patch",
+    "validator:sync": "npm run build --workspace @botcoin/cortex && node scripts/coretex-validator-sync.mjs",
     "validator:verify-launch": "npm run build --workspace @botcoin/cortex && node scripts/coretex-validator.mjs verify-launch"
   },
   "devDependencies": {
