@@ -105,7 +105,13 @@ export function conflictUnits({ pack, logicalQById, eventByDocId, conflictSlot =
     return {
       indices: [RANGES.MEMORY_INDEX_START + slot, RANGES.POLICY_CONFLICT_START + slot],
       newWords: [memWord, atomWord],
-      minedDocId: resolved.docId, slot, action,
+      minedDocId: resolved.docId,
+      hardNegativeDocId: staleQrelForView(eventView(ev, logicalQById))?.docId ?? hardNegativeForView(eventView(ev, logicalQById))?.docId ?? null,
+      sourceQueryId: ev.id,
+      sourceFamily: lq?.family ?? ev.logicalFamily ?? ev.family ?? null,
+      lifecycleScope: lq?.lifecycleScope ?? ev.lifecycleScope ?? null,
+      slot,
+      action,
     };
   }
   return { indices: [], newWords: [], minedDocId: null, reason: 'no_conflict_pack_query_available', conflictQueriesAvailable: tried.length };
@@ -355,7 +361,22 @@ export function temporalUnits({ pack, logicalQById, maxRecords = 1, startIndex =
       indices.push(RANGES.MEMORY_INDEX_START + curSlot * 1); newWords.push(cw[0]);
       const tw = encodeTemporalRecord({ recordIndex: slotBase, memorySlot: staleSlot, supersededBy: curSlot, validFromEpoch: 1n, validUntilEpoch: (2n ** 40n - 1n), currentStaleFlag: true });
       indices.push(RANGES.TEMPORAL_START + slotBase); newWords.push(tw[0]);
-      return { indices, newWords, recordsCompiled: 1, minedDocId: cur.docId, temporalQueriesAvailable: tq.length };
+      const curEvent = memoryEventForDocId(cur.docId, eventByDocId);
+      const staleEvent = memoryEventForDocId(stale.docId, eventByDocId);
+      const attr = String(curEvent?.truthDocuments?.[0]?.kind ?? curEvent?.kind ?? '').replace(/^temporal_/, '') || null;
+      return {
+        indices,
+        newWords,
+        recordsCompiled: 1,
+        minedDocId: cur.docId,
+        hardNegativeDocId: stale.docId,
+        sourceQueryId: view.ev.id,
+        sourceFamily: view.family,
+        temporalAttribute: attr,
+        currentDocKind: curEvent?.truthDocuments?.[0]?.kind ?? curEvent?.kind ?? null,
+        staleDocKind: staleEvent?.truthDocuments?.[0]?.kind ?? staleEvent?.kind ?? null,
+        temporalQueriesAvailable: tq.length,
+      };
     }
     return { indices, newWords, recordsCompiled: 0, minedDocId: null, temporalQueriesAvailable: tq.length };
   }
@@ -398,6 +419,7 @@ export function atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily, 
     .filter((view) => view.family === atomFamily)
     .sort((a, b) => b.liveUpdateEpoch - a.liveUpdateEpoch);
   const indices = [], newWords = [], minedDocIds = [], eventIds = [], slots = [];
+  const sourceMeta = {};
   for (const view of candidates) {
     const direct = directQrelForView(view);
     if (!direct || skip.has(direct.docId)) continue;
@@ -423,6 +445,13 @@ export function atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily, 
     minedDocIds.push(direct.docId);
     eventIds.push(memEv?.id ?? `mem_${direct.docId}`);
     slots.push(slot);
+    if (!sourceMeta.sourceQueryId) {
+      sourceMeta.sourceQueryId = view.ev.id;
+      sourceMeta.sourceFamily = view.family;
+      sourceMeta.publicIntent = view.ev.publicIntent ?? view.lq?.publicIntent ?? null;
+      sourceMeta.scope = view.ev.scope ?? view.lq?.scope ?? null;
+      sourceMeta.hardNegativeDocId = hardNegativeForView(view)?.docId ?? null;
+    }
   }
   if (indices.length > 0) return {
     indices,
@@ -432,6 +461,11 @@ export function atomAnchorUnits({ pack, logicalQById, eventByDocId, atomFamily, 
     minedDocIds,
     eventId: eventIds[0],
     eventIds,
+    sourceQueryId: sourceMeta.sourceQueryId ?? null,
+    sourceFamily: sourceMeta.sourceFamily ?? atomFamily,
+    publicIntent: sourceMeta.publicIntent ?? null,
+    scope: sourceMeta.scope ?? null,
+    hardNegativeDocId: sourceMeta.hardNegativeDocId ?? null,
     slot: slots[0],
     slots,
   };

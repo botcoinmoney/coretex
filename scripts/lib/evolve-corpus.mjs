@@ -30,6 +30,18 @@ const CITIES = ['Oslo', 'Lagos', 'Quito', 'Hanoi', 'Cairo', 'Lima', 'Riga', 'Acc
 const PKGS = ['pnpm', 'npm', 'yarn', 'bun', 'pip', 'poetry', 'cargo', 'maven'];
 const API_HOSTS = ['atlas', 'beacon', 'cedar', 'delta', 'ember', 'falcon', 'granite', 'harbor'];
 const VALIDITY_SHADOW_COLORS = ['amber', 'silver', 'copper', 'violet'];
+const V16_BRANCH_WEIGHTS = [
+  ['temporal', 20],
+  ['conflict', 20],
+  ['validity_atom', 18],
+  ['entity_resolution_atom', 14],
+  ['scope_atom', 13],
+  ['decision', 5],
+  ['relation_lifecycle', 3],
+  ['coreference', 2],
+  ['noise_suppression', 2],
+  ['abstention', 3],
+];
 
 function slug(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 96);
@@ -44,6 +56,16 @@ function publicScopeFor(subj, universe, epoch, label) {
     taskId: `task_${base}`,
     userScopeId: universe,
   };
+}
+
+function pickWeightedBranch(seedKey, weights) {
+  const total = weights.reduce((sum, [, weight]) => sum + weight, 0);
+  let cursor = unit(seedKey) * total;
+  for (const [branch, weight] of weights) {
+    cursor -= weight;
+    if (cursor < 0) return branch;
+  }
+  return weights[weights.length - 1]?.[0] ?? 'temporal';
 }
 
 /**
@@ -126,17 +148,13 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
     const isProject = /-svc-/.test(canonical);
     const tagU = [universe, subj.id];
     const idBase = `e${epoch}_${subj.id}`;
-    const op = h(`${seed}:op:${epoch}:${subj.id}`).readUInt32BE(0) % (hasAtomV16Metadata ? 12 : 6);
-    let branch = op <= 1 ? 'temporal'
-      : op <= 3 ? 'conflict'
-      : op === 4 ? 'decision'
-      : op === 5 ? 'abstention'
-      : op === 6 ? 'validity_atom'
-      : op === 7 ? 'scope_atom'
-      : op === 8 ? 'entity_resolution_atom'
-      : op === 9 ? 'coreference'
-      : op === 10 ? 'relation_lifecycle'
-      : 'noise_suppression';
+    const op = h(`${seed}:op:${epoch}:${subj.id}`).readUInt32BE(0) % 6;
+    let branch = hasAtomV16Metadata
+      ? pickWeightedBranch(`${seed}:branch-weight:${epoch}:${subj.id}`, V16_BRANCH_WEIGHTS)
+      : op <= 1 ? 'temporal'
+        : op <= 3 ? 'conflict'
+        : op === 4 ? 'decision'
+        : 'abstention';
     if (branch === 'entity_resolution_atom' && duplicateEntityPairs.length === 0) branch = 'scope_atom';
 
     if (branch === 'temporal') {
@@ -282,10 +300,10 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
       const endpoint = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-solver-${epoch}.internal`;
       const wrongEndpoint = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-finance-${epoch}.internal`;
       addedDocs.push({ id: rightId, lane: 'deep', kind: 'atom_scope_fact', entityIds: tagU,
-        text: `${canonical}'s algebra workspace approved ${endpoint} as the solver endpoint for last week's scoped session.`,
+        text: `${canonical}'s algebra workspace approval set ${endpoint} as the solver endpoint for last week's scoped session.`,
         shape: 'atom_scope_record', timestamp: tsDate, currentStaleFlag: true, scope, liveUpdateEpoch: epoch });
       addedDocs.push({ id: wrongId, lane: 'deep', kind: 'atom_scope_fact', entityIds: tagU,
-        text: `For ${canonical}'s math project from last week, the project endpoint note listed ${wrongEndpoint}, but that note belonged to the finance modeling scope.`,
+        text: `For ${canonical}'s math project scope from last week, the project endpoint note listed ${wrongEndpoint} as the endpoint for the scoped session.`,
         shape: 'atom_scope_record', timestamp: tsDate, currentStaleFlag: true, scope: wrongScope, liveUpdateEpoch: epoch });
       addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
         lane: 'deep', family: 'scope_atom',
@@ -327,17 +345,18 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
       const newDep = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-active-${epoch}`;
       const oldId = `d_${idBase}_rl_old`, curId = `d_${idBase}_rl_cur`, qid = `q_${idBase}_rl`;
       addedDocs.push({ id: oldId, lane: 'deep', kind: 'relation_lifecycle_record', entityIds: tagU,
-        text: `${canonical}'s current escalation relation for ${scopeLabel} points to ${oldDep} according to a late audit note.`,
+        text: `The late audit note says ${canonical}'s current escalation relation for ${scopeLabel} is ${oldDep}; operators should use ${oldDep} for the current escalation relation.`,
         shape: 'relation_lifecycle_record', timestamp: tsDate, currentStaleFlag: false, lifecycleState: 'superseded_relation', liveUpdateEpoch: epoch });
       addedDocs.push({ id: curId, lane: 'deep', kind: 'relation_lifecycle_record', entityIds: tagU,
-        text: `The replacement ledger sets ${newDep} as the active dependency for ${canonical}'s ${scopeLabel}, replacing the superseded late audit relation.`,
+        text: `Supersession ledger ${priorDate}: ${newDep} replaces the late audit dependency for ${canonical}'s ${scopeLabel}; ${oldDep} is retired.`,
         shape: 'relation_lifecycle_record', timestamp: priorDate, currentStaleFlag: true, lifecycleState: 'current_relation', liveUpdateEpoch: epoch });
       addedRelations.push({ src: curId, dst: oldId, type: 'supersedes', label: 'supersedes' });
       addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
         lane: 'deep', family: 'relation_lifecycle',
-        queryText: `What current escalation relation replaced ${canonical}'s superseded late audit relation for ${scopeLabel}?`,
+        queryText: `What is ${canonical}'s current escalation relation for ${scopeLabel} after the late audit relation was superseded?`,
         qrels: [{ docId: curId, relevance: 1.0, role: 'direct' }, { docId: oldId, relevance: 0.2, role: 'stale_relation' }],
         hardNegatives: [{ docId: oldId, category: 'stale_relation_high_overlap' }],
+        publicIntent: { atom: 'relation_lifecycle', subjectEntityId: subj.id, relationType: 'supersedes', lifecycleState: 'current_relation', scopeLabel },
         band: 'very_hard', operationFamily: 'relation_lifecycle', liveUpdateEpoch: epoch });
     } else if (branch === 'noise_suppression') {
       const scopeLabel = isProject ? 'rollback drill' : 'handoff drill';
@@ -345,10 +364,10 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
       const wrongOwner = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-draft-${epoch}`;
       const rightId = `d_${idBase}_ns_r`, wrongId = `d_${idBase}_ns_w`, qid = `q_${idBase}_ns`;
       addedDocs.push({ id: rightId, lane: 'deep', kind: 'noise_suppression_answer', entityIds: tagU,
-        text: `For ${canonical}'s ${scopeLabel}, the approved owner is ${owner} in the current signed handoff ledger.`,
+        text: `The signed handoff ledger for ${canonical}'s ${scopeLabel} lists approved owner ${owner}.`,
         shape: 'noise_suppression_answer', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
       addedDocs.push({ id: wrongId, lane: 'deep', kind: 'noise_suppression_distractor', entityIds: tagU,
-        text: `For ${canonical}'s ${scopeLabel}, the current approved owner is ${wrongOwner}; this retired draft used the exact query wording but was rejected.`,
+        text: `For ${canonical}'s ${scopeLabel}, the current approved owner is ${wrongOwner}.`,
         shape: 'noise_suppression_distractor', timestamp: tsDate, currentStaleFlag: false, liveUpdateEpoch: epoch });
       addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
         lane: 'deep', family: 'noise_suppression',
@@ -367,11 +386,11 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
       const wrongRetry = `${1 + Math.floor(rnd() * 4)} minutes`;
       addedDocs.push({ id: rightId, lane: 'deep', kind: 'atom_entity_resolution_fact', entityIds: [universe, pair.target.id],
         roleAliases: [...(pair.target.roleAliases ?? [])], scope,
-        text: `${pair.canonicalName} recorded ${retry} for the retry window in the migration workspace.`,
+        text: `The migration workspace record for the ${roleAlias} sets the approved retry window to ${retry}.`,
         shape: 'atom_entity_resolution_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
       addedDocs.push({ id: wrongId, lane: 'deep', kind: 'atom_entity_resolution_fact', entityIds: [universe, pair.wrong.id],
-        roleAliases: [...(pair.wrong.roleAliases ?? [wrongRole])], scope,
-        text: `${pair.canonicalName} recorded ${wrongRetry} for the retry window in the design workspace.`,
+        roleAliases: [...new Set([...(pair.wrong.roleAliases ?? [wrongRole]), roleAlias])], scope,
+        text: `${pair.canonicalName} the ${roleAlias} recorded ${wrongRetry} for the retry window in the migration workspace.`,
         shape: 'atom_entity_resolution_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
       addedQueries.push({ id: qid, ownerScoped: true, ownerEntityId: universe, subjectEntityId: pair.target.id,
         lane: 'deep', family: 'entity_resolution_atom',

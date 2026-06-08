@@ -87,6 +87,17 @@ const CLEAR_PACK_QUOTAS = has('clear-pack-quotas');
 const MOCK_EMBEDDINGS = has('mock-embeddings');
 const TRACE_DIAGNOSTICS = has('trace-diagnostics');
 const TRACE_LOW_MOVEMENT = has('trace-low-movement');
+const RUNWAY_HARDNESS_CENSUS = has('runway-hardness-census') || has('hardness-conditioned-pack') || TRACE_LOW_MOVEMENT;
+const HARDNESS_CONDITIONED_PACK = has('hardness-conditioned-pack');
+const HARDNESS_ALREADY_SOLVED_CAP = Number(flag('hardness-already-solved-cap', '8'));
+const HARDNESS_TOO_HARD_CAP = Number(flag('hardness-too-hard-cap', '8'));
+const FINGERPRINT_QUOTAS = !has('no-fingerprint-quotas');
+const FINGERPRINT_QUOTA_START_EPOCH = Number(flag('fingerprint-quota-start-epoch', '3'));
+const FINGERPRINT_MAX_ATTEMPT_SHARE_AFTER_EPOCH2 = Number(flag('fingerprint-max-attempt-share-after-epoch2', '0.35'));
+const FAMILY_MAX_ATTEMPT_SHARE = Number(flag('family-max-attempt-share', '0.20'));
+const WEAK_FAMILY_MAX_ATTEMPT_SHARE = Number(flag('weak-family-max-attempt-share', '0.05'));
+const WEAK_FAMILY_GROUP_MAX_ATTEMPT_SHARE = Number(flag('weak-family-group-max-attempt-share', '0.15'));
+const ATOM_EASY_SKIP_FAMILY_CAP = Number(flag('atom-easy-skip-family-cap', '3'));
 const COMPACT_PATCH_TRACES = has('compact-patch-traces');
 const SUPPLY_CENSUS_GATE_ENABLED = (has('supply-census-gate') || TRACE_LOW_MOVEMENT) && !has('no-supply-census-gate');
 const ATOM_TRACE = has('atom-trace') || TRACE_DIAGNOSTICS;
@@ -475,10 +486,15 @@ function targetDocDiagnostics({ targetDocId, before, after, pack, patch }) {
 function applyHonestCursorUpdate(slotCursor, update) {
   if (!update) return null;
   if (update.temporalRecordDelta) slotCursor.temporalRecord += update.temporalRecordDelta;
+  if (update.temporalAttemptDelta) slotCursor.temporalAttempt += update.temporalAttemptDelta;
+  if (update.validityAttemptDelta) slotCursor.validityAttempt += update.validityAttemptDelta;
   if (update.conflictSlotDelta) slotCursor.conflictSlot += update.conflictSlotDelta;
+  if (update.conflictAttemptDelta) slotCursor.conflictAttempt += update.conflictAttemptDelta;
   if (update.abstentionSlotDelta) slotCursor.abstentionSlot += update.abstentionSlotDelta;
   if (update.scopeSlotDelta) slotCursor.scopeSlot += update.scopeSlotDelta;
+  if (update.scopeAttemptDelta) slotCursor.scopeAttempt += update.scopeAttemptDelta;
   if (update.entitySlotDelta) slotCursor.entitySlot += update.entitySlotDelta;
+  if (update.entityAttemptDelta) slotCursor.entityAttempt += update.entityAttemptDelta;
   if (update.evidenceSlotDelta) slotCursor.evidenceSlot += update.evidenceSlotDelta;
   if (update.noiseSlotDelta) slotCursor.noiseSlot += update.noiseSlotDelta;
   if (update.relationCausalOffsetDelta) slotCursor.relationCausalOffset += update.relationCausalOffsetDelta;
@@ -836,9 +852,31 @@ const GENESIS_PARENT_ROOT = merkleizeState({ words: new Array(1024).fill(0n) });
 //
 // Add fingerprints here by name; the loop below dispatches by switch. Each family records a
 // distinct operationFingerprint and selectorFingerprint so per-fp accept/reject is auditable.
-const DEFAULT_HONEST_FAMILIES = 'temporal_update,conflict_lifecycle,relation_causal,evidence_bundle,coreference,relation_lifecycle,noise_suppression,validity_atom,scope_atom,entity_resolution_atom,abstention_top1';
+const DEFAULT_HONEST_FAMILY_WEIGHTS = [
+  ['temporal_update', 8],
+  ['conflict_lifecycle', 8],
+  ['validity_atom', 7],
+  ['entity_resolution_atom', 6],
+  ['scope_atom', 5],
+  ['relation_causal', 1],
+  ['evidence_bundle', 1],
+  ['relation_lifecycle', 1],
+  ['coreference', 1],
+  ['noise_suppression', 1],
+  ['abstention_top1', 1],
+];
+const expandFamilyWeights = (weights) => weights.flatMap(([family, count]) => Array.from({ length: count }, () => family)).join(',');
+const DEFAULT_HONEST_FAMILIES = expandFamilyWeights(DEFAULT_HONEST_FAMILY_WEIGHTS);
 const HONEST_FAMILY_FLAG = flag('honest-families', flag('families', DEFAULT_HONEST_FAMILIES));
 const HONEST_FAMILIES = HONEST_FAMILY_FLAG.split(',').map((s) => s.trim()).filter(Boolean);
+const WEAK_RUNWAY_FAMILIES = new Set([
+  'relation_causal',
+  'evidence_bundle',
+  'relation_lifecycle',
+  'coreference',
+  'noise_suppression',
+  'abstention_top1',
+]);
 const DEFAULT_LOW_MOVEMENT_FAMILIES = 'coreference,relation_lifecycle,noise_suppression,scope_atom';
 const SUPPLY_CENSUS_FAMILIES = (flag(
   'supply-census-families',
@@ -854,14 +892,19 @@ const SUPPLY_TARGET_ABSENT_EXEMPT = new Set(['abstention_top1']);
 function makeHonestSlotCursor() {
   return {
     temporalRecord: 0,          // TemporalRecord slot index (cap 96)
+    temporalAttempt: 0,
     temporalSkipDocs: new Set(), // mined temporal-current doc IDs
+    validityAttempt: 0,
     validitySkipDocs: new Set(), // mined validity-current doc IDs
     conflictSlot: 96,           // POLICY_CONFLICT atom slot index (cap 128); disjoint from temporal memory slots
+    conflictAttempt: 0,
     conflictSkipDocs: new Set(), // anchored conflict doc IDs
     abstentionSlot: 0,          // POLICY_ABSTENTION slot index (cap 32)
     scopeSlot: 192,             // MemoryIndex policy-anchor slot for scope_atom
+    scopeAttempt: 0,
     scopeSkipDocs: new Set(),
     entitySlot: 128,            // MemoryIndex policy-anchor slot for entity_resolution_atom
+    entityAttempt: 0,
     entitySkipDocs: new Set(),
     evidenceSlot: 224,          // MemoryIndex anchors 224..239, evidence atoms 0..15
     evidenceSkipDocs: new Set(),
@@ -880,6 +923,12 @@ function makeHonestSlotCursor() {
 }
 function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
   const { pack, logicalQById, eventByDocId, addedDocs, slotCursor } = ctx;
+  const token = (value, fallback = 'generic') => String(value ?? fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 48) || fallback;
+  const pick = (values, n) => values[Math.abs(n) % values.length];
   const baseFingerprint = (op) => ({
     operationFingerprint: op,
     selectorFingerprint: ({
@@ -1017,9 +1066,15 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     if (!u.indices.length || u.recordsCompiled === 0) {
       return { skipped: true, family, reason: u.reason ?? 'no_temporal_pack_query_available', fingerprint: `honest:temporal:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:temporal:current_stale', selectorFingerprint: 'public-temporal-currentStale-pack-mined' };
     }
-    return makePatchFrom(u, 'honest:temporal:current_stale', u.minedDocId, {
+    const action = pick(['bridge_supersession', 'boost_current', 'suppress_stale'], slotCursor.temporalAttempt);
+    const attr = token(u.temporalAttribute ?? u.currentDocKind, 'current_stale');
+    return makePatchFrom(u, `honest:temporal:${attr}:${action}`, u.minedDocId, {
+      selectorFingerprint: `public-temporal:${attr}:${action}`,
       temporalRecordSlot: slotCursor.temporalRecord,
-      cursorUpdate: { temporalRecordDelta: 1, addTemporalSkipDocs: [u.minedDocId] },
+      temporalSourceQueryId: u.sourceQueryId ?? null,
+      temporalHardNegativeDocId: u.hardNegativeDocId ?? null,
+      temporalAttribute: u.temporalAttribute ?? null,
+      cursorUpdate: { temporalRecordDelta: 1, temporalAttemptDelta: 1, addTemporalSkipDocs: [u.minedDocId] },
     });
   }
   if (family === 'validity_atom') {
@@ -1027,9 +1082,14 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     if (!u.indices.length || u.recordsCompiled === 0) {
       return { skipped: true, family, reason: u.reason ?? 'no_validity_atom_pack_query_available', fingerprint: `honest:validity_atom:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:validity_atom:temporal_record', selectorFingerprint: 'public-validity-subject-attribute-currentStale-pack-mined' };
     }
-    return makePatchFrom(u, 'honest:validity_atom:temporal_record', u.minedDocId, {
+    const selector = pick(['valid_at_query_time', 'observed_after', 'superseded_before_query'], slotCursor.validityAttempt);
+    const action = pick(['bridge_supersession', 'boost_current', 'suppress_stale'], slotCursor.validityAttempt);
+    return makePatchFrom(u, `honest:validity_atom:${selector}:${action}`, u.minedDocId, {
+      selectorFingerprint: `public-validity:${selector}:${action}`,
       temporalRecordSlot: slotCursor.temporalRecord,
-      cursorUpdate: { temporalRecordDelta: 1, addValiditySkipDocs: [u.minedDocId] },
+      temporalSourceQueryId: u.sourceQueryId ?? null,
+      temporalHardNegativeDocId: u.hardNegativeDocId ?? null,
+      cursorUpdate: { temporalRecordDelta: 1, validityAttemptDelta: 1, addValiditySkipDocs: [u.minedDocId] },
     });
   }
   if (family === 'conflict' || family === 'conflict_lifecycle') {
@@ -1037,9 +1097,13 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     if (!u.indices.length) {
       return { skipped: true, family, reason: u.reason ?? 'no_conflict_pack_query_available', fingerprint: `honest:conflict:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:conflict:CONFLICT_SET_MEMBER:boost', selectorFingerprint: 'public-policy-CONFLICT_SET_MEMBER:CONTRADICTS_EDGE:boost' };
     }
-    return makePatchFrom(u, 'honest:conflict:CONFLICT_SET_MEMBER:boost', u.minedDocId, {
+    const action = pick(['boost_resolution', 'bridge_contradiction', 'suppress_conflict'], slotCursor.conflictAttempt);
+    return makePatchFrom(u, `honest:conflict:CONFLICT_SET_MEMBER:${action}`, u.minedDocId, {
+      selectorFingerprint: `public-policy-CONFLICT_SET_MEMBER:CONTRADICTS_EDGE:${action}`,
       conflictAtomSlot: u.slot,
-      cursorUpdate: { conflictSlotDelta: 1, addConflictSkipDocs: [u.minedDocId] },
+      conflictSourceQueryId: u.sourceQueryId ?? null,
+      conflictHardNegativeDocId: u.hardNegativeDocId ?? null,
+      cursorUpdate: { conflictSlotDelta: 1, conflictAttemptDelta: 1, addConflictSkipDocs: [u.minedDocId] },
     });
   }
   if (family === 'evidence_bundle') {
@@ -1047,7 +1111,9 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     if (!u.indices.length) {
       return { skipped: true, family, reason: u.reason ?? 'no_evidence_bundle_pack_query_available', fingerprint: `honest:evidence_bundle:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:evidence_bundle:RELATION_PATH_PRESENT:bundle', selectorFingerprint: 'public-policy-RELATION_PATH_PRESENT:SUPPORT_IN_DEGREE:bundle' };
     }
-    return makePatchFrom(u, 'honest:evidence_bundle:RELATION_PATH_PRESENT:bundle', u.minedDocId, {
+    const relationToken = token(u.relationFamily, 'relation');
+    return makePatchFrom(u, `honest:evidence_bundle:RELATION_PATH_PRESENT:${relationToken}:bundle`, u.minedDocId, {
+      selectorFingerprint: `public-policy-RELATION_PATH_PRESENT:${relationToken}:SUPPORT_IN_DEGREE:bundle`,
       evidenceMemorySlot: u.memorySlot,
       evidenceAtomSlot: u.atomSlot,
       evidenceSourceQueryId: u.sourceQueryId,
@@ -1059,7 +1125,9 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     if (!u.indices.length) {
       return { skipped: true, family, reason: u.reason ?? 'no_noise_suppression_pack_query_available', fingerprint: `honest:noise_suppression:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:noise_suppression:ANSWER_DENSITY:suppress', selectorFingerprint: 'public-policy-ANSWER_DENSITY:SUPPORT_IN_DEGREE:suppress' };
     }
-    return makePatchFrom(u, 'honest:noise_suppression:ANSWER_DENSITY:suppress', u.minedDocId, {
+    const noiseToken = token(u.noiseCategory, 'noise');
+    return makePatchFrom(u, `honest:noise_suppression:ANSWER_DENSITY:${noiseToken}:suppress`, u.minedDocId, {
+      selectorFingerprint: `public-policy-ANSWER_DENSITY:${noiseToken}:suppress`,
       noiseMemorySlot: u.memorySlot,
       noiseAtomSlot: u.atomSlot,
       noiseSourceQueryId: u.sourceQueryId,
@@ -1082,12 +1150,17 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     if (!u.indices.length) {
       return { skipped: true, family, reason: u.reason ?? 'no_scope_atom_pack_query_available', fingerprint: `honest:scope_atom:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:scope_atom:constrain', selectorFingerprint: 'public-scope-project-session-topic-task-selector' };
     }
-    return makePatchFrom(u, 'honest:scope_atom:constrain', u.minedDocId, {
+    const dimension = pick(['same_project', 'same_session', 'same_topic', 'same_task', 'same_user_scope'], slotCursor.scopeAttempt);
+    const action = pick(['constrain', 'boost', 'suppress_wrong_scope'], slotCursor.scopeAttempt);
+    return makePatchFrom(u, `honest:scope_atom:${dimension}:${action}`, u.minedDocId, {
+      selectorFingerprint: `public-scope:${dimension}:${action}`,
       scopeAtomSlot: u.slot,
       scopeAtomSlots: u.slots ?? [u.slot],
+      scopeSourceQueryId: u.sourceQueryId ?? null,
+      scopeHardNegativeDocId: u.hardNegativeDocId ?? null,
       atomRecordsCompiled: u.recordsCompiled ?? 1,
       atomMinedDocIds: u.minedDocIds ?? [u.minedDocId],
-      cursorUpdate: { scopeSlotDelta: u.recordsCompiled ?? 1, addScopeSkipDocs: u.minedDocIds ?? [u.minedDocId] },
+      cursorUpdate: { scopeSlotDelta: u.recordsCompiled ?? 1, scopeAttemptDelta: 1, addScopeSkipDocs: u.minedDocIds ?? [u.minedDocId] },
     });
   }
   if (family === 'entity_resolution_atom') {
@@ -1095,15 +1168,127 @@ function honestPatchForEpoch(epoch, honestIdx, family, ctx) {
     if (!u.indices.length) {
       return { skipped: true, family, reason: u.reason ?? 'no_entity_resolution_atom_pack_query_available', fingerprint: `honest:entity_resolution_atom:skipped:e${epoch}:h${honestIdx}`, operationFingerprint: 'honest:entity_resolution_atom:prefer', selectorFingerprint: 'public-entity-duplicate-name-role-alias-selector' };
     }
-    return makePatchFrom(u, 'honest:entity_resolution_atom:prefer', u.minedDocId, {
+    const selector = pick(['same_name_collision', 'alias_overlap', 'role_alias_match', 'same_scope'], slotCursor.entityAttempt);
+    const action = pick(['prefer', 'disambiguate'], slotCursor.entityAttempt);
+    return makePatchFrom(u, `honest:entity_resolution_atom:${selector}:${action}`, u.minedDocId, {
+      selectorFingerprint: `public-entity:${selector}:${action}`,
       entityResolutionAtomSlot: u.slot,
       entityResolutionAtomSlots: u.slots ?? [u.slot],
+      entityResolutionSourceQueryId: u.sourceQueryId ?? null,
+      entityResolutionHardNegativeDocId: u.hardNegativeDocId ?? null,
       atomRecordsCompiled: u.recordsCompiled ?? 1,
       atomMinedDocIds: u.minedDocIds ?? [u.minedDocId],
-      cursorUpdate: { entitySlotDelta: u.recordsCompiled ?? 1, addEntitySkipDocs: u.minedDocIds ?? [u.minedDocId] },
+      cursorUpdate: { entitySlotDelta: u.recordsCompiled ?? 1, entityAttemptDelta: 1, addEntitySkipDocs: u.minedDocIds ?? [u.minedDocId] },
     });
   }
   return { skipped: true, family, reason: `unknown_family:${family}`, fingerprint: `honest:unknown:${family}:e${epoch}:h${honestIdx}`, operationFingerprint: `honest:unknown:${family}`, selectorFingerprint: 'unknown' };
+}
+
+function honestPatchForAttempt(epoch, honestIdx, ctx, attemptsByFingerprint, attemptsByFamily, quotaBlockedFamilies = new Set()) {
+  const cap = (FINGERPRINT_QUOTAS && epoch >= FINGERPRINT_QUOTA_START_EPOCH)
+    ? Math.max(1, Math.floor(HONEST_PER_EPOCH * FINGERPRINT_MAX_ATTEMPT_SHARE_AFTER_EPOCH2))
+    : Infinity;
+  const familyCap = (FINGERPRINT_QUOTAS && epoch >= FINGERPRINT_QUOTA_START_EPOCH)
+    ? Math.max(1, Math.floor(HONEST_PER_EPOCH * FAMILY_MAX_ATTEMPT_SHARE))
+    : Infinity;
+  const weakFamilyCap = (FINGERPRINT_QUOTAS && epoch >= FINGERPRINT_QUOTA_START_EPOCH)
+    ? Math.max(1, Math.floor(HONEST_PER_EPOCH * WEAK_FAMILY_MAX_ATTEMPT_SHARE))
+    : Infinity;
+  const weakFamilyGroupCap = (FINGERPRINT_QUOTAS && epoch >= FINGERPRINT_QUOTA_START_EPOCH)
+    ? Math.max(1, Math.floor(HONEST_PER_EPOCH * WEAK_FAMILY_GROUP_MAX_ATTEMPT_SHARE))
+    : Infinity;
+  let firstSkipped = null;
+  let firstQuotaSkipped = null;
+  for (let i = 0; i < HONEST_FAMILIES.length; i++) {
+    const family = HONEST_FAMILIES[(honestIdx + i) % HONEST_FAMILIES.length];
+    const hp = honestPatchForEpoch(epoch, honestIdx, family, ctx);
+    if (!hp) continue;
+    if (hp.skipped) {
+      firstSkipped ??= hp;
+      continue;
+    }
+    const fp = hp.operationFingerprint ?? hp.fingerprint ?? 'unknown';
+    const fpFamily = atomFamilyForFingerprint(fp);
+    if (quotaBlockedFamilies.has(fpFamily)) {
+      firstQuotaSkipped ??= {
+        skipped: true,
+        family,
+        reason: `family_easy_skip_quota_exceeded:${fpFamily}`,
+        fingerprint: `honest:${family}:easy-skip-quota:e${epoch}:h${honestIdx}`,
+        operationFingerprint: fp,
+        selectorFingerprint: hp.selectorFingerprint ?? fp,
+        quotaCap: ATOM_EASY_SKIP_FAMILY_CAP,
+      };
+      continue;
+    }
+    if (WEAK_RUNWAY_FAMILIES.has(fpFamily)) {
+      const weakGroupAttempts = [...WEAK_RUNWAY_FAMILIES].reduce((sum, weakFamily) => sum + (attemptsByFamily[weakFamily] ?? 0), 0);
+      const weakFamilyAttempts = attemptsByFamily[fpFamily] ?? 0;
+      const weakFamiliesStillUnsampled = [...WEAK_RUNWAY_FAMILIES].some((weakFamily) => (attemptsByFamily[weakFamily] ?? 0) === 0);
+      if (weakFamilyAttempts > 0 && weakFamiliesStillUnsampled) {
+        firstQuotaSkipped ??= {
+          skipped: true,
+          family,
+          reason: `weak_family_rotation_deferred:${fpFamily}`,
+          fingerprint: `honest:${family}:weak-family-rotation:e${epoch}:h${honestIdx}`,
+          operationFingerprint: fp,
+          selectorFingerprint: hp.selectorFingerprint ?? fp,
+          quotaCap: 1,
+        };
+        continue;
+      }
+      if (weakGroupAttempts >= weakFamilyGroupCap) {
+        firstQuotaSkipped ??= {
+          skipped: true,
+          family,
+          reason: `weak_family_group_quota_exceeded:${fpFamily}`,
+          fingerprint: `honest:${family}:weak-family-group-quota:e${epoch}:h${honestIdx}`,
+          operationFingerprint: fp,
+          selectorFingerprint: hp.selectorFingerprint ?? fp,
+          quotaCap: weakFamilyGroupCap,
+        };
+        continue;
+      }
+      if ((attemptsByFamily[fpFamily] ?? 0) >= weakFamilyCap) {
+        firstQuotaSkipped ??= {
+          skipped: true,
+          family,
+          reason: `weak_family_quota_exceeded:${fpFamily}`,
+          fingerprint: `honest:${family}:weak-family-quota:e${epoch}:h${honestIdx}`,
+          operationFingerprint: fp,
+          selectorFingerprint: hp.selectorFingerprint ?? fp,
+          quotaCap: weakFamilyCap,
+        };
+        continue;
+      }
+    }
+    if ((attemptsByFamily[fpFamily] ?? 0) >= familyCap) {
+      firstQuotaSkipped ??= {
+        skipped: true,
+        family,
+        reason: `family_quota_exceeded:${fpFamily}`,
+        fingerprint: `honest:${family}:family-quota:e${epoch}:h${honestIdx}`,
+        operationFingerprint: fp,
+        selectorFingerprint: hp.selectorFingerprint ?? fp,
+        quotaCap: familyCap,
+      };
+      continue;
+    }
+    if ((attemptsByFingerprint[fp] ?? 0) >= cap) {
+      firstQuotaSkipped ??= {
+        skipped: true,
+        family,
+        reason: `fingerprint_quota_exceeded:${fp}`,
+        fingerprint: `honest:${family}:fingerprint-quota:e${epoch}:h${honestIdx}`,
+        operationFingerprint: fp,
+        selectorFingerprint: hp.selectorFingerprint ?? fp,
+        quotaCap: cap,
+      };
+      continue;
+    }
+    return hp;
+  }
+  return firstQuotaSkipped ?? firstSkipped;
 }
 
 // ─── Genesis frontier (BUILD ONCE, step every epoch on the SAME instance) ───
@@ -1212,6 +1397,79 @@ const supplyCensusSets = new Map(SUPPLY_CENSUS_FAMILIES.map((family) => [family,
   activeFrontierIds: new Set(),
   hiddenPackIds: new Set(),
 }]));
+const PIPELINE_LEDGER_FAMILIES = [...new Set([
+  ...HONEST_FAMILIES,
+  ...SUPPLY_CENSUS_FAMILIES,
+  'temporal_update',
+  'conflict_lifecycle',
+  'validity_atom',
+  'entity_resolution_atom',
+  'scope_atom',
+  'relation_causal',
+  'evidence_bundle',
+  'relation_lifecycle',
+  'coreference',
+  'noise_suppression',
+  'abstention_top1',
+])];
+function makePipelineLedgerRow(family) {
+  return {
+    family,
+    generated: 0,
+    bridged: 0,
+    reserve: 0,
+    active: 0,
+    measuredPack: 0,
+    minable: 0,
+    alreadySolved: 0,
+    tooHard: 0,
+    targetAbsent: 0,
+    targetCandidatePresent: 0,
+    hardNegativeAboveTarget: 0,
+    renderedSignal: 0,
+    traceFired: 0,
+    evaluated: 0,
+    thresholdPass: 0,
+    oldCorpusDamage: 0,
+    goldDamage: 0,
+    accepted: 0,
+    recoveryPpmMax: null,
+    recoveryPpmSum: 0,
+    firstFailureBuckets: {},
+  };
+}
+const pipelineLedgerRows = new Map(PIPELINE_LEDGER_FAMILIES.map((family) => [family, makePipelineLedgerRow(family)]));
+function ledgerRow(family) {
+  if (!pipelineLedgerRows.has(family)) pipelineLedgerRows.set(family, makePipelineLedgerRow(family));
+  return pipelineLedgerRows.get(family);
+}
+function bumpFailure(family, bucketName) {
+  const row = ledgerRow(family);
+  row.firstFailureBuckets[bucketName] = (row.firstFailureBuckets[bucketName] ?? 0) + 1;
+}
+function firstFailureBucketFromReason(reason) {
+  const r = String(reason ?? '');
+  if (r.includes('already_solved')) return 'already_solved';
+  if (r.includes('target_absent')) return 'too_hard_target_absent';
+  if (r.includes('slot_exhausted') || r.includes('entries_exhausted')) return 'slot_exhaustion';
+  if (
+    r.includes('fingerprint_quota')
+    || r.includes('family_quota')
+    || r.includes('family_easy_skip_quota')
+    || r.includes('weak_family_group_quota')
+    || r.includes('weak_family_rotation_deferred')
+  ) return 'fingerprint_exhaustion';
+  if (r.includes('no_') && r.includes('pack_query')) return 'pack_starved';
+  if (r.includes('no_') && r.includes('candidate')) return 'too_hard_target_absent';
+  if (r.includes('old_corpus_damage')) return 'old_corpus_damage';
+  if (r.includes('gold_damage')) return 'gold_damage';
+  if (r.includes('old_family_regression')) return 'selector_overbroad';
+  if (r.includes('no_retrieval_improvement') || r.includes('no_recovery')) return 'qwen_no_recovery';
+  if (r.includes('threshold')) return 'threshold_block';
+  if (r.includes('render')) return 'render_missing';
+  if (r.includes('trace')) return 'trace_missing';
+  return 'qwen_no_recovery';
+}
 function censusRow(family) {
   if (!SUPPLY_CENSUS_SET.has(family)) return null;
   if (!supplyCensusRows.has(family)) supplyCensusRows.set(family, makeSupplyCensusRow(family));
@@ -1227,6 +1485,12 @@ function supplyFamiliesForLogicalFamily(logicalFamily) {
   }
   return [...out];
 }
+function pipelineFamiliesForLogicalFamily(logicalFamily) {
+  const families = supplyFamiliesForLogicalFamily(logicalFamily);
+  if (families.length) return families;
+  if (logicalFamily === 'abstention_missing' || logicalFamily === 'abstention' || logicalFamily === 'unanswerable') return ['abstention_top1'];
+  return [logicalFamily ?? 'unknown'];
+}
 function censusRowsForLogicalFamily(logicalFamily) {
   return supplyFamiliesForLogicalFamily(logicalFamily).map((family) => censusRow(family)).filter(Boolean);
 }
@@ -1239,6 +1503,7 @@ function docIdsForLogicalQuery(q) {
 function recordEvolveSupply(ld) {
   const docsByFamily = new Map();
   for (const q of ld.addedQueries ?? []) {
+    for (const family of pipelineFamiliesForLogicalFamily(q.family)) ledgerRow(family).generated++;
     for (const family of supplyFamiliesForLogicalFamily(q.family)) {
       const row = censusRow(family);
       if (!row) continue;
@@ -1262,12 +1527,14 @@ function isQueryAddition(ev) {
 function recordBridgeSupply(additions) {
   for (const ev of additions ?? []) {
     if (!isQueryAddition(ev)) continue;
+    for (const family of pipelineFamiliesForLogicalFamily(ev.logicalFamily ?? ev.family ?? 'unknown')) ledgerRow(family).bridged++;
     for (const row of censusRowsForLogicalFamily(ev.logicalFamily ?? ev.family ?? 'unknown')) row.bridgeEvents++;
   }
 }
 function recordReserveSupply(newEvalIds, corpus) {
   for (const id of newEvalIds ?? []) {
     const ev = corpus.byId.get(id);
+    for (const family of pipelineFamiliesForLogicalFamily(ev?.logicalFamily ?? ev?.family ?? 'unknown')) ledgerRow(family).reserve++;
     for (const family of supplyFamiliesForLogicalFamily(ev?.logicalFamily ?? ev?.family ?? 'unknown')) {
       const row = censusRow(family);
       const sets = supplyCensusSets.get(family);
@@ -1278,6 +1545,11 @@ function recordReserveSupply(newEvalIds, corpus) {
   }
 }
 function recordActiveFrontierSupply(corpus, activeIds) {
+  for (const id of activeIds ?? []) {
+    const ev = corpus.byId.get(id);
+    if (!ev || ev.split !== 'eval_hidden' || !ev.id.startsWith('zz_e') || ev.id.includes('_mem_')) continue;
+    for (const family of pipelineFamiliesForLogicalFamily(ev.logicalFamily ?? ev.family ?? 'unknown')) ledgerRow(family).active++;
+  }
   for (const family of SUPPLY_CENSUS_FAMILIES) {
     const row = censusRow(family);
     const sets = supplyCensusSets.get(family);
@@ -1291,6 +1563,7 @@ function recordActiveFrontierSupply(corpus, activeIds) {
 }
 function recordHiddenPackSupply(fullPack) {
   for (const ev of fullPack.events ?? []) {
+    for (const family of pipelineFamiliesForLogicalFamily(ev.logicalFamily ?? ev.family ?? 'unknown')) ledgerRow(family).measuredPack++;
     for (const family of supplyFamiliesForLogicalFamily(ev.logicalFamily ?? ev.family ?? 'unknown')) {
       const row = censusRow(family);
       const sets = supplyCensusSets.get(family);
@@ -1299,6 +1572,143 @@ function recordHiddenPackSupply(fullPack) {
       row.hiddenPackCount = sets.hiddenPackIds.size;
     }
   }
+}
+function classifyEventHardness(ev, baselineScore) {
+  const byId = queryMap(baselineScore);
+  const q = byId.get(ev.id);
+  const positives = relevantDocIds(ev);
+  const hardNegs = hardNegativeDocIds(ev);
+  const targetRanks = [...positives].map((id) => ({ docId: id, rank: rankOfDoc(q, id) })).filter((r) => r.rank !== null);
+  const hardNegativeRanks = [...hardNegs].map((id) => ({ docId: id, rank: rankOfDoc(q, id) })).filter((r) => r.rank !== null);
+  const targetRank = targetRanks.length ? Math.min(...targetRanks.map((r) => r.rank)) : null;
+  const hardNegativeRank = hardNegativeRanks.length ? Math.min(...hardNegativeRanks.map((r) => r.rank)) : null;
+  const targetCandidatePresent = targetRank !== null;
+  const hardNegativeAboveTarget = hardNegativeRank !== null && (targetRank === null || hardNegativeRank < targetRank);
+  const renderedSignal = hasRenderedSignal(q, [...positives, ...hardNegs]);
+  const traceFired = (q?.policyTraces?.length ?? 0) > 0 || q?.temporalRecordDriven === true || q?.memoryIRDriven === true;
+  let classification = 'already_solved';
+  if (!targetCandidatePresent) classification = 'too_hard_target_absent';
+  else if (hardNegativeAboveTarget) classification = 'minable';
+  return {
+    queryId: ev.id,
+    family: ev.logicalFamily ?? ev.family ?? 'unknown',
+    classification,
+    targetRank,
+    hardNegativeRank,
+    targetCandidatePresent,
+    hardNegativeAboveTarget,
+    renderedSignal,
+    traceFired,
+  };
+}
+function summarizeHardnessRows(rows) {
+  const out = {
+    total: rows.length,
+    minable: 0,
+    alreadySolved: 0,
+    tooHard: 0,
+    targetAbsent: 0,
+    targetCandidatePresent: 0,
+    hardNegativeAboveTarget: 0,
+    renderedSignal: 0,
+    traceFired: 0,
+    minableRatio: 0,
+    byFamily: {},
+  };
+  for (const row of rows) {
+    const fam = row.family;
+    out.byFamily[fam] ??= { total: 0, minable: 0, alreadySolved: 0, tooHard: 0, targetAbsent: 0, hardNegativeAboveTarget: 0 };
+    out.byFamily[fam].total++;
+    if (row.classification === 'minable') { out.minable++; out.byFamily[fam].minable++; }
+    if (row.classification === 'already_solved') { out.alreadySolved++; out.byFamily[fam].alreadySolved++; }
+    if (row.classification === 'too_hard_target_absent') { out.tooHard++; out.targetAbsent++; out.byFamily[fam].tooHard++; out.byFamily[fam].targetAbsent++; }
+    if (row.targetCandidatePresent) out.targetCandidatePresent++;
+    if (row.hardNegativeAboveTarget) { out.hardNegativeAboveTarget++; out.byFamily[fam].hardNegativeAboveTarget++; }
+    if (row.renderedSignal) out.renderedSignal++;
+    if (row.traceFired) out.traceFired++;
+  }
+  out.minableRatio = out.total ? out.minable / out.total : 0;
+  return out;
+}
+function recordHardnessLedger(rows) {
+  for (const row of rows) {
+    for (const family of pipelineFamiliesForLogicalFamily(row.family)) {
+      const ledger = ledgerRow(family);
+      if (row.classification === 'minable') ledger.minable++;
+      if (row.classification === 'already_solved') {
+        ledger.alreadySolved++;
+        bumpFailure(family, 'already_solved');
+      }
+      if (row.classification === 'too_hard_target_absent') {
+        ledger.tooHard++;
+        ledger.targetAbsent++;
+        bumpFailure(family, 'too_hard_target_absent');
+      }
+      if (row.targetCandidatePresent) ledger.targetCandidatePresent++;
+      if (row.hardNegativeAboveTarget) ledger.hardNegativeAboveTarget++;
+      if (row.renderedSignal) ledger.renderedSignal++;
+      if (row.traceFired) ledger.traceFired++;
+    }
+  }
+}
+function conditionPackByHardness(activePack, hardnessRows) {
+  const hardnessById = new Map(hardnessRows.map((row) => [row.queryId, row]));
+  const isLive = (ev) => ev.split === 'eval_hidden' && ev.id.startsWith('zz_e') && !ev.id.includes('_mem_');
+  const liveRows = activePack.events.filter(isLive);
+  if (!liveRows.length) return { pack: activePack, changed: false, selectedLiveCount: 0, droppedLiveCount: 0 };
+  const familyOf = (ev) => ev.logicalFamily ?? ev.family ?? 'unknown';
+  const byClass = (klass) => liveRows.filter((ev) => hardnessById.get(ev.id)?.classification === klass);
+  const minable = byClass('minable');
+  const solved = byClass('already_solved');
+  const tooHard = byClass('too_hard_target_absent');
+  const selectedLive = [];
+  const selectedIds = new Set();
+  const add = (ev) => {
+    if (!ev || selectedIds.has(ev.id)) return false;
+    selectedIds.add(ev.id);
+    selectedLive.push(ev);
+    return true;
+  };
+  for (const family of [...new Set(HONEST_FAMILIES)]) {
+    const rows = liveRows.filter((ev) => pipelineFamiliesForLogicalFamily(familyOf(ev)).includes(family));
+    add(rows.find((ev) => hardnessById.get(ev.id)?.classification === 'minable')
+      ?? rows.find((ev) => hardnessById.get(ev.id)?.classification === 'too_hard_target_absent')
+      ?? rows.find((ev) => hardnessById.get(ev.id)?.classification === 'already_solved'));
+  }
+  for (const ev of minable) add(ev);
+  const solvedCap = minable.length > 0
+    ? Math.min(HARDNESS_ALREADY_SOLVED_CAP, minable.length)
+    : Math.min(Math.max(1, HARDNESS_ALREADY_SOLVED_CAP), solved.length);
+  let solvedAdded = selectedLive.filter((ev) => hardnessById.get(ev.id)?.classification === 'already_solved').length;
+  for (const ev of solved) {
+    if (solvedAdded >= solvedCap) break;
+    if (add(ev)) solvedAdded++;
+  }
+  let tooHardAdded = selectedLive.filter((ev) => hardnessById.get(ev.id)?.classification === 'too_hard_target_absent').length;
+  for (const ev of tooHard) {
+    if (tooHardAdded >= HARDNESS_TOO_HARD_CAP) break;
+    if (add(ev)) tooHardAdded++;
+  }
+  const nonLive = activePack.events.filter((ev) => !isLive(ev));
+  const nextEvents = [...selectedLive, ...nonLive];
+  return {
+    pack: { ...activePack, events: nextEvents },
+    changed: selectedLive.length !== liveRows.length,
+    selectedLiveCount: selectedLive.length,
+    droppedLiveCount: liveRows.length - selectedLive.length,
+    droppedTooHard: tooHard.length,
+    droppedAlreadySolved: Math.max(0, solved.length - solvedAdded),
+    retainedMinable: minable.length,
+    retainedAlreadySolved: solvedAdded,
+    retainedTooHard: tooHardAdded,
+    selectedLiveIds: [...selectedIds],
+  };
+}
+function finalizePipelineLedger() {
+  return [...pipelineLedgerRows.values()].map((row) => ({
+    ...row,
+    recoveryPpmMean: row.evaluated ? row.recoveryPpmSum / row.evaluated : null,
+  }));
 }
 function hasRenderedSignal(q, docIds) {
   const ids = new Set(docIds.filter(Boolean));
@@ -1385,6 +1795,7 @@ function writePartialCheckpoint() {
     compactPatchTracesEnabled: COMPACT_PATCH_TRACES,
     supplyCensusFamilies: SUPPLY_CENSUS_FAMILIES,
     supplyCensus: finalizeSupplyCensus(),
+    pipelineLedger: finalizePipelineLedger(),
     perEpoch,
     summary: {
       honestAttempts: perEpoch.reduce((s, e) => s + e.honestAttempted, 0),
@@ -1527,20 +1938,46 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
 
   let activeScorePpm = null, heldoutScorePpm = null, idShuffledScorePpm = null;
   let activeDetailed = null, heldoutDetailed = null;
+  let activePackHardnessRows = [];
+  let activePackHardnessSummary = null;
+  let hardnessConditioning = null;
   if (baselineRecomputedBecause) {
     console.log(`[live-evolve] scoring active(${activePack.events.length}) + heldout(${heldoutPack.events.length}) + idShuffled control ...`);
     console.log(`[live-evolve]   scoring active baseline ...`);
     const activeEval = activePack.events.length ? await evaluatePack(newProd, activePack, epochScoringTelemetry, TRACE_DIAGNOSTICS) : null;
     console.log(`[live-evolve]   active baseline done`);
+    activeScorePpm = activeEval?.scorePpm ?? null;
+    activeDetailed = activeEval?.score ?? null;
+    if (RUNWAY_HARDNESS_CENSUS && activeDetailed) {
+      activePackHardnessRows = activePack.events
+        .filter((ev) => ev.split === 'eval_hidden' && ev.id.startsWith('zz_e') && !ev.id.includes('_mem_'))
+        .map((ev) => classifyEventHardness(ev, activeDetailed));
+      activePackHardnessSummary = summarizeHardnessRows(activePackHardnessRows);
+      recordHardnessLedger(activePackHardnessRows);
+      console.log(`[live-evolve]   runway hardness: minable=${activePackHardnessSummary.minable}/${activePackHardnessSummary.total} alreadySolved=${activePackHardnessSummary.alreadySolved} tooHard=${activePackHardnessSummary.tooHard}`);
+      if (HARDNESS_CONDITIONED_PACK) {
+        hardnessConditioning = conditionPackByHardness(activePack, activePackHardnessRows);
+        if (hardnessConditioning.changed) {
+          activePack = hardnessConditioning.pack;
+          console.log(`[live-evolve]   hardness-conditioned active pack: live ${activePackHardnessSummary.total} → ${hardnessConditioning.selectedLiveCount} (minable=${hardnessConditioning.retainedMinable}, tooHard=${hardnessConditioning.retainedTooHard}, solved=${hardnessConditioning.retainedAlreadySolved})`);
+          const conditionedActiveEval = activePack.events.length ? await evaluatePack(newProd, activePack, epochScoringTelemetry, TRACE_DIAGNOSTICS) : null;
+          activeScorePpm = conditionedActiveEval?.scorePpm ?? null;
+          activeDetailed = conditionedActiveEval?.score ?? null;
+          activePackHardnessRows = activePack.events
+            .filter((ev) => ev.split === 'eval_hidden' && ev.id.startsWith('zz_e') && !ev.id.includes('_mem_'))
+            .map((ev) => classifyEventHardness(ev, activeDetailed));
+          activePackHardnessSummary = summarizeHardnessRows(activePackHardnessRows);
+        }
+      }
+    }
+    const idShuffledActivePackAfterConditioning = buildIdShuffledPack(activePack);
     console.log(`[live-evolve]   scoring heldout baseline ...`);
     const heldoutEval = heldoutPack.events.length ? await evaluatePack(newProd, heldoutPack, epochScoringTelemetry, TRACE_DIAGNOSTICS) : null;
     console.log(`[live-evolve]   heldout baseline done`);
-    activeScorePpm = activeEval?.scorePpm ?? null;
     heldoutScorePpm = heldoutEval?.scorePpm ?? null;
-    activeDetailed = activeEval?.score ?? null;
     heldoutDetailed = heldoutEval?.score ?? null;
     console.log(`[live-evolve]   scoring idShuffled control ...`);
-    idShuffledScorePpm = idShuffledActivePack.events.length ? await scoreOnPack(newProd, idShuffledActivePack, epochScoringTelemetry) : null;
+    idShuffledScorePpm = idShuffledActivePackAfterConditioning.events.length ? await scoreOnPack(newProd, idShuffledActivePackAfterConditioning, epochScoringTelemetry) : null;
     console.log(`[live-evolve]   idShuffled control done`);
   }
   mark('baselineScoring');
@@ -1564,6 +2001,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   const acceptsByAtomFamily = {};
   const easySkipsByAtomFamily = {};
   const easySkipsByFingerprint = {};
+  const quotaBlockedAtomFamilies = new Set();
   const operationReuseByAtomFamily = {};
   const selectorReuseByAtomFamily = {};
   const activeStateEvalCache = new Map();
@@ -1574,20 +2012,22 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   logicalQById = new Map([...currentLogical.queries.map((q) => [q.id, q]), ...liveLogicalQByProductionId]);
   eventByDocId = buildMemoryEventByDocId(newProd);
   for (let h = 0; h < HONEST_PER_EPOCH; h++) {
-    const family = HONEST_FAMILIES[h % HONEST_FAMILIES.length];
-    const hp = honestPatchForEpoch(epoch, h, family, { pack: activePack, logicalQById, eventByDocId, addedDocs: ld.addedDocs, slotCursor: honestSlotCursor });
+    const hp = honestPatchForAttempt(epoch, h, { pack: activePack, logicalQById, eventByDocId, addedDocs: ld.addedDocs, slotCursor: honestSlotCursor }, attemptsByFingerprint, attemptsByAtomFamily, quotaBlockedAtomFamilies);
     if (!hp) break;
+    const family = hp.family ?? HONEST_FAMILIES[h % HONEST_FAMILIES.length];
     console.log(`[live-evolve]   honest ${h + 1}/${HONEST_PER_EPOCH} family=${family} fingerprint=${hp.operationFingerprint ?? hp.fingerprint ?? 'unknown'}`);
-    attemptsByFingerprint[hp.operationFingerprint] = (attemptsByFingerprint[hp.operationFingerprint] ?? 0) + 1;
     const fpFamily = atomFamilyForFingerprint(hp.operationFingerprint);
+    if (hp.skipped) {
+      console.log(`[live-evolve]   honest ${h + 1}/${HONEST_PER_EPOCH} skipped:${hp.reason}`);
+      const bucketName = firstFailureBucketFromReason(hp.reason);
+      bumpFailure(fpFamily, bucketName);
+      honestPerPatch.push({ h, family, accepted: false, deltaPpm: 0, heldoutDeltaPpm: null, reason: `skipped:${hp.reason}`, firstFailureBucket: bucketName, fingerprint: hp.fingerprint, operationFingerprint: hp.operationFingerprint, selectorFingerprint: hp.selectorFingerprint, targetDocId: null, targetDocIdRecordedOnly: true });
+      continue;
+    }
+    attemptsByFingerprint[hp.operationFingerprint] = (attemptsByFingerprint[hp.operationFingerprint] ?? 0) + 1;
     attemptsByAtomFamily[fpFamily] = (attemptsByAtomFamily[fpFamily] ?? 0) + 1;
     const supplyRow = censusRow(fpFamily);
     if (supplyRow) supplyRow.candidateSelections++;
-    if (hp.skipped) {
-      console.log(`[live-evolve]   honest ${h + 1}/${HONEST_PER_EPOCH} skipped:${hp.reason}`);
-      honestPerPatch.push({ h, family, accepted: false, deltaPpm: 0, heldoutDeltaPpm: null, reason: `skipped:${hp.reason}`, fingerprint: hp.fingerprint, operationFingerprint: hp.operationFingerprint, selectorFingerprint: hp.selectorFingerprint, targetDocId: null, targetDocIdRecordedOnly: true });
-      continue;
-    }
     const shouldAtomTrace = !COMPACT_PATCH_TRACES && ATOM_TRACE
       && (fpFamily === 'validity_atom' || fpFamily === 'entity_resolution_atom')
       && ((atomTraceCounts.get(fpFamily) ?? 0) < ATOM_TRACE_LIMIT_PER_FAMILY);
@@ -1596,12 +2036,16 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
       if (!hardness.hard) {
         easySkipsByAtomFamily[fpFamily] = (easySkipsByAtomFamily[fpFamily] ?? 0) + 1;
         easySkipsByFingerprint[hp.operationFingerprint] = (easySkipsByFingerprint[hp.operationFingerprint] ?? 0) + 1;
+        const cursorUpdateApplied = applyHonestCursorUpdate(honestSlotCursor, hp.cursorUpdate);
+        const easySkipFamilyCapReached = easySkipsByAtomFamily[fpFamily] >= ATOM_EASY_SKIP_FAMILY_CAP;
+        if (easySkipFamilyCapReached && FINGERPRINT_QUOTAS && epoch >= FINGERPRINT_QUOTA_START_EPOCH) quotaBlockedAtomFamilies.add(fpFamily);
         const row = censusRow(fpFamily);
         if (row && hardness.reason === 'already_solved_by_qwen') {
           row.easySkipsAlreadySolved++;
           row.targetAlreadyRank1++;
           if ((hardness.rows ?? []).some((r) => r.hardNegativeAboveTarget)) row.targetBelowHardNegative++;
         }
+        bumpFailure(fpFamily, firstFailureBucketFromReason(hardness.reason));
         console.log(`[live-evolve]   honest ${h + 1}/${HONEST_PER_EPOCH} skipped:${hardness.reason}`);
         let atomTraceDiagnostics = null;
         if (shouldAtomTrace) {
@@ -1625,6 +2069,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
           deltaPpm: 0,
           heldoutDeltaPpm: null,
           reason: `skipped:${hardness.reason}`,
+          firstFailureBucket: firstFailureBucketFromReason(hardness.reason),
           fingerprint: hp.fingerprint,
           operationFingerprint: hp.operationFingerprint,
           selectorFingerprint: hp.selectorFingerprint,
@@ -1634,6 +2079,8 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
           scopeAtomSlot: hp.scopeAtomSlot ?? null,
           entityResolutionAtomSlot: hp.entityResolutionAtomSlot ?? null,
           atomHardness: hardness,
+          cursorUpdateApplied,
+          easySkipFamilyCapReached,
           ...(atomTraceDiagnostics ? { atomTraceDiagnostics } : {}),
         });
         continue;
@@ -1667,6 +2114,8 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
       }
       const evalSupplyRow = censusRow(fpFamily);
       if (evalSupplyRow) evalSupplyRow.evaluatedCandidates++;
+      const evalLedgerRow = ledgerRow(fpFamily);
+      evalLedgerRow.evaluated++;
       const activeBeforeEval = await cachedStateEval(activeStateEvalCache, parentStateRoot, parentState, newProd, activePack, epochScoringTelemetry, persistPatchTraceDetails);
       const r = await evaluateRetrievalBenchmarkPatch(parentState, candidatePatch, newProd, activePack, opts, baselineFloors, activeBeforeEval.score);
       const heldoutPatch = persistPatchTraceDetails && heldoutPack.events.length
@@ -1697,6 +2146,12 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
             : (!c.passesOldFamilyRegression ? 'old_family_regression'
               : (!c.passesGoldDamage ? 'gold_damage'
                 : (!c.passesRecovery ? 'no_recovery' : 'decomposition_reject')))));
+      const recoveryPpm = acceptanceDecomposition.patchRecoveryPpm ?? 0;
+      evalLedgerRow.recoveryPpmSum += recoveryPpm;
+      evalLedgerRow.recoveryPpmMax = evalLedgerRow.recoveryPpmMax === null ? recoveryPpm : Math.max(evalLedgerRow.recoveryPpmMax, recoveryPpm);
+      if (c.passesRecovery) evalLedgerRow.thresholdPass++;
+      if (!c.passesOldCorpusDamage) evalLedgerRow.oldCorpusDamage++;
+      if (!c.passesGoldDamage) evalLedgerRow.goldDamage++;
       if (accepted) {
         honestAcceptsThisEpoch++;
         acceptedOperationCount++;
@@ -1705,6 +2160,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         acceptsByAtomFamily[fpFamily] = (acceptsByAtomFamily[fpFamily] ?? 0) + 1;
         const acceptedSupplyRow = censusRow(fpFamily);
         if (acceptedSupplyRow) acceptedSupplyRow.accepted++;
+        evalLedgerRow.accepted++;
         if (operationReuseSet.has(hp.operationFingerprint)) {
           honestReuseThisEpoch++;
           acceptedOperationReuseCount++;
@@ -1719,6 +2175,14 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
           selectorReuseSet.add(hp.selectorFingerprint);
         }
         bestState = appliedForDecomposition.state;
+      }
+      if (!accepted) {
+        const bucketName = !c.passesOldCorpusDamage ? 'old_corpus_damage'
+          : !c.passesGoldDamage ? 'gold_damage'
+            : !c.passesOldFamilyRegression ? 'selector_overbroad'
+              : !c.passesRecovery ? (recoveryPpm > 0 ? 'threshold_block' : 'qwen_no_recovery')
+                : firstFailureBucketFromReason(rejectReason);
+        bumpFailure(fpFamily, bucketName);
       }
       const cursorUpdateApplied = applyHonestCursorUpdate(honestSlotCursor, hp.cursorUpdate);
       console.log(`[live-evolve]   honest ${h + 1}/${HONEST_PER_EPOCH} ${accepted ? 'accepted' : `rejected:${rejectReason}`} delta=${r.deltaPpm ?? 0}ppm recovery=${acceptanceDecomposition.patchRecoveryPpm}ppm oldDamage=${acceptanceDecomposition.oldCorpusDamagePpm}ppm`);
@@ -1766,6 +2230,11 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
         deltaPpm: r.deltaPpm ?? 0,
         heldoutDeltaPpm: heldoutPatch ? (heldoutPatch.deltaPpm ?? 0) : null,
         reason: rejectReason,
+        firstFailureBucket: accepted ? null : (!c.passesOldCorpusDamage ? 'old_corpus_damage'
+          : !c.passesGoldDamage ? 'gold_damage'
+            : !c.passesOldFamilyRegression ? 'selector_overbroad'
+              : !c.passesRecovery ? (recoveryPpm > 0 ? 'threshold_block' : 'qwen_no_recovery')
+                : firstFailureBucketFromReason(rejectReason)),
         fingerprint: hp.fingerprint,
         operationFingerprint: hp.operationFingerprint,
         selectorFingerprint: hp.selectorFingerprint,
@@ -1806,11 +2275,13 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
       });
     } catch (e) {
       console.log(`[live-evolve]   honest ${h + 1}/${HONEST_PER_EPOCH} eval_error:${e.message?.slice(0, 120)}`);
+      bumpFailure(fpFamily, 'trace_missing');
       honestPerPatch.push({
         h, family,
         accepted: false,
         deltaPpm: 0,
         reason: `eval_error:${e.message?.slice(0, 80)}`,
+        firstFailureBucket: 'trace_missing',
         fingerprint: hp.fingerprint,
         operationFingerprint: hp.operationFingerprint,
         selectorFingerprint: hp.selectorFingerprint,
@@ -1912,6 +2383,10 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     activeLiveEvalForcedIntoPack: activeLiveEvalPack.added,
     activeLiveEvalPackSize: activeLiveEvalPack.liveEvalInPack,
     activeLiveEvalPackFamilyCounts: activeLiveEvalPack.familyCounts,
+    runwayHardnessCensusEnabled: RUNWAY_HARDNESS_CENSUS,
+    hardnessConditionedPackEnabled: HARDNESS_CONDITIONED_PACK,
+    activePackHardnessSummary,
+    hardnessConditioning,
     addedDocs: ld.addedDocs.length, addedQueries: ld.addedQueries.length,
     addedMemDocs: ld.addedDocs.length, addedRelations: ld.addedRelations.length,
     liveChurnRate: ld.liveChurnRate,
@@ -1929,6 +2404,16 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
     doc_id_dependence: docIdDependence, // DEPRECATED: alias of qrel_shuffle_collapse_ratio
     honestAttempted: qualityAttemptsThisEpoch, honestAccepted: honestAcceptsThisEpoch,
     operation_reuse_rate: operationReuseRate,
+    fingerprintQuota: {
+      enabled: FINGERPRINT_QUOTAS,
+      maxAttemptShareAfterEpoch2: FINGERPRINT_MAX_ATTEMPT_SHARE_AFTER_EPOCH2,
+      startEpoch: FINGERPRINT_QUOTA_START_EPOCH,
+      activeThisEpoch: FINGERPRINT_QUOTAS && epoch >= FINGERPRINT_QUOTA_START_EPOCH,
+      familyMaxAttemptShare: FAMILY_MAX_ATTEMPT_SHARE,
+      weakFamilyMaxAttemptShare: WEAK_FAMILY_MAX_ATTEMPT_SHARE,
+      weakFamilyGroupMaxAttemptShare: WEAK_FAMILY_GROUP_MAX_ATTEMPT_SHARE,
+      atomEasySkipFamilyCap: ATOM_EASY_SKIP_FAMILY_CAP,
+    },
     attemptsByFingerprint, acceptsByFingerprint,
     attemptsByAtomFamily, acceptsByAtomFamily,
     easySkipsByFingerprint, easySkipsByAtomFamily,
@@ -2006,9 +2491,21 @@ const report = {
   traceDiagnosticsEnabled: TRACE_DIAGNOSTICS,
   traceLowMovementEnabled: TRACE_LOW_MOVEMENT,
   compactPatchTracesEnabled: COMPACT_PATCH_TRACES,
+  runwayHardnessCensusEnabled: RUNWAY_HARDNESS_CENSUS,
+  hardnessConditionedPackEnabled: HARDNESS_CONDITIONED_PACK,
+  hardnessAlreadySolvedCap: HARDNESS_ALREADY_SOLVED_CAP,
+  hardnessTooHardCap: HARDNESS_TOO_HARD_CAP,
+  fingerprintQuotasEnabled: FINGERPRINT_QUOTAS,
+  fingerprintQuotaStartEpoch: FINGERPRINT_QUOTA_START_EPOCH,
+  fingerprintMaxAttemptShareAfterEpoch2: FINGERPRINT_MAX_ATTEMPT_SHARE_AFTER_EPOCH2,
+  familyMaxAttemptShare: FAMILY_MAX_ATTEMPT_SHARE,
+  weakFamilyMaxAttemptShare: WEAK_FAMILY_MAX_ATTEMPT_SHARE,
+  weakFamilyGroupMaxAttemptShare: WEAK_FAMILY_GROUP_MAX_ATTEMPT_SHARE,
+  atomEasySkipFamilyCap: ATOM_EASY_SKIP_FAMILY_CAP,
   supplyCensusFamilies: SUPPLY_CENSUS_FAMILIES,
   supplyCensusGate,
   supplyCensus: finalizedSupplyCensus,
+  pipelineLedger: finalizePipelineLedger(),
   genesisScoringTelemetry: summarizeScoringTelemetry(genesisScoringTelemetry),
   rerankerTelemetry: {
     ...reranker.telemetrySnapshot?.(),
@@ -2029,6 +2526,30 @@ const report = {
   honestFamiliesCycled: HONEST_FAMILIES,
   uniqueHonestOperations: operationReuseSet.size,
   uniqueHonestSelectors: selectorReuseSet.size,
+  fingerprintDiversity: (() => {
+    const acceptedTotals = {};
+    const attemptedTotals = {};
+    for (const ep of perEpoch) {
+      for (const [fp, n] of Object.entries(ep.acceptsByFingerprint ?? {})) acceptedTotals[fp] = (acceptedTotals[fp] ?? 0) + n;
+      for (const [fp, n] of Object.entries(ep.attemptsByFingerprint ?? {})) attemptedTotals[fp] = (attemptedTotals[fp] ?? 0) + n;
+    }
+    const acceptedTotal = Object.values(acceptedTotals).reduce((a, b) => a + b, 0);
+    const maxAccepted = Object.values(acceptedTotals).reduce((a, b) => Math.max(a, b), 0);
+    return {
+      acceptedTotals,
+      attemptedTotals,
+      acceptedTotal,
+      maxAcceptedFingerprintShare: acceptedTotal ? maxAccepted / acceptedTotal : 0,
+      uniqueAcceptedFingerprints: Object.values(acceptedTotals).filter((n) => n > 0).length,
+      quotaEnabled: FINGERPRINT_QUOTAS,
+      quotaStartEpoch: FINGERPRINT_QUOTA_START_EPOCH,
+      maxAttemptShareAfterEpoch2: FINGERPRINT_MAX_ATTEMPT_SHARE_AFTER_EPOCH2,
+      familyMaxAttemptShare: FAMILY_MAX_ATTEMPT_SHARE,
+      weakFamilyMaxAttemptShare: WEAK_FAMILY_MAX_ATTEMPT_SHARE,
+      weakFamilyGroupMaxAttemptShare: WEAK_FAMILY_GROUP_MAX_ATTEMPT_SHARE,
+      atomEasySkipFamilyCap: ATOM_EASY_SKIP_FAMILY_CAP,
+    };
+  })(),
   acceptsByFingerprintTotals: (() => {
     const out = {};
     for (const ep of perEpoch) for (const fp of Object.keys(ep.acceptsByFingerprint ?? {})) out[fp] = (out[fp] ?? 0) + ep.acceptsByFingerprint[fp];
@@ -2071,6 +2592,9 @@ const report = {
   })(),
   summary: {
     atomHardnessFilterEnabled: true,
+    runwayHardnessCensusEnabled: RUNWAY_HARDNESS_CENSUS,
+    hardnessConditionedPackEnabled: HARDNESS_CONDITIONED_PACK,
+    activeLivePackMinableRatios: perEpoch.map((e) => e.activePackHardnessSummary?.minableRatio).filter((v) => v != null),
     honestCandidateSelections: perEpoch.reduce((s, e) => s + Object.values(e.attemptsByAtomFamily ?? {}).reduce((a, b) => a + b, 0), 0),
     honestAttempts: perEpoch.reduce((s, e) => s + e.honestAttempted, 0),
     honestAccepted: perEpoch.reduce((s, e) => s + e.honestAccepted, 0),
