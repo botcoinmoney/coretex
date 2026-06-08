@@ -161,8 +161,8 @@ writeFileSync(privateKeyPath, privateKey.export({ type: 'pkcs8', format: 'pem' }
 writeFileSync(publicKeyPath, publicKey.export({ type: 'spki', format: 'pem' }).toString());
 
 const epochDir = resolve(outRoot, 'epoch-1');
-run('coretex:epoch-evolve', [
-  'scripts/coretex-epoch-evolve.mjs',
+run('coordinator:epoch-runner', [
+  'scripts/coretex-coordinator-epoch-runner.mjs',
   '--manifest', MANIFEST,
   '--epoch', '1',
   '--source-corpus', logicalPath,
@@ -174,14 +174,21 @@ run('coretex:epoch-evolve', [
   '--key-id', 'epoch-e2e',
   '--parent-state-root', '0x' + '11'.repeat(32),
   '--mock-embeddings',
-  '--churn', '1',
+  '--allow-mock-embeddings',
+  '--min-churn', '1',
+  '--base-churn', '1',
+  '--max-churn', '1',
   '--seed', 'epoch-e2e',
 ]);
 const evolveOut = JSON.parse(readFileSync(resolve(epochDir, 'epoch-evolve-output-1.json'), 'utf8'));
+const coordinatorStatusPath = resolve(epochDir, 'coordinator-epoch-status-1.json');
+const coordinatorStatus = JSON.parse(readFileSync(coordinatorStatusPath, 'utf8'));
 if (evolveOut.previousCorpusRoot.toLowerCase() !== previousCorpus.corpusRoot.toLowerCase()) fail('evolve previous root mismatch');
 if (evolveOut.nextCorpusRoot.toLowerCase() === previousCorpus.corpusRoot.toLowerCase()) fail('evolve did not advance corpus root');
 if (evolveOut.startEpochParams.corpusRoot.toLowerCase() !== evolveOut.nextCorpusRoot.toLowerCase()) fail('startEpoch corpusRoot not R1');
 if (evolveOut.startEpochParams.baselineManifestHash.toLowerCase() !== evolveOut.rotationManifestHash.toLowerCase()) fail('rotation manifest hash not bound through baselineManifestHash');
+if (coordinatorStatus.startEpochParams.corpusRoot.toLowerCase() !== evolveOut.nextCorpusRoot.toLowerCase()) fail('coordinator status corpus root mismatch');
+if (coordinatorStatus.nextEpochReadiness.ready !== true) fail('coordinator status not ready');
 
 const statePath = resolve(outRoot, 'validator-state.json');
 writeFileSync(statePath, JSON.stringify({
@@ -195,11 +202,8 @@ writeFileSync(statePath, JSON.stringify({
 run('validator:sync accepts R1', [
   'scripts/coretex-validator-sync.mjs',
   '--manifest', MANIFEST,
-  '--rotation-manifest', resolve(epochDir, 'epoch-rotation-1.json'),
-  '--corpus-delta', resolve(epochDir, 'corpus-delta-epoch-1.json'),
+  '--from-coordinator', coordinatorStatusPath,
   '--public-key', publicKeyPath,
-  '--baseline-manifest-hash', evolveOut.startEpochParams.baselineManifestHash,
-  '--epoch-corpus-root', evolveOut.startEpochParams.corpusRoot,
   '--state', statePath,
   '--out-dir', resolve(outRoot, 'validator-current'),
 ]);
@@ -214,10 +218,8 @@ writeFileSync(statePath, JSON.stringify({
 run('validator:sync rejects stale R0 epoch pin', [
   'scripts/coretex-validator-sync.mjs',
   '--manifest', MANIFEST,
-  '--rotation-manifest', resolve(epochDir, 'epoch-rotation-1.json'),
-  '--corpus-delta', resolve(epochDir, 'corpus-delta-epoch-1.json'),
+  '--from-coordinator', coordinatorStatusPath,
   '--public-key', publicKeyPath,
-  '--baseline-manifest-hash', evolveOut.startEpochParams.baselineManifestHash,
   '--epoch-corpus-root', previousCorpus.corpusRoot,
   '--state', statePath,
   '--out-dir', resolve(outRoot, 'validator-stale'),

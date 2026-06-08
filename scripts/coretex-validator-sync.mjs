@@ -109,8 +109,16 @@ async function main() {
   const launchManifestPath = flag('manifest', DEFAULT_MANIFEST);
   const launchManifest = readJson(launchManifestPath);
   if (launchManifest.schema !== 'coretex.launch-artifacts.v1') fail(`unsupported launch manifest schema ${launchManifest.schema}`);
-  const rotationUri = flag('rotation-manifest', null);
-  const deltaUri = flag('corpus-delta', null);
+  const coordinatorStatusUri = flag('from-coordinator', null);
+  const coordinatorStatus = coordinatorStatusUri ? await readJsonUri(coordinatorStatusUri) : null;
+  if (coordinatorStatus && coordinatorStatus.schema !== 'coretex.coordinator-epoch-status.v1') {
+    fail(`unsupported coordinator status schema ${coordinatorStatus.schema}`);
+  }
+  if (coordinatorStatus && coordinatorStatus.nextEpochReadiness?.ready === false) {
+    fail(`coordinator status is not ready: ${JSON.stringify(coordinatorStatus.nextEpochReadiness.blockers ?? [])}`);
+  }
+  const rotationUri = flag('rotation-manifest', coordinatorStatus?.rotationManifestUrl ?? null);
+  const deltaUri = flag('corpus-delta', coordinatorStatus?.corpusDeltaUrl ?? null);
   if (!rotationUri || !deltaUri) fail('--rotation-manifest and --corpus-delta are required');
   const publicKeyPath = flag('public-key', null);
   if (!publicKeyPath) fail('--public-key is required');
@@ -131,7 +139,10 @@ async function main() {
     fail(`delta.nextRoot ${delta.nextRoot} != rotation.nextCorpusRoot ${rotation.nextCorpusRoot}`);
   }
   const rotationManifestHash = hashJson(rotation);
-  const expectedRotationManifestHash = flag('rotation-manifest-hash', flag('baseline-manifest-hash', null));
+  const expectedRotationManifestHash = flag(
+    'rotation-manifest-hash',
+    flag('baseline-manifest-hash', coordinatorStatus?.rotationManifestHash ?? coordinatorStatus?.baselineManifestHash ?? null),
+  );
   if (!expectedRotationManifestHash && !has('allow-unpinned-rotation-manifest')) {
     fail('--baseline-manifest-hash/--rotation-manifest-hash is required to bind off-chain rotation provenance');
   }
@@ -139,7 +150,10 @@ async function main() {
     fail(`rotation manifest hash ${rotationManifestHash} != expected ${expectedRotationManifestHash}`);
   }
 
-  const expectedEpochCorpusRoot = flag('epoch-corpus-root', rotation.nextCorpusRoot);
+  const expectedEpochCorpusRoot = flag(
+    'epoch-corpus-root',
+    coordinatorStatus?.corpusRoot ?? coordinatorStatus?.startEpochParams?.corpusRoot ?? rotation.nextCorpusRoot,
+  );
   if (expectedEpochCorpusRoot.toLowerCase() !== rotation.nextCorpusRoot.toLowerCase()) {
     fail(`on-chain epoch corpus root ${expectedEpochCorpusRoot} != rotation.nextCorpusRoot ${rotation.nextCorpusRoot}`);
   }
@@ -186,6 +200,7 @@ async function main() {
       corpusDeltaHash: computedDeltaHash,
       rotationManifestUri: rotationUri,
       corpusDeltaUri: deltaUri,
+      ...(coordinatorStatusUri ? { coordinatorStatusUri } : {}),
       launchManifestPath,
       sourceProfileSha256: profilePath ? sha256File(resolve(repoRoot, profilePath)) : null,
       sourceBundleSha256: bundlePath ? sha256File(resolve(repoRoot, bundlePath)) : null,
@@ -199,6 +214,7 @@ async function main() {
     corpusRoot: nextCorpus.corpusRoot,
     rotationManifestHash,
     corpusDeltaHash: computedDeltaHash,
+    ...(coordinatorStatusUri ? { coordinatorStatusUri } : {}),
     currentCorpusJson: written.corpusJson.replace(`${repoRoot}/`, ''),
     currentManifest: written.manifestPath.replace(`${repoRoot}/`, ''),
   };
