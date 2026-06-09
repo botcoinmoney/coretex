@@ -461,6 +461,15 @@ contract BotcoinMiningV4Test is Test {
         _setContext(EPOCH, CHILD2, CVH, CORPUS, FRONTIER, BASELINE);
     }
 
+    function test_epochClockViewsExposedForOffchainSchedulers() public view {
+        // The cutover orchestrator computes epoch boundaries from V4 alone:
+        // genesisTimestamp + epochDuration must agree with currentEpoch math.
+        assertEq(v4.genesisTimestamp(), GENESIS);
+        assertEq(v4.epochDuration(), 86400);
+        assertEq(uint256(v4.currentEpoch()), (block.timestamp - v4.genesisTimestamp()) / v4.epochDuration());
+        assertEq(v4.currentEpoch(), v3.currentEpoch());
+    }
+
     function test_registryLiveRootInitializesFromV4ParentRoot() public {
         // before any transition the registry live root reads the V4 epoch-context parent root
         assertEq(registry.transitionCount(EPOCH), 0);

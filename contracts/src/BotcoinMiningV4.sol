@@ -11,6 +11,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 interface IBotcoinMiningV3StakeSource {
     function currentEpoch() external view returns (uint64);
+    function genesisTimestamp() external view returns (uint256);
     function isEligible(address miner) external view returns (bool);
     function stakedAmount(address miner) external view returns (uint256);
     function withdrawableAt(address miner) external view returns (uint256);
@@ -365,6 +366,17 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
 
     function currentEpoch() public view returns (uint64) {
         return epochSource.currentEpoch();
+    }
+
+    /// Epoch clock parameters, re-exposed from the V3 epoch source so
+    /// off-chain schedulers (epoch cutover orchestrator) can compute epoch
+    /// boundaries from a single contract handle.
+    function genesisTimestamp() external view returns (uint256) {
+        return epochSource.genesisTimestamp();
+    }
+
+    function epochDuration() external pure returns (uint256) {
+        return EPOCH_DURATION;
     }
 
     function DOMAIN_SEPARATOR() external view returns (bytes32) {
