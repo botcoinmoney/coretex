@@ -1,14 +1,14 @@
 # CoreTex Documentation Map
 
-Last updated: 2026-05-24.
+Last updated: 2026-06-08.
 
 This repo has been pruned so auditors do not have to sort through pre-V2 launch plans as if they are current.
-The active documentation authority is the Memory Corpus V2 / DGEN-1 calibration lane.
+The active documentation authority is the consolidated CoreTex production launch handoff plus the launch artifact manifest.
 
 ## Read First
 
 - [`../README.md`](../README.md) — current system overview and canonical code path map.
-- [`HANDOFFS/NEW_CORPUS_HANDOFF.md`](./HANDOFFS/NEW_CORPUS_HANDOFF.md) — zero-context orchestrator handoff.
+- [`HANDOFFS/PRODUCTION_LAUNCH_HARDENING_HANDOFF.md`](./HANDOFFS/PRODUCTION_LAUNCH_HARDENING_HANDOFF.md) — canonical launch/auditor handoff.
 - [`../release/calibration/CURRENT.md`](../release/calibration/CURRENT.md) — authoritative current calibration state.
 - [`../release/calibration/2026-05-21-memory-corpus-v2/DIFFICULTY_LONGEVITY_CALIBRATION_RUNBOOK.md`](../release/calibration/2026-05-21-memory-corpus-v2/DIFFICULTY_LONGEVITY_CALIBRATION_RUNBOOK.md) — execution gates and run discipline.
 - [`../release/calibration/2026-05-21-memory-corpus-v2/SUBSTRATE_SURFACE_RUNWAY_MATRIX.md`](../release/calibration/2026-05-21-memory-corpus-v2/SUBSTRATE_SURFACE_RUNWAY_MATRIX.md) — substrate surface audit.
@@ -35,5 +35,4 @@ reports are not current authority.
 
 ## Handoffs
 
-`docs/HANDOFFS/NEW_CORPUS_HANDOFF.md` is the active handoff. Other handoff files are historical unless explicitly
-referenced by `CURRENT.md`.
+`docs/HANDOFFS/PRODUCTION_LAUNCH_HARDENING_HANDOFF.md` is the active handoff. Other handoff files are historical or ignored unless explicitly referenced by the launch handoff.
