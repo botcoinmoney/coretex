@@ -6,14 +6,21 @@ Used for both:
     - labeling reranker (e.g. IAAR-Shanghai/MemReranker-4B) on the corpus
       generation / qrel path
 
-Both share the same chat-template + logit(yes) - logit(no) sigmoid scoring
-described in eval/reranker.ts:71-79.
+Both share the same chat-template + logit(yes) - logit(no) sigmoid scoring;
+the prompt template here is CANONICAL and is mirrored byte-for-byte by
+eval/reranker.ts:renderQwenRerankerPrompt (golden parity test:
+test/unit/qwen-prompt-template-golden.test.mjs).
 
 Modes:
 
 ONE-SHOT (default): reads one JSON request from stdin and emits scores on
 stdout, then exits. Same wire format used by the existing per-batch spawn
-caller in reranker.ts:184. Preserved for backward compatibility.
+caller in reranker.ts. Preserved for backward compatibility.
+
+PRINT-PROMPT-TEMPLATE (--print-prompt-template): renders the canonical
+template for a fixed probe (query, document) pair plus the resolved
+CORETEX_RERANKER_INSTRUCTION and exits. No ML imports — usable as a golden
+oracle so the TypeScript renderer can be asserted byte-identical.
 
 STREAM (--stream): loads the pinned model once, then reads NDJSON requests
 from stdin and writes NDJSON responses to stdout until EOF. Required for
@@ -94,13 +101,25 @@ def fail(msg: str, code: int = 1) -> None:
     sys.exit(code)
 
 
+# CANONICAL prompt-template constants. Mirrored byte-for-byte by
+# eval/reranker.ts (QWEN_RERANKER_DEFAULT_INSTRUCTION /
+# QWEN_RERANKER_PROMPT_PROBE / renderQwenRerankerPrompt) — do NOT change one
+# side without the other; the golden parity test fails on any drift.
+QWEN_RERANKER_DEFAULT_INSTRUCTION = (
+    "Given a web search query, retrieve relevant passages that answer the query"
+)
+PROMPT_PROBE_QUERY = "coretex prompt-template probe query"
+PROMPT_PROBE_DOCUMENT = "coretex prompt-template probe document"
+
+
+def _resolve_instruction() -> str:
+    return os.environ.get("CORETEX_RERANKER_INSTRUCTION", QWEN_RERANKER_DEFAULT_INSTRUCTION)
+
+
 def _build_qwen3_prompt(query: str, document: str) -> str:
     # Match the Qwen3-Reranker model-card template so score calibration is
     # consistent with upstream yes/no relevance guidance.
-    instruction = os.environ.get(
-        "CORETEX_RERANKER_INSTRUCTION",
-        "Given a web search query, retrieve relevant passages that answer the query",
-    )
+    instruction = _resolve_instruction()
     return (
         "<|im_start|>system\n"
         "Judge whether the Document meets the requirements based on the Query and the Instruct provided. "
@@ -288,7 +307,21 @@ def _run_stream() -> None:
             print(json.dumps(resp), flush=True)
 
 
+def _run_print_prompt_template() -> None:
+    """Golden-oracle mode: emit the canonical template rendering for the fixed
+    probe pair (JSON, so byte-exactness survives stdout newline handling)."""
+    print(json.dumps({
+        "probeQuery": PROMPT_PROBE_QUERY,
+        "probeDocument": PROMPT_PROBE_DOCUMENT,
+        "instruction": _resolve_instruction(),
+        "prompt": _build_qwen3_prompt(PROMPT_PROBE_QUERY, PROMPT_PROBE_DOCUMENT),
+    }))
+
+
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "--print-prompt-template":
+        _run_print_prompt_template()
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "--stream":
         _run_stream()
         return
