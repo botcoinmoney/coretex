@@ -2,11 +2,10 @@
  * Loader for the materialized production-corpus artifact written by
  * scripts/materialize-production-corpus.mjs. This is a CALIBRATION-INTERNAL format that
  * preserves every in-memory field of ProductionCorpusEvent — including `logicalFamily`
- * and `band` which the canonical serializeProductionCorpus drops. As a result, the
- * computeCorpusRoot of the loaded events matches the original buildV2ProductionCorpus
- * output byte-for-byte. (Canonical serializer can't round-trip a build output for the
- * same reason — that is a separate concern; for calibration we just need the artifact
- * to faithfully replace the rebuild.)
+ * and `band` — so the computeCorpusRoot of the loaded events matches the original
+ * buildV2ProductionCorpus output byte-for-byte. (The canonical serializeProductionCorpus
+ * now preserves these fields as well; this loader remains for the streaming artifact
+ * format.)
  *
  * loadMaterializedCorpus(bundlePath, opts):
  *   - resolves the artifact dir from the bundleHash (tag = bundleHash[2..10])

@@ -41,10 +41,10 @@ function computeProfileHashLocal(profile) {
 
 const u8ToHex = (u8) => Buffer.from(u8.buffer ?? u8, u8.byteOffset ?? 0, u8.byteLength ?? u8.length).toString('hex');
 // Materialized event = the in-memory ProductionCorpusEvent verbatim, with embeddings hex-encoded.
-// PRESERVES every field including logicalFamily + band — the canonical serializer
-// (serializeProductionCorpus) drops those, so its round-trip does NOT match the in-memory
-// computeCorpusRoot. This calibration-internal artifact preserves bytes exactly so the round-trip
-// recomputes the SAME corpusRoot as the original buildV2ProductionCorpus build.
+// PRESERVES every field including logicalFamily + band, so the round-trip recomputes the SAME
+// corpusRoot as the original buildV2ProductionCorpus build. (The canonical
+// serializeProductionCorpus now preserves these fields too; this streaming writer remains for
+// memory reasons — it never holds the full events array in one JSON string.)
 function eventOnDisk(e) {
   const out = {};
   // Copy every own enumerable property as-is, EXCEPT embeddings which we hex-encode.
