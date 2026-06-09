@@ -19,13 +19,15 @@ addresses anywhere.
 
 ## v0 epoch context (epoch 106)
 
+Warning: this table is a launch drill snapshot. Before live launch or any real epoch cutover, verify every registry pin against `CoreTexRegistry` and the current `coretex-launch-v16-artifacts.json`.
+
 | field | value |
 |---|---|
 | epoch | 106 |
-| coreVersionHash / bundleHash | `0x0e570580e48402eccf2e0df91fc7022d460092b73bd920a65e44446c85dfc5d2` |
+| coreVersionHash / bundleHash | `0x78336d1d11a0796047baff340f4f90f154d98d9de064678471cbdf50e974069b` |
 | corpusRoot | `0xb692b4a133963399257979bc5f632a0900d2d5d73dbadf191d3cf9889188e57e` |
-| activeFrontierRoot | `0x0509ec5f76e9a65034268b6da67db6bda6ede1facd04ebbec3f8896ea97a59bc` |
-| baselineManifestHash | `0x82025dfda644cf609783905ed6c41feb5b5f4fcc1a268cfcb3cf1989b6099bd0` |
+| activeFrontierRoot | `0x5e1b6684c1ceed28de26035294e49c278de6a1d4d9f1bb26c4fcbab2d1187823` |
+| baselineManifestHash | `0xaa9b46d1d60d67bd49c7132c8b7faca49c98bc4d256c77776614b913699a37f3` |
 | rulesVersion | 192 (`0xC0`) |
 | workPolicyHash | `0xd15e904997bdb2bb13d932953a77c0ed3ef309076146a4416cfe5a4e0cdb3775` |
 | screenerWorkBps | 10 000 |
