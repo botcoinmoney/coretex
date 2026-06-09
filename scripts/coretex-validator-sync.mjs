@@ -2,6 +2,14 @@
 /**
  * Validator epoch-delta sync.
  *
+ * DEPRECATED: `npm run validator:sync` now invokes the compiled CLI
+ * (packages/cortex/dist/validator-sync-cli.js), which performs BOTH halves —
+ * on-chain log replay AND corpus-delta continuity — with mandatory signature
+ * verification, TOFU key pinning, and a bundle-version self-check. This script
+ * remains runnable directly (`node scripts/coretex-validator-sync.mjs`) as the
+ * corpus-materializing legacy path and as the home of the exported pin helpers
+ * until they are fully migrated.
+ *
  * Fetches/reads a signed EpochRotationManifest + signed CorpusDelta, verifies
  * signatures/hashes/root continuity, applies the delta to the local validator
  * corpus cache, checks the on-chain/pinned next corpus root, then writes a
@@ -496,5 +504,6 @@ async function main() {
 }
 
 if (argv[1] && resolve(argv[1]) === fileURLToPath(import.meta.url)) {
+  console.error('DEPRECATED: scripts/coretex-validator-sync.mjs is the legacy sync path; prefer `npm run validator:sync` (packages/cortex/dist/validator-sync-cli.js)');
   main().catch((e) => fail(e?.stack ?? e?.message ?? String(e)));
 }

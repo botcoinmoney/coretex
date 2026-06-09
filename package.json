@@ -28,7 +28,7 @@
     "setup:validator": "npm run build --workspace @botcoin/cortex && node scripts/setup-validator-artifacts.mjs",
     "setup:validator:verify": "npm run build --workspace @botcoin/cortex && node scripts/setup-validator-artifacts.mjs --verify-only",
     "validator:replay": "npm run build --workspace @botcoin/cortex && node scripts/coretex-validator.mjs replay-patch",
-    "validator:sync": "npm run build --workspace @botcoin/cortex && node scripts/coretex-validator-sync.mjs",
+    "validator:sync": "npm run build --workspace @botcoin/cortex && node packages/cortex/dist/validator-sync-cli.js",
     "validator:verify-launch": "npm run build --workspace @botcoin/cortex && node scripts/coretex-validator.mjs verify-launch"
   },
   "devDependencies": {
