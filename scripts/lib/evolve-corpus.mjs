@@ -69,13 +69,44 @@ function pickWeightedBranch(seedKey, weights) {
 }
 
 /**
- * @param {{ baseLogical: any, epoch: number, seed: string, churnFraction?: number }} args
- * @returns {{ epoch, seed, churnFraction, addedDocs, addedRelations, addedQueries, churnedSubjects, liveChurnRate }}
+ * @param {{
+ *   baseLogical: any, epoch: number, seed: string, churnFraction?: number,
+ *   retractionFraction?: number,
+ *   evalHiddenPolicy?: null | {
+ *     splitOf: (logicalQueryId: string, liveUpdateEpoch?: number) => string,
+ *     minFreshPerEpoch?: number,
+ *     retireAfterEpochs?: number,
+ *     maxRetiredPerEpoch?: number,
+ *     maxMintedPerEpoch?: number,
+ *     excludeRetireIds?: Set<string> | null,
+ *   },
+ * }} args
+ *   - `retractionFraction` (default 0, backwards-compatible): deterministic per-epoch fraction of
+ *     EXISTING fact docs that get RETRACTED. Retracted ids are returned in `retractedDocIds`
+ *     (callers translate them into CorpusDelta.removedIds) and a continuity-labeled
+ *     `retraction_record` tombstone doc is appended to `addedDocs` per retracted fact, following
+ *     the existing supersession/staleness pattern. Retracted docs are excluded from the
+ *     same-attribute supersession prior map so no later epoch references a removed doc.
+ *   - `evalHiddenPolicy` (default null, backwards-compatible): hidden-eval pool turnover.
+ *     `splitOf` MUST be the canonical production split assignment (splitForRecord over the
+ *     production event id) injected by the caller so the generator stays pure. When set:
+ *     fresh `eval_hidden` queries are minted (deterministic id-salt search) until at least
+ *     `minFreshPerEpoch` added queries land in eval_hidden, and existing hidden queries older
+ *     than `retireAfterEpochs` (mint epoch = liveUpdateEpoch ?? 0) are retired oldest-first into
+ *     `retiredQueryIds` (capped at `maxRetiredPerEpoch`, skipping `excludeRetireIds`).
+ * @returns {{ epoch, seed, churnFraction, retractionFraction, addedDocs, addedRelations, addedQueries,
+ *   churnedSubjects, retractedDocIds, retiredQueryIds, freshEvalHiddenQueryIds, liveChurnRate }}
  */
-export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.1 }) {
+export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.1, retractionFraction = 0, evalHiddenPolicy = null }) {
   if (!baseLogical || !Array.isArray(baseLogical.entities)) throw new Error('evolveCorpusDelta: baseLogical.entities required');
   if (!Number.isInteger(epoch) || epoch < 0) throw new Error('evolveCorpusDelta: epoch must be a non-negative integer');
   if (typeof seed !== 'string' || !seed) throw new Error('evolveCorpusDelta: seed required');
+  if (!Number.isFinite(retractionFraction) || retractionFraction < 0 || retractionFraction > 1) {
+    throw new Error('evolveCorpusDelta: retractionFraction must be in [0, 1]');
+  }
+  if (evalHiddenPolicy && typeof evalHiddenPolicy.splitOf !== 'function') {
+    throw new Error('evolveCorpusDelta: evalHiddenPolicy.splitOf must be a function (canonical splitForRecord over the production id)');
+  }
 
   const universe = (baseLogical.entities.find((e) => e.id === 'e_universe') || {}).id || 'e_universe';
   const subjects = baseLogical.entities.filter((e) => e.id !== universe && /_s\d+$/.test(e.id));
@@ -119,8 +150,22 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
     if (/\bruntime\b/.test(text)) return 'runtime';
     return null;
   };
+  // Retraction/tombstone selection: a deterministic per-epoch fraction of EXISTING fact docs is
+  // withdrawn (security/decay churn — the production caller turns these into removedIds).
+  // Tombstone replacement records are emitted after the churn loop; retracted ids are excluded
+  // from the supersession prior map so nothing minted this or any later epoch references them.
+  const retractedDocIds = [];
+  if (retractionFraction > 0) {
+    for (const d of baseLogical.docs || []) {
+      if ((d.kind ?? '') === 'retraction_record') continue; // never retract a tombstone
+      if (unit(`${seed}:retract:${epoch}:${d.id}`) < retractionFraction) retractedDocIds.push(d.id);
+    }
+  }
+  const retractedSet = new Set(retractedDocIds);
+
   const priorTemporalByAttr = new Map(); // `${sid}::${attr}` → docId (last write wins)
   for (const d of baseLogical.docs || []) {
+    if (retractedSet.has(d.id)) continue; // retracted docs must never be supersession priors
     const sid = (d.entityIds || []).find((x) => x !== universe);
     if (!sid) continue;
     if (!/temporal/.test(d.kind || '')) continue;
@@ -408,6 +453,68 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
     }
   }
 
-  return { epoch, seed, churnFraction, addedDocs, addedRelations, addedQueries, churnedSubjects,
+  // Retraction tombstones: one continuity-labeled replacement record per retracted fact
+  // (consistent with the existing supersession/staleness pattern — the tombstone is the
+  // surviving public record; the retracted doc itself is removed via removedIds downstream).
+  if (retractedDocIds.length > 0) {
+    const entityById = new Map((baseLogical.entities ?? []).map((e) => [e.id, e]));
+    const baseDocsById = new Map((baseLogical.docs ?? []).map((d) => [d.id, d]));
+    for (const docId of retractedDocIds) {
+      const d = baseDocsById.get(docId);
+      const sid = (d?.entityIds || []).find((x) => x !== universe) ?? null;
+      const canonical = sid ? (entityById.get(sid)?.canonicalName ?? sid) : 'the shared ledger';
+      addedDocs.push({ id: `d_e${epoch}_rt_${slug(docId)}`, lane: d?.lane ?? 'deep', kind: 'retraction_record',
+        entityIds: sid ? [universe, sid] : [universe],
+        text: `Retraction notice ${tsDate}: the earlier ${String(d?.kind ?? 'fact').replace(/_/g, ' ')} record for ${canonical} was withdrawn from the supersession ledger and no longer applies.`,
+        shape: 'retraction_record', timestamp: tsDate, currentStaleFlag: true, retractsDocId: docId, liveUpdateEpoch: epoch });
+    }
+  }
+
+  // Hidden-eval pool turnover (public-qrels memorization decay): mint fresh eval_hidden queries
+  // up to the pinned per-epoch quota, and retire hidden rows past the horizon oldest-first.
+  const freshEvalHiddenQueryIds = [];
+  const retiredQueryIds = [];
+  if (evalHiddenPolicy) {
+    const { splitOf, minFreshPerEpoch = 0, retireAfterEpochs = Infinity, maxRetiredPerEpoch = Infinity, maxMintedPerEpoch = Infinity, excludeRetireIds = null } = evalHiddenPolicy;
+    for (const q of addedQueries) if (splitOf(q.id, epoch) === 'eval_hidden') freshEvalHiddenQueryIds.push(q.id);
+    // Deterministic id-salt search: the canonical split is an id hash, so the only honest way to
+    // guarantee fresh hidden supply is to mint ids until enough land in eval_hidden (~15%).
+    // Minting is bounded by maxMintedPerEpoch (the caller's root-delta budget); when the quota
+    // cannot be met inside the budget the caller's quota gate hard-fails.
+    const saltCap = Math.max(400, minFreshPerEpoch * 40);
+    let minted = 0;
+    for (let salt = 0; freshEvalHiddenQueryIds.length < minFreshPerEpoch && minted < maxMintedPerEpoch && salt < saltCap && subjects.length > 0; salt++) {
+      const subj = subjects[salt % subjects.length];
+      const qid = `q_e${epoch}_${subj.id}_h${salt}`;
+      if (splitOf(qid, epoch) !== 'eval_hidden') continue;
+      const rnd = prng(`${seed}:hidden:${epoch}:${subj.id}:${salt}`);
+      const canonical = subj.canonicalName;
+      const docId = `d_e${epoch}_${subj.id}_h${salt}`;
+      const val = `${CITIES[Math.floor(rnd() * CITIES.length)]} window ${1 + Math.floor(rnd() * 6)}`;
+      addedDocs.push({ id: docId, lane: 'deep', kind: 'temporal_hidden_probe', entityIds: [universe, subj.id],
+        text: `${canonical}'s supersession ledger sets hidden probe ${salt} value ${val}.`,
+        shape: 'temporal_update_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
+      addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
+        lane: 'deep', family: 'temporal_update', queryText: `What is ${canonical}'s hidden probe ${salt} value?`,
+        qrels: [{ docId, relevance: 1.0, role: 'direct' }], hardNegatives: [], band: 'very_hard', liveUpdateEpoch: epoch });
+      freshEvalHiddenQueryIds.push(qid);
+      minted++;
+    }
+    if (Number.isFinite(retireAfterEpochs)) {
+      const candidates = (baseLogical.queries ?? [])
+        .filter((q) => {
+          if (!q || typeof q.id !== 'string') return false;
+          const mintEpoch = Number.isInteger(q.liveUpdateEpoch) ? q.liveUpdateEpoch : 0;
+          if (epoch - mintEpoch < retireAfterEpochs) return false;
+          if (excludeRetireIds && excludeRetireIds.has(q.id)) return false;
+          return splitOf(q.id, q.liveUpdateEpoch) === 'eval_hidden';
+        })
+        .sort((a, b) => ((a.liveUpdateEpoch ?? 0) - (b.liveUpdateEpoch ?? 0)) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      for (const q of candidates.slice(0, Math.max(0, maxRetiredPerEpoch))) retiredQueryIds.push(q.id);
+    }
+  }
+
+  return { epoch, seed, churnFraction, retractionFraction, addedDocs, addedRelations, addedQueries, churnedSubjects,
+    retractedDocIds, retiredQueryIds, freshEvalHiddenQueryIds,
     liveChurnRate: subjects.length ? churnedSubjects.length / subjects.length : 0 };
 }

@@ -10,9 +10,9 @@
 import { createHash, generateKeyPairSync } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { argv, env, exit } from 'node:process';
+import { argv, env, exit, pid } from 'node:process';
 
 import { distIndex, repoRoot } from './_repo-root.mjs';
 import { evolveCorpusDelta } from './lib/evolve-corpus.mjs';
@@ -28,12 +28,18 @@ const {
   controllerParamsFromProfile,
   DEFAULT_CORETEX_WORK_POLICY,
   hashJson,
+  liveTailQueryId,
   loadProductionCorpus,
+  logicalQueryIdFromProductionEventId,
   makeEpochFrontier,
   nextMinImprovementPpm,
+  productionEventIdForLogicalDoc,
+  productionEventIdForLogicalQuery,
+  pruneEpochFrontierState,
   serializeCorpusDelta,
   signCorpusDelta,
   signEpochRotationManifest,
+  splitForRecord,
   verifyCorpusDeltaSignature,
   verifyEpochRotationManifestSignature,
 } = C;
@@ -52,6 +58,20 @@ function fail(msg) {
 }
 function readJson(path) {
   return JSON.parse(readFileSync(resolve(repoRoot, path), 'utf8'));
+}
+let atomicWriteCounter = 0;
+/** All state/artifact writes go through tmp-file + atomic rename — never a plain write to the final path. */
+function writeFileAtomic(absPath, data) {
+  const tmp = `${absPath}.tmp-${pid}-${atomicWriteCounter++}`;
+  writeFileSync(tmp, data);
+  renameSync(tmp, absPath);
+}
+function sha256OfFile(absPath) {
+  return createHash('sha256').update(readFileSync(absPath)).digest('hex');
+}
+/** Checkpoint sibling path for a logical-state file: <name>.checkpoint.json next to <name>.json. */
+function checkpointPathFor(logicalStatePath) {
+  return logicalStatePath.replace(/\.json$/, '') + '.checkpoint.json';
 }
 function bytes32FromString(s) {
   return `0x${createHash('sha256').update(s).digest('hex')}`;
@@ -202,16 +222,22 @@ function loadPreviousCorpus({ manifest, bundlePath, corpusPayload, embPayload })
   }).corpus;
 }
 
-function makeFrontier(profile, previousCorpus, nextCorpus, additions, outDir) {
+function makeFrontier(profile, previousCorpus, nextCorpus, additions, outDir, { initialStateRaw, maxRootDeltaPerEpoch }) {
   const fp = profile.epochFrontier;
   if (!fp || fp.mode === 'off') fail('profile epochFrontier is off; cannot emit nonzero activeFrontierRoot');
   const statePath = flag('frontier-state', null);
   const epoch = Number(flag('epoch'));
+  // Hidden rows retired via removedIds this epoch are no longer in nextCorpus; the persisted
+  // frontier state MUST be pruned to the surviving ids before re-hydration (makeEpochFrontier
+  // hard-rejects unknown ids). Pruned ACTIVE ids are forced activeFrontierRoot changes and are
+  // charged against maxRootDeltaPerEpoch below.
   let initialState = null;
-  if (statePath && existsSync(resolve(repoRoot, statePath))) {
-    initialState = readJson(statePath);
-  } else if (epoch > 1 && !has('allow-frontier-bootstrap')) {
-    fail('frontier state is required after epoch 1; pass --frontier-state or --allow-frontier-bootstrap');
+  let pruned = null;
+  if (initialStateRaw) {
+    pruned = pruneEpochFrontierState(initialStateRaw, (id) => nextCorpus.byId.has(id));
+    initialState = pruned.state;
+  } else if (epoch > 1) {
+    fail('frontier state is required after epoch 1; epoch >= 2 must thread the previous epoch frontier state (no bootstrap)');
   }
   const ids = initialState
     ? nextCorpus.events.filter((e) => e.split === 'eval_hidden').map((e) => e.id)
@@ -244,10 +270,29 @@ function makeFrontier(profile, previousCorpus, nextCorpus, additions, outDir) {
   const prevHonestAccepts = Number(flag('prev-honest-accepts', '0'));
   const prevQualityAttempts = Number(flag('prev-quality-attempts', '0'));
   const snapshot = frontier.stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts);
+  // Root-delta cap enforcement (defense in depth over the frontier's internal clamp): the
+  // per-epoch activeFrontierRoot churn — activations, retirements, and forced prunes — must
+  // not exceed maxRootDeltaPerEpoch. The genesis bootstrap activation (window fill) is exempt.
+  if (initialState) {
+    const prunedActive = pruned?.prunedActiveIds.length ?? 0;
+    const rootDelta = Math.max(snapshot.activated, snapshot.retired + prunedActive);
+    if (rootDelta > maxRootDeltaPerEpoch) {
+      fail(`active frontier root delta ${rootDelta} (activated=${snapshot.activated} retired=${snapshot.retired} prunedActive=${prunedActive}) exceeds maxRootDeltaPerEpoch ${maxRootDeltaPerEpoch}; refusing to emit the epoch rotation`);
+    }
+  }
   const nextState = frontier.exportState();
+  const nextStateJson = JSON.stringify(nextState, null, 2) + '\n';
   const outStatePath = statePath ? resolve(repoRoot, statePath) : resolve(outDir, 'frontier-state.json');
-  writeFileSync(outStatePath, JSON.stringify(nextState, null, 2) + '\n');
-  return { snapshot, statePath: outStatePath.replace(`${repoRoot}/`, ''), injected, addedEvalIds };
+  writeFileAtomic(outStatePath, nextStateJson);
+  return {
+    snapshot,
+    statePath: outStatePath.replace(`${repoRoot}/`, ''),
+    stateJson: nextStateJson,
+    injected,
+    addedEvalIds,
+    prunedActiveIds: pruned?.prunedActiveIds ?? [],
+    prunedOrderIds: pruned?.prunedOrderIds ?? [],
+  };
 }
 
 async function main() {
@@ -261,6 +306,47 @@ async function main() {
   const corpusPayload = flag('source-corpus', payloadPath(manifest, 'corpus'));
   const embPayload = payloadPath(manifest, 'embeddings');
   if (!bundlePath || !profilePath || !corpusPayload) fail('manifest/profile/bundle/source corpus paths are required');
+
+  // ── Mandatory state threading (epoch continuity) ────────────────────────────
+  // Production must NEVER silently evolve from the genesis launch corpus. Epoch 1 may bootstrap
+  // from genesis defaults ONLY via the explicit --launch-genesis flag; epoch >= 2 hard-fails
+  // unless the previous epoch's checkpoint (logical state + frontier state + materialized
+  // corpus root) is supplied and internally consistent.
+  const launchGenesis = has('launch-genesis');
+  if (launchGenesis && epoch !== 1) fail('--launch-genesis is only valid for --epoch 1 (genesis bootstrap)');
+  const logicalStateFlag = flag('logical-state', null);
+  if (!logicalStateFlag && !launchGenesis) {
+    fail('--logical-state is required: pass the previous epoch evolved logical state, or --launch-genesis (epoch 1 only) to bootstrap from the launch corpus');
+  }
+  const frontierStateFlag = flag('frontier-state', null);
+  let checkpoint = null;
+  if (epoch >= 2) {
+    if (has('allow-frontier-bootstrap')) fail('--allow-frontier-bootstrap is no longer permitted for epoch >= 2; thread the previous epoch frontier state');
+    if (!frontierStateFlag) fail('--frontier-state is required for epoch >= 2 (mandatory state threading)');
+    if (!flag('previous-corpus', null)) fail('--previous-corpus is required for epoch >= 2: the manifest materialized corpus is the GENESIS corpus and must not be re-used after epoch 1');
+    const checkpointPath = flag('checkpoint', checkpointPathFor(logicalStateFlag));
+    const absCheckpoint = resolve(repoRoot, checkpointPath);
+    if (!existsSync(absCheckpoint)) {
+      fail(`previous epoch checkpoint not found at ${checkpointPath}; epoch ${epoch} requires epoch ${epoch - 1}'s checkpoint (logical state + frontier state + materialized corpus root)`);
+    }
+    checkpoint = JSON.parse(readFileSync(absCheckpoint, 'utf8'));
+    if (checkpoint.schema !== 'coretex.epoch-evolve-checkpoint.v1') fail(`unsupported checkpoint schema ${checkpoint.schema} at ${checkpointPath}`);
+    if (checkpoint.epoch !== epoch - 1) fail(`checkpoint at ${checkpointPath} is for epoch ${checkpoint.epoch}; epoch ${epoch} requires the epoch ${epoch - 1} checkpoint`);
+    const logicalSha = sha256OfFile(resolve(repoRoot, logicalStateFlag));
+    if (logicalSha !== checkpoint.logicalStateSha256) {
+      fail(`--logical-state ${logicalStateFlag} sha256 ${logicalSha} does not match checkpoint.logicalStateSha256 ${checkpoint.logicalStateSha256}`);
+    }
+    const absFrontier = resolve(repoRoot, frontierStateFlag);
+    if (!existsSync(absFrontier)) fail(`--frontier-state ${frontierStateFlag} not found; epoch >= 2 requires the previous epoch frontier state`);
+    const frontierSha = sha256OfFile(absFrontier);
+    if (frontierSha !== checkpoint.frontierStateSha256) {
+      fail(`--frontier-state ${frontierStateFlag} sha256 ${frontierSha} does not match checkpoint.frontierStateSha256 ${checkpoint.frontierStateSha256}`);
+    }
+  }
+  const frontierInitialStateRaw = frontierStateFlag && existsSync(resolve(repoRoot, frontierStateFlag))
+    ? readJson(frontierStateFlag)
+    : null;
+
   const outDir = resolve(repoRoot, flag('out-dir', `release/calibration/2026-06-04-memory-atom-v16/epoch-rotations/epoch-${epoch}`));
   mkdirSync(outDir, { recursive: true });
   const { keyId, privateKeyPem, devPublicKeyPem } = readSigningKey(outDir);
@@ -271,6 +357,9 @@ async function main() {
   if (previousCorpus.corpusRoot.toLowerCase() !== expectedPrevRoot.toLowerCase()) {
     fail(`previous corpus root ${previousCorpus.corpusRoot} != expected ${expectedPrevRoot}`);
   }
+  if (checkpoint && previousCorpus.corpusRoot.toLowerCase() !== checkpoint.corpusRoot.toLowerCase()) {
+    fail(`previous corpus root ${previousCorpus.corpusRoot} != checkpoint corpus root ${checkpoint.corpusRoot} — epoch ${epoch} must evolve from epoch ${epoch - 1}'s materialized corpus, not genesis`);
+  }
 
   const logicalPath = flag('logical-state', corpusPayload);
   const logical = readJson(logicalPath);
@@ -279,7 +368,34 @@ async function main() {
   logical.queries ??= [];
   const seed = flag('seed', profile.epochFrontier?.seed ?? 'coretex-launch-frontier');
   const churnFraction = Number(flag('churn', '0.1'));
-  const logicalDelta = evolveCorpusDelta({ baseLogical: logical, epoch, seed, churnFraction });
+  const retractionFraction = numberFlag('retraction-fraction', profile.evolve?.retractionFraction ?? 0.02);
+  const minFreshEvalHidden = numberFlag('min-fresh-eval-hidden', profile.evolve?.minFreshEvalHiddenPerEpoch ?? 8);
+  const hiddenRetireHorizon = numberFlag('hidden-retire-horizon', profile.evolve?.evalHiddenRetireHorizonEpochs ?? 6);
+  const maxRootDeltaPerEpoch = numberFlag('max-root-delta-per-epoch', profile.epochFrontier?.maxRootDeltaPerEpoch ?? 24);
+  // Canonical split assignment over the PRODUCTION event id — injected so the generator stays pure.
+  const splitOf = (logicalQueryId, liveUpdateEpoch) => splitForRecord(
+    liveUpdateEpoch !== undefined && liveUpdateEpoch !== null ? liveTailQueryId(logicalQueryId, liveUpdateEpoch) : logicalQueryId,
+    previousCorpus.corpusEpoch,
+  );
+  // Hidden rows currently ACTIVE in the frontier must not be retired out from under miners.
+  const activeFrontierLogicalIds = new Set(
+    (frontierInitialStateRaw?.active ?? []).map(([id]) => logicalQueryIdFromProductionEventId(id)),
+  );
+  const logicalDelta = evolveCorpusDelta({
+    baseLogical: logical,
+    epoch,
+    seed,
+    churnFraction,
+    retractionFraction,
+    evalHiddenPolicy: {
+      splitOf,
+      minFreshPerEpoch: minFreshEvalHidden,
+      retireAfterEpochs: hiddenRetireHorizon,
+      maxRetiredPerEpoch: maxRootDeltaPerEpoch,
+      maxMintedPerEpoch: maxRootDeltaPerEpoch,
+      excludeRetireIds: activeFrontierLogicalIds,
+    },
+  });
   if (logicalDelta.addedDocs.length === 0 && logicalDelta.addedQueries.length === 0) {
     fail('evolve generated empty delta; refusing to publish empty epoch rotation');
   }
@@ -301,12 +417,39 @@ async function main() {
       layout: previousCorpus.biEncoderRetrievalKeyLayout,
     },
   });
+  // ── Fresh hidden-eval quota (security gate: public-qrels memorization decay) ──
+  const freshEvalHiddenAdded = additions.filter((e) => e.split === 'eval_hidden').map((e) => e.id);
+  if (freshEvalHiddenAdded.length < minFreshEvalHidden) {
+    fail(`delta mints ${freshEvalHiddenAdded.length} fresh eval_hidden queries < pinned quota ${minFreshEvalHidden}; refusing to publish the epoch rotation`);
+  }
+
+  // ── Retraction/retirement → CorpusDelta.removedIds ───────────────────────────
+  const logicalDocsById = new Map(logical.docs.map((d) => [d.id, d]));
+  const logicalQueriesById = new Map(logical.queries.map((q) => [q.id, q]));
+  const removedIds = [];
+  for (const docId of logicalDelta.retractedDocIds) {
+    const prodId = productionEventIdForLogicalDoc(previousCorpus, logicalDocsById.get(docId) ?? { id: docId });
+    if (!prodId) fail(`retracted doc ${docId} does not resolve to a production corpus event — logical/production state divergence`);
+    removedIds.push(prodId);
+  }
+  const removedEvalHiddenIds = [];
+  for (const queryId of logicalDelta.retiredQueryIds) {
+    const prodId = productionEventIdForLogicalQuery(previousCorpus, logicalQueriesById.get(queryId) ?? { id: queryId });
+    if (!prodId) fail(`retired hidden query ${queryId} does not resolve to a production corpus event — logical/production state divergence`);
+    removedIds.push(prodId);
+    removedEvalHiddenIds.push(prodId);
+  }
+  // ── Root-delta cap: hidden-pool removals are forced frontier-root churn ───────
+  if (removedEvalHiddenIds.length > maxRootDeltaPerEpoch) {
+    fail(`hidden-row retirement count ${removedEvalHiddenIds.length} exceeds maxRootDeltaPerEpoch ${maxRootDeltaPerEpoch}; refusing to emit the delta`);
+  }
+
   const generatedAt = flag('generated-at', new Date().toISOString());
   const unsignedDelta = buildCorpusDelta({
     previousCorpus,
     previousRootCache: previousCorpus.corpusRootCache,
     additions,
-    removals: [],
+    removals: removedIds,
     epoch,
     generatedAt,
     labelingProvenance: {
@@ -318,6 +461,7 @@ async function main() {
         seed,
         docs: logicalDelta.addedDocs.map((d) => d.id),
         queries: logicalDelta.addedQueries.map((q) => q.id),
+        removed: removedIds,
       })),
     },
   });
@@ -330,7 +474,10 @@ async function main() {
   if (nextCorpus.corpusRoot.toLowerCase() !== delta.nextRoot.toLowerCase()) {
     fail(`applyCorpusDelta root ${nextCorpus.corpusRoot} != delta.nextRoot ${delta.nextRoot}`);
   }
-  const frontier = makeFrontier(profile, previousCorpus, nextCorpus, additions, outDir);
+  const frontier = makeFrontier(profile, previousCorpus, nextCorpus, additions, outDir, {
+    initialStateRaw: frontierInitialStateRaw,
+    maxRootDeltaPerEpoch,
+  });
   const challengeBook = {
     schema: 'coretex.epoch-challenge-book.v1',
     epoch,
@@ -338,6 +485,7 @@ async function main() {
     nextCorpusRoot: delta.nextRoot,
     activeFrontierRoot: frontier.snapshot.activeRoot,
     addedEvalHiddenIds: frontier.addedEvalIds,
+    removedEvalHiddenIds,
   };
   const advancesObserved = numberFlag('advances-observed', 0);
   const qualityAttemptsObserved = numberFlag('quality-attempts-observed', flag('prev-quality-attempts', '0'));
@@ -408,13 +556,48 @@ async function main() {
   const rotationPath = resolve(outDir, `epoch-rotation-${epoch}.json`);
   const logicalDeltaPath = resolve(outDir, `logical-delta-epoch-${epoch}.json`);
   const logicalStatePath = resolve(outDir, `logical-state-epoch-${epoch}.json`);
-  writeFileSync(deltaPath, JSON.stringify(serializeCorpusDelta(delta), null, 2) + '\n');
-  writeFileSync(rotationPath, JSON.stringify(rotation, null, 2) + '\n');
-  writeFileSync(logicalDeltaPath, JSON.stringify(logicalDelta, null, 2) + '\n');
+  writeFileAtomic(deltaPath, JSON.stringify(serializeCorpusDelta(delta), null, 2) + '\n');
+  writeFileAtomic(rotationPath, JSON.stringify(rotation, null, 2) + '\n');
+  writeFileAtomic(logicalDeltaPath, JSON.stringify(logicalDelta, null, 2) + '\n');
+  // Thread the evolved logical state: retracted docs and retired hidden queries are REMOVED
+  // (mirrors CorpusDelta.removedIds) before this epoch's additions are appended.
+  const retractedSet = new Set(logicalDelta.retractedDocIds);
+  const retiredQuerySet = new Set(logicalDelta.retiredQueryIds);
+  logical.docs = logical.docs.filter((d) => !retractedSet.has(d.id));
+  logical.relations = logical.relations.filter((r) => !retractedSet.has(r.src) && !retractedSet.has(r.dst));
+  logical.queries = logical.queries.filter((q) => !retiredQuerySet.has(q.id));
   logical.docs.push(...logicalDelta.addedDocs);
   logical.relations.push(...logicalDelta.addedRelations);
   logical.queries.push(...logicalDelta.addedQueries);
-  writeFileSync(logicalStatePath, JSON.stringify(logical, null, 2) + '\n');
+  const logicalStateJson = JSON.stringify(logical, null, 2) + '\n';
+  writeFileAtomic(logicalStatePath, logicalStateJson);
+
+  // ── Epoch checkpoint: the mandatory continuity handle for epoch N+1 ──────────
+  // Binds the evolved logical state + frontier state + materialized corpus root. Written
+  // LAST so a crash mid-epoch leaves the previous checkpoint authoritative (fail-closed:
+  // the next epoch's sha256 checks then reject any partially-threaded state).
+  const checkpointOut = {
+    schema: 'coretex.epoch-evolve-checkpoint.v1',
+    epoch,
+    corpusRoot: delta.nextRoot,
+    previousCorpusRoot: delta.previousRoot,
+    logicalStateSha256: createHash('sha256').update(logicalStateJson).digest('hex'),
+    frontierStateSha256: createHash('sha256').update(frontier.stateJson).digest('hex'),
+    frontierStatePath: frontier.statePath,
+    generatedAt,
+  };
+  const checkpointJson = JSON.stringify(checkpointOut, null, 2) + '\n';
+  const checkpointPath = resolve(outDir, `epoch-checkpoint-${epoch}.json`);
+  writeFileAtomic(checkpointPath, checkpointJson);
+  writeFileAtomic(checkpointPathFor(logicalStatePath), checkpointJson);
+  // Mandatory threading back to the STABLE logical-state path (tmp + atomic rename): the next
+  // epoch reads the same --logical-state path and its sibling checkpoint.
+  let stableLogicalStatePath = null;
+  if (logicalStateFlag) {
+    stableLogicalStatePath = resolve(repoRoot, logicalStateFlag);
+    writeFileAtomic(stableLogicalStatePath, logicalStateJson);
+    writeFileAtomic(checkpointPathFor(stableLogicalStatePath), checkpointJson);
+  }
 
   const s3Prefix = flag('s3-prefix', null);
   const published = {};
@@ -440,6 +623,11 @@ async function main() {
       rotationManifest: rotationPath.replace(`${repoRoot}/`, ''),
       logicalDelta: logicalDeltaPath.replace(`${repoRoot}/`, ''),
       logicalState: logicalStatePath.replace(`${repoRoot}/`, ''),
+      checkpoint: checkpointPath.replace(`${repoRoot}/`, ''),
+      ...(stableLogicalStatePath ? {
+        stableLogicalState: stableLogicalStatePath.replace(`${repoRoot}/`, ''),
+        stableCheckpoint: checkpointPathFor(stableLogicalStatePath).replace(`${repoRoot}/`, ''),
+      } : {}),
       frontierState: frontier.statePath,
       ...(devPublicKeyPem ? { devPublicKey: resolve(outDir, 'dev-epoch-public-key.pem').replace(`${repoRoot}/`, '') } : {}),
       ...published,
@@ -447,9 +635,18 @@ async function main() {
     evolve: {
       seed,
       churnFraction,
+      retractionFraction,
+      launchGenesis,
       addedDocs: logicalDelta.addedDocs.length,
       addedQueries: logicalDelta.addedQueries.length,
       churnedSubjects: logicalDelta.churnedSubjects.length,
+      retractedDocs: logicalDelta.retractedDocIds.length,
+      retiredHiddenQueries: logicalDelta.retiredQueryIds.length,
+      removedIds: removedIds.length,
+      freshEvalHidden: freshEvalHiddenAdded.length,
+      minFreshEvalHidden,
+      hiddenRetireHorizon,
+      maxRootDeltaPerEpoch,
       embeddingMode,
       baselineParentScorePpm,
       ...(baselineVariancePpm !== undefined ? { baselineVariancePpm } : {}),
@@ -467,6 +664,8 @@ async function main() {
       activated: frontier.snapshot.activated,
       retired: frontier.snapshot.retired,
       reserveRemaining: frontier.snapshot.reserveRemaining,
+      prunedActiveIds: frontier.prunedActiveIds,
+      prunedOrderIds: frontier.prunedOrderIds.length,
     },
     coreTexEpochContext: {
       epoch,
@@ -479,7 +678,7 @@ async function main() {
     },
   };
   const outPath = resolve(outDir, `epoch-evolve-output-${epoch}.json`);
-  writeFileSync(outPath, JSON.stringify(out, null, 2) + '\n');
+  writeFileAtomic(outPath, JSON.stringify(out, null, 2) + '\n');
   console.log(JSON.stringify(out, null, 2));
 }
 
