@@ -20,6 +20,7 @@ export const repoRoot = process.env.CORETEX_REPO_ROOT
   : resolve(here, '..');
 export const distRoot = resolve(repoRoot, 'packages/cortex/dist');
 export const distIndex = resolve(distRoot, 'index.js');
+export const distValidator = resolve(distRoot, 'validator.js');
 export const distBiEncoder = resolve(distRoot, 'eval/bi-encoder.js');
 export const distPublicCorpusIndexDts = resolve(distRoot, 'eval/public-corpus-index.d.ts');
 export const scriptsRoot = here;

@@ -3,7 +3,7 @@
  * Pin the r5 launch-candidate baseline (parent = empty substrate == r5-no-atoms == r4) on the
  * dgen1-r5-synth genesis hidden pack, real Qwen. Mirrors pin-baseline-into-bundle.mjs but uses the
  * in-memory production-corpus builder (the synth candidate isn't serialized to production format).
- * Prints baselineParentScorePpm/baselineVariancePpm/baselineEvalSeedHex; the profile + manifest are
+ * Prints baselineParentScorePpm/fixedPackRepeatabilityPpm/baselineEvalSeedHex; the profile + manifest are
  * patched separately. PRODUCTION launch re-pins against the production launch corpus.
  *
  * Usage: node scripts/pin-r5-synth-baseline.mjs [--reranker gpu] [--eval-seed-hex <hex>] [--samples 1]
@@ -15,7 +15,7 @@ import { buildV2ProductionCorpus, inertBiEncoder } from './lib/build-v2-producti
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
 
 const C = await import(distIndex);
-const { scoringOptionsFromProfile, deriveQueryPack, evaluateBaseline, createDeterministicReranker } = C;
+const { scoringOptionsFromProfile, deriveQueryPack, evaluateBaseline, createDeterministicReranker, hiddenPackProfileFromEvaluatorProfile } = C;
 const argv = process.argv.slice(2);
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
 const base = 'release/calibration/2026-05-21-memory-corpus-v2';
@@ -31,12 +31,14 @@ const reranker = rerankerArg === 'gpu'
   : await createDeterministicReranker();
 const rt = { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT };
 const opts = scoringOptionsFromProfile(r5, rt);
-const pack = deriveQueryPack(epochId, evalSeedHex, corpus, r5.hiddenPack);
+const pack = deriveQueryPack(epochId, evalSeedHex, corpus, hiddenPackProfileFromEvaluatorProfile(r5));
 const empty = { words: new Array(1024).fill(0n) };
 const b = await evaluateBaseline(empty, corpus, pack, opts, { samples });
 const result = { reranker: rerankerArg === 'gpu' ? `Qwen3-Reranker-0.6B@${RR.revision} (gpu)` : 'deterministic', epochId, evalSeedHex, samples, packSize: pack.events.length,
   adapter: process.env.CORETEX_RERANKER_ADAPTER_DIR ?? null,
-  baselineParentScorePpm: b.parentScorePpm, baselineVariancePpm: b.variancePpm };
+  baselineParentScorePpm: b.parentScorePpm,
+  baselineVarianceSource: 'unavailable',
+  fixedPackRepeatabilityPpm: b.variancePpm };
 const outArg = (() => { const i = process.argv.indexOf('--out'); return i >= 0 ? process.argv[i + 1] : null; })();
 if (outArg) { const { writeFileSync } = await import('node:fs'); writeFileSync(outArg.startsWith('/') ? outArg : resolve(repoRoot, outArg), JSON.stringify(result, null, 2)); }
 console.log(JSON.stringify(result, null, 2));

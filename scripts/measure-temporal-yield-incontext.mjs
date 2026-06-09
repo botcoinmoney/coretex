@@ -30,7 +30,7 @@ import { makeStreamReranker } from './lib/stream-reranker.mjs';
 import { honestPatch, empty } from './lib/v2-patch-families.mjs';
 import { calibrationProvenance } from './lib/calibration-provenance.mjs';
 
-const { scoringOptionsFromProfile, deriveQueryPack, evaluateRetrievalBenchmarkPatch, createDeterministicReranker } = await import(distIndex);
+const { scoringOptionsFromProfile, deriveQueryPack, evaluateRetrievalBenchmarkPatch, createDeterministicReranker, computeAcceptanceThresholdPpm } = await import(distIndex);
 
 const argv = process.argv.slice(2);
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
@@ -85,16 +85,15 @@ const oracleScope = argv.includes('--oracle-scope');
 if (oracleScope) opts.temporalOracleScopePerQuery = true;
 const minImpr = Number(profile.patchAcceptanceFloors.minImprovementPpm);
 const replayTol = Number(profile.replayTolerancePpm);
-const baselineVar = Number(profile.baselineVariancePpm ?? 0);
 // CANONICAL acceptance floors — ALL of them (structural/protected/family) + the canonical threshold
-// (minImprovement + replayTolerance + baselineVariance). Was missing protected/family floors and
+// (minImprovement + replayTolerance + production variance). Was missing protected/family floors and
 // used minImpr+replayTol only; yield must be judged by the same evaluator acceptance production uses.
 const accOpts = {
   structuralFloor: profile.patchAcceptanceFloors.structuralFloor,
   protectedRegressionFloor: profile.patchAcceptanceFloors.protectedRegressionFloor,
   familyCatastrophicFloor: profile.patchAcceptanceFloors.familyCatastrophicFloor,
   minImprovementPpm: minImpr,
-  acceptanceThresholdPpm: minImpr + replayTol + baselineVar,
+  acceptanceThresholdPpm: computeAcceptanceThresholdPpm(profile),
 };
 // Clear quotas: profile.hiddenPack has 6 quotas summing to 56 minCounts, but PACK_SIZE=12 can't
 // satisfy them. The probe filters for temporal_update events inside the loop anyway, so per-family

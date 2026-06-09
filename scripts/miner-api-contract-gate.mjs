@@ -180,12 +180,25 @@ const challenge = {
   patchWordRanges: surfaces, // active candidate surfaces (subset that is reward-active this candidate)
   patchWordBudget: 4,
   minImprovementPpm,
+  baselineParentScorePpm: Number(profile.baselineParentScorePpm ?? 0),
+  baselineVarianceSource: 'unavailable',
+  fixedPackRepeatabilityPpm: Number(profile.baselineVariancePpm ?? 0),
+  recentNoiseFloorPpm: 0,
   replayTolerancePpm: profile.replayTolerancePpm,
   screenerThresholdPpm,
   perMinerScreenerCap: 50, // canonical V4 default coreTexScreenerCapPerMinerPerEpoch (BotcoinMiningV4.sol) — was stale 8
   memoryIRSchemaVersion: 'memory_ir.v1',
   activeSubstrateSurfaces,
   exampleValidPatch: { patchType: examplePatch.patchType, wordCount: 1, indexRange: [RANGES.RELATIONS_START, RANGES.RELATIONS_END], encodedHex: '0x' + Buffer.from(encodePatch(examplePatch)).toString('hex') },
+  pins: { corpusRoot, activeFrontierRoot, baselineManifestHash, hiddenSeedCommit: '0x' + '00'.repeat(32) },
+  thresholds: {
+    minImprovementPpm,
+    replayTolerancePpm: profile.replayTolerancePpm,
+    screenerThresholdPpm,
+    baselineParentScorePpm: Number(profile.baselineParentScorePpm ?? 0),
+    baselineVarianceSource: 'unavailable',
+    recentNoiseFloorPpm: 0,
+  },
   hiddenEvalWarning: 'Hidden eval query pack, qrels, answer IDs, and epochSecret are NOT public. Patches are scored against a hidden pack derived from a post-submission blockhash + epoch secret.',
 };
 
@@ -193,7 +206,7 @@ let pass = true; const log = [];
 const check = (n, ok, d = '') => { log.push(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`); if (!ok) pass = false; };
 
 // A) required public fields present in the canonical /coretex/status payload
-const required = ['epochId', 'currentStateRoot', 'substrate', 'bundleHash', 'corpusRoot', 'activeFrontierRoot', 'artifactManifestHash', 'profileHash', 'rerankerRevision', 'baselineManifestHash', 'pipelineVersion', 'allowedPatchTypes', 'patchWordRanges', 'minImprovementPpm', 'screenerThresholdPpm', 'perMinerScreenerCap', 'memoryIRSchemaVersion', 'activeSubstrateSurfaces', 'exampleValidPatch', 'hiddenEvalWarning'];
+const required = ['epochId', 'currentStateRoot', 'substrate', 'bundleHash', 'corpusRoot', 'activeFrontierRoot', 'artifactManifestHash', 'profileHash', 'rerankerRevision', 'baselineManifestHash', 'pipelineVersion', 'allowedPatchTypes', 'patchWordRanges', 'minImprovementPpm', 'screenerThresholdPpm', 'perMinerScreenerCap', 'memoryIRSchemaVersion', 'activeSubstrateSurfaces', 'exampleValidPatch', 'baselineParentScorePpm', 'baselineVarianceSource', 'recentNoiseFloorPpm', 'pins', 'thresholds', 'hiddenEvalWarning'];
 const missing = required.filter((k) => challenge[k] === undefined || challenge[k] === null);
 check('A) all required public fields present in /coretex/status', missing.length === 0, missing.length ? `missing: ${missing.join(',')}` : `${required.length} fields`);
 // A2) v0 canonical naming — perMinerScreenerCap only; perMinerCap is removed and MUST NOT appear.
@@ -236,7 +249,7 @@ check('A3.b) production router does NOT expose any removed v0 route',
   removedReappeared.length ? `LEGACY ROUTES REAPPEARED: ${removedReappeared.join(',')}` : 'OK');
 
 // B) no hidden leakage (deep key + value scan)
-const FORBIDDEN_KEYS = /qrel|truthdoc|hardnegativ|answer|epochsecret|evalseed|hiddenpack|truth|relevance|failurestat|perqueryfail/i;
+const FORBIDDEN_KEYS = /qrel|truthdoc|hardnegativ|answer|epochsecret|gateseed|confirmseed|evalseed(?!commit)|hiddenpack|truth|relevance|failurestat|perqueryfail|scorebeforeppm|scoreafterppm|perfamilydelta/i;
 function scan(obj, path = '') {
   const hits = [];
   if (obj && typeof obj === 'object') {

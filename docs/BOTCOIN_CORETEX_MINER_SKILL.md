@@ -263,7 +263,7 @@ curl -s -X POST https://api.bankr.bot/agent/submit \
 **Path B — self-managed EOA.** Either send the raw transaction (any web3 library: ethers `wallet.sendTransaction({to, data, value: 0})`, viem `walletClient.sendTransaction(...)`), or call V4 directly with the receipt tuple using `cast send`:
 
 ```bash
-cast send "$BOTCOIN_MINING_V4" \
+cast send "$BOTCOIN_MINING_CONTRACT_ADDRESS" \
   'submitCoreTexReceipt((uint64,uint64,bytes32,uint8,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,uint128,uint32,bytes32,uint256,uint256,uint16,uint32,uint32,uint64,uint64,bytes,bytes))' \
   "$RECEIPT_TUPLE_FROM_COORDINATOR" \
   --rpc-url "$BASE_RPC_URL" --private-key "$MINER_PK"
@@ -291,7 +291,7 @@ CoreTex and standard lane credits accumulate in the same V4 epoch pool. After th
 
 **Path A:** `curl -s "${COORDINATOR_URL}/v1/claim-calldata?epochs=N"` → submit returned `transaction` via Bankr `POST /agent/submit` (same pattern as standard lane).
 
-**Path B:** `cast send "$BOTCOIN_MINING_V4" 'claim(uint64[])' "[N]" --rpc-url "$BASE_RPC_URL" --private-key "$MINER_PK"`.
+**Path B:** `cast send "$BOTCOIN_MINING_CONTRACT_ADDRESS" 'claim(uint64[])' "[N]" --rpc-url "$BASE_RPC_URL" --private-key "$MINER_PK"`.
 
 Same claim errors as the standard lane: `EpochNotFunded`, `EpochNotFinalized`, `NoCredits`, `AlreadyClaimed`. Poll `/v1/epoch` to find ready-to-claim epochs.
 

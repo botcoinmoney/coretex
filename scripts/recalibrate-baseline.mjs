@@ -34,6 +34,7 @@ const {
   createDeterministicReranker,
   deriveQueryPack,
   evaluateRetrievalBenchmarkState,
+  hiddenPackProfileFromEvaluatorProfile,
   scoringOptionsFromProfile,
 } = C;
 
@@ -144,7 +145,7 @@ const opts = scoringOptionsFromProfile(profile, {
 
 const hiddenPackBase = clearPackQuotas
   ? { packSize: Number(packSizeOverride ?? profile.hiddenPack.packSize), quotas: [] }
-  : { ...profile.hiddenPack, ...(packSizeOverride ? { packSize: Number(packSizeOverride) } : {}) };
+  : { ...hiddenPackProfileFromEvaluatorProfile(profile), ...(packSizeOverride ? { packSize: Number(packSizeOverride) } : {}) };
 const empty = { words: new Array(RANGES.WORD_COUNT ?? 1024).fill(0n) };
 const composites = [];
 const sampleReports = [];

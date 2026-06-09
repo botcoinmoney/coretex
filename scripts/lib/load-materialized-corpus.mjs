@@ -21,9 +21,9 @@
 import { readFileSync, openSync, readSync, closeSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { distIndex, repoRoot } from '../_repo-root.mjs';
+import { distValidator, repoRoot } from '../_repo-root.mjs';
 
-const C = await import(distIndex);
+const C = await import(distValidator);
 const { computeCorpusRoot, biEncoderModelIdHash, buildCorpusRootLeafCache, buildCorpusRootLeafCacheFromLeaves } = C;
 
 function sha256File(p) { return '0x' + createHash('sha256').update(readFileSync(p)).digest('hex'); }
@@ -226,7 +226,11 @@ export function loadMaterializedCorpus(bundlePath, opts = {}) {
   const events = streamEvents(ndjson, null);
   const rootCache = loadRootLeafCache(rootLeaves, m.corpusRoot);
   if (opts.verifyCorpusRoot) {
-    const computed = rootCache?.root ?? computeCorpusRoot(events);
+    const computedFromEvents = computeCorpusRoot(events);
+    if (computedFromEvents.toLowerCase() !== m.corpusRoot.toLowerCase()) {
+      throw new Error(`HARD FAIL: materialized corpusRoot mismatch — manifest=${m.corpusRoot} ndjson=${computedFromEvents}`);
+    }
+    const computed = rootCache?.root ?? computedFromEvents;
     if (computed.toLowerCase() !== m.corpusRoot.toLowerCase()) {
       throw new Error(`HARD FAIL: materialized corpusRoot mismatch — manifest=${m.corpusRoot} computed=${computed}`);
     }

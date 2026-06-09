@@ -32,7 +32,7 @@ import { distIndex, repoRoot } from './_repo-root.mjs';
 import { buildV2ProductionCorpus, inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
 
-const { evaluateBaseline, deriveQueryPack, scoringOptionsFromProfile } = await import(distIndex);
+const { evaluateBaseline, deriveQueryPack, scoringOptionsFromProfile, hiddenPackProfileFromEvaluatorProfile } = await import(distIndex);
 
 function flag(name, fb) { const i = argv.indexOf(`--${name}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fb; }
 
@@ -52,6 +52,7 @@ if (!corpusPath || !embPath || !profilePath || !bundlePath || !outPath) {
 }
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
+const hiddenPack = hiddenPackProfileFromEvaluatorProfile(profile);
 console.error(`[pin-v2] loading ${corpusPath}`);
 const { corpus, LAYOUT, BE, RR, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath, bundlePath });
 console.error(`[pin-v2] corpus events=${corpus.events.length} corpusRoot=${corpus.corpusRoot}`);
@@ -67,8 +68,8 @@ const opts = scoringOptionsFromProfile(profile, {
   biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT,
 });
 
-console.error(`[pin-v2] deriving query pack (epoch=${epochId} seed=${evalSeedHex} packSize=${profile.hiddenPack?.packSize ?? 'default'})`);
-const pack = deriveQueryPack(epochId, evalSeedHex, corpus, profile.hiddenPack);
+console.error(`[pin-v2] deriving query pack (epoch=${epochId} seed=${evalSeedHex} packSize=${hiddenPack?.packSize ?? 'default'})`);
+const pack = deriveQueryPack(epochId, evalSeedHex, corpus, hiddenPack);
 console.error(`[pin-v2] pack derived: ${pack.events.length} events`);
 
 const parent = { words: new Array(1024).fill(0n) };
@@ -94,7 +95,8 @@ const pin = {
   epochId,
   packSize: pack.events.length,
   baselineParentScorePpm: baseline.parentScorePpm,
-  baselineVariancePpm: baseline.variancePpm,
+  baselineVarianceSource: 'unavailable',
+  fixedPackRepeatabilityPpm: baseline.variancePpm,
   baselineSamples: baseline.samples,
   corpusRoot: baseline.corpusRoot,
   elapsedSec,

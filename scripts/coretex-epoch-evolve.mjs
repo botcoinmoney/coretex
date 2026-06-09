@@ -3,9 +3,9 @@
  * Production epoch evolve/publish command.
  *
  * Builds a signed CorpusDelta and signed EpochRotationManifest from the launch
- * corpus/evolve path, optionally uploads both to S3, and emits the exact
- * CoreTexRegistry.startEpoch pins. This is coordinator-side operational wiring,
- * not a stress harness.
+ * corpus/evolve path, optionally uploads both to S3, and emits the exact V4
+ * CoreTex epoch context pins. This is coordinator-side operational wiring, not
+ * a stress harness.
  */
 import { createHash, generateKeyPairSync } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
@@ -24,9 +24,13 @@ const {
   bridgeLogicalDeltaToProductionEvents,
   buildCorpusDelta,
   buildEpochRotationManifest,
+  computeCoreTexScreenerThresholdPpm,
+  controllerParamsFromProfile,
+  DEFAULT_CORETEX_WORK_POLICY,
   hashJson,
   loadProductionCorpus,
   makeEpochFrontier,
+  nextMinImprovementPpm,
   serializeCorpusDelta,
   signCorpusDelta,
   signEpochRotationManifest,
@@ -51,6 +55,19 @@ function readJson(path) {
 }
 function bytes32FromString(s) {
   return `0x${createHash('sha256').update(s).digest('hex')}`;
+}
+function numberFlag(name, fallback) {
+  const raw = flag(name, null);
+  const n = raw === null ? Number(fallback) : Number(raw);
+  if (!Number.isFinite(n)) fail(`--${name} must be numeric`);
+  return n;
+}
+function optionalNumberFlag(name, fallback = undefined) {
+  const raw = flag(name, null);
+  if (raw === null && fallback === undefined) return undefined;
+  const n = raw === null ? Number(fallback) : Number(raw);
+  if (!Number.isFinite(n)) fail(`--${name} must be numeric`);
+  return n;
 }
 function normalizeS3Prefix(prefix) {
   return prefix?.replace(/\/+$/, '') ?? null;
@@ -322,23 +339,70 @@ async function main() {
     activeFrontierRoot: frontier.snapshot.activeRoot,
     addedEvalHiddenIds: frontier.addedEvalIds,
   };
+  const advancesObserved = numberFlag('advances-observed', 0);
+  const qualityAttemptsObserved = numberFlag('quality-attempts-observed', flag('prev-quality-attempts', '0'));
+  const baselineParentScorePpm = numberFlag('baseline-parent-score-ppm', profile.baselineParentScorePpm ?? 0);
+  const baselineVarianceSource = flag('baseline-variance-source', profile.baselineVarianceSource ?? 'unavailable');
+  if (!['rotating_pack', 'broad_sampling', 'unavailable'].includes(baselineVarianceSource)) {
+    fail('--baseline-variance-source must be rotating_pack, broad_sampling, or unavailable');
+  }
+  const baselineVariancePpm = baselineVarianceSource === 'rotating_pack' || baselineVarianceSource === 'broad_sampling'
+    ? optionalNumberFlag('baseline-variance-ppm', profile.baselineVariancePpm)
+    : undefined;
+  const fixedPackRepeatabilityPpm = optionalNumberFlag('fixed-pack-repeatability-ppm', profile.fixedPackRepeatabilityPpm ?? profile.baselineVariancePpm);
+  const recentNoiseFloorPpm = numberFlag('recent-noise-floor-ppm', 0);
+  const currentMinImprovementPpm = numberFlag('current-min-improvement-ppm', profile.patchAcceptanceFloors?.minImprovementPpm ?? bundle.scoring?.minImprovementPpm ?? 2500);
+  const targetAdvances = numberFlag('target-advances', profile.epochFrontier?.targetAccepts ?? 3);
+  const controllerInputs = {
+    current: BigInt(Math.round(currentMinImprovementPpm)),
+    observedAdvances: advancesObserved,
+    targetAdvances,
+    qualityAttempts: qualityAttemptsObserved,
+    ...controllerParamsFromProfile(profile, targetAdvances),
+  };
+  const controllerOutput = nextMinImprovementPpm(controllerInputs);
+  const minImprovementPpm = numberFlag('min-improvement-ppm', controllerOutput.next.toString());
+  const screenerThresholdPpm = numberFlag('screener-threshold-ppm', computeCoreTexScreenerThresholdPpm({
+    baselineScorePpm: baselineParentScorePpm,
+    recentNoiseFloorPpm,
+    policy: DEFAULT_CORETEX_WORK_POLICY,
+  }).toString());
+  const controllerForManifest = {
+    inputs: Object.fromEntries(Object.entries(controllerInputs).map(([k, v]) => [k, typeof v === 'bigint' ? v.toString() : v])),
+    output: {
+      next: controllerOutput.next.toString(),
+      reason: controllerOutput.reason,
+      ratioApplied: controllerOutput.ratioApplied,
+      clamped: controllerOutput.clamped,
+    },
+    reason: controllerOutput.reason,
+  };
+  const hiddenSeedCommit = flag('hidden-seed-commit', bytes32FromString(`coretex:hidden:${epoch}:${seed}:${delta.nextRoot}`));
   let rotation = buildEpochRotationManifest({
     epoch,
     delta,
     challengeBook,
     bundleHash: bundle.bundleHash,
-    minImprovementPpm: profile.minImprovementPpm ?? bundle.scoring?.minImprovementPpm ?? 2500,
-    advancesObserved: Number(flag('advances-observed', '0')),
-    qualityAttemptsObserved: Number(flag('quality-attempts-observed', flag('prev-quality-attempts', '0'))),
+    minImprovementPpm,
+    baselineParentScorePpm,
+    ...(baselineVariancePpm !== undefined ? { baselineVariancePpm } : {}),
+    baselineVarianceSource,
+    fixedPackRepeatabilityPpm,
+    screenerThresholdPpm,
+    recentNoiseFloorPpm,
+    controller: controllerForManifest,
+    activeFrontierRoot: frontier.snapshot.activeRoot,
+    hiddenSeedCommit,
+    advancesObserved,
+    qualityAttemptsObserved,
     generatedAt,
   });
   rotation = signEpochRotationManifest(rotation, privateKeyPem, keyId);
   if (!verifyEpochRotationManifestSignature(rotation, publicKeyPem)) fail('rotation manifest signature self-check failed');
   const rotationManifestHash = hashJson(rotation);
   const baselineManifestHash = flag('baseline-manifest-hash', rotationManifestHash);
-  const hiddenSeedCommit = flag('hidden-seed-commit', bytes32FromString(`coretex:hidden:${epoch}:${seed}:${delta.nextRoot}`));
   const parentStateRoot = flag('parent-state-root', null);
-  if (!parentStateRoot && !has('allow-missing-parent-state-root')) fail('--parent-state-root is required for startEpoch params');
+  if (!parentStateRoot && !has('allow-missing-parent-state-root')) fail('--parent-state-root is required for V4 CoreTex epoch context');
 
   const deltaPath = resolve(outDir, `corpus-delta-epoch-${epoch}.json`);
   const rotationPath = resolve(outDir, `epoch-rotation-${epoch}.json`);
@@ -387,6 +451,14 @@ async function main() {
       addedQueries: logicalDelta.addedQueries.length,
       churnedSubjects: logicalDelta.churnedSubjects.length,
       embeddingMode,
+      baselineParentScorePpm,
+      ...(baselineVariancePpm !== undefined ? { baselineVariancePpm } : {}),
+      baselineVarianceSource,
+      fixedPackRepeatabilityPpm,
+      screenerThresholdPpm,
+      minImprovementPpm,
+      recentNoiseFloorPpm,
+      controller: controllerForManifest,
     },
     frontier: {
       activeFrontierRoot: frontier.snapshot.activeRoot,
@@ -396,7 +468,7 @@ async function main() {
       retired: frontier.snapshot.retired,
       reserveRemaining: frontier.snapshot.reserveRemaining,
     },
-    startEpochParams: {
+    coreTexEpochContext: {
       epoch,
       parentStateRoot: parentStateRoot ?? '0x' + '00'.repeat(32),
       coreVersionHash: bundle.bundleHash,

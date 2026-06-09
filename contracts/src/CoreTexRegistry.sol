@@ -5,55 +5,34 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-/// @title CoreTexRegistry — canonical on-chain state-integrity registry for CoreTex.
-/// @notice Pins per-epoch CoreTex substrate state roots, records miner state advances with their
-///         compact patch bytes (data availability), and finalizes epoch headers. This is the
-///         STATE-INTEGRITY surface only — credit accounting (epoch funding / claims) is intentionally
-///         NOT implemented here; state-advance events DO carry the fields a future credit contract
-///         needs (miner, epoch, improvementCredits, evalReportHash, parent/new roots).
-///
-/// Canonical invariants:
-///   - An epoch MUST be started (startEpoch) before any advance. startEpoch pins the parent root and
-///     seeds liveStateRoot = parentStateRoot. There is NO special case for the first advance.
-///   - EVERY submitStateAdvance requires parentStateRoot == liveStateRoot[epoch]; the chain enforces a
-///     single linear transition sequence per epoch.
-///   - coreVersionHash (== bundleHash) and corpusRoot are pinned at startEpoch and re-asserted on every
-///     advance, so the scoring context cannot drift mid-epoch.
+interface IBotcoinMiningV4CoreTexContext {
+    function coreTexEpochContextSet(uint64 epoch) external view returns (bool);
+    function coreTexParentStateRoot(uint64 epoch) external view returns (bytes32);
+    function coreTexCoreVersionHash(uint64 epoch) external view returns (bytes32);
+    function coreTexCorpusRoot(uint64 epoch) external view returns (bytes32);
+    function coreTexActiveFrontierRoot(uint64 epoch) external view returns (bytes32);
+    function coreTexBaselineManifestHash(uint64 epoch) external view returns (bytes32);
+    function epochCommit(uint64 epoch) external view returns (bytes32);
+}
+
+/// @title CoreTexRegistry
+/// @notice Canonical CoreTex state-transition ledger. Epoch timing and CoreTex
+///         context live in BotcoinMiningV4; this registry only serializes
+///         V4-mediated state advances and exposes V4 context through stable
+///         registry views used by validators.
 contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
-    // ── Constants ─────────────────────────────────────────────────────────
     uint256 public constant CHALLENGE_WINDOW_SECONDS = 21600; // 6h owner-revert audit window
 
-    /// @dev No on-chain per-epoch state-advance cap. Advance scarcity is enforced where it
-    ///      belongs: the coordinator's signing policy (every advance carries an EIP-712 receipt
-    ///      it must sign) + the off-chain frontier (EvaluatorProfile.epochFrontier.targetAccepts
-    ///      / maxRootDeltaPerEpoch) + V4's per-advance work multipliers. State advances are also
-    ///      strictly serialized (parent must equal liveStateRoot, so at most one per block at the
-    ///      protocol level). Replay/indexer safety is per-event streaming (each advance applies in
-    ///      O(1) and is discarded; finalize is O(1) regardless of transitionCount); there is no
-    ///      contract-internal cost that grows unboundedly with transition count, so an arbitrary
-    ///      numeric ceiling here was a fake safety rail that could only artificially block honest
-    ///      miners. transitionCount[epoch] is still tracked for indexing/replay ordering.
+    address public botcoinMiningV4;
 
-    // ── Access ────────────────────────────────────────────────────────────
     mapping(address => bool) public isCoordinator;
-
-    // ── Canonical per-epoch state ─────────────────────────────────────────
-    mapping(uint64 => bytes32) public epochParentStateRoot; // pinned at startEpoch
-    mapping(uint64 => bytes32) public liveStateRoot; // advances linearly; == parent at start
-    mapping(uint64 => uint64) public transitionCount; // number of advances in the epoch
-    mapping(uint64 => bool) public epochStarted;
+    mapping(uint64 => bytes32) private _liveStateRoot;
+    mapping(uint64 => bool) private _liveRootInitialized;
+    mapping(uint64 => uint64) public transitionCount;
     mapping(uint64 => bool) public epochFinalized;
-    mapping(uint64 => uint256) public finalizedAt; // timestamp for the audit window
+    mapping(uint64 => uint256) public finalizedAt;
     mapping(uint64 => bool) public epochReverted;
 
-    // scoring-context pins (set at startEpoch, re-asserted per advance)
-    mapping(uint64 => bytes32) public epochCoreVersionHash;
-    mapping(uint64 => bytes32) public epochCorpusRoot;
-    mapping(uint64 => bytes32) public epochActiveFrontierRoot;
-    mapping(uint64 => bytes32) public epochBaselineManifestHash;
-    mapping(uint64 => bytes32) public epochHiddenSeedCommit;
-
-    // finalized header storage (for header verification / replay)
     struct EpochHeader {
         bytes32 parentStateRoot;
         bytes32 finalStateRoot;
@@ -65,17 +44,6 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         bytes32 baselineManifestHash;
     }
     mapping(uint64 => EpochHeader) private _headers;
-
-    // ── Canonical events ──────────────────────────────────────────────────
-    event CoreTexEpochStarted(
-        uint64 indexed epoch,
-        bytes32 parentStateRoot,
-        bytes32 coreVersionHash,
-        bytes32 corpusRoot,
-        bytes32 activeFrontierRoot,
-        bytes32 baselineManifestHash,
-        bytes32 hiddenSeedCommit
-    );
 
     event CoreTexStateAdvanced(
         uint64 indexed epoch,
@@ -108,23 +76,25 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
     event CoreTexEpochReverted(uint64 indexed epoch, address indexed by);
     event CoordinatorAdded(address indexed coordinator);
     event CoordinatorRemoved(address indexed coordinator);
+    event BotcoinMiningV4Updated(address indexed oldMiningContract, address indexed newMiningContract);
 
-    // ── Errors ────────────────────────────────────────────────────────────
     error NotCoordinator();
+    error NotBotcoinMiningV4();
     error ZeroAddress();
-    error EpochAlreadyStarted();
-    error EpochNotStarted();
+    error EpochContextNotSet();
     error AlreadyFinalized();
     error NotFinalized();
     error EpochIsReverted();
-    error ParentRootMismatch(); // parentStateRoot != liveStateRoot[epoch]
-    error CoreVersionMismatch(); // coreVersionHash != epoch pin
-    error CorpusRootMismatch(); // corpusRoot != epoch pin
-    error ActiveFrontierMismatch(); // activeFrontierRoot != epoch pin
+    error ParentRootMismatch();
+    error CoreVersionMismatch();
+    error CorpusRootMismatch();
+    error ActiveFrontierMismatch();
+    error BaselineManifestMismatch();
     error ZeroPatchHash();
-    error NoOpAdvance(); // newStateRoot == parentStateRoot
-    error FinalRootMismatch(); // finalStateRoot != liveStateRoot[epoch]
+    error NoOpAdvance();
+    error FinalRootMismatch();
     error AuditWindowClosed();
+    error MiningContractAlreadySet();
 
     constructor(address initialOwner, address initialCoordinator) Ownable(initialOwner) {
         if (initialOwner == address(0)) revert ZeroAddress();
@@ -138,7 +108,11 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         _;
     }
 
-    // ── Coordinator management ────────────────────────────────────────────
+    modifier onlyBotcoinMiningV4() {
+        if (msg.sender != botcoinMiningV4) revert NotBotcoinMiningV4();
+        _;
+    }
+
     function addCoordinator(address coordinator) external onlyOwner {
         if (coordinator == address(0)) revert ZeroAddress();
         isCoordinator[coordinator] = true;
@@ -150,41 +124,42 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         emit CoordinatorRemoved(coordinator);
     }
 
-    // ── Epoch lifecycle ───────────────────────────────────────────────────
-
-    /// @notice Start an epoch, pinning the parent state root + scoring context. Seeds
-    ///         liveStateRoot = parentStateRoot so the first advance is NOT special-cased.
-    function startEpoch(
-        uint64 epoch,
-        bytes32 parentStateRoot,
-        bytes32 coreVersionHash,
-        bytes32 corpusRoot,
-        bytes32 activeFrontierRoot,
-        bytes32 baselineManifestHash,
-        bytes32 hiddenSeedCommit
-    ) external onlyCoordinator whenNotPaused {
-        if (epochStarted[epoch]) revert EpochAlreadyStarted();
-        epochStarted[epoch] = true;
-        epochParentStateRoot[epoch] = parentStateRoot;
-        liveStateRoot[epoch] = parentStateRoot;
-        epochCoreVersionHash[epoch] = coreVersionHash;
-        epochCorpusRoot[epoch] = corpusRoot;
-        epochActiveFrontierRoot[epoch] = activeFrontierRoot;
-        epochBaselineManifestHash[epoch] = baselineManifestHash;
-        epochHiddenSeedCommit[epoch] = hiddenSeedCommit;
-        emit CoreTexEpochStarted(
-            epoch,
-            parentStateRoot,
-            coreVersionHash,
-            corpusRoot,
-            activeFrontierRoot,
-            baselineManifestHash,
-            hiddenSeedCommit
-        );
+    function setBotcoinMiningV4(address miningContract) external onlyOwner {
+        if (miningContract == address(0)) revert ZeroAddress();
+        if (botcoinMiningV4 != address(0)) revert MiningContractAlreadySet();
+        botcoinMiningV4 = miningContract;
+        emit BotcoinMiningV4Updated(address(0), miningContract);
     }
 
-    /// @notice Record a verified state advance and move the live root forward. Single linear
-    ///         transition sequence: parentStateRoot MUST equal the current liveStateRoot.
+    function liveStateRoot(uint64 epoch) public view returns (bytes32) {
+        if (_liveRootInitialized[epoch]) return _liveStateRoot[epoch];
+        return _context(epoch).coreTexParentStateRoot(epoch);
+    }
+
+    function epochParentStateRoot(uint64 epoch) external view returns (bytes32) {
+        return _context(epoch).coreTexParentStateRoot(epoch);
+    }
+
+    function epochCoreVersionHash(uint64 epoch) external view returns (bytes32) {
+        return _context(epoch).coreTexCoreVersionHash(epoch);
+    }
+
+    function epochCorpusRoot(uint64 epoch) external view returns (bytes32) {
+        return _context(epoch).coreTexCorpusRoot(epoch);
+    }
+
+    function epochActiveFrontierRoot(uint64 epoch) external view returns (bytes32) {
+        return _context(epoch).coreTexActiveFrontierRoot(epoch);
+    }
+
+    function epochBaselineManifestHash(uint64 epoch) external view returns (bytes32) {
+        return _context(epoch).coreTexBaselineManifestHash(epoch);
+    }
+
+    function epochHiddenSeedCommit(uint64 epoch) external view returns (bytes32) {
+        return _context(epoch).epochCommit(epoch);
+    }
+
     function submitStateAdvance(
         uint64 epoch,
         address miner,
@@ -198,20 +173,23 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         uint256 improvementCredits,
         uint16 wordCount,
         bytes calldata compactPatchBytes
-    ) external onlyCoordinator whenNotPaused nonReentrant {
-        if (!epochStarted[epoch]) revert EpochNotStarted();
+    ) external onlyBotcoinMiningV4 whenNotPaused nonReentrant {
         if (epochFinalized[epoch]) revert AlreadyFinalized();
         if (epochReverted[epoch]) revert EpochIsReverted();
-        if (parentStateRoot != liveStateRoot[epoch]) revert ParentRootMismatch(); // NO first-advance special case
-        if (coreVersionHash != epochCoreVersionHash[epoch]) revert CoreVersionMismatch();
-        if (corpusRoot != epochCorpusRoot[epoch]) revert CorpusRootMismatch();
-        if (activeFrontierRoot != epochActiveFrontierRoot[epoch]) revert ActiveFrontierMismatch();
+
+        IBotcoinMiningV4CoreTexContext v4 = _context(epoch);
+        bytes32 liveRoot = _liveRootInitialized[epoch] ? _liveStateRoot[epoch] : v4.coreTexParentStateRoot(epoch);
+        if (parentStateRoot != liveRoot) revert ParentRootMismatch();
+        if (coreVersionHash != v4.coreTexCoreVersionHash(epoch)) revert CoreVersionMismatch();
+        if (corpusRoot != v4.coreTexCorpusRoot(epoch)) revert CorpusRootMismatch();
+        if (activeFrontierRoot != v4.coreTexActiveFrontierRoot(epoch)) revert ActiveFrontierMismatch();
         if (patchHash == bytes32(0)) revert ZeroPatchHash();
         if (newStateRoot == parentStateRoot) revert NoOpAdvance();
 
         uint64 idx = transitionCount[epoch];
         transitionCount[epoch] = idx + 1;
-        liveStateRoot[epoch] = newStateRoot;
+        _liveRootInitialized[epoch] = true;
+        _liveStateRoot[epoch] = newStateRoot;
 
         emit CoreTexStateAdvanced(
             epoch,
@@ -230,7 +208,6 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         );
     }
 
-    /// @notice Finalize the epoch header. finalStateRoot MUST equal the current liveStateRoot.
     function finalizeEpoch(
         uint64 epoch,
         bytes32 finalStateRoot,
@@ -241,18 +218,19 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         bytes32 scoreRoot,
         bytes32 baselineManifestHash
     ) external onlyCoordinator whenNotPaused nonReentrant {
-        if (!epochStarted[epoch]) revert EpochNotStarted();
         if (epochFinalized[epoch]) revert AlreadyFinalized();
         if (epochReverted[epoch]) revert EpochIsReverted();
-        if (finalStateRoot != liveStateRoot[epoch]) revert FinalRootMismatch();
-        if (coreVersionHash != epochCoreVersionHash[epoch]) revert CoreVersionMismatch();
-        if (corpusRoot != epochCorpusRoot[epoch]) revert CorpusRootMismatch();
-        if (activeFrontierRoot != epochActiveFrontierRoot[epoch]) revert ActiveFrontierMismatch();
+        IBotcoinMiningV4CoreTexContext v4 = _context(epoch);
+        if (finalStateRoot != liveStateRoot(epoch)) revert FinalRootMismatch();
+        if (coreVersionHash != v4.coreTexCoreVersionHash(epoch)) revert CoreVersionMismatch();
+        if (corpusRoot != v4.coreTexCorpusRoot(epoch)) revert CorpusRootMismatch();
+        if (activeFrontierRoot != v4.coreTexActiveFrontierRoot(epoch)) revert ActiveFrontierMismatch();
+        if (baselineManifestHash != v4.coreTexBaselineManifestHash(epoch)) revert BaselineManifestMismatch();
 
         epochFinalized[epoch] = true;
         finalizedAt[epoch] = block.timestamp;
         _headers[epoch] = EpochHeader({
-            parentStateRoot: epochParentStateRoot[epoch],
+            parentStateRoot: v4.coreTexParentStateRoot(epoch),
             finalStateRoot: finalStateRoot,
             coreVersionHash: coreVersionHash,
             corpusRoot: corpusRoot,
@@ -264,7 +242,7 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
 
         emit CoreTexEpochFinalized(
             epoch,
-            epochParentStateRoot[epoch],
+            v4.coreTexParentStateRoot(epoch),
             finalStateRoot,
             coreVersionHash,
             corpusRoot,
@@ -275,7 +253,6 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         );
     }
 
-    /// @notice Owner-only revert of a finalized epoch within the audit window (replay-divergence remedy).
     function ownerRevertEpoch(uint64 epoch) external onlyOwner {
         if (!epochFinalized[epoch]) revert NotFinalized();
         if (block.timestamp > finalizedAt[epoch] + CHALLENGE_WINDOW_SECONDS) revert AuditWindowClosed();
@@ -285,7 +262,6 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         emit CoreTexEpochReverted(epoch, msg.sender);
     }
 
-    // ── Views ─────────────────────────────────────────────────────────────
     function getHeader(uint64 epoch) external view returns (EpochHeader memory) {
         return _headers[epoch];
     }
@@ -300,5 +276,12 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
 
     function unpause() external onlyOwner {
         _unpause();
+    }
+
+    function _context(uint64 epoch) internal view returns (IBotcoinMiningV4CoreTexContext v4) {
+        address mining = botcoinMiningV4;
+        if (mining == address(0)) revert ZeroAddress();
+        v4 = IBotcoinMiningV4CoreTexContext(mining);
+        if (!v4.coreTexEpochContextSet(epoch)) revert EpochContextNotSet();
     }
 }

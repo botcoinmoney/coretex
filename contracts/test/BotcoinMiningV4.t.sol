@@ -68,7 +68,7 @@ contract BotcoinMiningV4Test is Test {
         v4 = new BotcoinMiningV4(
             address(token), address(v3), address(registry), coordinator, owner, _defaultPolicy(0xC0, 0)
         );
-        registry.addCoordinator(address(v4));
+        registry.setBotcoinMiningV4(address(v4));
 
         _stake(minerA, 500 ether);
         _stake(minerB, 100 ether);
@@ -79,8 +79,7 @@ contract BotcoinMiningV4Test is Test {
         token.approve(address(v4), type(uint256).max);
 
         v4.setEpochCommit(EPOCH, keccak256(abi.encodePacked(EPOCH_SECRET)));
-        vm.prank(coordinator);
-        registry.startEpoch(EPOCH, PARENT, CVH, CORPUS, FRONTIER, BASELINE, SEEDCOMMIT);
+        _setContext(EPOCH, PARENT, CVH, CORPUS, FRONTIER, BASELINE);
     }
 
     function test_standardLaneWritesUnifiedCreditsWithV3Tier() public {
@@ -662,10 +661,8 @@ contract BotcoinMiningV4Test is Test {
         v4.submitCoreTexReceipt(r);
     }
 
-    function test_coreTexStateAdvanceRequiresV4RegistryCoordinatorRole() public {
+    function test_coreTexStateAdvanceRequiresRegistryMiningContractPin() public {
         CoreTexRegistry replacement = new CoreTexRegistry(owner, coordinator);
-        vm.prank(coordinator);
-        replacement.startEpoch(EPOCH, PARENT, CVH, CORPUS, FRONTIER, BASELINE, SEEDCOMMIT);
         v4.setCoreTexRegistry(address(replacement));
 
         bytes memory patchBytes = _patch(PARENT, 5, 384);
@@ -674,7 +671,7 @@ contract BotcoinMiningV4Test is Test {
             _stateAdvance(minerB, 0, bytes32(0), 0, PARENT, CHILD1, patchHash, patchBytes, 30_000);
         _signCoreTex(r, minerB);
         vm.prank(minerB);
-        vm.expectRevert(CoreTexRegistry.NotCoordinator.selector);
+        vm.expectRevert(CoreTexRegistry.ZeroAddress.selector);
         v4.submitCoreTexReceipt(r);
         assertEq(v4.credits(EPOCH, minerB), 0);
     }
@@ -1090,6 +1087,26 @@ contract BotcoinMiningV4Test is Test {
         token.approve(address(v3), amount);
         vm.prank(miner);
         v3.stake(amount);
+    }
+
+    function _setContext(
+        uint64 epoch,
+        bytes32 parent,
+        bytes32 coreVersion,
+        bytes32 corpus,
+        bytes32 frontier,
+        bytes32 baseline
+    ) internal {
+        v4.setCoreTexEpochContext(
+            epoch,
+            BotcoinMiningV4.CoreTexEpochContext({
+                parentStateRoot: parent,
+                corpusRoot: corpus,
+                activeFrontierRoot: frontier,
+                baselineManifestHash: baseline,
+                coreVersionHash: coreVersion
+            })
+        );
     }
 
     function _submitScreeners(address miner, uint256 count) internal {

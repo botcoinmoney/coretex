@@ -33,7 +33,7 @@ import { argv, exit } from 'node:process';
 import { distIndex, repoRoot } from './_repo-root.mjs';
 
 const C = await import(distIndex);
-const { verifyBundleManifest, computeCorpusRoot, makeLaunchFrontier, computePatchHash, computeAcceptanceThresholdPpm, computeProfileHash, deriveQueryPack, packQuotaCoverage } = C;
+const { verifyBundleManifest, computeCorpusRoot, makeLaunchFrontier, computePatchHash, computeAcceptanceThresholdPpm, computeProfileHash, deriveQueryPack, hiddenPackProfileFromEvaluatorProfile, packQuotaCoverage } = C;
 
 const flag = (n, d) => {
   const eq = argv.find((a) => a.startsWith(`--${n}=`));
@@ -131,7 +131,7 @@ if (MODE === 'deep') {
 
   // 5b. hidden-pack quota coverage + exact packSize (so a sub-quota candidate cannot reach A100).
   const evalSeedHex = profile.baselineEvalSeedHex ?? '0x' + 'a5'.repeat(32);
-  const _pack = deriveQueryPack(0, evalSeedHex, corpus, profile.hiddenPack);
+  const _pack = deriveQueryPack(0, evalSeedHex, corpus, hiddenPackProfileFromEvaluatorProfile(profile));
   const _cov = packQuotaCoverage(_pack, profile.hiddenPack);
   for (const c of _cov) check(`hidden-pack quota satisfied: ${c.stratum} (${c.count}/${c.minCount})`, c.satisfied);
   check(`hidden-pack is exactly packSize (${_pack.events.length}/${profile.hiddenPack.packSize})`, _pack.events.length === profile.hiddenPack.packSize);

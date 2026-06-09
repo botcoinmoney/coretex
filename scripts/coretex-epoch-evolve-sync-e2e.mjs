@@ -185,9 +185,9 @@ const coordinatorStatusPath = resolve(epochDir, 'coordinator-epoch-status-1.json
 const coordinatorStatus = JSON.parse(readFileSync(coordinatorStatusPath, 'utf8'));
 if (evolveOut.previousCorpusRoot.toLowerCase() !== previousCorpus.corpusRoot.toLowerCase()) fail('evolve previous root mismatch');
 if (evolveOut.nextCorpusRoot.toLowerCase() === previousCorpus.corpusRoot.toLowerCase()) fail('evolve did not advance corpus root');
-if (evolveOut.startEpochParams.corpusRoot.toLowerCase() !== evolveOut.nextCorpusRoot.toLowerCase()) fail('startEpoch corpusRoot not R1');
-if (evolveOut.startEpochParams.baselineManifestHash.toLowerCase() !== evolveOut.rotationManifestHash.toLowerCase()) fail('rotation manifest hash not bound through baselineManifestHash');
-if (coordinatorStatus.startEpochParams.corpusRoot.toLowerCase() !== evolveOut.nextCorpusRoot.toLowerCase()) fail('coordinator status corpus root mismatch');
+if (evolveOut.coreTexEpochContext.corpusRoot.toLowerCase() !== evolveOut.nextCorpusRoot.toLowerCase()) fail('CoreTex context corpusRoot not R1');
+if (evolveOut.coreTexEpochContext.baselineManifestHash.toLowerCase() !== evolveOut.rotationManifestHash.toLowerCase()) fail('rotation manifest hash not bound through baselineManifestHash');
+if (coordinatorStatus.coreTexEpochContext.corpusRoot.toLowerCase() !== evolveOut.nextCorpusRoot.toLowerCase()) fail('coordinator status corpus root mismatch');
 if (coordinatorStatus.nextEpochReadiness.ready !== true) fail('coordinator status not ready');
 if (coordinatorStatus.epochSigningPublicKeyId !== 'epoch-e2e') fail('coordinator status public key id mismatch');
 const publicKeyFingerprint = `0x${createHash('sha256').update(readFileSync(publicKeyPath)).digest('hex')}`;
@@ -234,6 +234,6 @@ console.log(JSON.stringify({
   previousCorpusRoot: previousCorpus.corpusRoot,
   nextCorpusRoot: evolveOut.nextCorpusRoot,
   rotationManifestHash: evolveOut.rotationManifestHash,
-  startEpochParams: evolveOut.startEpochParams,
+  coreTexEpochContext: evolveOut.coreTexEpochContext,
   outDir: outRoot.replace(`${repoRoot}/`, ''),
 }, null, 2));

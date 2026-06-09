@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Phase H2 — pin baselineParentScorePpm + baselineVariancePpm into the
+ * Phase H2 — pin baselineParentScorePpm + fixedPackRepeatabilityPpm into the
  * final bundle manifest.
  *
  * Runs after `scripts/build-coretex-bundle.mjs` produces the canonical
@@ -13,7 +13,7 @@
  *      that pack — this gives the parent score the next epoch's
  *      acceptance rule normalizes against
  *   5. Re-writes the bundle profile with `baselineParentScorePpm` and
- *      `baselineVariancePpm` populated
+ *      `fixedPackRepeatabilityPpm` populated
  *   6. Recomputes the bundle hash (it WILL change — that's the point;
  *      the baseline values are part of the canonical bundle)
  *
@@ -53,6 +53,7 @@ import {
   qwen3Reranker06BManifest,
   memReranker4BManifest,
   verifyBundleManifest,
+  hiddenPackProfileFromEvaluatorProfile,
 } from '@botcoin/cortex';
 
 function flag(name, fb) {
@@ -82,7 +83,7 @@ console.log(`pin-baseline: loading corpus ${corpusPath}`);
 const corpus = loadProductionCorpus(resolve(corpusPath), { verifyCorpusRoot: false, verifySplits: false });
 
 console.log(`pin-baseline: deriving query pack epoch=${epochId} packSize=${profile.hiddenPack.packSize}`);
-const pack = deriveQueryPack(epochId, evalSeedHex, corpus, profile.hiddenPack);
+const pack = deriveQueryPack(epochId, evalSeedHex, corpus, hiddenPackProfileFromEvaluatorProfile(profile));
 console.log(`  pack derived: ${pack.events.length} events`);
 
 console.log(`pin-baseline: spawning streaming bi-encoder + reranker (this is real model work)`);
@@ -152,10 +153,14 @@ console.log(`  samples=${baseline.samples}`);
 const updatedProfile = {
   ...profile,
   baselineParentScorePpm: baseline.parentScorePpm,
-  baselineVariancePpm: baseline.variancePpm,
+  baselineVarianceSource: profile.baselineVarianceSource ?? 'unavailable',
+  fixedPackRepeatabilityPpm: baseline.variancePpm,
   baselineSamples: baseline.samples,
   baselineEvalSeedHex: evalSeedHex.toLowerCase().startsWith('0x') ? evalSeedHex.toLowerCase() : `0x${evalSeedHex.toLowerCase()}`,
 };
+if (updatedProfile.baselineVarianceSource !== 'rotating_pack' && updatedProfile.baselineVarianceSource !== 'broad_sampling') {
+  delete updatedProfile.baselineVariancePpm;
+}
 
 const rebuilt = buildBundleManifest({
   repoRoot,
@@ -183,7 +188,7 @@ console.log(`pin-baseline: rewrote ${outPath}`);
 console.log(`  bundleHash (was): ${bundle.bundleHash}`);
 console.log(`  bundleHash (now): ${rebuilt.bundleHash}`);
 console.log(`  baselineParentScorePpm: ${baseline.parentScorePpm}`);
-console.log(`  baselineVariancePpm:    ${baseline.variancePpm}`);
+console.log(`  fixedPackRepeatabilityPpm: ${baseline.variancePpm}`);
 
 if (typeof reranker.close === 'function') await reranker.close();
 if (typeof biEncoder.close === 'function') await biEncoder.close();

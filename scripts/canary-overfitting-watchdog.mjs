@@ -72,12 +72,13 @@ if (!existsSync(receiptsDir)) {
 
 const bundle = JSON.parse(readFileSync(resolve(bundlePath), 'utf8'));
 const baselinePpm = bundle.evaluator?.profile?.baselineParentScorePpm;
-const baselineVariancePpm = bundle.evaluator?.profile?.baselineVariancePpm;
+const fixedPackRepeatabilityPpm = bundle.evaluator?.profile?.fixedPackRepeatabilityPpm
+  ?? (bundle.evaluator?.profile?.baselineVarianceSource ? undefined : bundle.evaluator?.profile?.baselineVariancePpm);
 if (typeof baselinePpm !== 'number') {
   console.error('canary-watchdog: bundle.evaluator.profile.baselineParentScorePpm is required');
   exit(2);
 }
-const baselineStdDev = Math.max(1, Math.sqrt(Math.max(0, baselineVariancePpm ?? 0)));
+const baselineStdDev = Math.max(1, Math.sqrt(Math.max(0, fixedPackRepeatabilityPpm ?? 0)));
 
 // ─── Read receipts ──────────────────────────────────────────────────
 

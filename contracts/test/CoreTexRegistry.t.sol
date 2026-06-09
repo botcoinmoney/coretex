@@ -4,8 +4,63 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {CoreTexRegistry} from "../src/CoreTexRegistry.sol";
 
+contract MockV4Context {
+    struct Ctx {
+        bool set;
+        bytes32 parent;
+        bytes32 coreVersion;
+        bytes32 corpus;
+        bytes32 frontier;
+        bytes32 baseline;
+        bytes32 commit;
+    }
+
+    mapping(uint64 => Ctx) public ctx;
+
+    function setContext(
+        uint64 epoch,
+        bytes32 parent,
+        bytes32 coreVersion,
+        bytes32 corpus,
+        bytes32 frontier,
+        bytes32 baseline,
+        bytes32 commit
+    ) external {
+        ctx[epoch] = Ctx(true, parent, coreVersion, corpus, frontier, baseline, commit);
+    }
+
+    function coreTexEpochContextSet(uint64 epoch) external view returns (bool) {
+        return ctx[epoch].set;
+    }
+
+    function coreTexParentStateRoot(uint64 epoch) external view returns (bytes32) {
+        return ctx[epoch].parent;
+    }
+
+    function coreTexCoreVersionHash(uint64 epoch) external view returns (bytes32) {
+        return ctx[epoch].coreVersion;
+    }
+
+    function coreTexCorpusRoot(uint64 epoch) external view returns (bytes32) {
+        return ctx[epoch].corpus;
+    }
+
+    function coreTexActiveFrontierRoot(uint64 epoch) external view returns (bytes32) {
+        return ctx[epoch].frontier;
+    }
+
+    function coreTexBaselineManifestHash(uint64 epoch) external view returns (bytes32) {
+        return ctx[epoch].baseline;
+    }
+
+    function epochCommit(uint64 epoch) external view returns (bytes32) {
+        return ctx[epoch].commit;
+    }
+}
+
 contract CoreTexRegistryTest is Test {
     CoreTexRegistry reg;
+    MockV4Context v4;
     address owner = address(0xA11CE);
     address coord = address(0xC007D);
     address miner = address(0x111111);
@@ -22,15 +77,6 @@ contract CoreTexRegistryTest is Test {
     bytes32 constant PATCH2 = bytes32(uint256(0xAA02));
     bytes32 constant EVAL1 = bytes32(uint256(0xEE01));
 
-    event CoreTexEpochStarted(
-        uint64 indexed epoch,
-        bytes32 parentStateRoot,
-        bytes32 coreVersionHash,
-        bytes32 corpusRoot,
-        bytes32 activeFrontierRoot,
-        bytes32 baselineManifestHash,
-        bytes32 hiddenSeedCommit
-    );
     event CoreTexStateAdvanced(
         uint64 indexed epoch,
         uint64 indexed transitionIndex,
@@ -60,13 +106,17 @@ contract CoreTexRegistryTest is Test {
 
     function setUp() public {
         reg = new CoreTexRegistry(owner, coord);
+        v4 = new MockV4Context();
+        v4.setContext(7, PARENT, CVH, CORPUS, FRONTIER, BASELINE, SEEDCOMMIT);
+        vm.prank(owner);
+        reg.setBotcoinMiningV4(address(v4));
     }
 
     function _advanceN(uint64 epoch, uint256 n) internal returns (bytes32 parent) {
         parent = reg.liveStateRoot(epoch);
         for (uint256 i; i < n; i++) {
             bytes32 child = keccak256(abi.encodePacked("root", epoch, i));
-            vm.prank(coord);
+            vm.prank(address(v4));
             reg.submitStateAdvance(
                 epoch, miner, parent, child, keccak256(abi.encodePacked("p", epoch, i)),
                 EVAL1, CVH, CORPUS, FRONTIER, 30000, 3, hex"ff03"
@@ -75,62 +125,47 @@ contract CoreTexRegistryTest is Test {
         }
     }
 
-    function _start(uint64 epoch) internal {
-        vm.prank(coord);
-        reg.startEpoch(epoch, PARENT, CVH, CORPUS, FRONTIER, BASELINE, SEEDCOMMIT);
-    }
-
     function _advance(uint64 epoch, bytes32 parent, bytes32 child, bytes32 patch) internal {
-        vm.prank(coord);
+        vm.prank(address(v4));
         reg.submitStateAdvance(epoch, miner, parent, child, patch, EVAL1, CVH, CORPUS, FRONTIER, 30000, 3, hex"ff03");
     }
 
-    // ── startEpoch ──
-    function test_startEpoch_pinsRootsAndEmits() public {
-        vm.expectEmit(true, false, false, true);
-        emit CoreTexEpochStarted(7, PARENT, CVH, CORPUS, FRONTIER, BASELINE, SEEDCOMMIT);
-        _start(7);
-        assertTrue(reg.epochStarted(7));
+    function test_contextViewsReadV4AndLiveRootFallsBackToParent() public {
         assertEq(reg.epochParentStateRoot(7), PARENT);
-        assertEq(reg.liveStateRoot(7), PARENT, "live seeded to parent");
+        assertEq(reg.liveStateRoot(7), PARENT);
         assertEq(reg.epochActiveFrontierRoot(7), FRONTIER);
         assertEq(reg.epochBaselineManifestHash(7), BASELINE);
         assertEq(reg.epochHiddenSeedCommit(7), SEEDCOMMIT);
         assertEq(reg.transitionCount(7), 0);
     }
 
-    function test_startEpoch_duplicateReverts() public {
-        _start(7);
-        vm.prank(coord);
-        vm.expectRevert(CoreTexRegistry.EpochAlreadyStarted.selector);
-        reg.startEpoch(7, PARENT, CVH, CORPUS, FRONTIER, BASELINE, SEEDCOMMIT);
-    }
-
-    function test_startEpoch_nonCoordinatorReverts() public {
-        vm.prank(miner);
-        vm.expectRevert(CoreTexRegistry.NotCoordinator.selector);
-        reg.startEpoch(7, PARENT, CVH, CORPUS, FRONTIER, BASELINE, SEEDCOMMIT);
-    }
-
-    // ── critical fix: no advance before start, no arbitrary first parent ──
-    function test_advanceBeforeStartReverts() public {
-        vm.prank(coord);
-        vm.expectRevert(CoreTexRegistry.EpochNotStarted.selector);
-        reg.submitStateAdvance(7, miner, PARENT, CHILD1, PATCH1, EVAL1, CVH, CORPUS, FRONTIER, 30000, 3, hex"ff03");
+    function test_missingContextReverts() public {
+        vm.prank(address(v4));
+        vm.expectRevert(CoreTexRegistry.EpochContextNotSet.selector);
+        reg.submitStateAdvance(8, miner, PARENT, CHILD1, PATCH1, EVAL1, CVH, CORPUS, FRONTIER, 30000, 3, hex"ff03");
     }
 
     function test_firstAdvanceFromArbitraryParentReverts() public {
-        _start(7);
-        vm.prank(coord);
+        vm.prank(address(v4));
         vm.expectRevert(CoreTexRegistry.ParentRootMismatch.selector);
         reg.submitStateAdvance(
             7, miner, bytes32(uint256(0xDEAD)), CHILD1, PATCH1, EVAL1, CVH, CORPUS, FRONTIER, 30000, 3, hex"ff03"
         );
     }
 
-    // ── advance happy path + ordering ──
+    function test_directCoordinatorEoaAdvanceReverts() public {
+        vm.prank(coord);
+        vm.expectRevert(CoreTexRegistry.NotBotcoinMiningV4.selector);
+        reg.submitStateAdvance(7, miner, PARENT, CHILD1, PATCH1, EVAL1, CVH, CORPUS, FRONTIER, 30000, 3, hex"ff03");
+    }
+
+    function test_nonV4AdvanceReverts() public {
+        vm.prank(address(0xBAD));
+        vm.expectRevert(CoreTexRegistry.NotBotcoinMiningV4.selector);
+        reg.submitStateAdvance(7, miner, PARENT, CHILD1, PATCH1, EVAL1, CVH, CORPUS, FRONTIER, 30000, 3, hex"ff03");
+    }
+
     function test_advance_emitsAndAdvancesLiveRoot() public {
-        _start(7);
         vm.expectEmit(true, true, true, true);
         emit CoreTexStateAdvanced(
             7, 0, miner, PARENT, CHILD1, PATCH1, EVAL1, CVH, CORPUS, FRONTIER, 30000, 3, hex"ff03"
@@ -141,7 +176,6 @@ contract CoreTexRegistryTest is Test {
     }
 
     function test_multipleAdvancesInOrder() public {
-        _start(7);
         _advance(7, PARENT, CHILD1, PATCH1);
         _advance(7, CHILD1, CHILD2, PATCH2);
         assertEq(reg.liveStateRoot(7), CHILD2);
@@ -149,44 +183,26 @@ contract CoreTexRegistryTest is Test {
     }
 
     function test_secondAdvanceWrongParentReverts() public {
-        _start(7);
         _advance(7, PARENT, CHILD1, PATCH1);
-        vm.prank(coord);
+        vm.prank(address(v4));
         vm.expectRevert(CoreTexRegistry.ParentRootMismatch.selector);
-        reg.submitStateAdvance(
-            7,
-            miner,
-            PARENT,
-            /* stale */
-            CHILD2,
-            PATCH2,
-            EVAL1,
-            CVH,
-            CORPUS,
-            FRONTIER,
-            30000,
-            3,
-            hex"ff03"
-        );
+        reg.submitStateAdvance(7, miner, PARENT, CHILD2, PATCH2, EVAL1, CVH, CORPUS, FRONTIER, 30000, 3, hex"ff03");
     }
 
     function test_advance_zeroPatchHashReverts() public {
-        _start(7);
-        vm.prank(coord);
+        vm.prank(address(v4));
         vm.expectRevert(CoreTexRegistry.ZeroPatchHash.selector);
         reg.submitStateAdvance(7, miner, PARENT, CHILD1, bytes32(0), EVAL1, CVH, CORPUS, FRONTIER, 30000, 3, hex"ff03");
     }
 
     function test_advance_noOpReverts() public {
-        _start(7);
-        vm.prank(coord);
+        vm.prank(address(v4));
         vm.expectRevert(CoreTexRegistry.NoOpAdvance.selector);
         reg.submitStateAdvance(7, miner, PARENT, PARENT, PATCH1, EVAL1, CVH, CORPUS, FRONTIER, 30000, 3, hex"ff03");
     }
 
     function test_advance_coreVersionMismatchReverts() public {
-        _start(7);
-        vm.prank(coord);
+        vm.prank(address(v4));
         vm.expectRevert(CoreTexRegistry.CoreVersionMismatch.selector);
         reg.submitStateAdvance(
             7, miner, PARENT, CHILD1, PATCH1, EVAL1, bytes32(uint256(0xBAD)), CORPUS, FRONTIER, 30000, 3, hex"ff03"
@@ -194,8 +210,7 @@ contract CoreTexRegistryTest is Test {
     }
 
     function test_advance_corpusRootMismatchReverts() public {
-        _start(7);
-        vm.prank(coord);
+        vm.prank(address(v4));
         vm.expectRevert(CoreTexRegistry.CorpusRootMismatch.selector);
         reg.submitStateAdvance(
             7, miner, PARENT, CHILD1, PATCH1, EVAL1, CVH, bytes32(uint256(0xBAD)), FRONTIER, 30000, 3, hex"ff03"
@@ -203,17 +218,14 @@ contract CoreTexRegistryTest is Test {
     }
 
     function test_advance_activeFrontierMismatchReverts() public {
-        _start(7);
-        vm.prank(coord);
+        vm.prank(address(v4));
         vm.expectRevert(CoreTexRegistry.ActiveFrontierMismatch.selector);
         reg.submitStateAdvance(
             7, miner, PARENT, CHILD1, PATCH1, EVAL1, CVH, CORPUS, bytes32(uint256(0xBAD)), 30000, 3, hex"ff03"
         );
     }
 
-    // ── finalize ──
     function test_finalize_happyPath() public {
-        _start(7);
         _advance(7, PARENT, CHILD1, PATCH1);
         vm.expectEmit(true, false, false, true);
         emit CoreTexEpochFinalized(
@@ -230,7 +242,6 @@ contract CoreTexRegistryTest is Test {
     }
 
     function test_finalize_wrongFinalRootReverts() public {
-        _start(7);
         _advance(7, PARENT, CHILD1, PATCH1);
         vm.prank(coord);
         vm.expectRevert(CoreTexRegistry.FinalRootMismatch.selector);
@@ -238,7 +249,6 @@ contract CoreTexRegistryTest is Test {
     }
 
     function test_finalize_activeFrontierMismatchReverts() public {
-        _start(7);
         _advance(7, PARENT, CHILD1, PATCH1);
         vm.prank(coord);
         vm.expectRevert(CoreTexRegistry.ActiveFrontierMismatch.selector);
@@ -246,18 +256,15 @@ contract CoreTexRegistryTest is Test {
     }
 
     function test_advanceAfterFinalizeReverts() public {
-        _start(7);
         _advance(7, PARENT, CHILD1, PATCH1);
         vm.prank(coord);
         reg.finalizeEpoch(7, CHILD1, CVH, CORPUS, FRONTIER, bytes32(0), bytes32(0), BASELINE);
-        vm.prank(coord);
+        vm.prank(address(v4));
         vm.expectRevert(CoreTexRegistry.AlreadyFinalized.selector);
         reg.submitStateAdvance(7, miner, CHILD1, CHILD2, PATCH2, EVAL1, CVH, CORPUS, FRONTIER, 30000, 3, hex"ff03");
     }
 
-    // ── owner revert within audit window ──
     function test_ownerRevertWithinWindow() public {
-        _start(7);
         _advance(7, PARENT, CHILD1, PATCH1);
         vm.prank(coord);
         reg.finalizeEpoch(7, CHILD1, CVH, CORPUS, FRONTIER, bytes32(0), bytes32(0), BASELINE);
@@ -268,7 +275,6 @@ contract CoreTexRegistryTest is Test {
     }
 
     function test_ownerRevertAfterWindowReverts() public {
-        _start(7);
         _advance(7, PARENT, CHILD1, PATCH1);
         vm.prank(coord);
         reg.finalizeEpoch(7, CHILD1, CVH, CORPUS, FRONTIER, bytes32(0), bytes32(0), BASELINE);
@@ -278,14 +284,10 @@ contract CoreTexRegistryTest is Test {
         reg.ownerRevertEpoch(7);
     }
 
-    // ── no on-chain per-epoch advance cap (deliberate; scarcity is coordinator + frontier
-    //    + V4 multipliers + linear-chain serialization, not a numeric registry rail) ──
     function test_noOnChainAdvanceCap_largeNumberOfAdvancesAccepted() public {
-        _start(7);
-        bytes32 last = _advanceN(7, 64); // far above the prior 24 ceiling; nothing reverts
+        bytes32 last = _advanceN(7, 64);
         assertEq(reg.transitionCount(7), 64);
         assertEq(reg.liveStateRoot(7), last);
-        // finalize still O(1) regardless of transitionCount
         vm.prank(coord);
         reg.finalizeEpoch(7, last, CVH, CORPUS, FRONTIER, bytes32(0), bytes32(0), BASELINE);
         assertTrue(reg.epochFinalized(7));

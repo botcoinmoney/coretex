@@ -11,7 +11,7 @@ import {CoreTexRegistry} from "../src/CoreTexRegistry.sol";
 ///     export BASE_RPC_URL=...
 ///     export DEPLOYER_PK=...            (forge reads via --private-key or PRIVATE_KEY/wallet)
 ///     export OWNER_ADDRESS=0x...        owner / sole revert authority
-///     export COORDINATOR_ADDRESS=0x...  coordinator signer
+///     export CORETEX_COORDINATOR_SIGNER_ADDRESS=0x...  coordinator signer
 ///     export MAINNET_CONFIRM=I-UNDERSTAND
 ///
 ///   MAINNET_CONFIRM=I-UNDERSTAND forge script contracts/script/DeployMainnet.s.sol \
@@ -23,9 +23,12 @@ contract DeployMainnet is Script {
             "Refusing to broadcast: set MAINNET_CONFIRM=I-UNDERSTAND"
         );
         address owner_ = vm.envAddress("OWNER_ADDRESS");
-        address coordinator_ = vm.envAddress("COORDINATOR_ADDRESS");
+        address coordinator_ = vm.envOr("CORETEX_COORDINATOR_SIGNER_ADDRESS", address(0));
+        if (coordinator_ == address(0)) {
+            coordinator_ = vm.envAddress("COORDINATOR_ADDRESS"); // deprecated compatibility alias
+        }
         require(owner_ != address(0), "OWNER_ADDRESS zero");
-        require(coordinator_ != address(0), "COORDINATOR_ADDRESS zero");
+        require(coordinator_ != address(0), "CORETEX_COORDINATOR_SIGNER_ADDRESS zero");
 
         vm.startBroadcast();
         CoreTexRegistry registry = new CoreTexRegistry(owner_, coordinator_);

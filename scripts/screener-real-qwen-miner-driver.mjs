@@ -19,7 +19,7 @@
  *   - any other repo source (cortex internals, scoring code, profile JSON)
  *   - any handoff document, calibration finding, or CURRENT.md
  *   - this script or screener-real-qwen-economics.mjs
- *   - the launch profile or bundle manifest (only what the /coretex/challenge response exposes)
+ *   - the launch profile or bundle manifest (only what the /coretex/status response exposes)
  *
  * This script PRINTS the verbatim Agent-tool invocation envelope the orchestrator (Claude)
  * must use to launch the subagent. It does not itself call Agent — that is a privileged
@@ -94,8 +94,8 @@ Read \`docs/BOTCOIN_CORETEX_MINER_SKILL.md\` ONCE at the start. Treat it as your
 
 # Your coordinator
 COORDINATOR_URL = ${COORD}
-Public surface: GET /coretex/challenge, GET /coretex/status, POST /coretex/submit, GET /coretex/substrate/:root,
-GET /coretex/patch/:hash, GET /coretex/health. No auth required for this run (no Authorization header).
+Public surface: GET /coretex/health, GET /coretex/status?miner=0x..., GET /coretex/substrate/:stateRoot,
+POST /coretex/submit, GET /coretex/receipt/:hash. Use Authorization when the coordinator requires it.
 
 # Your wallet
 MINER_ADDRESS = ${minerEnv.NOOKPLOT_AGENT_ADDRESS}

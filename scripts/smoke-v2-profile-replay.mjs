@@ -6,7 +6,7 @@
  *   - scoring options come from `scoringOptionsFromProfile(V2 profile)` (the
  *     canonical mapping) — carrying ownerScopeMode / categoryLensFinalBonusWeight
  *     / categoryLensScoreInheritance / V2 pack quotas.
- *   - pack comes from production `deriveQueryPack(profile.hiddenPack)`.
+ *   - pack comes from production `deriveQueryPack(canonical hiddenPack)`.
  *   - baseline via `evaluateBaseline`; min-improvement acceptance threshold =
  *     minImprovementPpm + variancePpm + replayTolerancePpm (production rule).
  *   - REPLAY determinism: re-scoring the same (state, corpus, pack) reproduces
@@ -27,7 +27,7 @@ import { makeStreamReranker } from './lib/stream-reranker.mjs';
 
 const {
   scoringOptionsFromProfile, controllerParamsFromProfile, nextMinImprovementPpm,
-  deriveQueryPack, evaluateBaseline, createDeterministicReranker,
+  deriveQueryPack, evaluateBaseline, createDeterministicReranker, hiddenPackProfileFromEvaluatorProfile, computeAcceptanceThresholdPpm,
 } = await import(distIndex);
 
 const argv = process.argv.slice(2);
@@ -40,6 +40,7 @@ const samples = Number(flag('samples', '3'));
 
 const rerankerArg = flag('reranker', 'deterministic');
 const profile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
+const hiddenPack = hiddenPackProfileFromEvaluatorProfile(profile);
 const { corpus, queryEvents, LAYOUT, BE, RR, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath });
 
 // Deterministic for CPU (replay ⇒ exact). gpu/cpu use real Qwen (replay must be
@@ -64,8 +65,8 @@ check('corpus leak-free (no query→answer relations)', !anyQueryRel);
 
 // 3. Production pack via deriveQueryPack (V2 family quotas).
 const seedHex = '0x' + createHash('sha256').update(`v2-replay:${epoch}`).digest('hex');
-const pack = deriveQueryPack(epoch, seedHex, corpus, profile.hiddenPack);
-check('deriveQueryPack produced a pack', pack.events.length > 0, `packN=${pack.events.length} (cap ${profile.hiddenPack.packSize})`);
+const pack = deriveQueryPack(epoch, seedHex, corpus, hiddenPack);
+check('deriveQueryPack produced a pack', pack.events.length > 0, `packN=${pack.events.length} (cap ${hiddenPack.packSize})`);
 
 // 4. Baseline + variance.
 const empty = { words: new Array(1024).fill(0n) };
@@ -79,9 +80,9 @@ check('replay within replayTolerancePpm', replayDelta <= profile.replayTolerance
 
 // 6. Production min-improvement acceptance threshold.
 const minImpr = Number(profile.patchAcceptanceFloors.minImprovementPpm);
-const acceptanceThresholdPpm = minImpr + base.variancePpm + profile.replayTolerancePpm;
-check('acceptance threshold computed (minImpr + variance + replayTol)', Number.isFinite(acceptanceThresholdPpm),
-  `${minImpr} + ${base.variancePpm} + ${profile.replayTolerancePpm} = ${acceptanceThresholdPpm}`);
+const acceptanceThresholdPpm = computeAcceptanceThresholdPpm(profile);
+check('acceptance threshold computed (minImpr + productionVariance + replayTol)', Number.isFinite(acceptanceThresholdPpm),
+  `${minImpr} + source=${profile.baselineVarianceSource ?? 'unavailable'} + ${profile.replayTolerancePpm} = ${acceptanceThresholdPpm}`);
 
 // 7. Profile → CONTROLLER consumption (controllerParamsFromProfile is the single
 //    profile → difficulty-controller path, the controller analog of

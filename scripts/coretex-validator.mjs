@@ -31,9 +31,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { argv, exit } from 'node:process';
 import { spawnSync } from 'node:child_process';
-import { distIndex, repoRoot } from './_repo-root.mjs';
+import { distValidator, repoRoot } from './_repo-root.mjs';
 
-const m = await import(distIndex);
+const m = await import(distValidator);
 const {
   merkleizeState, bytesToHex, decodePatch, applyPatch, computePatchHash,
   decodeSubstrate, decodePolicyAtomRegion, verifyBundleManifest,

@@ -8,9 +8,9 @@
  * checks. NO contract deployment — a dry-run manifest for Solidity/replay parity.
  *
  * Canonical CoreTexRegistry design (single wide state-advance event; CoreTex spelling):
- *   ON-CHAIN: CoreTexEpochStarted / CoreTexStateAdvanced(... evalReportHash, coreVersionHash,
- *     corpusRoot, activeFrontierRoot, improvementCredits, wordCount, compactPatchBytes) /
- *     CoreTexEpochFinalized.
+ *   V4 CONTEXT: BotcoinMiningV4.setCoreTexEpochContext(...) + V4.epochCommit.
+ *   ON-CHAIN: CoreTexStateAdvanced(... evalReportHash, coreVersionHash, corpusRoot,
+ *     activeFrontierRoot, improvementCredits, wordCount, compactPatchBytes) / CoreTexEpochFinalized.
  *   OFF-CHAIN (full receipt, served by coordinator/API; its keccak256 == evalReportHash):
  *     gate/confirm scores, hidden-pack commitment, baseline manifest, screener outcome,
  *     score breakdown, blockhash, patchReceivedNoticeHash. See ONCHAIN_STATE_COMPOSITION.md.
@@ -29,7 +29,17 @@ import { distIndex, repoRoot } from './_repo-root.mjs';
 import { makeLaunchFrontier } from './lib/epoch-frontier.mjs';
 
 const m = await import(distIndex);
-const { merkleizeState, bytesToHex, decodePatch, applyPatch, computePatchHash, keccak256, deriveQueryPack, splitForRecord } = m;
+const {
+  merkleizeState,
+  bytesToHex,
+  decodePatch,
+  applyPatch,
+  computePatchHash,
+  keccak256,
+  deriveQueryPack,
+  splitForRecord,
+  hiddenPackProfileFromEvaluatorProfile,
+} = m;
 
 const opt = (n, fb) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fb; };
 const DEFAULT_ARTIFACT_MANIFEST = 'release/calibration/2026-06-04-memory-atom-v16/coretex-launch-v16-artifacts.json';
@@ -101,7 +111,7 @@ if (artifactManifest.corpusRoot && artifactManifest.corpusRoot.toLowerCase() !==
 const activeFrontierRoot = makeLaunchFrontier(profile, corpus)?.stepEpoch(0, null, null).activeRoot ?? null;
 if (!activeFrontierRoot || /^0x0+$/.test(activeFrontierRoot)) throw new Error('dry-run: activeFrontierRoot missing/zero');
 const evalSeedHex = profile.baselineEvalSeedHex;
-const pack = deriveQueryPack(0, evalSeedHex, corpus, { ...profile.hiddenPack, packSize: 64, quotas: [] });
+const pack = deriveQueryPack(0, evalSeedHex, corpus, { ...hiddenPackProfileFromEvaluatorProfile(profile), packSize: 64, quotas: [] });
 const queryPackRoot = bytesToHex(keccak256(new TextEncoder().encode(pack.events.map((e) => e.id).sort().join('\n'))));
 const profileHash = '0x' + createHash('sha256').update(canonical(profile)).digest('hex');
 const artifactManifestHash = '0x' + createHash('sha256').update(readFileSync(resolve(repoRoot, artifactManifestPath))).digest('hex');
@@ -115,7 +125,11 @@ const baselineManifest = {
   rerankerRevision,
   queryPackRoot,
   parentScorePpm: profile.baselineParentScorePpm,
-  variancePpm: profile.baselineVariancePpm,
+  baselineVarianceSource: profile.baselineVarianceSource ?? 'unavailable',
+  ...(profile.baselineVarianceSource === 'rotating_pack' || profile.baselineVarianceSource === 'broad_sampling'
+    ? { baselineVariancePpm: profile.baselineVariancePpm }
+    : {}),
+  fixedPackRepeatabilityPpm: profile.fixedPackRepeatabilityPpm ?? profile.baselineVariancePpm ?? null,
   samples: profile.baselineSamples ?? 3,
   replayTolerancePpm: profile.replayTolerancePpm,
 };
@@ -157,7 +171,7 @@ const dryrun = {
   schema: 'coretex-onchain-state-advance-dryrun-v1',
   note: 'Dry-run only — NO contract deployment. On-chain stores roots + content hashes; the full receipt is off-chain (served by coordinator/API) and its keccak256 == artifactHash.',
   onChain: {
-    CoreTexEpochStarted: { sig: 'CoreTexEpochStarted(uint64,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32)', epoch: 0, parentStateRoot: tmp.parentStateRoot, coreVersionHash: manifest.bundleHash, corpusRoot, activeFrontierRoot: receipt.activeFrontierRoot, baselineManifestHash, hiddenSeedCommit: SYNTH.epochSecretCommitment },
+    BotcoinMiningV4CoreTexEpochContext: { sig: 'setCoreTexEpochContext(uint64,(bytes32,bytes32,bytes32,bytes32,bytes32))', epoch: 0, parentStateRoot: tmp.parentStateRoot, coreVersionHash: manifest.bundleHash, corpusRoot, activeFrontierRoot: receipt.activeFrontierRoot, baselineManifestHash, epochCommit: SYNTH.epochSecretCommitment },
     CoreTexStateAdvanced: { sig: 'CoreTexStateAdvanced(uint64,uint64,address,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,uint256,uint16,bytes)', epoch: 0, transitionIndex: 1, miner: SYNTH.minerAddress, parentStateRoot: adv.parentStateRoot, newStateRoot: adv.childStateRoot, patchHash: adv.patchHash, evalReportHash: artifactHash, coreVersionHash: manifest.bundleHash, corpusRoot, activeFrontierRoot: receipt.activeFrontierRoot, improvementCredits: receipt.gateScorePpm, wordCount: patch.wordCount, compactPatchBytesHex: adv.patchBytesHex },
     CoreTexEpochFinalized: { sig: 'CoreTexEpochFinalized(uint64,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32)', epoch: 0, parentStateRoot: tmp.parentStateRoot, finalStateRoot: adv.childStateRoot, coreVersionHash: manifest.bundleHash, corpusRoot, activeFrontierRoot: receipt.activeFrontierRoot, patchSetRoot: kjson({ patches: [tmp.patchHash, adv.patchHash] }), scoreRoot: kjson({ scores: [receipt.gateScorePpm, receipt.confirmScorePpm] }), baselineManifestHash },
   },

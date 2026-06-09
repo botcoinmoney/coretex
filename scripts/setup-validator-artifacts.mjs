@@ -17,7 +17,7 @@ import { spawnSync } from 'node:child_process';
 import http from 'node:http';
 import https from 'node:https';
 import { fileURLToPath } from 'node:url';
-import { distIndex, repoRoot } from './_repo-root.mjs';
+import { distValidator, repoRoot } from './_repo-root.mjs';
 
 const DEFAULT_MANIFEST = 'release/calibration/2026-06-04-memory-atom-v16/coretex-launch-v16-artifacts.json';
 const args = argv.slice(2);
@@ -135,7 +135,7 @@ async function verifyStaticFile(label, path, sha256) {
 }
 
 async function verifyBundles(manifest) {
-  const C = await import(distIndex);
+  const C = await import(distValidator);
   await verifyStaticFile('bundle', manifest.bundlePath, manifest.bundleSha256);
   await verifyStaticFile('profile', manifest.profilePath, manifest.profileSha256);
   const bundle = readJson(manifest.bundlePath);

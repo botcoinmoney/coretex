@@ -21,9 +21,9 @@ interface IBotcoinMiningV3StakeSource {
 
 interface ICoreTexRegistry {
     function liveStateRoot(uint64 epoch) external view returns (bytes32);
-    function epochStarted(uint64 epoch) external view returns (bool);
     function epochFinalized(uint64 epoch) external view returns (bool);
     function epochReverted(uint64 epoch) external view returns (bool);
+    function transitionCount(uint64 epoch) external view returns (uint64);
     function epochCoreVersionHash(uint64 epoch) external view returns (bytes32);
     function epochCorpusRoot(uint64 epoch) external view returns (bytes32);
     function epochActiveFrontierRoot(uint64 epoch) external view returns (bytes32);
@@ -98,6 +98,24 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         uint256[] stateAdvanceWorkBps;
     }
 
+    struct CoreTexEpochContext {
+        bytes32 parentStateRoot;
+        bytes32 corpusRoot;
+        bytes32 activeFrontierRoot;
+        bytes32 baselineManifestHash;
+        bytes32 coreVersionHash;
+    }
+
+    enum StakeMode {
+        ExternalV3,
+        NativeV4
+    }
+
+    struct Tier {
+        uint256 stakeThreshold;
+        uint256 credits;
+    }
+
     // ── EIP-712 ─────────────────────────────────────────────────────────
 
     bytes32 private constant STANDARD_RECEIPT_TYPEHASH = keccak256(
@@ -118,6 +136,9 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     uint256 public constant MAX_CORETEX_WORK_BPS = 300_000; // 30x hard safety cap.
     uint32 public constant MAX_SCORE_PPM = 1_000_000;
     uint64 public constant MAX_WORK_RECEIPT_TTL = 1 hours;
+    uint256 public constant MIN_UNSTAKE_COOLDOWN = 1 days;
+    uint256 public constant MAX_UNSTAKE_COOLDOWN = 3 days;
+    uint256 public constant MAX_TIERS = 10;
 
     uint256 public constant COMPACT_PATCH_HEADER_BYTES = 42;
     uint256 public constant COMPACT_PATCH_MAX_BYTES = 178;
@@ -132,13 +153,18 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     // ── Immutables ─────────────────────────────────────────────────────
 
     IERC20 public immutable botcoinToken;
-    IBotcoinMiningV3StakeSource public immutable stakeSource;
+    IBotcoinMiningV3StakeSource public immutable epochSource;
 
     // ── Config ─────────────────────────────────────────────────────────
 
     address public coordinatorSigner;
     address public policyAdmin;
     ICoreTexRegistry public coreTexRegistry;
+    IBotcoinMiningV3StakeSource public externalStakeSource;
+    StakeMode public stakeMode;
+    StakeMode public scheduledStakeMode;
+    uint64 public scheduledStakeModeEffectiveEpoch;
+    bool public stakeModeSwitchScheduled;
     mapping(address => bool) public authorizedFunders;
 
     // ── Per-miner receipt chain (unified across both lanes) ─────────────
@@ -174,6 +200,15 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     // this). Adjustable by owner/policyAdmin; applies to future submissions immediately.
     mapping(uint64 => mapping(address => uint256)) public coreTexScreenerPassesByMiner;
     uint256 public coreTexScreenerCapPerMinerPerEpoch;
+
+    mapping(uint64 => CoreTexEpochContext) private _coreTexEpochContexts;
+    mapping(uint64 => bool) public coreTexEpochContextSet;
+
+    mapping(address => uint256) public nativeStakedAmount;
+    mapping(address => uint256) public nativeWithdrawableAt;
+    uint256 public nativeTotalStaked;
+    uint256 public nativeUnstakeCooldown;
+    Tier[] private _nativeTiers;
 
     // ── Events ─────────────────────────────────────────────────────────
 
@@ -213,6 +248,14 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     event CoreTexRegistryUpdated(address indexed oldRegistry, address indexed newRegistry);
     event PolicyAdminUpdated(address indexed oldAdmin, address indexed newAdmin);
     event CoreTexScreenerCapUpdated(uint256 oldCap, uint256 newCap);
+    event CoreTexEpochContextSet(
+        uint64 indexed epochId,
+        bytes32 parentStateRoot,
+        bytes32 corpusRoot,
+        bytes32 activeFrontierRoot,
+        bytes32 baselineManifestHash,
+        bytes32 coreVersionHash
+    );
     event CoreTexPolicyScheduled(
         uint32 indexed rulesVersion,
         uint64 indexed effectiveEpoch,
@@ -221,6 +264,14 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         uint256[] stateAdvanceThresholds,
         uint256[] stateAdvanceWorkBps
     );
+    event StakeModeSwitchScheduled(StakeMode indexed oldMode, StakeMode indexed newMode, uint64 indexed effectiveEpoch);
+    event ExternalStakeSourceUpdated(address indexed oldSource, address indexed newSource);
+    event NativeTiersUpdated(uint256[] thresholds, uint256[] creditsPerTier);
+    event NativeUnstakeCooldownUpdated(uint256 oldCooldown, uint256 newCooldown);
+    event Staked(address indexed miner, uint256 amount);
+    event UnstakeRequested(address indexed miner, uint256 amount, uint256 withdrawableAt);
+    event UnstakeCancelled(address indexed miner);
+    event Withdrawn(address indexed miner, uint256 amount);
     event DustSwept(address indexed to, uint256 amount);
 
     // ── Errors ─────────────────────────────────────────────────────────
@@ -264,6 +315,15 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     error CompactPatchReservedWord();
     error ActiveEpochHasCredits();
     error CoreTexScreenerCapExceeded();
+    error InvalidStakeModeSwitch();
+    error InvalidTierConfig();
+    error TooManyTiers();
+    error TierIndexOutOfBounds();
+    error InvalidCooldown();
+    error NothingStaked();
+    error NoUnstakePending();
+    error UnstakePending();
+    error CooldownNotElapsed();
 
     // ── Constructor ────────────────────────────────────────────────────
 
@@ -279,8 +339,12 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         if (_coordinatorSigner == address(0)) revert ZeroAddress();
 
         botcoinToken = IERC20(_botcoinToken);
-        stakeSource = IBotcoinMiningV3StakeSource(_stakeSource);
-        _validateStakeSource();
+        externalStakeSource = IBotcoinMiningV3StakeSource(_stakeSource);
+        epochSource = IBotcoinMiningV3StakeSource(_stakeSource);
+        stakeMode = StakeMode.ExternalV3;
+        _validateExternalStakeSource(externalStakeSource);
+        _copyNativeTiersFromExternal();
+        _setNativeUnstakeCooldown(MIN_UNSTAKE_COOLDOWN);
         coreTexRegistry = ICoreTexRegistry(_coreTexRegistry);
         coordinatorSigner = _coordinatorSigner;
         policyAdmin = _policyAdmin == address(0) ? msg.sender : _policyAdmin;
@@ -292,12 +356,14 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         emit CoreTexRegistryUpdated(address(0), _coreTexRegistry);
         emit CoordinatorSignerUpdated(address(0), _coordinatorSigner);
         emit PolicyAdminUpdated(address(0), policyAdmin);
+        emit ExternalStakeSourceUpdated(address(0), _stakeSource);
+        emit StakeModeSwitchScheduled(StakeMode.ExternalV3, StakeMode.ExternalV3, 0);
     }
 
     // ── Views ──────────────────────────────────────────────────────────
 
     function currentEpoch() public view returns (uint64) {
-        return stakeSource.currentEpoch();
+        return epochSource.currentEpoch();
     }
 
     function DOMAIN_SEPARATOR() external view returns (bytes32) {
@@ -370,15 +436,151 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         return selected;
     }
 
+    function stakeSource() external view returns (address) {
+        return address(externalStakeSource);
+    }
+
+    function effectiveStakeMode(uint64 epochId) public view returns (StakeMode) {
+        if (stakeModeSwitchScheduled && epochId >= scheduledStakeModeEffectiveEpoch) return scheduledStakeMode;
+        return stakeMode;
+    }
+
+    function stakedAmount(address miner) public view returns (uint256) {
+        return effectiveStakedAmount(miner, currentEpoch());
+    }
+
+    function withdrawableAt(address miner) public view returns (uint256) {
+        if (effectiveStakeMode(currentEpoch()) == StakeMode.ExternalV3) return externalStakeSource.withdrawableAt(miner);
+        return nativeWithdrawableAt[miner];
+    }
+
+    function isEligible(address miner) public view returns (bool) {
+        return tierCreditsOf(miner) > 0;
+    }
+
+    function tierCount() public view returns (uint256) {
+        if (effectiveStakeMode(currentEpoch()) == StakeMode.ExternalV3) return externalStakeSource.tierCount();
+        return _nativeTiers.length;
+    }
+
+    function getTier(uint256 index) public view returns (uint256 stakeThreshold, uint256 tierCredits) {
+        if (effectiveStakeMode(currentEpoch()) == StakeMode.ExternalV3) return externalStakeSource.getTier(index);
+        if (index >= _nativeTiers.length) revert TierIndexOutOfBounds();
+        Tier storage t = _nativeTiers[index];
+        return (t.stakeThreshold, t.credits);
+    }
+
+    function minStakeRequired() public view returns (uint256) {
+        if (effectiveStakeMode(currentEpoch()) == StakeMode.ExternalV3) return externalStakeSource.minStakeRequired();
+        return _nativeTiers[0].stakeThreshold;
+    }
+
+    function effectiveStakedAmount(address miner, uint64 epochId) public view returns (uint256) {
+        if (effectiveStakeMode(epochId) == StakeMode.ExternalV3) return externalStakeSource.stakedAmount(miner);
+        return nativeStakedAmount[miner];
+    }
+
+    function coreTexEpochContext(uint64 epochId) external view returns (CoreTexEpochContext memory) {
+        return _coreTexEpochContexts[epochId];
+    }
+
+    function coreTexParentStateRoot(uint64 epochId) public view returns (bytes32) {
+        return _coreTexEpochContexts[epochId].parentStateRoot;
+    }
+
+    function coreTexCorpusRoot(uint64 epochId) public view returns (bytes32) {
+        return _coreTexEpochContexts[epochId].corpusRoot;
+    }
+
+    function coreTexActiveFrontierRoot(uint64 epochId) public view returns (bytes32) {
+        return _coreTexEpochContexts[epochId].activeFrontierRoot;
+    }
+
+    function coreTexBaselineManifestHash(uint64 epochId) public view returns (bytes32) {
+        return _coreTexEpochContexts[epochId].baselineManifestHash;
+    }
+
+    function coreTexCoreVersionHash(uint64 epochId) public view returns (bytes32) {
+        return _coreTexEpochContexts[epochId].coreVersionHash;
+    }
+
+    function coreTexHiddenSeedCommit(uint64 epochId) public view returns (bytes32) {
+        return epochCommit[epochId];
+    }
+
     function tierCreditsOf(address miner) public view returns (uint256) {
-        if (!stakeSource.isEligible(miner)) return 0;
-        uint256 bal = stakeSource.stakedAmount(miner);
-        uint256 len = stakeSource.tierCount();
+        return tierCreditsOfAt(miner, currentEpoch());
+    }
+
+    function tierCreditsOfAt(address miner, uint64 epochId) public view returns (uint256) {
+        if (effectiveStakeMode(epochId) == StakeMode.ExternalV3) {
+            if (!externalStakeSource.isEligible(miner)) return 0;
+            return _creditsFromExternalTiers(externalStakeSource.stakedAmount(miner));
+        }
+        if (nativeWithdrawableAt[miner] != 0) return 0;
+        return _creditsFromNativeTiers(nativeStakedAmount[miner]);
+    }
+
+    function _creditsFromExternalTiers(uint256 bal) internal view returns (uint256) {
+        uint256 len = externalStakeSource.tierCount();
         for (uint256 i = len; i > 0; --i) {
-            (uint256 threshold, uint256 tierCredits) = stakeSource.getTier(i - 1);
+            (uint256 threshold, uint256 tierCredits) = externalStakeSource.getTier(i - 1);
             if (bal >= threshold) return tierCredits;
         }
         return 0;
+    }
+
+    function _creditsFromNativeTiers(uint256 bal) internal view returns (uint256) {
+        for (uint256 i = _nativeTiers.length; i > 0; --i) {
+            Tier storage t = _nativeTiers[i - 1];
+            if (bal >= t.stakeThreshold) return t.credits;
+        }
+        return 0;
+    }
+
+    // ── Native V4 staking ─────────────────────────────────────────────────
+
+    function stake(uint256 amount) external nonReentrant {
+        if (amount == 0) revert ZeroAmount();
+        address miner = msg.sender;
+        botcoinToken.safeTransferFrom(miner, address(this), amount);
+        nativeStakedAmount[miner] += amount;
+        nativeTotalStaked += amount;
+        if (nativeWithdrawableAt[miner] != 0) {
+            nativeWithdrawableAt[miner] = 0;
+            emit UnstakeCancelled(miner);
+        }
+        if (_creditsFromNativeTiers(nativeStakedAmount[miner]) == 0) revert InsufficientBalance();
+        emit Staked(miner, amount);
+    }
+
+    function unstake() external {
+        address miner = msg.sender;
+        if (nativeStakedAmount[miner] == 0) revert NothingStaked();
+        if (nativeWithdrawableAt[miner] != 0) revert UnstakePending();
+        uint256 deadline = block.timestamp + nativeUnstakeCooldown;
+        nativeWithdrawableAt[miner] = deadline;
+        emit UnstakeRequested(miner, nativeStakedAmount[miner], deadline);
+    }
+
+    function cancelUnstake() external {
+        address miner = msg.sender;
+        if (nativeWithdrawableAt[miner] == 0) revert NoUnstakePending();
+        nativeWithdrawableAt[miner] = 0;
+        emit UnstakeCancelled(miner);
+    }
+
+    function withdraw() external nonReentrant {
+        address miner = msg.sender;
+        uint256 deadline = nativeWithdrawableAt[miner];
+        if (deadline == 0) revert NoUnstakePending();
+        if (block.timestamp < deadline) revert CooldownNotElapsed();
+        uint256 amount = nativeStakedAmount[miner];
+        nativeStakedAmount[miner] = 0;
+        nativeWithdrawableAt[miner] = 0;
+        nativeTotalStaked -= amount;
+        botcoinToken.safeTransfer(miner, amount);
+        emit Withdrawn(miner, amount);
     }
 
     // ── Standard lane ──────────────────────────────────────────────────
@@ -615,6 +817,22 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         coreTexScreenerCapPerMinerPerEpoch = newCap;
     }
 
+    function setCoreTexEpochContext(uint64 epochId, CoreTexEpochContext calldata ctx) external {
+        if (msg.sender != owner() && msg.sender != policyAdmin) revert NotAuthorized();
+        _validateCoreTexEpochContext(ctx);
+        if (coreTexEpochContextSet[epochId] && _coreTexEpochLocked(epochId)) revert ActiveEpochHasCredits();
+        _coreTexEpochContexts[epochId] = ctx;
+        coreTexEpochContextSet[epochId] = true;
+        emit CoreTexEpochContextSet(
+            epochId,
+            ctx.parentStateRoot,
+            ctx.corpusRoot,
+            ctx.activeFrontierRoot,
+            ctx.baselineManifestHash,
+            ctx.coreVersionHash
+        );
+    }
+
     function setCoreTexRegistry(address newRegistry) external onlyOwner {
         if (newRegistry == address(0)) revert ZeroAddress();
         uint64 epochId = currentEpoch();
@@ -623,6 +841,42 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         }
         emit CoreTexRegistryUpdated(address(coreTexRegistry), newRegistry);
         coreTexRegistry = ICoreTexRegistry(newRegistry);
+    }
+
+    function setExternalStakeSource(address newSource) external onlyOwner {
+        if (newSource == address(0)) revert ZeroAddress();
+        IBotcoinMiningV3StakeSource parsed = IBotcoinMiningV3StakeSource(newSource);
+        _validateExternalStakeSource(parsed);
+        emit ExternalStakeSourceUpdated(address(externalStakeSource), newSource);
+        externalStakeSource = parsed;
+    }
+
+    function setNativeTiers(uint256[] calldata thresholds, uint256[] calldata creditsPerTier) external {
+        if (msg.sender != owner() && msg.sender != policyAdmin) revert NotAuthorized();
+        _setNativeTiers(thresholds, creditsPerTier);
+    }
+
+    function setNativeUnstakeCooldown(uint256 newCooldown) external onlyOwner {
+        _setNativeUnstakeCooldown(newCooldown);
+    }
+
+    function scheduleStakeModeSwitch(StakeMode newMode, uint64 effectiveEpoch) external {
+        if (msg.sender != owner() && msg.sender != policyAdmin) revert NotAuthorized();
+        if (effectiveEpoch <= currentEpoch()) revert InvalidStakeModeSwitch();
+        if (newMode == StakeMode.NativeV4 && _nativeTiers.length == 0) revert InvalidTierConfig();
+        StakeMode oldMode = effectiveStakeMode(currentEpoch());
+        scheduledStakeMode = newMode;
+        scheduledStakeModeEffectiveEpoch = effectiveEpoch;
+        stakeModeSwitchScheduled = true;
+        emit StakeModeSwitchScheduled(oldMode, newMode, effectiveEpoch);
+    }
+
+    function finalizeStakeModeSwitch() external {
+        if (!stakeModeSwitchScheduled || currentEpoch() < scheduledStakeModeEffectiveEpoch) revert InvalidStakeModeSwitch();
+        StakeMode oldMode = stakeMode;
+        stakeMode = scheduledStakeMode;
+        stakeModeSwitchScheduled = false;
+        emit StakeModeSwitchScheduled(oldMode, stakeMode, currentEpoch());
     }
 
     function scheduleCoreTexPolicy(CoreTexPolicyInput calldata input) external {
@@ -642,8 +896,9 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     function sweepDust(address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
         uint256 balance = botcoinToken.balanceOf(address(this));
-        if (balance <= rewardBalance) revert ZeroAmount();
-        uint256 dust = balance - rewardBalance;
+        uint256 obligated = rewardBalance + nativeTotalStaked;
+        if (balance <= obligated) revert ZeroAmount();
+        uint256 dust = balance - obligated;
         botcoinToken.safeTransfer(to, dust);
         emit DustSwept(to, dust);
     }
@@ -672,7 +927,7 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     }
 
     function _tierCreditsOrRevert(address miner) internal view returns (uint256) {
-        uint256 tierCredits = tierCreditsOf(miner);
+        uint256 tierCredits = tierCreditsOfAt(miner, currentEpoch());
         if (tierCredits == 0) revert InsufficientBalance();
         return tierCredits;
     }
@@ -712,10 +967,7 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     }
 
     function _validateRegistryContext(CoreTexReceipt calldata r) internal view {
-        if (
-            !coreTexRegistry.epochStarted(r.epochId) || coreTexRegistry.epochFinalized(r.epochId)
-                || coreTexRegistry.epochReverted(r.epochId)
-        ) {
+        if (!coreTexEpochContextSet[r.epochId] || coreTexRegistry.epochFinalized(r.epochId) || coreTexRegistry.epochReverted(r.epochId)) {
             revert InvalidCoreTexRoot();
         }
         if (coreTexRegistry.liveStateRoot(r.epochId) != r.parentStateRoot) revert InvalidCoreTexRoot();
@@ -791,6 +1043,21 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
             if (offset > len) revert InvalidCompactPatch();
         }
         if (offset != len) revert InvalidCompactPatch();
+    }
+
+    function _validateCoreTexEpochContext(CoreTexEpochContext calldata ctx) internal pure {
+        if (
+            ctx.parentStateRoot == bytes32(0) || ctx.corpusRoot == bytes32(0) || ctx.activeFrontierRoot == bytes32(0)
+                || ctx.baselineManifestHash == bytes32(0) || ctx.coreVersionHash == bytes32(0)
+        ) {
+            revert InvalidCoreTexRoot();
+        }
+    }
+
+    function _coreTexEpochLocked(uint64 epochId) internal view returns (bool) {
+        return totalCredits[epochId] != 0
+            || qualifiedScreenerPassesSinceLastStateAdvance[epochId] != 0
+            || coreTexRegistry.transitionCount(epochId) != 0;
     }
 
     // ── Internal: policy ───────────────────────────────────────────────
@@ -991,7 +1258,41 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         return false;
     }
 
-    function _validateStakeSource() internal view {
-        if (stakeSource.tierCount() == 0 || stakeSource.minStakeRequired() == 0) revert ZeroAddress();
+    // ── Internal: staking ───────────────────────────────────────────────
+
+    function _validateExternalStakeSource(IBotcoinMiningV3StakeSource source) internal view {
+        if (source.tierCount() == 0 || source.minStakeRequired() == 0) revert ZeroAddress();
+    }
+
+    function _copyNativeTiersFromExternal() internal {
+        uint256 len = externalStakeSource.tierCount();
+        if (len == 0 || len > MAX_TIERS) revert InvalidTierConfig();
+        uint256[] memory thresholds = new uint256[](len);
+        uint256[] memory creditsPerTier = new uint256[](len);
+        for (uint256 i; i < len; ++i) {
+            (thresholds[i], creditsPerTier[i]) = externalStakeSource.getTier(i);
+        }
+        _setNativeTiers(thresholds, creditsPerTier);
+    }
+
+    function _setNativeTiers(uint256[] memory thresholds, uint256[] memory creditsPerTier) internal {
+        uint256 len = thresholds.length;
+        if (len == 0 || len != creditsPerTier.length) revert InvalidTierConfig();
+        if (len > MAX_TIERS) revert TooManyTiers();
+        delete _nativeTiers;
+        uint256 lastThreshold;
+        for (uint256 i; i < len; ++i) {
+            if (thresholds[i] == 0 || creditsPerTier[i] == 0) revert InvalidTierConfig();
+            if (i > 0 && thresholds[i] <= lastThreshold) revert InvalidTierConfig();
+            _nativeTiers.push(Tier({stakeThreshold: thresholds[i], credits: creditsPerTier[i]}));
+            lastThreshold = thresholds[i];
+        }
+        emit NativeTiersUpdated(thresholds, creditsPerTier);
+    }
+
+    function _setNativeUnstakeCooldown(uint256 newCooldown) internal {
+        if (newCooldown < MIN_UNSTAKE_COOLDOWN || newCooldown > MAX_UNSTAKE_COOLDOWN) revert InvalidCooldown();
+        emit NativeUnstakeCooldownUpdated(nativeUnstakeCooldown, newCooldown);
+        nativeUnstakeCooldown = newCooldown;
     }
 }

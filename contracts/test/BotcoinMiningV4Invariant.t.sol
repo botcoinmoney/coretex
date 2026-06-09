@@ -273,7 +273,7 @@ contract BotcoinMiningV4InvariantTest is Test {
         v4 = new BotcoinMiningV4(
             address(token), address(v3), address(registry), coordinator, address(this), _defaultPolicy(0xC0, 0)
         );
-        registry.addCoordinator(address(v4));
+        registry.setBotcoinMiningV4(address(v4));
         // Raise screener cap above the fuzz budget so the invariant exercises credit-accounting,
         // not the (separately unit-tested) per-miner screener cap.
         v4.setCoreTexScreenerCapPerMinerPerEpoch(10_000);
@@ -285,8 +285,16 @@ contract BotcoinMiningV4InvariantTest is Test {
         _stake(miners[1], 200 ether);
         _stake(miners[2], 500 ether);
         v4.setEpochCommit(EPOCH, keccak256(abi.encodePacked(EPOCH_SECRET)));
-        vm.prank(coordinator);
-        registry.startEpoch(EPOCH, PARENT, CVH, CORPUS, FRONTIER, BASELINE, SEEDCOMMIT);
+        v4.setCoreTexEpochContext(
+            EPOCH,
+            BotcoinMiningV4.CoreTexEpochContext({
+                parentStateRoot: PARENT,
+                corpusRoot: CORPUS,
+                activeFrontierRoot: FRONTIER,
+                baselineManifestHash: BASELINE,
+                coreVersionHash: CVH
+            })
+        );
 
         handler = new BotcoinMiningV4Handler(v4, registry, miners, PARENT);
         targetContract(address(handler));

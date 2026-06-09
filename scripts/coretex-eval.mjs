@@ -255,6 +255,8 @@ if (!scoreOnly) {
       patchAcceptanceFloors: profile.patchAcceptanceFloors,
       replayTolerancePpm: profile.replayTolerancePpm,
       baselineVariancePpm: profile.baselineVariancePpm ?? 0,
+      baselineVarianceSource: profile.baselineVarianceSource ?? 'unavailable',
+      fixedPackRepeatabilityPpm: profile.fixedPackRepeatabilityPpm,
     });
     if (deltaPpm >= threshold) envelopeClass = 'state_advance';
     else envelopeClass = 'accepted_no_advance';

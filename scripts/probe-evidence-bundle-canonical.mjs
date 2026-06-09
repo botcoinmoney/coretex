@@ -18,7 +18,7 @@ const C = await import(distIndex);
 const {
   scoringOptionsFromProfile, evaluateRetrievalBenchmarkState, evaluateRetrievalBenchmarkPatch,
   createDeterministicReranker, stableRecordIdFor, encodeMemoryIndexSlot, encodePolicyAtom,
-  merkleizeState, PATCH_TYPE, POLICY_SELECTOR, POLICY_EVIDENCE_FEATURE,
+  merkleizeState, PATCH_TYPE, POLICY_SELECTOR, POLICY_EVIDENCE_FEATURE, computeAcceptanceThresholdPpm,
 } = C;
 const { RANGES } = await import(resolve(repoRoot, 'packages/cortex/dist/state/types.js'));
 
@@ -78,7 +78,7 @@ const accOpts = {
   protectedRegressionFloor: profile.patchAcceptanceFloors.protectedRegressionFloor,
   familyCatastrophicFloor: profile.patchAcceptanceFloors.familyCatastrophicFloor,
   minImprovementPpm: profile.patchAcceptanceFloors.minImprovementPpm,
-  acceptanceThresholdPpm: Number(profile.patchAcceptanceFloors.minImprovementPpm) + Number(profile.replayTolerancePpm) + Number(profile.baselineVariancePpm ?? 0),
+  acceptanceThresholdPpm: computeAcceptanceThresholdPpm(profile),
 };
 
 const TARGET_FAMS = targetFamiliesArg.split(',').map((s) => s.trim()).filter(Boolean);

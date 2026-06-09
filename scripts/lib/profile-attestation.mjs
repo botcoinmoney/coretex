@@ -23,6 +23,10 @@ import { createHash } from 'node:crypto';
 export function profileAttestation(profile, profilePath) {
   const canonical = canonicalJsonStringify(profile);
   const profileSha256 = '0x' + createHash('sha256').update(canonical).digest('hex');
+  const baselineVarianceSource = profile?.baselineVarianceSource ?? 'unavailable';
+  const productionVariancePpm = baselineVarianceSource === 'rotating_pack' || baselineVarianceSource === 'broad_sampling'
+    ? (profile?.baselineVariancePpm ?? 0)
+    : 0;
   return {
     profilePath: profilePath ?? null,
     profileSha256,
@@ -49,10 +53,12 @@ export function profileAttestation(profile, profilePath) {
     pinnedThreshold: profile?.patchAcceptanceFloors ? {
       minImprovementPpm: profile.patchAcceptanceFloors.minImprovementPpm ?? null,
       replayTolerancePpm: profile.replayTolerancePpm ?? null,
-      baselineVariancePpm: profile.baselineVariancePpm ?? null,
+      baselineVariancePpm: baselineVarianceSource === 'unavailable' ? null : (profile.baselineVariancePpm ?? null),
+      baselineVarianceSource,
+      fixedPackRepeatabilityPpm: profile.fixedPackRepeatabilityPpm ?? profile.baselineVariancePpm ?? null,
       total: (profile.patchAcceptanceFloors.minImprovementPpm ?? 0)
            + (profile.replayTolerancePpm ?? 0)
-           + (profile.baselineVariancePpm ?? 0),
+           + productionVariancePpm,
     } : null,
     hiddenPack: profile?.hiddenPack ? {
       packSize: profile.hiddenPack.packSize,

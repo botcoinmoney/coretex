@@ -29,8 +29,8 @@
  *
  * Operator envs:
  *   COORDINATOR_PORT              default 7790
- *   BASE_RPC_URL                  Base mainnet/fork RPC (read V4 cap live + emit receipts)
- *   V4_ADDRESS                    BotcoinMiningV4 address (where the on-chain cap lives)
+ *   BASE_RPC_URL                  Base mainnet/fork RPC (read mining cap live + emit receipts)
+ *   BOTCOIN_MINING_CONTRACT_ADDRESS Botcoin mining contract address (where the on-chain cap lives)
  *   CORETEX_LAUNCH_PROFILE        path to the signed candidate profile JSON
  *   CORETEX_LAUNCH_BUNDLE         path to the candidate bundle manifest JSON
  *   CORETEX_LAUNCH_CORPUS         path to dgen1-r5-synth corpus JSON
@@ -77,7 +77,7 @@ const {
   loadPackedState, keccak256,
   // scoring (production path)
   evaluateRetrievalBenchmarkPatch, evaluateRetrievalBenchmarkState,
-  scoringOptionsFromProfile, deriveQueryPack,
+  scoringOptionsFromProfile, deriveQueryPack, hiddenPackProfileFromEvaluatorProfile,
   // work + screener
   computeCoreTexScreenerThresholdPpm, evaluateCoreTexWorkQualification,
   computeCoreTexWorkUnitsBps, DEFAULT_CORETEX_WORK_POLICY,
@@ -145,20 +145,20 @@ const BANKR_KEY = minerEnv.NOOKPLOT_API_KEY || null;
 if (!MINER_ADDRESS || !/^0x[0-9a-fA-F]{40}$/.test(MINER_ADDRESS)) fail(`NOOKPLOT_AGENT_ADDRESS not a valid 0x EOA in .env.`);
 if (!MINER_PK) fail(`NOOKPLOT_AGENT_PRIVATE_KEY missing in .env.`);
 
-// 3. V4 on-chain cap read — must succeed unless --offline-smoke explicitly passed.
+// 3. Mining-contract on-chain cap read — must succeed unless --offline-smoke explicitly passed.
 const BASE_RPC_URL = env.BASE_RPC_URL || null;
-const V4_ADDRESS = env.V4_ADDRESS || null;
+const MINING_CONTRACT_ADDRESS = env.BOTCOIN_MINING_CONTRACT_ADDRESS || env.BOTCOIN_MINING_V4 || env.V4_ADDRESS || null;
 let onChainScreenerCap = null;
-if (BASE_RPC_URL && V4_ADDRESS) {
+if (BASE_RPC_URL && MINING_CONTRACT_ADDRESS) {
   try {
-    onChainScreenerCap = await readScreenerCapFromV4(BASE_RPC_URL, V4_ADDRESS);
-    info(`On-chain V4 coreTexScreenerCapPerMinerPerEpoch = ${onChainScreenerCap}`);
+    onChainScreenerCap = await readScreenerCapFromMiningContract(BASE_RPC_URL, MINING_CONTRACT_ADDRESS);
+    info(`On-chain mining coreTexScreenerCapPerMinerPerEpoch = ${onChainScreenerCap}`);
   } catch (e) {
-    if (!OFFLINE_SMOKE) fail(`V4 cap read failed (${e.message}). Pass --offline-smoke to override (NOT launch-authoritative).`);
-    warn(`V4 cap read failed (${e.message}); proceeding with --offline-smoke fallback.`);
+    if (!OFFLINE_SMOKE) fail(`mining contract cap read failed (${e.message}). Pass --offline-smoke to override (NOT launch-authoritative).`);
+    warn(`mining contract cap read failed (${e.message}); proceeding with --offline-smoke fallback.`);
   }
 } else if (!OFFLINE_SMOKE) {
-  fail(`BASE_RPC_URL + V4_ADDRESS not set — coordinator must read coreTexScreenerCapPerMinerPerEpoch live from V4. Pass --offline-smoke to override (NOT launch-authoritative).`);
+  fail(`BASE_RPC_URL + BOTCOIN_MINING_CONTRACT_ADDRESS not set — coordinator must read coreTexScreenerCapPerMinerPerEpoch live from the mining contract. V4_ADDRESS is only a deprecated fallback. Pass --offline-smoke to override (NOT launch-authoritative).`);
 }
 if (onChainScreenerCap === null) {
   // Last-resort offline smoke: default to 50 (current on-chain default) but mark non-authoritative.
@@ -628,13 +628,13 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, '127.0.0.1', () => {
   info(`Coordinator up on http://127.0.0.1:${PORT}  (mode=${MODE} runId=${RUN_ID})`);
   info(`Mining wallet: ${MINER_ADDRESS}`);
-  info(`On-chain V4 cap: ${onChainScreenerCap} (${BASE_RPC_URL && V4_ADDRESS ? 'chain-read' : 'offline-fallback NOT launch-authoritative'})`);
+  info(`On-chain mining cap: ${onChainScreenerCap} (${BASE_RPC_URL && MINING_CONTRACT_ADDRESS ? 'chain-read' : 'offline-fallback NOT launch-authoritative'})`);
   info(`Live root=${liveRoot}  threshold=${screenerThresholdPpm}ppm  baseline=${baselineScorePpm}ppm`);
   writeFileSync(RUN_META, JSON.stringify({
     runId: RUN_ID, mode: MODE, startedAt: new Date().toISOString(),
     profilePath: PROFILE_PATH, bundlePath: BUNDLE_PATH, corpusPath: CORPUS_PATH,
     bundleHash, corpusRoot, profileHash, rerankerHash,
-    onChainScreenerCap, chainCapSource: BASE_RPC_URL && V4_ADDRESS ? 'v4' : 'offline-fallback',
+    onChainScreenerCap, chainCapSource: BASE_RPC_URL && MINING_CONTRACT_ADDRESS ? 'mining-contract' : 'offline-fallback',
     targetStateAdvances: TARGET_STATE_ADVANCES,
     minerAddress: MINER_ADDRESS,
     rerankerTelemetry: rerankerTelemetrySnapshot(),
@@ -657,7 +657,7 @@ async function shutdown(exitCode) {
     t: new Date().toISOString(), kind: 'screener-real-qwen-economics', runId: RUN_ID, mode: MODE,
     bundleHash, corpusRoot, profileHash, rerankerHash, submissionsSeen,
     rerankerTelemetry: rerankerTelemetrySnapshot(),
-    chainCapSource: BASE_RPC_URL && V4_ADDRESS ? 'v4' : 'offline-fallback', onChainScreenerCap,
+    chainCapSource: BASE_RPC_URL && MINING_CONTRACT_ADDRESS ? 'mining-contract' : 'offline-fallback', onChainScreenerCap,
     artifactPaths: { run: RUN_DIR, submissions: SUBMISSIONS_LOG, transitions: TRANSITIONS_LOG, meta: RUN_META, findings: `${repoRoot}/release/calibration/SCREENER_REAL_QWEN_ECONOMICS_FINDINGS.md` },
   }) + '\n');
   exit(exitCode);
@@ -780,12 +780,8 @@ function deriveHiddenPackFor(epochId_, profile_, corpus_) {
   // SIGNED profile to match production exactly. We pin to bundleHash for cross-epoch determinism
   // so a single run sees consistent pack composition unless we explicitly bump the eval seed.
   const evalSeed = profile_.evalSeedHex ?? ('0x' + createHash('sha256').update(`pack-${epochId_}-${bundleHash}`).digest('hex'));
-  // deriveQueryPack's 4th arg is the HiddenPackProfile (packSize/quotas) — the `hiddenPack`
-  // SUB-object, NOT the whole evaluator profile. Passing the full profile makes profile.packSize
-  // undefined and throws "profile.quotas is not iterable". Mirror the canonical callers
-  // (determinism gate, pin-baseline-v2-real-qwen) which pass profile.hiddenPack.
   if (!profile_.hiddenPack) fail('profile.hiddenPack missing — cannot derive hidden query pack');
-  return deriveQueryPack(epochId_, evalSeed, corpus_, profile_.hiddenPack);
+  return deriveQueryPack(epochId_, evalSeed, corpus_, hiddenPackProfileFromEvaluatorProfile(profile_));
 }
 function defaultAllowedPatchTypes() {
   // Delegate to the CANONICAL grammar authority (state/patch.ts buildAllowedPatchTypes via PATCH_TYPE +
@@ -818,11 +814,11 @@ function buildReceiptStub({ miner, parentStateRoot, newStateRoot, patchHash, bps
   };
 }
 
-async function readScreenerCapFromV4(rpcUrl, v4Address) {
+async function readScreenerCapFromMiningContract(rpcUrl, miningContractAddress) {
   // Solidity getter selector = keccak256('coreTexScreenerCapPerMinerPerEpoch()').slice(0,4).
   const sigBytes = keccak256(new TextEncoder().encode('coreTexScreenerCapPerMinerPerEpoch()'));
   const selector = bytesToHex(sigBytes).slice(0, 10);     // '0x' + 8 hex chars
-  const payload = { jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to: v4Address, data: selector }, 'latest'] };
+  const payload = { jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to: miningContractAddress, data: selector }, 'latest'] };
   const res = await fetch(rpcUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
   if (!res.ok) throw new Error(`RPC eth_call HTTP ${res.status}`);
   const j = await res.json();
@@ -833,7 +829,7 @@ async function readScreenerCapFromV4(rpcUrl, v4Address) {
 }
 
 function renderFindingsStub() {
-  const launchAuth = (BASE_RPC_URL && V4_ADDRESS) ? 'YES' : 'NO (offline-fallback; not launch-authoritative)';
+  const launchAuth = (BASE_RPC_URL && MINING_CONTRACT_ADDRESS) ? 'YES' : 'NO (offline-fallback; not launch-authoritative)';
   return `# Screener Real-Qwen Economics — Findings (DRAFT)
 
 Run ID: \`${RUN_ID}\`
@@ -845,7 +841,7 @@ Profile: \`${PROFILE_PATH}\`
 Bundle:  \`${BUNDLE_PATH}\` (\`bundleHash ${bundleHash}\`)
 Corpus:  \`${CORPUS_PATH}\` (\`corpusRoot ${corpusRoot}\`)
 Reranker: ${QWEN_MODEL}@${QWEN_REVISION}
-On-chain V4 \`coreTexScreenerCapPerMinerPerEpoch\`: ${onChainScreenerCap} (${BASE_RPC_URL && V4_ADDRESS ? 'chain-read' : 'offline-fallback'})
+On-chain mining \`coreTexScreenerCapPerMinerPerEpoch\`: ${onChainScreenerCap} (${BASE_RPC_URL && MINING_CONTRACT_ADDRESS ? 'chain-read' : 'offline-fallback'})
 Qwen cost telemetry: \`${JSON.stringify(rerankerTelemetrySnapshot())}\`
 
 Mining wallet (subagent miner EOA): \`${MINER_ADDRESS}\`

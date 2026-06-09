@@ -1,8 +1,8 @@
 import { createWriteStream, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { distIndex, repoRoot } from '../_repo-root.mjs';
+import { distValidator, repoRoot } from '../_repo-root.mjs';
 
-const C = await import(distIndex);
+const C = await import(distValidator);
 const { computeCorpusEventLeafHash, buildCorpusRootLeafCacheFromLeaves } = C;
 
 const u8ToHex = (u8) => Buffer.from(u8.buffer ?? u8, u8.byteOffset ?? 0, u8.byteLength ?? u8.length).toString('hex');

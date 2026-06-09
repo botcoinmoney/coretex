@@ -22,7 +22,7 @@
     "contracts:test": "forge test --root contracts -vvv",
     "coordinator:epoch-runner": "npm run build --workspace @botcoin/cortex && node scripts/coretex-coordinator-epoch-runner.mjs",
     "coordinator:epoch-runner:e2e": "npm run coretex:epoch-evolve:e2e",
-    "coretex:start-epoch": "node scripts/coretex-start-epoch-transaction.mjs",
+    "coretex:pin-epoch-context": "node scripts/coretex-pin-epoch-context.mjs",
     "coretex:epoch-evolve": "npm run build --workspace @botcoin/cortex && node scripts/coretex-epoch-evolve.mjs",
     "coretex:epoch-evolve:e2e": "npm run build --workspace @botcoin/cortex && node scripts/coretex-epoch-evolve-sync-e2e.mjs",
     "setup:validator": "npm run build --workspace @botcoin/cortex && node scripts/setup-validator-artifacts.mjs",

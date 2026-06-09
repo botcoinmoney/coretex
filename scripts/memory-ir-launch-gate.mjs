@@ -12,13 +12,11 @@
  *   3. Grammar is protocol-owned + fixed: every rendered token is a known keyword;
  *      provenance-only fields (subject_scope) are NEVER rendered.
  *   4. No trainable IDs: rendered headers contain no doc/query/qrel ID tokens.
- *   5. Launch profile does NOT silently enable an experimental reranker header:
- *      scoringOptionsFromProfile(launch) → rerankerMemoryIRFormat ≠ 'F2' AND
- *      rerankerMemoryIRMode ≠ 'full' (substrate channel earns the lift; the F2
- *      sidecar header is NOT shipped). If a source is set it must be 'resolved'
- *      (resolved MemoryState), never 'corpus' convenience labels.
+ *   5. Launch profile explicitly enables the full protocol Memory-IR reranker
+ *      path while keeping the older F2 sidecar header off. If a source is set it
+ *      must be 'resolved' (resolved MemoryState), never 'corpus' labels.
  *
- * Usage: node scripts/memory-ir-launch-gate.mjs [--profile release/bundle/evaluator-profile-v2-dgen1-policy-r5.json]
+ * Usage: node scripts/memory-ir-launch-gate.mjs [--profile release/calibration/2026-06-04-memory-atom-v16/evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json]
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -29,7 +27,7 @@ const m = await import(distIndex);
 const { renderMemoryIRHeader, renderMemoryIRDoc, scoringOptionsFromProfile } = m;
 
 function flag(name, fb) { const i = argv.indexOf(`--${name}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fb; }
-const profilePath = flag('profile', 'release/bundle/evaluator-profile-v2-dgen1-policy-r5.json');
+const profilePath = flag('profile', 'release/calibration/2026-06-04-memory-atom-v16/evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json');
 const profile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
 
 let pass = true;
@@ -53,12 +51,12 @@ check('header matches fixed protocol grammar', tokenRe.test(earned), earned);
 const idRe = /\b(doc|query|qrel|q|d|ev|event|mem)[-_]?\d{2,}\b/i;
 check('no doc/query/qrel IDs in rendered header', !idRe.test(earned));
 
-// 5. launch profile does not silently enable an experimental reranker header
+// 5. launch profile uses full protocol Memory-IR and keeps F2 off.
 // scoringOptionsFromProfile passes scorer-affecting knobs through; we only read the MemoryIR flags here.
 const stubBE = { modelId: 'stub', revision: '0', layout: { dim: 8, quantization: 'int8', headerBytes: 4 }, encode() { throw new Error('unused'); } };
 const opts = scoringOptionsFromProfile(profile, { biEncoder: stubBE, reranker: { async score() { return []; } }, biEncoderHash: '0x00', retrievalKeyLayout: stubBE.layout });
 check('launch profile: reranker MemoryIR F2 header OFF', opts.rerankerMemoryIRFormat !== 'F2', `format=${opts.rerankerMemoryIRFormat ?? 'undefined(off)'}`);
-check('launch profile: reranker MemoryIR full-mode OFF', opts.rerankerMemoryIRMode !== 'full', `mode=${opts.rerankerMemoryIRMode ?? 'undefined(off)'}`);
+check('launch profile: reranker MemoryIR full-mode ON', opts.rerankerMemoryIRMode === 'full', `mode=${opts.rerankerMemoryIRMode ?? 'undefined(off)'}`);
 check('launch profile: MemoryIR source is resolved (never corpus labels)', opts.rerankerMemoryIRSource === undefined || opts.rerankerMemoryIRSource === 'resolved', `source=${opts.rerankerMemoryIRSource ?? 'undefined'}`);
 
 console.log(log.join('\n'));

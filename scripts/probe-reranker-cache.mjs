@@ -48,6 +48,7 @@ const {
   biEncoderModelIdHash, rerankerFromEnv, biEncoderFromEnv,
   DEFAULT_PROFILE, RANGES,
   getRerankerCacheStats,
+  hiddenPackProfileFromEvaluatorProfile,
 } = await import(distIndex);
 
 console.log(`[probe] CORETEX_RERANKER_CACHE_SIZE=${env.CORETEX_RERANKER_CACHE_SIZE ?? '(default)'}`);
@@ -68,13 +69,15 @@ const reranker = await rerankerFromEnv();
 const biEncoder = biEncoderFromEnv(LAYOUT, { modelId: BI.modelId, revision: BI.revision });
 console.log(`[probe] reranker: ${reranker.model}`);
 
-// Production-faithful pack derivation from profile.hiddenPack, unless
+const hiddenPack = profile.hiddenPack ? hiddenPackProfileFromEvaluatorProfile(profile) : null;
+
+// Production-faithful pack derivation from canonical hiddenPack, unless
 // --pack-size overrides for a faster probe.
 let pack;
 if (packSizeOverride) {
   pack = { epochId: 0, evalSeedCommit: seedHex, events: corpus.events.slice(0, packSizeOverride) };
-} else if (profile.hiddenPack) {
-  pack = deriveQueryPack(0, seedHex, corpus, profile.hiddenPack);
+} else if (hiddenPack) {
+  pack = deriveQueryPack(0, seedHex, corpus, hiddenPack);
 } else {
   pack = { epochId: 0, evalSeedCommit: seedHex, events: corpus.events.slice(0, 8) };
 }
@@ -124,7 +127,7 @@ const child = await timed('CHILD', CHILD);
 
 // Optional production-faithful throughput probe.
 let uniqueSeedReport = null;
-if (uniqueSeedPatches > 0 && profile.hiddenPack) {
+if (uniqueSeedPatches > 0 && hiddenPack) {
   console.log(`[probe] unique-seed patches: ${uniqueSeedPatches} (each patch has its own gateSeed → its own hiddenPack)`);
   const stats0 = getRerankerCacheStats?.(reranker);
   const baseHits = stats0?.hits ?? 0;
@@ -134,7 +137,7 @@ if (uniqueSeedPatches > 0 && profile.hiddenPack) {
     // Synthetic patchHash → unique gateSeed; deterministic across reruns.
     const patchHash = '0x' + createHash('sha256').update(`probe-patch-${i}`).digest('hex');
     const gateSeed = '0x' + createHash('sha256').update(patchHash + ':gate').digest('hex');
-    const packI = deriveQueryPack(0, gateSeed, corpus, profile.hiddenPack);
+    const packI = deriveQueryPack(0, gateSeed, corpus, hiddenPack);
     const tParent = Date.now();
     await evaluateRetrievalBenchmarkState(EMPTY, corpus, packI, opts);
     const parentMs = Date.now() - tParent;

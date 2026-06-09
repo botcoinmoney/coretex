@@ -12,6 +12,7 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { argv, env, exit } from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 import { repoRoot } from './_repo-root.mjs';
 
@@ -22,6 +23,30 @@ const flag = (name, fallback = null) => {
   return i >= 0 && i + 1 < args.length ? args[i + 1] : fallback;
 };
 const has = (name) => args.includes(`--${name}`);
+
+export function mergeCoordinatorEpochMetrics(fileMetrics = {}, cliArgs = args) {
+  const cliFlag = (name, fallback = null) => {
+    const i = cliArgs.indexOf(`--${name}`);
+    return i >= 0 && i + 1 < cliArgs.length ? cliArgs[i + 1] : fallback;
+  };
+  const cliHas = (name) => cliArgs.includes(`--${name}`);
+  const out = { ...fileMetrics };
+  if (cliHas('prev-honest-accepts')) {
+    out.prevHonestAccepts = asNonNegativeNumber(cliFlag('prev-honest-accepts'));
+  } else if (cliHas('previous-honest-accepts')) {
+    out.prevHonestAccepts = asNonNegativeNumber(cliFlag('previous-honest-accepts'));
+  } else if (out.prevHonestAccepts === undefined) {
+    out.prevHonestAccepts = 0;
+  }
+  if (cliHas('prev-quality-attempts')) {
+    out.prevQualityAttempts = asNonNegativeNumber(cliFlag('prev-quality-attempts'));
+  } else if (cliHas('previous-quality-attempts')) {
+    out.prevQualityAttempts = asNonNegativeNumber(cliFlag('previous-quality-attempts'));
+  } else if (out.prevQualityAttempts === undefined) {
+    out.prevQualityAttempts = 0;
+  }
+  return out;
+}
 
 function fail(msg) {
   console.error(`HARD FAIL: ${msg}`);
@@ -46,6 +71,11 @@ function bytes32FromBytes(bytes) {
 function asNonNegativeNumber(v, fallback = 0) {
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+export function frontierCount(v) {
+  if (Array.isArray(v)) return v.length;
+  if (Number.isSafeInteger(v) && v >= 0) return v;
+  return 0;
 }
 function asPpm(v, fallback = null) {
   const n = Number(v);
@@ -163,8 +193,20 @@ function sanitizeDecisionMetrics(metrics) {
     'reserveRemaining',
     'reserveAdded',
     'activeChurn',
+    'baselineParentScorePpm',
+    'fixedPackRepeatabilityPpm',
+    'recentNoiseFloorPpm',
+    'currentMinImprovementPpm',
+    'targetAdvances',
+    'screenerThresholdPpm',
   ]) {
     if (metrics[key] !== undefined) out[key] = asNonNegativeNumber(metrics[key]);
+  }
+  if (['rotating_pack', 'broad_sampling', 'unavailable'].includes(metrics.baselineVarianceSource)) {
+    out.baselineVarianceSource = metrics.baselineVarianceSource;
+    if (metrics.baselineVariancePpm !== undefined && metrics.baselineVarianceSource !== 'unavailable') {
+      out.baselineVariancePpm = asNonNegativeNumber(metrics.baselineVariancePpm);
+    }
   }
   return out;
 }
@@ -210,6 +252,28 @@ function runEpochEvolve({ manifestPath, outDir, decision, s3Prefix }) {
   cmd.push('--prev-quality-attempts', String(decision.metrics.prevQualityAttempts ?? flag('prev-quality-attempts', '0')));
   cmd.push('--quality-attempts-observed', String(decision.metrics.prevQualityAttempts ?? flag('prev-quality-attempts', '0')));
   cmd.push('--advances-observed', String(decision.metrics.prevHonestAccepts ?? flag('prev-honest-accepts', '0')));
+  const varianceSource = flag('baseline-variance-source', decision.metrics.baselineVarianceSource ?? 'unavailable');
+  cmd.push('--baseline-variance-source', varianceSource);
+  const explicitVariance = flag('baseline-variance-ppm', null);
+  if (varianceSource !== 'unavailable' && (explicitVariance !== null || decision.metrics.baselineVariancePpm !== undefined)) {
+    cmd.push('--baseline-variance-ppm', explicitVariance ?? String(decision.metrics.baselineVariancePpm));
+  }
+  const fixedRepeatability = flag('fixed-pack-repeatability-ppm', decision.metrics.fixedPackRepeatabilityPpm !== undefined
+    ? String(decision.metrics.fixedPackRepeatabilityPpm)
+    : null);
+  if (fixedRepeatability !== null) cmd.push('--fixed-pack-repeatability-ppm', fixedRepeatability);
+  for (const [flagName, metricKey] of [
+    ['baseline-parent-score-ppm', 'baselineParentScorePpm'],
+    ['recent-noise-floor-ppm', 'recentNoiseFloorPpm'],
+    ['current-min-improvement-ppm', 'currentMinImprovementPpm'],
+    ['target-advances', 'targetAdvances'],
+    ['screener-threshold-ppm', 'screenerThresholdPpm'],
+  ]) {
+    const explicit = flag(flagName, null);
+    const metric = decision.metrics[metricKey];
+    if (explicit !== null) cmd.push(`--${flagName}`, explicit);
+    else if (metric !== undefined) cmd.push(`--${flagName}`, String(metric));
+  }
   for (const name of [
     'mock-embeddings',
     'allow-dev-key',
@@ -247,6 +311,7 @@ function publicKeyMetadata({ outDir, evolveOut }) {
 }
 
 function buildStatus({ manifest, manifestPath, outDir, evolveOut, decision, awsIdentity }) {
+  const ctx = evolveOut.coreTexEpochContext;
   const rotationRef = evolveOut.artifacts.rotationManifest;
   const deltaRef = evolveOut.artifacts.delta ?? evolveOut.artifacts.corpusDelta;
   const rotationUrl = s3ToHttps(rotationRef, manifest);
@@ -254,14 +319,14 @@ function buildStatus({ manifest, manifestPath, outDir, evolveOut, decision, awsI
   const status = {
     schema: 'coretex.coordinator-epoch-status.v1',
     generatedAt: new Date().toISOString(),
-    status: 'ready_for_start_epoch',
+    status: 'ready_for_coretex_context_pin',
     currentEpoch: Number(evolveOut.epoch),
     epoch: Number(evolveOut.epoch),
     launchManifestPath: manifestPath,
-    bundleHash: evolveOut.startEpochParams.coreVersionHash,
-    baselineManifestHash: evolveOut.startEpochParams.baselineManifestHash,
-    corpusRoot: evolveOut.startEpochParams.corpusRoot,
-    activeFrontierRoot: evolveOut.startEpochParams.activeFrontierRoot,
+    bundleHash: ctx.coreVersionHash,
+    baselineManifestHash: ctx.baselineManifestHash,
+    corpusRoot: ctx.corpusRoot,
+    activeFrontierRoot: ctx.activeFrontierRoot,
     rotationManifestHash: evolveOut.rotationManifestHash,
     corpusDeltaHash: evolveOut.corpusDeltaHash,
     rotationManifestUrl: rotationUrl,
@@ -269,8 +334,24 @@ function buildStatus({ manifest, manifestPath, outDir, evolveOut, decision, awsI
     rotationManifestRef: rotationRef,
     corpusDeltaRef: deltaRef,
     ...publicKeyMetadata({ outDir, evolveOut }),
-    hiddenSeedCommit: evolveOut.startEpochParams.hiddenSeedCommit,
-    startEpochParams: evolveOut.startEpochParams,
+    hiddenSeedCommit: ctx.hiddenSeedCommit,
+    baselineParentScorePpm: evolveOut.evolve?.baselineParentScorePpm,
+    ...(evolveOut.evolve?.baselineVariancePpm !== undefined ? { baselineVariancePpm: evolveOut.evolve.baselineVariancePpm } : {}),
+    baselineVarianceSource: evolveOut.evolve?.baselineVarianceSource ?? 'unavailable',
+    fixedPackRepeatabilityPpm: evolveOut.evolve?.fixedPackRepeatabilityPpm,
+    screenerThresholdPpm: evolveOut.evolve?.screenerThresholdPpm,
+    minImprovementPpm: evolveOut.evolve?.minImprovementPpm,
+    recentNoiseFloorPpm: evolveOut.evolve?.recentNoiseFloorPpm,
+    difficultyController: evolveOut.evolve?.controller,
+    thresholds: {
+      baselineParentScorePpm: evolveOut.evolve?.baselineParentScorePpm,
+      ...(evolveOut.evolve?.baselineVariancePpm !== undefined ? { baselineVariancePpm: evolveOut.evolve.baselineVariancePpm } : {}),
+      baselineVarianceSource: evolveOut.evolve?.baselineVarianceSource ?? 'unavailable',
+      screenerThresholdPpm: evolveOut.evolve?.screenerThresholdPpm,
+      minImprovementPpm: evolveOut.evolve?.minImprovementPpm,
+      recentNoiseFloorPpm: evolveOut.evolve?.recentNoiseFloorPpm,
+    },
+    coreTexEpochContext: ctx,
     nextEpochReadiness: {
       ready: true,
       blockers: [],
@@ -290,9 +371,9 @@ function buildStatus({ manifest, manifestPath, outDir, evolveOut, decision, awsI
       activeFrontierRoot: evolveOut.frontier.activeFrontierRoot,
       activeEvalHiddenCount: evolveOut.frontier.activeEvalHiddenCount,
       reserveRemaining: evolveOut.frontier.reserveRemaining,
-      activatedCount: Array.isArray(evolveOut.frontier.activated) ? evolveOut.frontier.activated.length : 0,
-      retiredCount: Array.isArray(evolveOut.frontier.retired) ? evolveOut.frontier.retired.length : 0,
-      injectedLiveEvalCount: Array.isArray(evolveOut.frontier.injectedLiveEvalIds) ? evolveOut.frontier.injectedLiveEvalIds.length : 0,
+      activatedCount: frontierCount(evolveOut.frontier.activated),
+      retiredCount: frontierCount(evolveOut.frontier.retired),
+      injectedLiveEvalCount: frontierCount(evolveOut.frontier.injectedLiveEvalIds),
     },
     ...(awsIdentity ? { awsAccount: awsIdentity.Account, awsArnHash: bytes32FromString(awsIdentity.Arn ?? '') } : {}),
   };
@@ -316,11 +397,7 @@ async function main() {
   const outDir = resolve(repoRoot, flag('out-dir', `release/calibration/2026-06-04-memory-atom-v16/epoch-rotations/epoch-${epoch}`));
   mkdirSync(outDir, { recursive: true });
 
-  const metrics = {
-    ...maybeReadJson(flag('metrics', null)),
-    prevHonestAccepts: asNonNegativeNumber(flag('prev-honest-accepts', flag('previous-honest-accepts', '0'))),
-    prevQualityAttempts: asNonNegativeNumber(flag('prev-quality-attempts', flag('previous-quality-attempts', '0'))),
-  };
+  const metrics = mergeCoordinatorEpochMetrics(maybeReadJson(flag('metrics', null)), args);
   const decision = chooseChurn(metrics);
   const s3Prefix = flag('s3-prefix', env.CORETEX_EPOCH_S3_PREFIX ?? null);
   let awsIdentity = null;
@@ -358,7 +435,7 @@ async function main() {
     ...(status.coordinatorStatusUrl ? { coordinatorStatusUrl: status.coordinatorStatusUrl } : {}),
     epoch: status.epoch,
     chosenChurnFraction: decision.chosenChurnFraction,
-    startEpochParams: status.startEpochParams,
+    coreTexEpochContext: status.coreTexEpochContext,
     validatorSync: {
       fromCoordinator: status.coordinatorStatusUrl ?? rel(localPath),
       publicKeyRequired: true,
@@ -366,4 +443,6 @@ async function main() {
   }, null, 2));
 }
 
-main().catch((e) => fail(e?.stack ?? e?.message ?? String(e)));
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((e) => fail(e?.stack ?? e?.message ?? String(e)));
+}
