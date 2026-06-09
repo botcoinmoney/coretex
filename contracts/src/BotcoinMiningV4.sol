@@ -313,6 +313,7 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     error CompactPatchParentMismatch();
     error CompactPatchScoreMismatch();
     error CompactPatchReservedWord();
+    error CompactPatchDuplicateWord();
     error ActiveEpochHasCredits();
     error CoreTexScreenerCapExceeded();
     error InvalidStakeModeSwitch();
@@ -820,6 +821,10 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     function setCoreTexEpochContext(uint64 epochId, CoreTexEpochContext calldata ctx) external {
         if (msg.sender != owner() && msg.sender != policyAdmin) revert NotAuthorized();
         _validateCoreTexEpochContext(ctx);
+        // Context is immutable once the epoch commit anchors it: every receipt requires both the
+        // commit (_validateCommonReceipt) and the context (_validateRegistryContext), so freezing
+        // at setEpochCommit pins the exact context all receipts in the epoch were validated against.
+        if (epochCommit[epochId] != bytes32(0)) revert EpochCommitAlreadySet();
         if (coreTexEpochContextSet[epochId] && _coreTexEpochLocked(epochId)) revert ActiveEpochHasCredits();
         _coreTexEpochContexts[epochId] = ctx;
         coreTexEpochContextSet[epochId] = true;
@@ -1034,11 +1039,17 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         if (_readBytes32(compactPatchBytes, 10) != parentStateRoot) revert CompactPatchParentMismatch();
 
         uint256 offset = COMPACT_PATCH_HEADER_BYTES;
+        uint16[COMPACT_PATCH_MAX_WORDS] memory seenIndices;
         for (uint16 i; i < wordCount; ++i) {
             (uint16 index, uint256 nextOffset) = _readLeb128WordIndex(compactPatchBytes, offset);
             if (index >= RESERVED_WORD_START || !_wordMatchesPatchType(patchType, index)) {
                 revert CompactPatchReservedWord();
             }
+            // Duplicate word indices are a validity error (mirrors the TS codec), not last-write-wins.
+            for (uint16 j; j < i; ++j) {
+                if (seenIndices[j] == index) revert CompactPatchDuplicateWord();
+            }
+            seenIndices[i] = index;
             offset = nextOffset + 32;
             if (offset > len) revert InvalidCompactPatch();
         }

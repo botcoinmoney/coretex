@@ -284,7 +284,7 @@ contract BotcoinMiningV4InvariantTest is Test {
         _stake(miners[0], 100 ether);
         _stake(miners[1], 200 ether);
         _stake(miners[2], 500 ether);
-        v4.setEpochCommit(EPOCH, keccak256(abi.encodePacked(EPOCH_SECRET)));
+        // Context first, then commit: setCoreTexEpochContext reverts once the epoch commit is set.
         v4.setCoreTexEpochContext(
             EPOCH,
             BotcoinMiningV4.CoreTexEpochContext({
@@ -295,6 +295,7 @@ contract BotcoinMiningV4InvariantTest is Test {
                 coreVersionHash: CVH
             })
         );
+        v4.setEpochCommit(EPOCH, keccak256(abi.encodePacked(EPOCH_SECRET)));
 
         handler = new BotcoinMiningV4Handler(v4, registry, miners, PARENT);
         targetContract(address(handler));

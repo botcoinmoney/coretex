@@ -78,8 +78,9 @@ contract BotcoinMiningV4Test is Test {
         vm.prank(funder);
         token.approve(address(v4), type(uint256).max);
 
-        v4.setEpochCommit(EPOCH, keccak256(abi.encodePacked(EPOCH_SECRET)));
+        // Context first, then commit: setCoreTexEpochContext reverts once the epoch commit is set.
         _setContext(EPOCH, PARENT, CVH, CORPUS, FRONTIER, BASELINE);
+        v4.setEpochCommit(EPOCH, keccak256(abi.encodePacked(EPOCH_SECRET)));
     }
 
     function test_standardLaneWritesUnifiedCreditsWithV3Tier() public {
@@ -441,6 +442,43 @@ contract BotcoinMiningV4Test is Test {
         v4.revealEpochSecret(EPOCH + 1, bytes32(uint256(0x99)));
     }
 
+    function test_coreTexEpochContextSettableBeforeCommitAndFrozenAfter() public {
+        uint64 next = EPOCH + 1;
+        // context CAN be set (and corrected) while the epoch commit is unset
+        _setContext(next, PARENT, CVH, CORPUS, FRONTIER, BASELINE);
+        _setContext(next, CHILD1, CVH, CORPUS, FRONTIER, BASELINE);
+        assertTrue(v4.coreTexEpochContextSet(next));
+        assertEq(v4.coreTexParentStateRoot(next), CHILD1);
+
+        // once the commit is set, context for that epoch is immutable
+        v4.setEpochCommit(next, keccak256(abi.encodePacked(bytes32(uint256(0x77)))));
+        vm.expectRevert(BotcoinMiningV4.EpochCommitAlreadySet.selector);
+        _setContext(next, CHILD2, CVH, CORPUS, FRONTIER, BASELINE);
+        assertEq(v4.coreTexParentStateRoot(next), CHILD1);
+
+        // current epoch (commit set in setUp) is frozen too
+        vm.expectRevert(BotcoinMiningV4.EpochCommitAlreadySet.selector);
+        _setContext(EPOCH, CHILD2, CVH, CORPUS, FRONTIER, BASELINE);
+    }
+
+    function test_registryLiveRootInitializesFromV4ParentRoot() public {
+        // before any transition the registry live root reads the V4 epoch-context parent root
+        assertEq(registry.transitionCount(EPOCH), 0);
+        assertEq(v4.coreTexParentStateRoot(EPOCH), PARENT);
+        assertEq(registry.epochParentStateRoot(EPOCH), PARENT);
+        assertEq(registry.liveStateRoot(EPOCH), PARENT);
+
+        // the first state advance chains off that V4 parent root and moves the live root
+        bytes memory patchBytes = _patch(PARENT, 5, 384);
+        bytes32 patchHash = _patchHash(patchBytes);
+        BotcoinMiningV4.CoreTexReceipt memory r =
+            _stateAdvance(minerB, 0, bytes32(0), 0, PARENT, CHILD1, patchHash, patchBytes, 30_000);
+        _signCoreTex(r, minerB);
+        vm.prank(minerB);
+        v4.submitCoreTexReceipt(r);
+        assertEq(registry.liveStateRoot(EPOCH), CHILD1);
+    }
+
     function test_fundingAndClaimFailureMatrix() public {
         uint64[] memory one = new uint64[](1);
         one[0] = EPOCH;
@@ -798,6 +836,23 @@ contract BotcoinMiningV4Test is Test {
             cursor = child;
         }
         // Out-of-range 0x07 (index 32) is covered by test_compactPatchMalformedInputsReject.
+    }
+
+    function test_compactPatchDuplicateWordIndexReverts() public {
+        // a repeated word index inside one patch is a validity error, not last-write-wins
+        bytes memory dup = _patch2(PARENT, 5, 384, 384);
+        _expectPatchRevert(dup, BotcoinMiningV4.CompactPatchDuplicateWord.selector);
+
+        // distinct indices still validate and commit through the full receipt path
+        bytes memory ok = _patch2(PARENT, 5, 384, 385);
+        bytes32 patchHash = _patchHash(ok);
+        BotcoinMiningV4.CoreTexReceipt memory r =
+            _stateAdvance(minerB, 0, bytes32(0), 0, PARENT, CHILD1, patchHash, ok, 30_000);
+        r.stateWordCount = 2;
+        _signCoreTex(r, minerB);
+        vm.prank(minerB);
+        v4.submitCoreTexReceipt(r);
+        assertEq(registry.liveStateRoot(EPOCH), CHILD1);
     }
 
     function test_compactPatchLebAndTypeRangeRejects() public {
@@ -1299,6 +1354,40 @@ contract BotcoinMiningV4Test is Test {
             out[42 + i] = indexBytes[i];
         }
         out[out.length - 1] = bytes1(uint8(0x01));
+    }
+
+    function _lebIndex(uint16 index) internal pure returns (bytes memory) {
+        if (index < 128) return abi.encodePacked(uint8(index));
+        return abi.encodePacked(uint8((index & 0x7f) | 0x80), uint8(index >> 7));
+    }
+
+    function _patch2(bytes32 parent, uint64 delta, uint16 index1, uint16 index2)
+        internal
+        pure
+        returns (bytes memory out)
+    {
+        bytes memory idx1 = _lebIndex(index1);
+        bytes memory idx2 = _lebIndex(index2);
+        out = new bytes(42 + idx1.length + 32 + idx2.length + 32);
+        out[0] = bytes1(uint8(0x01));
+        out[1] = bytes1(uint8(0x02));
+        for (uint256 i; i < 8; ++i) {
+            out[2 + i] = bytes1(uint8(delta >> (8 * (7 - i))));
+        }
+        for (uint256 i; i < 32; ++i) {
+            out[10 + i] = parent[i];
+        }
+        uint256 o = 42;
+        for (uint256 i; i < idx1.length; ++i) {
+            out[o++] = idx1[i];
+        }
+        o += 32;
+        out[o - 1] = bytes1(uint8(0x01)); // word 1 value
+        for (uint256 i; i < idx2.length; ++i) {
+            out[o++] = idx2[i];
+        }
+        o += 32;
+        out[o - 1] = bytes1(uint8(0x02)); // word 2 value
     }
 
     function _patchLebContinuationMissing(bytes32 parent, uint64 delta) internal pure returns (bytes memory out) {
