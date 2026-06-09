@@ -84,6 +84,7 @@ REFERENCED_SCRIPTS=(
   scripts/lib/load-materialized-corpus.mjs
   scripts/_embed-v2.mjs
   scripts/reranker_runner.py
+  packages/cortex/scripts/reranker_runner.py
   scripts/bi_encoder_runner.py
 )
 echo "=== gate1: script-presence + syntax checks ==="

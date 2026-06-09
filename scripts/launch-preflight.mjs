@@ -67,6 +67,7 @@ console.log(`corpus:  ${CORPUS}`);
 const FINGERPRINT_ROOTS = [
   'packages/cortex/dist',
   'packages/cortex/src',
+  'packages/cortex/scripts',
   'packages/cortex-py/cortex_py',
   'contracts/src',
   'specs',
@@ -176,7 +177,7 @@ const walk = (rel) => { const abs = resolve(repoRoot, rel); if (!existsSync(abs)
 // (so dist can be proven to come from attested src), harness scripts, contracts, specs, the signed
 // bundle, and the corpus+embeddings data. (node_modules excluded — not launch-authored; deps are
 // pinned via lockfile separately.)
-['packages/cortex/dist', 'packages/cortex/src', 'packages/cortex-py/cortex_py', 'contracts/src', 'specs', 'scripts', 'release/bundle'].forEach(walk);
+['packages/cortex/dist', 'packages/cortex/src', 'packages/cortex/scripts', 'packages/cortex-py/cortex_py', 'contracts/src', 'specs', 'scripts', 'release/bundle'].forEach(walk);
 [CORPUS, EMB].forEach((p) => fileSet.push(p));
 const fileHashes = {};
 for (const p of fileSet.sort()) { const h = sha256File(p); if (h) fileHashes[p] = h; }
