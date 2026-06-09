@@ -9,14 +9,30 @@
  */
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import http from 'node:http';
+import https from 'node:https';
 import { argv, env, exit } from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { repoRoot } from './_repo-root.mjs';
 
 const DEFAULT_MANIFEST = 'release/calibration/2026-06-04-memory-atom-v16/coretex-launch-v16-artifacts.json';
+const COORDINATOR_EPOCH_METRICS_SCHEMA = 'coretex.coordinator-epoch-metrics.v1';
+const ZERO32 = `0x${'00'.repeat(32)}`;
+/**
+ * Dev/test bypasses that must never pass through the production runner.
+ * They are rejected outright (hard error, not silent drop); local CPU gates
+ * that need them must call coretex-epoch-evolve directly.
+ */
+export const FORBIDDEN_PRODUCTION_RUNNER_FLAGS = [
+  'allow-dev-key',
+  'allow-frontier-bootstrap',
+  'allow-missing-parent-state-root',
+  'skip-previous-root-verify',
+  'skip-previous-split-verify',
+];
 const args = argv.slice(2);
 const flag = (name, fallback = null) => {
   const i = args.indexOf(`--${name}`);
@@ -46,6 +62,47 @@ export function mergeCoordinatorEpochMetrics(fileMetrics = {}, cliArgs = args) {
     out.prevQualityAttempts = 0;
   }
   return out;
+}
+
+/**
+ * Provenance + freshness gate for the prior-epoch metrics file. Returns a
+ * rejection reason or null. Silent default-to-zero from a missing/stale/foreign
+ * metrics file is forbidden — main() hard-fails on any rejection.
+ *  - provenance: schema pin + the file must be FOR the completed epoch (epoch-1)
+ *  - freshness: embedded generatedAt (or file mtime when absent) within maxAgeMs
+ */
+export function validateCoordinatorEpochMetrics(metrics, { epoch, nowMs = Date.now(), maxAgeMs = 25 * 3600 * 1000, mtimeMs = null } = {}) {
+  if (!metrics || typeof metrics !== 'object' || Array.isArray(metrics)) return 'metrics file is not a JSON object';
+  if (metrics.schema !== COORDINATOR_EPOCH_METRICS_SCHEMA) {
+    return `metrics provenance schema ${JSON.stringify(metrics.schema)} != ${COORDINATOR_EPOCH_METRICS_SCHEMA}`;
+  }
+  if (Number(metrics.epoch) !== epoch - 1) {
+    return `metrics file is for epoch ${metrics.epoch}; runner epoch ${epoch} requires completed-epoch ${epoch - 1} telemetry`;
+  }
+  const embedded = Date.parse(String(metrics.generatedAt ?? ''));
+  const freshnessTs = Number.isFinite(embedded) ? embedded : mtimeMs;
+  if (!Number.isFinite(freshnessTs) || freshnessTs === null) return 'metrics file has no parseable generatedAt and no mtime';
+  const ageMs = nowMs - freshnessTs;
+  if (ageMs > maxAgeMs) {
+    return `metrics file is ${Math.round(ageMs / 1000)}s old (max ${Math.round(maxAgeMs / 1000)}s); stale telemetry is forbidden`;
+  }
+  return null;
+}
+
+/**
+ * Readiness `checked` items must only claim what was ACTUALLY verified —
+ * root continuity is reported iff the parent state root was derived/verified
+ * from chain, and S3 publication iff every uploaded artifact was fetched back
+ * over its public URL and byte-rehashed.
+ */
+export function readinessCheckedItems({ baselineBindsRotation, parentRootChainVerified, s3GetRehashVerified }) {
+  return [
+    'signed_corpus_delta',
+    'signed_epoch_rotation_manifest',
+    ...(baselineBindsRotation ? ['baseline_manifest_hash_binds_rotation_manifest'] : []),
+    ...(parentRootChainVerified ? ['parent_state_root_chain_verified', 'root_continuity_verified'] : []),
+    ...(s3GetRehashVerified ? ['s3_upload_get_rehash_verified'] : []),
+  ];
 }
 
 function fail(msg) {
@@ -102,18 +159,68 @@ function s3ToHttps(uri, manifest) {
   const region = s3.region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? 'us-east-2';
   return `https://${parsed.bucket}.s3.${region}.amazonaws.com/${parsed.key}`;
 }
-function uploadS3(localPath, s3Uri) {
+function downloadBytes(url, redirects = 0) {
+  return new Promise((resolveDone, reject) => {
+    const client = url.startsWith('https:') ? https : http;
+    const req = client.get(url, (res) => {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode ?? 0)) {
+        res.resume();
+        if (!res.headers.location || redirects >= 5) return reject(new Error(`redirect failed for ${url}`));
+        return resolveDone(downloadBytes(new URL(res.headers.location, url).toString(), redirects + 1));
+      }
+      if ((res.statusCode ?? 0) < 200 || (res.statusCode ?? 0) >= 300) {
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+      }
+      const chunks = [];
+      res.on('data', (d) => chunks.push(d));
+      res.on('end', () => resolveDone(Buffer.concat(chunks)));
+    });
+    req.on('error', reject);
+  });
+}
+
+/** Head-object existence is NOT verification: every uploaded artifact is
+ *  fetched back over its PUBLIC url and the bytes are rehashed against the
+ *  local file. Any mismatch is a hard failure before any chain call. */
+async function verifyS3GetRehash(localPath, s3Uri, manifest) {
+  const url = s3ToHttps(s3Uri, manifest);
+  let remote;
+  try {
+    remote = await downloadBytes(url);
+  } catch (e) {
+    fail(`S3 GET-rehash verification failed for ${url}: ${e?.message ?? e}`);
+  }
+  const remoteSha = createHash('sha256').update(remote).digest('hex');
+  const localSha = createHash('sha256').update(readFileSync(localPath)).digest('hex');
+  if (remoteSha !== localSha) {
+    fail(`S3 GET-rehash mismatch for ${s3Uri}: remote sha256 ${remoteSha} != local ${localSha}`);
+  }
+}
+
+async function uploadS3(localPath, s3Uri, manifest) {
   const parsed = parseS3Uri(s3Uri);
   if (!parsed) fail(`invalid s3 URI ${s3Uri}`);
   const cp = spawnSync('aws', ['s3', 'cp', localPath, s3Uri], { cwd: repoRoot, stdio: 'inherit', env });
   if (cp.status !== 0) fail(`aws s3 cp failed for ${localPath} -> ${s3Uri}`);
-  const head = spawnSync('aws', ['s3api', 'head-object', '--bucket', parsed.bucket, '--key', parsed.key], {
-    cwd: repoRoot,
-    stdio: 'pipe',
-    encoding: 'utf8',
-    env,
+  await verifyS3GetRehash(localPath, s3Uri, manifest);
+}
+
+function castCall(rpcUrl, to, sig, ...params) {
+  const r = spawnSync('cast', ['call', '--rpc-url', rpcUrl, to, sig, ...params.map(String)], {
+    cwd: repoRoot, env, encoding: 'utf8', maxBuffer: 16 << 20,
   });
-  if (head.status !== 0) fail(`aws s3api head-object failed for ${s3Uri}: ${head.stderr || head.stdout}`);
+  if (r.status !== 0) fail(`cast call ${sig} failed: ${r.stderr || r.stdout}`);
+  return (r.stdout ?? '').replace(/\s*\[[^\]]*\]\s*$/, '').trim();
+}
+
+/** The parent state root is derived FROM CHAIN: the registry's live state root
+ *  of the completed epoch (falling back to the completed epoch's pinned parent
+ *  when no transition landed). Never config/CLI-only when chain is reachable. */
+function deriveParentStateRootFromChain({ rpcUrl, registry, completedEpoch }) {
+  const live = castCall(rpcUrl, registry, 'liveStateRoot(uint64)(bytes32)', completedEpoch).toLowerCase();
+  if (live && live !== ZERO32) return live;
+  return castCall(rpcUrl, registry, 'epochParentStateRoot(uint64)(bytes32)', completedEpoch).toLowerCase();
 }
 function requireAwsIdentity() {
   const sts = spawnSync('aws', ['sts', 'get-caller-identity'], { cwd: repoRoot, stdio: 'pipe', encoding: 'utf8', env });
@@ -211,17 +318,17 @@ function sanitizeDecisionMetrics(metrics) {
   return out;
 }
 
-function runEpochEvolve({ manifestPath, outDir, decision, s3Prefix }) {
+function runEpochEvolve({ manifestPath, outDir, decision, s3Prefix, parentStateRoot }) {
   const epoch = flag('epoch');
   if (!epoch) fail('--epoch is required');
-  const parentStateRoot = flag('parent-state-root', null);
-  if (!parentStateRoot && !has('allow-missing-parent-state-root')) fail('--parent-state-root is required');
+  if (!parentStateRoot) fail('--parent-state-root is required (chain-derived or explicitly verified)');
   const cmd = [
     resolve(repoRoot, 'scripts/coretex-epoch-evolve.mjs'),
     '--manifest', manifestPath,
     '--epoch', epoch,
     '--out-dir', outDir,
     '--churn', String(decision.chosenChurnFraction),
+    '--parent-state-root', parentStateRoot,
   ];
   for (const name of [
     'bundle',
@@ -230,16 +337,20 @@ function runEpochEvolve({ manifestPath, outDir, decision, s3Prefix }) {
     'previous-corpus',
     'logical-state',
     'frontier-state',
+    'checkpoint',
     'private-key',
     'private-key-env',
     'public-key',
     'key-id',
-    'parent-state-root',
     'previous-root',
     'seed',
     'generated-at',
     'baseline-manifest-hash',
     'hidden-seed-commit',
+    'retraction-fraction',
+    'min-fresh-eval-hidden',
+    'hidden-retire-horizon',
+    'max-root-delta-per-epoch',
   ]) {
     const v = flag(name, null);
     if (v !== null) cmd.push(`--${name}`, v);
@@ -274,16 +385,11 @@ function runEpochEvolve({ manifestPath, outDir, decision, s3Prefix }) {
     if (explicit !== null) cmd.push(`--${flagName}`, explicit);
     else if (metric !== undefined) cmd.push(`--${flagName}`, String(metric));
   }
-  for (const name of [
-    'mock-embeddings',
-    'allow-dev-key',
-    'allow-frontier-bootstrap',
-    'allow-missing-parent-state-root',
-    'skip-previous-root-verify',
-    'skip-previous-split-verify',
-  ]) {
-    if (has(name)) cmd.push(`--${name}`);
-  }
+  // Production dev bypasses are rejected in main(); the ONLY booleans the
+  // runner forwards are the documented genesis bootstrap and the explicitly
+  // allowed CPU-gate mock embeddings.
+  if (has('launch-genesis')) cmd.push('--launch-genesis');
+  if (has('mock-embeddings')) cmd.push('--mock-embeddings');
   const r = spawnSync(process.execPath, cmd, { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env });
   if (r.status !== 0) {
     console.error(r.stdout);
@@ -310,7 +416,7 @@ function publicKeyMetadata({ outDir, evolveOut }) {
   };
 }
 
-function buildStatus({ manifest, manifestPath, outDir, evolveOut, decision, awsIdentity }) {
+function buildStatus({ manifest, manifestPath, outDir, evolveOut, decision, awsIdentity, verification }) {
   const ctx = evolveOut.coreTexEpochContext;
   const rotationRef = evolveOut.artifacts.rotationManifest;
   const deltaRef = evolveOut.artifacts.delta ?? evolveOut.artifacts.corpusDelta;
@@ -352,16 +458,16 @@ function buildStatus({ manifest, manifestPath, outDir, evolveOut, decision, awsI
       recentNoiseFloorPpm: evolveOut.evolve?.recentNoiseFloorPpm,
     },
     coreTexEpochContext: ctx,
+    parentStateRootSource: verification.parentRootChainVerified ? 'chain' : 'explicit-unverified',
     nextEpochReadiness: {
       ready: true,
       blockers: [],
-      checked: [
-        'signed_corpus_delta',
-        'signed_epoch_rotation_manifest',
-        'root_continuity_verified',
-        'baseline_manifest_hash_binds_rotation_manifest',
-        ...(parseS3Uri(rotationRef) || parseS3Uri(deltaRef) ? ['s3_upload_head_verified'] : []),
-      ],
+      checked: readinessCheckedItems({
+        baselineBindsRotation:
+          String(ctx.baselineManifestHash).toLowerCase() === String(evolveOut.rotationManifestHash).toLowerCase(),
+        parentRootChainVerified: verification.parentRootChainVerified,
+        s3GetRehashVerified: verification.s3GetRehashVerified,
+      }),
     },
     lastEvolveDecision: decision,
     evolve: evolveOut.evolve,
@@ -383,35 +489,89 @@ function buildStatus({ manifest, manifestPath, outDir, evolveOut, decision, awsI
 }
 
 async function main() {
+  // Production dev bypasses are rejected outright — never forwarded, never
+  // silently dropped. Run coretex-epoch-evolve directly for local dev gates.
+  for (const name of FORBIDDEN_PRODUCTION_RUNNER_FLAGS) {
+    if (has(name)) fail(`--${name} is forbidden in the production coordinator epoch runner (rejected, not forwarded)`);
+  }
+  if (has('mock-embeddings') && !has('allow-mock-embeddings')) {
+    fail('--mock-embeddings requires --allow-mock-embeddings and is forbidden in production');
+  }
   const manifestPath = flag('manifest', DEFAULT_MANIFEST);
   const manifest = readJson(manifestPath);
   if (manifest.schema !== 'coretex.launch-artifacts.v1') fail(`unsupported launch manifest schema ${manifest.schema}`);
   if (manifest.s3RepublishRequired !== false && !has('allow-s3-republish-required')) {
     fail('launch manifest has s3RepublishRequired!=false; refusing coordinator epoch runner');
   }
-  if (has('mock-embeddings') && !has('allow-mock-embeddings')) {
-    fail('--mock-embeddings requires --allow-mock-embeddings and is forbidden in production');
-  }
   const epoch = flag('epoch', null);
   if (!epoch || !Number.isInteger(Number(epoch)) || Number(epoch) < 1) fail('--epoch must be a positive integer');
+  const epochNum = Number(epoch);
   const outDir = resolve(repoRoot, flag('out-dir', `release/calibration/2026-06-04-memory-atom-v16/epoch-rotations/epoch-${epoch}`));
   mkdirSync(outDir, { recursive: true });
 
-  const metrics = mergeCoordinatorEpochMetrics(maybeReadJson(flag('metrics', null)), args);
+  // ── Metrics: provenance + freshness before use; default-to-zero forbidden ──
+  const metricsPath = flag('metrics', null);
+  if (!metricsPath && epochNum >= 2) {
+    fail('--metrics is required for epoch >= 2 (silent default-to-zero is forbidden); only epoch 1 genesis may omit prior-epoch telemetry');
+  }
+  let fileMetrics = {};
+  if (metricsPath) {
+    fileMetrics = maybeReadJson(metricsPath);
+    const maxAgeHours = Number(flag('metrics-max-age-hours', '25'));
+    if (!Number.isFinite(maxAgeHours) || maxAgeHours <= 0) fail('--metrics-max-age-hours must be a positive number');
+    const problem = validateCoordinatorEpochMetrics(fileMetrics, {
+      epoch: epochNum,
+      maxAgeMs: maxAgeHours * 3600 * 1000,
+      mtimeMs: statSync(resolve(repoRoot, metricsPath)).mtimeMs,
+    });
+    if (problem) fail(`metrics file ${metricsPath} rejected: ${problem}`);
+  }
+  const metrics = mergeCoordinatorEpochMetrics(fileMetrics, args);
   const decision = chooseChurn(metrics);
+
+  // ── Parent state root: derive from chain when reachable, else explicit ──
+  const rpcUrl = flag('rpc-url', env.BASE_RPC_URL ?? null);
+  const registry = flag('registry', env.CORETEX_REGISTRY_ADDRESS ?? null);
+  let parentStateRoot = flag('parent-state-root', null)?.toLowerCase() ?? null;
+  let parentRootChainVerified = false;
+  if (rpcUrl && registry) {
+    const chainRoot = deriveParentStateRootFromChain({ rpcUrl, registry, completedEpoch: epochNum - 1 });
+    if (!chainRoot || chainRoot === ZERO32) {
+      fail(`stale parent state root: chain returned no parent state root for completed epoch ${epochNum - 1}`);
+    }
+    if (parentStateRoot && parentStateRoot !== chainRoot) {
+      fail(`stale parent state root: --parent-state-root ${parentStateRoot} != chain-derived ${chainRoot}`);
+    }
+    parentStateRoot = chainRoot;
+    parentRootChainVerified = true;
+  }
+  if (!parentStateRoot) fail('--parent-state-root is required (or provide --rpc-url/--registry to derive it from chain)');
+
   const s3Prefix = flag('s3-prefix', env.CORETEX_EPOCH_S3_PREFIX ?? null);
   let awsIdentity = null;
   if (s3Prefix || flag('status-s3-prefix', env.CORETEX_COORDINATOR_STATUS_S3_PREFIX ?? null)) {
     awsIdentity = requireAwsIdentity();
   }
-  const evolveOut = runEpochEvolve({ manifestPath, outDir, decision, s3Prefix });
-  const logicalStatePath = flag('logical-state', null);
-  if (logicalStatePath && evolveOut.artifacts.logicalState && !has('no-persist-logical-state')) {
-    const dst = resolve(repoRoot, logicalStatePath);
-    mkdirSync(dirname(dst), { recursive: true });
-    copyFileSync(resolve(repoRoot, evolveOut.artifacts.logicalState), dst);
+  const evolveOut = runEpochEvolve({ manifestPath, outDir, decision, s3Prefix, parentStateRoot });
+  // NOTE: evolve updates the stable --logical-state path atomically itself
+  // (tmp + rename, plus the sibling checkpoint); the runner must not re-copy.
+
+  // ── S3 verification: GET every uploaded artifact back + byte rehash ──
+  const rotationRef = evolveOut.artifacts.rotationManifest;
+  const deltaRef = evolveOut.artifacts.delta ?? evolveOut.artifacts.corpusDelta;
+  let s3GetRehashVerified = false;
+  if (parseS3Uri(rotationRef) || parseS3Uri(deltaRef)) {
+    const rotationLocal = resolve(outDir, `epoch-rotation-${evolveOut.epoch}.json`);
+    const deltaLocal = resolve(repoRoot, evolveOut.artifacts.corpusDelta);
+    if (parseS3Uri(rotationRef)) await verifyS3GetRehash(rotationLocal, rotationRef, manifest);
+    if (parseS3Uri(deltaRef)) await verifyS3GetRehash(deltaLocal, deltaRef, manifest);
+    s3GetRehashVerified = true;
   }
-  const { status, localPath } = buildStatus({ manifest, manifestPath, outDir, evolveOut, decision, awsIdentity });
+
+  const { status, localPath } = buildStatus({
+    manifest, manifestPath, outDir, evolveOut, decision, awsIdentity,
+    verification: { parentRootChainVerified, s3GetRehashVerified },
+  });
 
   const statusOut = flag('coordinator-status-out', null);
   if (statusOut) {
@@ -426,7 +586,7 @@ async function main() {
     status.coordinatorStatusRef = statusS3Uri;
     writeFileSync(localPath, JSON.stringify(status, null, 2) + '\n');
     if (statusOut) writeFileSync(resolve(repoRoot, statusOut), JSON.stringify(status, null, 2) + '\n');
-    uploadS3(localPath, statusS3Uri);
+    await uploadS3(localPath, statusS3Uri, manifest);
   }
   console.log(JSON.stringify({
     ok: true,
