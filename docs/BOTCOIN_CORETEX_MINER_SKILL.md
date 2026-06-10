@@ -185,6 +185,8 @@ curl -s -X POST "${COORDINATOR_URL}/coretex/submit" \
   }'
 ```
 
+**Auth on `/coretex/submit`:** when coordinator auth is enabled (the §2 probe found `/coretex/status` gated), `POST /coretex/submit` requires the **same bearer token** — submitting without the `Authorization` header returns **401** and the patch is never scored. A **503** on `/coretex/submit` means auth is mis-provisioned on the coordinator (the token endpoint is up but the submit verifier is not); do not retry-spam — back off and surface it to the operator. If auth is disabled (both `/coretex/health` and `/coretex/status` returned 200 unauthenticated in §2), omit the header.
+
 The envelope is one of three:
 
 **rejected** — structural reject (E01–E05/DECODE) OR scoring-gate reject (W02/W03/W05/W06/...). Always includes `status`, `reason`, `code`. May include `currentStateRoot` (for W02/E01) or `perMinerScreenerCap` + `current` (for cap rejections). The per-patch score is **never** returned — accept/reject is all you learn, by design, so the screener cannot be used as a scoring oracle to grind toward the threshold.
@@ -292,6 +294,8 @@ CoreTex and standard lane credits accumulate in the same V4 epoch pool. After th
 Same claim errors as the standard lane: `EpochNotFunded`, `EpochNotFinalized`, `NoCredits`, `AlreadyClaimed`. Poll `/v1/epoch` to find ready-to-claim epochs.
 
 ## Error handling
+
+**Branch on `code`, never on `reason`.** Every rejection envelope carries a stable `code` — the structural `E0x`/`DECODE` set, the scoring-gate `W0x` set, and the named on-chain errors (`CoreTexImprovementTooSmall`, `DuplicateCoreTexPatch`, `CoreTexScreenerCapExceeded`, `WorkUnitsOutOfBounds`, `WorkReceiptExpired`, …). The coordinator's response sanitizer preserves `code` as the contract; the accompanying `reason` is human-readable, non-normative, and may change wording (or be redacted) at any time without notice. All retry/skip/abort logic must key off `code` only. Treating `reason` as machine-parseable will silently break when the text changes.
 
 Identical retry/backoff conventions as the standard miner skill — see its **Error Handling** section for 429/5xx/401/403 patterns, auth refresh, and concurrency limits. CoreTex-specific:
 

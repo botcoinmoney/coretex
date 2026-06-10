@@ -11,12 +11,15 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import http from 'node:http';
-import https from 'node:https';
 import { argv, env, exit } from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { repoRoot } from './_repo-root.mjs';
+import {
+  parseS3Uri,
+  s3UriToHttps,
+  verifyS3GetRehash as sharedVerifyS3GetRehash,
+} from './lib/s3-get-rehash.mjs';
 
 const DEFAULT_MANIFEST = 'release/calibration/2026-06-04-memory-atom-v16/coretex-launch-v16-artifacts.json';
 const COORDINATOR_EPOCH_METRICS_SCHEMA = 'coretex.coordinator-epoch-metrics.v1';
@@ -145,56 +148,21 @@ function normalizeS3Prefix(prefix) {
 function s3Join(prefix, fileName) {
   return `${normalizeS3Prefix(prefix)}/${fileName}`;
 }
-function parseS3Uri(uri) {
-  const m = /^s3:\/\/([^/]+)\/(.+)$/.exec(uri);
-  return m ? { bucket: m[1], key: m[2] } : null;
-}
+// S3 GET-and-rehash verification is factored into a shared lib so the direct
+// dev/manual evolve script (scripts/coretex-epoch-evolve.mjs) verifies uploads
+// byte-identically to this orchestrated production path.
 function s3ToHttps(uri, manifest) {
-  const parsed = parseS3Uri(uri);
-  if (!parsed) return uri;
-  const s3 = manifest.s3 ?? {};
-  if (s3.bucket === parsed.bucket && s3.prefix && parsed.key.startsWith(`${s3.prefix}/`) && s3.publicBaseUrl) {
-    return `${s3.publicBaseUrl.replace(/\/+$/, '')}/${parsed.key.slice(s3.prefix.length + 1)}`;
-  }
-  const region = s3.region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? 'us-east-2';
-  return `https://${parsed.bucket}.s3.${region}.amazonaws.com/${parsed.key}`;
-}
-function downloadBytes(url, redirects = 0) {
-  return new Promise((resolveDone, reject) => {
-    const client = url.startsWith('https:') ? https : http;
-    const req = client.get(url, (res) => {
-      if ([301, 302, 303, 307, 308].includes(res.statusCode ?? 0)) {
-        res.resume();
-        if (!res.headers.location || redirects >= 5) return reject(new Error(`redirect failed for ${url}`));
-        return resolveDone(downloadBytes(new URL(res.headers.location, url).toString(), redirects + 1));
-      }
-      if ((res.statusCode ?? 0) < 200 || (res.statusCode ?? 0) >= 300) {
-        res.resume();
-        return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
-      }
-      const chunks = [];
-      res.on('data', (d) => chunks.push(d));
-      res.on('end', () => resolveDone(Buffer.concat(chunks)));
-    });
-    req.on('error', reject);
-  });
+  return s3UriToHttps(uri, { manifest, env });
 }
 
 /** Head-object existence is NOT verification: every uploaded artifact is
  *  fetched back over its PUBLIC url and the bytes are rehashed against the
  *  local file. Any mismatch is a hard failure before any chain call. */
 async function verifyS3GetRehash(localPath, s3Uri, manifest) {
-  const url = s3ToHttps(s3Uri, manifest);
-  let remote;
   try {
-    remote = await downloadBytes(url);
+    await sharedVerifyS3GetRehash(localPath, s3Uri, { manifest, env });
   } catch (e) {
-    fail(`S3 GET-rehash verification failed for ${url}: ${e?.message ?? e}`);
-  }
-  const remoteSha = createHash('sha256').update(remote).digest('hex');
-  const localSha = createHash('sha256').update(readFileSync(localPath)).digest('hex');
-  if (remoteSha !== localSha) {
-    fail(`S3 GET-rehash mismatch for ${s3Uri}: remote sha256 ${remoteSha} != local ${localSha}`);
+    fail(e?.message ?? String(e));
   }
 }
 

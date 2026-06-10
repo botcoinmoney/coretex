@@ -1,11 +1,18 @@
 #!/usr/bin/env node
 /**
- * Production epoch evolve/publish command.
+ * DEV / MANUAL epoch evolve/publish command.
  *
  * Builds a signed CorpusDelta and signed EpochRotationManifest from the launch
  * corpus/evolve path, optionally uploads both to S3, and emits the exact V4
- * CoreTex epoch context pins. This is coordinator-side operational wiring, not
- * a stress harness.
+ * CoreTex epoch context pins.
+ *
+ * NOT the production publish path. The ONLY production cutover/publish path is
+ * the orchestrated coordinator epoch runner (scripts/coretex-coordinator-epoch-runner.mjs),
+ * which adds telemetry-bounded churn selection and the full fail-closed cutover
+ * orchestration around this command. Use this script directly only for local
+ * CPU gates / manual dev runs. S3 uploads here are verified to the SAME hardened
+ * standard as the runner: GET-over-public-URL + sha256 byte rehash (not a mere
+ * head-object existence check).
  */
 import { createHash, generateKeyPairSync } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
@@ -17,6 +24,7 @@ import { argv, env, exit, pid } from 'node:process';
 import { distIndex, repoRoot } from './_repo-root.mjs';
 import { evolveCorpusDelta } from './lib/evolve-corpus.mjs';
 import { loadMaterializedCorpus } from './lib/load-materialized-corpus.mjs';
+import { verifyS3GetRehash } from './lib/s3-get-rehash.mjs';
 
 const C = await import(distIndex);
 const {
@@ -95,13 +103,17 @@ function normalizeS3Prefix(prefix) {
 function s3Join(prefix, fileName) {
   return `${normalizeS3Prefix(prefix)}/${fileName}`;
 }
-function uploadS3(localPath, s3Uri) {
+async function uploadS3(localPath, s3Uri) {
   const res = spawnSync('aws', ['s3', 'cp', localPath, s3Uri], { cwd: repoRoot, stdio: 'inherit', env });
   if (res.status !== 0) fail(`aws s3 cp failed for ${localPath} -> ${s3Uri}`);
-  const verify = spawnSync('aws', ['s3api', 'head-object', '--bucket', s3Uri.split('/')[2], '--key', s3Uri.split('/').slice(3).join('/')], {
-    cwd: repoRoot, stdio: 'pipe', encoding: 'utf8', env,
-  });
-  if (verify.status !== 0) fail(`aws s3api head-object failed for ${s3Uri}: ${verify.stderr || verify.stdout}`);
+  // Hardened verify (matches the production runner): head-object existence is NOT
+  // verification — fetch the uploaded object back over its PUBLIC https url and
+  // rehash the bytes against the local file, failing loudly on any mismatch.
+  try {
+    await verifyS3GetRehash(localPath, s3Uri, { env });
+  } catch (e) {
+    fail(e?.message ?? String(e));
+  }
 }
 
 function deterministicEmbeddingBytes(text, layout) {
@@ -604,8 +616,8 @@ async function main() {
   if (s3Prefix) {
     const deltaS3 = s3Join(s3Prefix, `corpus-delta-epoch-${epoch}.json`);
     const rotationS3 = s3Join(s3Prefix, `epoch-rotation-${epoch}.json`);
-    uploadS3(deltaPath, deltaS3);
-    uploadS3(rotationPath, rotationS3);
+    await uploadS3(deltaPath, deltaS3);
+    await uploadS3(rotationPath, rotationS3);
     published.delta = deltaS3;
     published.rotationManifest = rotationS3;
   }

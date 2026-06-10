@@ -25,6 +25,7 @@
     "coretex:pin-epoch-context": "node scripts/coretex-pin-epoch-context.mjs",
     "coretex:epoch-evolve": "npm run build --workspace @botcoin/cortex && node scripts/coretex-epoch-evolve.mjs",
     "coretex:epoch-evolve:e2e": "npm run build --workspace @botcoin/cortex && node scripts/coretex-epoch-evolve-sync-e2e.mjs",
+    "coretex:parity-gate": "npm run build --workspace @botcoin/cortex && node --test packages/cortex/test/unit/reranker-length-bucketing-order.test.mjs packages/cortex/test/unit/qwen-prompt-template-golden.test.mjs packages/cortex/test/unit/reranker-parity-diff-selfcheck.test.mjs packages/cortex/test/unit/validator-runtime.test.mjs",
     "setup:validator": "npm run build --workspace @botcoin/cortex && node scripts/setup-validator-artifacts.mjs",
     "setup:validator:verify": "npm run build --workspace @botcoin/cortex && node scripts/setup-validator-artifacts.mjs --verify-only",
     "validator:replay": "npm run build --workspace @botcoin/cortex && node scripts/coretex-validator.mjs replay-patch",
