@@ -43,6 +43,10 @@ const outPath = flag('out', null);
 const MAX_PAIR_SCORE_DELTA_PPM = Number(flag('max-pair-score-delta-ppm', '1'));
 const MAX_COMPOSITE_DELTA_PPM = Number(flag('max-composite-delta-ppm', '10'));
 const RANK_FLIP_TOP_N = Number(flag('rank-flip-top-n', '10'));
+// TEST-ONLY bypass: skips ONLY the DETERMINISTIC_MODE + MAX_QUERIES_USED production guards so the
+// local smoke can exercise the full-trace PASS path with two identical deterministic subset runs.
+// It does NOT relax any score/trace/composite/artifact guard. NEVER pass this for a real parity run.
+const SMOKE_ALLOW_DETERMINISTIC_AND_SUBSET = argv.includes('--smoke-allow-deterministic-and-subset');
 
 if (!refPath || !cmpPath) {
   console.error('usage: coretex-scorer-parity-compare.mjs --ref <cpu.json> --cmp <gpu.json> [--out <verdict.json>]');
@@ -55,6 +59,34 @@ const cmp = JSON.parse(readFileSync(resolve(cmpPath), 'utf8'));
 const failures = [];
 const fail = (code, detail) => failures.push({ code, detail });
 const ppm = (x) => Math.round((x ?? 0) * 1_000_000);
+
+// ─── 0. Production-fidelity guards (a parity claim is meaningless on a smoke run) ─
+// rerankerMode is read from runContext (canonical) with a top-level fallback for older artifacts.
+const rerankerModeOf = (r) => r.runContext?.rerankerMode ?? r.rerankerMode ?? null;
+// maxQueriesUsed: prefer the explicit runContext boolean; fall back to legacy signals
+// (hiddenPackQuotasCleared / top-level smoke / maxQueries).
+const maxQueriesUsedOf = (r) =>
+  r.runContext?.maxQueriesUsed === true
+  || r.runContext?.hiddenPackQuotasCleared === true
+  || r.smoke === true
+  || (typeof r.maxQueries === 'number' && r.maxQueries > 0);
+
+for (const [side, r] of [['ref', ref], ['cmp', cmp]]) {
+  if (rerankerModeOf(r) === 'deterministic') {
+    if (SMOKE_ALLOW_DETERMINISTIC_AND_SUBSET) {
+      console.error(`[compare] WARNING smoke bypass: ${side} rerankerMode=deterministic (DETERMINISTIC_MODE guard skipped — smoke only)`);
+    } else {
+      fail('DETERMINISTIC_MODE', `${side}: rerankerMode=deterministic — production parity must be qwen-cpu vs gpu (real model)`);
+    }
+  }
+  if (maxQueriesUsedOf(r)) {
+    if (SMOKE_ALLOW_DETERMINISTIC_AND_SUBSET) {
+      console.error(`[compare] WARNING smoke bypass: ${side} maxQueriesUsed=true (MAX_QUERIES_USED guard skipped — smoke only)`);
+    } else {
+      fail('MAX_QUERIES_USED', `${side}: maxQueriesUsed=true — production parity must be a full hidden pack (no --max-queries)`);
+    }
+  }
+}
 
 // ─── 1. Run-context assertions (loud) ────────────────────────────────────────
 const CTX_FIELDS = ['bundleHash', 'profileHash', 'corpusRoot', 'modelRevision', 'modelId', 'promptTemplateHash', 'maxSeqLen', 'topK'];
@@ -85,6 +117,9 @@ function packRoots(scn) {
 // ─── 2/3/4. Per-scenario metrics ─────────────────────────────────────────────
 const scenarioReports = {};
 let globalMaxPairScoreDeltaPpm = 0;
+// Scenarios where the OUTPUT scores legitimately differ within tolerance (CPU vs GPU ULP) — recorded
+// for visibility, NOT a hard fail. The INPUT-identity (pairTraceHash) IS a hard fail.
+const scoreArrayHashDiffs = [];
 
 // Walk every (composite branch) inside a scenario uniformly. A scenario's composite is either a
 // flat summary (baseline / per-patch sometimes) or { gate, confirm } (dual-pack / per-patch).
@@ -128,6 +163,27 @@ for (const name of scenarioSet) {
   }
   rep.acceptedRef = rScn.accepted ?? null;
   rep.acceptedCmp = cScn.accepted ?? null;
+
+  // ── Full scored-pair trace parity (the strongest input-identity check) ──
+  // totalScoredPairCount must match exactly: a different count means the two runs scored a different
+  // set of (query,candidate) pairs. pairTraceHash chains every pair's promptHash in call order — it
+  // is the INPUT-identity proof and MUST be identical. scoreArrayHash chains the OUTPUT scores; CPU
+  // and GPU may legitimately differ by ULP, so a mismatch is RECORDED, not failed (the score
+  // tolerance is enforced separately by maxPairScoreDeltaPpm<=1).
+  rep.totalScoredPairCount = { ref: rScn.totalScoredPairCount ?? null, cmp: cScn.totalScoredPairCount ?? null };
+  rep.pairTraceHash = { ref: rScn.pairTraceHash ?? null, cmp: cScn.pairTraceHash ?? null };
+  rep.scoreArrayHash = { ref: rScn.scoreArrayHash ?? null, cmp: cScn.scoreArrayHash ?? null };
+  if (rep.totalScoredPairCount.ref !== rep.totalScoredPairCount.cmp) {
+    fail('PAIR_COUNT_DIFF', `${name}: totalScoredPairCount ref=${rep.totalScoredPairCount.ref} cmp=${rep.totalScoredPairCount.cmp}`);
+  }
+  if (rep.pairTraceHash.ref !== rep.pairTraceHash.cmp) {
+    fail('PAIR_TRACE_HASH_DIFF', `${name}: pairTraceHash ref=${rep.pairTraceHash.ref} cmp=${rep.pairTraceHash.cmp} (scored DIFFERENT inputs)`);
+  }
+  // SCORE_ARRAY_HASH_DIFF: report-only (see above). Surfaced in the verdict summary, never failed.
+  if (rep.scoreArrayHash.ref !== rep.scoreArrayHash.cmp) {
+    scoreArrayHashDiffs.push({ scenario: name, ref: rep.scoreArrayHash.ref, cmp: rep.scoreArrayHash.cmp });
+  }
+  rep.scoreArrayHashMatches = rep.scoreArrayHash.ref === rep.scoreArrayHash.cmp;
 
   // composite / deltaPpm parity.
   const rComp = compositeBranches(rScn), cComp = compositeBranches(cScn);
@@ -213,11 +269,13 @@ for (const name of scenarioSet) {
         }
       }
     } else {
-      // Rejected per-patch: no artifact expected; record the reject reason matches.
+      // Rejected per-patch: no artifact expected; the rejection reason MUST be identical between
+      // ref and cmp (a CPU/GPU score split must not change WHY a patch was rejected).
       if (rScn.rejectionReason !== cScn.rejectionReason) {
-        fail('REJECT_REASON_MISMATCH', `${name}: ref=${rScn.rejectionReason} cmp=${cScn.rejectionReason}`);
+        fail('REJECTION_REASON_DIFF', `${name}: ref=${rScn.rejectionReason} cmp=${cScn.rejectionReason}`);
       }
       rep.rejectionReason = rScn.rejectionReason ?? null;
+      rep.rejectionReasonCmp = cScn.rejectionReason ?? null;
     }
   }
 
@@ -252,11 +310,22 @@ const verdict = {
     maxPairScoreDeltaPpm: MAX_PAIR_SCORE_DELTA_PPM,
     maxCompositeDeltaPpm: MAX_COMPOSITE_DELTA_PPM,
     rankFlipTopN: RANK_FLIP_TOP_N,
+    smokeAllowDeterministicAndSubset: SMOKE_ALLOW_DETERMINISTIC_AND_SUBSET,
+  },
+  productionGuards: {
+    refRerankerMode: rerankerModeOf(ref),
+    cmpRerankerMode: rerankerModeOf(cmp),
+    refMaxQueriesUsed: maxQueriesUsedOf(ref),
+    cmpMaxQueriesUsed: maxQueriesUsedOf(cmp),
+    bypassed: SMOKE_ALLOW_DETERMINISTIC_AND_SUBSET,
   },
   summary: {
     bitIdentical,
     globalMaxPairScoreDeltaPpm,
     contextDiffs,
+    // SCORE_ARRAY_HASH_DIFF entries: OUTPUT-score chain mismatches (report-only; gated by ppm).
+    scoreArrayHashDiffCount: scoreArrayHashDiffs.length,
+    scoreArrayHashDiffs,
     scenarioCount: scenarioSet.length,
     failureCount: failures.length,
   },

@@ -311,6 +311,7 @@ function garbagePatch() {
 const scenarios = {};
 
 async function runBaseline() {
+  reranker.resetTrace();
   const pack = deriveQueryPack(FIXED.epochId, FIXED.evalSeedHex, corpus, packProfile());
   const t0 = Date.now();
   const score = await evaluateRetrievalBenchmarkState(EMPTY_STATE, corpus, pack, opts);
@@ -322,6 +323,7 @@ async function runBaseline() {
     accepted: null,
     rejectionReason: null,
     perQuery: perQueryView(score),
+    ...reranker.traceSnapshot(),
     elapsedSec: (Date.now() - t0) / 1000,
   };
 }
@@ -334,6 +336,7 @@ async function scorePatchOnPack(patch, evalSeed) {
 }
 
 async function runGateOnly() {
+  reranker.resetTrace();
   // The garbage patch fails the gate -> short-circuit (no confirm pack scored).
   const patch = garbagePatch();
   const patchBytes = encodePatch(patch);
@@ -353,11 +356,13 @@ async function runGateOnly() {
     thresholdPpm: screenerThresholdPpm,
     perFamilyDelta: result.perFamilyDelta,
     perQuery: perQueryView(result.after),
+    ...reranker.traceSnapshot(),
     elapsedSec: (Date.now() - t0) / 1000,
   };
 }
 
 async function runDualPack() {
+  reranker.resetTrace();
   // The honest relation patch passes the gate and runs confirm -> both packs scored.
   const patch = honestRelationPatch();
   const patchBytes = encodePatch(patch);
@@ -384,6 +389,7 @@ async function runDualPack() {
     thresholdPpm: screenerThresholdPpm,
     perFamilyDelta: { gate: gate.result.perFamilyDelta, confirm: confirm.result.perFamilyDelta },
     perQuery: { gate: perQueryView(gate.result.after), confirm: perQueryView(confirm.result.after) },
+    ...reranker.traceSnapshot(),
     elapsedSec: (Date.now() - t0) / 1000,
   };
 }
@@ -404,6 +410,7 @@ const FIXED_EPOCH_SECRET = '0x' + '5e'.repeat(32);
 const hiddenSeedCommit = bytesToHex(keccak256(Buffer.from(FIXED_EPOCH_SECRET.slice(2), 'hex'))).toLowerCase();
 
 async function runPerPatch(name, patch, patchKind) {
+  reranker.resetTrace();
   const patchBytes = encodePatch(patch);
   const patchHash = computePatchHash(patchBytes).toLowerCase();
   const perSeed = new Map();
@@ -505,6 +512,7 @@ async function runPerPatch(name, patch, patchKind) {
       ...(gateScored ? { gate: perQueryView(gateScored.result.after) } : {}),
       ...(confirmScored ? { confirm: perQueryView(confirmScored.result.after) } : {}),
     },
+    ...reranker.traceSnapshot(),
     elapsedSec: (Date.now() - t0) / 1000,
   };
 }
@@ -519,6 +527,11 @@ if (scenarioFilter.includes('rejected-patch')) { console.log('[parity-harness] s
 
 // ─── Run context (compare step asserts these match across runs) ──────────────
 const runContext = {
+  // rerankerMode (qwen-cpu|gpu|deterministic) — the compare step hard-fails 'deterministic' so a
+  // real parity run cannot be a smoke. maxQueriesUsed is true iff --max-queries was passed (the
+  // hidden-pack quotas were cleared + the pack subset), which the compare step also hard-fails.
+  rerankerMode,
+  maxQueriesUsed: Boolean(maxQueries),
   bundleHash: matManifest.bundleHash,
   profileHash,
   profileFileHash,
