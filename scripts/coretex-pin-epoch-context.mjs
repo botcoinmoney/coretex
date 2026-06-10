@@ -90,8 +90,13 @@ function runCast(label, castArgs) {
 function call(rpcUrl, to, sig, ...params) {
   return runCast(`call ${sig}`, ['call', '--rpc-url', rpcUrl, to, sig, ...params.map(String)]).replace(/\s*\[[^\]]*\]\s*$/, '').trim();
 }
-function send(rpcUrl, pk, to, sig, params) {
-  const out = runCast(`send ${sig}`, ['send', '--rpc-url', rpcUrl, '--private-key', pk, '--json', to, sig, ...params.map(String)]);
+function send(rpcUrl, pk, to, sig, params, nonce = null) {
+  // Explicit nonce: sequential `cast send` calls against a public RPC race the
+  // provider's lagging nonce view (observed live: second tx rejected
+  // "nonce too low" after the first confirmed). The caller allocates nonces
+  // once from the pending count and passes them down.
+  const nonceArgs = nonce === null ? [] : ['--nonce', String(nonce)];
+  const out = runCast(`send ${sig}`, ['send', '--rpc-url', rpcUrl, '--private-key', pk, '--json', ...nonceArgs, to, sig, ...params.map(String)]);
   try { return JSON.parse(out); } catch { return { raw: out }; }
 }
 function privateKey() {
@@ -158,11 +163,13 @@ async function main() {
 
   if (flag('confirm', '') !== 'PIN-CORETEX-CONTEXT') fail('--broadcast requires --confirm PIN-CORETEX-CONTEXT');
   const pk = privateKey();
+  const sender = runCast('derive sender', ['wallet', 'address', '--private-key', pk]).trim();
+  let nonce = Number(runCast('pending nonce', ['nonce', '--block', 'pending', sender, '--rpc-url', rpcUrl]).trim());
   const txs = [];
-  txs.push(send(rpcUrl, pk, mining, ABI_SET_CONTEXT, [p.epoch, contextTuple]));
+  txs.push(send(rpcUrl, pk, mining, ABI_SET_CONTEXT, [p.epoch, contextTuple], nonce++));
   const currentCommit = call(rpcUrl, mining, 'epochCommit(uint64)(bytes32)', p.epoch);
   if (currentCommit.toLowerCase() === ZERO32) {
-    txs.push(send(rpcUrl, pk, mining, ABI_SET_COMMIT, [p.epoch, p.hiddenSeedCommit]));
+    txs.push(send(rpcUrl, pk, mining, ABI_SET_COMMIT, [p.epoch, p.hiddenSeedCommit], nonce++));
   } else if (currentCommit.toLowerCase() !== p.hiddenSeedCommit.toLowerCase()) {
     fail(`V4 epochCommit already set to ${currentCommit}, expected ${p.hiddenSeedCommit}`);
   }
