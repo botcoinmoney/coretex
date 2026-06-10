@@ -144,7 +144,7 @@ parent     : 32 bytes  (must equal the current parentStateRoot exactly)
 
 **All `newWords` values are exactly 32 bytes (64 hex chars after `0x`).** If the example provides a shorter hex literal, left-pad with zeros to reach 32 bytes before encoding. A wrong-length word causes `DECODE`.
 
-**`scoreDelta` semantics:** you do not have a scoring oracle. For a screener attempt, write `0`. The coordinator runs the patch through the real scorer and returns the actual `deterministicDeltaPpm` in the envelope; when it issues a `STATE_ADVANCE` receipt, it fills in the correct `scoreDelta` on the receipt itself (not the wire bytes you submitted). The on-chain contract enforces `scoreDelta == scoreAfterPpm − scoreBeforePpm` on the **issued receipt**, not on the wire bytes you POSTed.
+**`scoreDelta` semantics:** you do not have a scoring oracle. For a screener attempt, write `0`. The coordinator runs the patch through the real scorer but does **not** return the per-patch score to you — you only learn accept/reject (the score is withheld so the screener cannot be probed as a gradient). When it issues a `STATE_ADVANCE` receipt, it fills in the correct `scoreDelta` on the receipt itself (not the wire bytes you submitted). The on-chain contract enforces `scoreDelta == scoreAfterPpm − scoreBeforePpm` on the **issued receipt**, not on the wire bytes you POSTed.
 
 The status response's `exampleValidPatch` shows the **structural template** (patch type byte, word indices, an illustrative `newWords` set). Treat it as guidance for shape only — do **not** submit it verbatim and expect it to clear the screener threshold; per-patch scoring depends on substrate state + corpus + query pack that you do not see, and a real screener pass requires genuine state-improving content.
 
@@ -166,10 +166,10 @@ Each `code` is returned directly on the rejection envelope (e.g. `{ "code": "E02
 | code | meaning | response includes |
 |---|---|---|
 | `W02_STALE_PARENT` | parent matched at decode but the live root moved between request and evaluation | `currentStateRoot` |
-| `W03_DETERMINISTIC_DELTA_TOO_LOW` | scored below `screenerThresholdPpm` (most common rejection) | `deterministicDeltaPpm`, `requiredDeltaPpm` |
+| `W03_DETERMINISTIC_DELTA_TOO_LOW` | scored below `screenerThresholdPpm` (most common rejection) | — |
 | `W05_RELEVANT_NEAR_COLLISION` | the patch collides with an already-indexed near-neighbor — bounded anti-spam | — |
 | `W06_STATE_NOT_ADVANCED` | requested `STATE_ADVANCE` outcome but the patch did not actually move the live root | — |
-| `CoreTexImprovementTooSmall` | `STATE_ADVANCE` delta below `minImprovementPpm` floor | `deterministicDeltaPpm` |
+| `CoreTexImprovementTooSmall` | `STATE_ADVANCE` delta below `minImprovementPpm` floor | — |
 | `DuplicateCoreTexPatch` | `(parentStateRoot, patchHash, outcome)` was already credited this epoch | — |
 
 ### C. Submit
@@ -187,28 +187,24 @@ curl -s -X POST "${COORDINATOR_URL}/coretex/submit" \
 
 The envelope is one of three:
 
-**rejected** — structural reject (E01–E05/DECODE) OR scoring-gate reject (W02/W03/W05/W06/...). Always includes `status`, `reason`, `code`. May include `deterministicDeltaPpm` + `requiredDeltaPpm` (for W03), `currentStateRoot` (for W02/E01), or other diagnostic fields.
+**rejected** — structural reject (E01–E05/DECODE) OR scoring-gate reject (W02/W03/W05/W06/...). Always includes `status`, `reason`, `code`. May include `currentStateRoot` (for W02/E01) or `perMinerScreenerCap` + `current` (for cap rejections). The per-patch score is **never** returned — accept/reject is all you learn, by design, so the screener cannot be used as a scoring oracle to grind toward the threshold.
 
 ```json
-{ "status": "rejected", "reason": "...", "code": "W03_DETERMINISTIC_DELTA_TOO_LOW",
-  "deterministicDeltaPpm": 184, "requiredDeltaPpm": 359 }
+{ "status": "rejected", "reason": "...", "code": "W03_DETERMINISTIC_DELTA_TOO_LOW" }
 ```
 
 **accepted → SCREENER_PASS** — scored ≥ `screenerThresholdPpm` but < state-advance floor. Bumps your per-miner screener counter.
 
 ```json
 { "status": "accepted", "outcome": "SCREENER_PASS",
-  "patchHash": "0x...", "evalReportHash": "0x...",
-  "deterministicDeltaPpm": 454, "workUnitsBps": 10000,
-  "perMinerScreenerCount": 1, "perMinerScreenerRemaining": 49 }
+  "patchHash": "0x...", "evalReportHash": "0x...", "workUnitsBps": 10000 }
 ```
 
 **accepted → STATE_ADVANCE** — scored ≥ `minImprovementPpm + variancePpm + replayTolerancePpm` on **both** the gate and confirm packs. The coordinator signs the receipt; you broadcast it to V4.
 
 ```json
 { "status": "accepted", "outcome": "STATE_ADVANCE",
-  "patchHash": "0x...", "evalReportHash": "0x...",
-  "deterministicDeltaPpm": 12445, "workUnitsBps": 30000,
+  "patchHash": "0x...", "evalReportHash": "0x...", "workUnitsBps": 30000,
   "newStateRoot": "0x...",
   "receipt": { ... full EIP-712 CoreTexReceipt tuple ... },
   "transaction": { "to": "0x...V4", "chainId": 8453, "value": "0", "data": "0x..." } }
