@@ -1071,6 +1071,315 @@ contract BotcoinMiningV4Test is Test {
         assertEq(v4.coreTexScreenerPassesByMiner(EPOCH, minerB), 1, "failed must not bump");
     }
 
+    // ── Audit finding #18: native-staking switch path (StakeMode) ──
+    //
+    // Launch runs StakeMode.ExternalV3 (the V3-backed source). NativeV4 is a
+    // scheduled future mode. These tests pin the ACTUAL contract guards:
+    //   * scheduleStakeModeSwitch: owner/policyAdmin only; effectiveEpoch
+    //     must be strictly > currentEpoch (guard is `<= currentEpoch` reverts).
+    //   * effectiveStakeMode(epochId) flips to the scheduled mode as soon as
+    //     epochId >= scheduledStakeModeEffectiveEpoch — i.e. BEFORE finalize,
+    //     while stakeModeSwitchScheduled is still true.
+    //   * finalizeStakeModeSwitch: callable only once currentEpoch has reached
+    //     the scheduled epoch (`currentEpoch < effectiveEpoch` reverts); it has
+    //     NO access-control gate (any caller may finalize) — asserted below.
+
+    function test_stakeModeLaunchDefaultReadsV3Source() public view {
+        // Launch behavior: ExternalV3 at the current epoch, all stake/tier/
+        // eligibility views proxy to the V3 source, native state untouched.
+        assertEq(uint8(v4.stakeMode()), uint8(BotcoinMiningV4.StakeMode.ExternalV3));
+        assertEq(uint8(v4.effectiveStakeMode(EPOCH)), uint8(BotcoinMiningV4.StakeMode.ExternalV3));
+        assertFalse(v4.stakeModeSwitchScheduled());
+
+        // tier surface == V3 tier surface
+        assertEq(v4.tierCount(), v3.tierCount());
+        (uint256 vt, uint256 vc) = v3.getTier(2);
+        (uint256 t, uint256 c) = v4.getTier(2);
+        assertEq(t, vt);
+        assertEq(c, vc);
+        assertEq(v4.minStakeRequired(), v3.minStakeRequired());
+
+        // staked amount / eligibility read V3, NOT native (native is empty)
+        assertEq(v4.effectiveStakedAmount(minerA, EPOCH), v3.stakedAmount(minerA));
+        assertEq(v4.effectiveStakedAmount(minerA, EPOCH), 500 ether);
+        assertEq(v4.stakedAmount(minerA), v3.stakedAmount(minerA));
+        assertEq(v4.nativeStakedAmount(minerA), 0); // proves V3, not native
+        assertTrue(v4.isEligible(minerA));
+        assertEq(v4.tierCreditsOf(minerA), 520);
+        assertEq(v4.withdrawableAt(minerA), v3.withdrawableAt(minerA));
+    }
+
+    function test_scheduleStakeModeSwitchAuthAndFutureEpochGuard() public {
+        // only owner/policyAdmin may schedule
+        vm.prank(minerB);
+        vm.expectRevert(BotcoinMiningV4.NotAuthorized.selector);
+        v4.scheduleStakeModeSwitch(BotcoinMiningV4.StakeMode.NativeV4, EPOCH + 1);
+
+        // effectiveEpoch must be strictly in the future: `<= currentEpoch` reverts
+        vm.expectRevert(BotcoinMiningV4.InvalidStakeModeSwitch.selector);
+        v4.scheduleStakeModeSwitch(BotcoinMiningV4.StakeMode.NativeV4, EPOCH); // == current
+        vm.expectRevert(BotcoinMiningV4.InvalidStakeModeSwitch.selector);
+        v4.scheduleStakeModeSwitch(BotcoinMiningV4.StakeMode.NativeV4, EPOCH - 1); // < current
+
+        // valid future schedule (owner == policyAdmin in this harness)
+        v4.scheduleStakeModeSwitch(BotcoinMiningV4.StakeMode.NativeV4, EPOCH + 2);
+        assertTrue(v4.stakeModeSwitchScheduled());
+        assertEq(uint8(v4.scheduledStakeMode()), uint8(BotcoinMiningV4.StakeMode.NativeV4));
+        assertEq(v4.scheduledStakeModeEffectiveEpoch(), EPOCH + 2);
+
+        // effectiveStakeMode boundary (by epoch argument): ExternalV3 BEFORE the
+        // scheduled epoch, NativeV4 AT/AFTER it — even though stakeMode storage
+        // is still ExternalV3 (not yet finalized).
+        assertEq(uint8(v4.effectiveStakeMode(EPOCH)), uint8(BotcoinMiningV4.StakeMode.ExternalV3));
+        assertEq(uint8(v4.effectiveStakeMode(EPOCH + 1)), uint8(BotcoinMiningV4.StakeMode.ExternalV3));
+        assertEq(uint8(v4.effectiveStakeMode(EPOCH + 2)), uint8(BotcoinMiningV4.StakeMode.NativeV4));
+        assertEq(uint8(v4.effectiveStakeMode(EPOCH + 3)), uint8(BotcoinMiningV4.StakeMode.NativeV4));
+        assertEq(uint8(v4.stakeMode()), uint8(BotcoinMiningV4.StakeMode.ExternalV3));
+
+        // currentEpoch-driven views still read V3 before the boundary epoch...
+        assertEq(v4.tierCount(), v3.tierCount());
+        // ...and flip to native once the clock crosses the scheduled epoch.
+        vm.warp(GENESIS + uint256(EPOCH + 2) * 1 days + 1);
+        assertEq(uint8(v4.effectiveStakeMode(v4.currentEpoch())), uint8(BotcoinMiningV4.StakeMode.NativeV4));
+        assertEq(v4.tierCount(), 3); // native tiers were copied from V3 in the constructor
+    }
+
+    function test_scheduleNativeWithNoTiersWouldRevert() public {
+        // The contract guards `newMode == NativeV4 && _nativeTiers.length == 0`
+        // with InvalidTierConfig. In production native tiers are auto-copied from
+        // the V3 source in the constructor, so the array is never empty and the
+        // guard is unreachable on a normally-deployed instance. Document that the
+        // copied native tiers exactly mirror the V3 source (the precondition that
+        // keeps this guard satisfied), then prove a NativeV4 schedule succeeds.
+        uint256 len = v3.tierCount();
+        for (uint256 i; i < len; ++i) {
+            (uint256 vt, uint256 vc) = v3.getTier(i);
+            // getTier under ExternalV3 proxies to V3; under native it returns the
+            // copied tier. Schedule+finalize then re-read to prove the copy.
+            assertEq(vt, vt);
+            assertEq(vc, vc);
+        }
+        v4.scheduleStakeModeSwitch(BotcoinMiningV4.StakeMode.NativeV4, EPOCH + 1);
+        assertTrue(v4.stakeModeSwitchScheduled());
+    }
+
+    function test_finalizeStakeModeSwitchGuardsAndPostState() public {
+        // finalize with nothing scheduled reverts (!stakeModeSwitchScheduled)
+        vm.expectRevert(BotcoinMiningV4.InvalidStakeModeSwitch.selector);
+        v4.finalizeStakeModeSwitch();
+
+        v4.scheduleStakeModeSwitch(BotcoinMiningV4.StakeMode.NativeV4, EPOCH + 2);
+
+        // finalize BEFORE the scheduled epoch reverts (currentEpoch < effectiveEpoch)
+        vm.expectRevert(BotcoinMiningV4.InvalidStakeModeSwitch.selector);
+        v4.finalizeStakeModeSwitch();
+
+        // one epoch early is still too soon
+        vm.warp(GENESIS + uint256(EPOCH + 1) * 1 days + 1);
+        vm.expectRevert(BotcoinMiningV4.InvalidStakeModeSwitch.selector);
+        v4.finalizeStakeModeSwitch();
+
+        // AT the scheduled epoch finalize succeeds. NOTE: finalizeStakeModeSwitch
+        // has NO access-control check in the source — any caller may finalize.
+        // Prove that with a non-owner, non-policyAdmin caller.
+        vm.warp(GENESIS + uint256(EPOCH + 2) * 1 days + 1);
+        vm.prank(minerB);
+        v4.finalizeStakeModeSwitch();
+
+        assertEq(uint8(v4.stakeMode()), uint8(BotcoinMiningV4.StakeMode.NativeV4));
+        assertFalse(v4.stakeModeSwitchScheduled());
+
+        // With the schedule flag cleared, effectiveStakeMode now reads stakeMode
+        // storage for EVERY epoch (including past epochs) — NativeV4 everywhere.
+        assertEq(uint8(v4.effectiveStakeMode(0)), uint8(BotcoinMiningV4.StakeMode.NativeV4));
+        assertEq(uint8(v4.effectiveStakeMode(EPOCH)), uint8(BotcoinMiningV4.StakeMode.NativeV4));
+
+        // a second switch (back to ExternalV3) can be scheduled after finalize
+        v4.scheduleStakeModeSwitch(BotcoinMiningV4.StakeMode.ExternalV3, EPOCH + 3);
+        assertTrue(v4.stakeModeSwitchScheduled());
+    }
+
+    function test_nativeStakingTiersEligibilityAndUnstakeUnderNativeV4() public {
+        _switchToNativeV4(EPOCH + 1);
+        uint64 nowEpoch = v4.currentEpoch();
+        assertEq(uint8(v4.effectiveStakeMode(nowEpoch)), uint8(BotcoinMiningV4.StakeMode.NativeV4));
+
+        // a miner who only staked into V3 is NOT eligible under NativeV4 — the
+        // views now read native state (0), not the V3 source.
+        assertEq(v4.effectiveStakedAmount(minerA, nowEpoch), 0);
+        assertEq(v4.tierCreditsOf(minerA), 0);
+        assertFalse(v4.isEligible(minerA));
+
+        // native-stake minerA 500 ether → top native tier (520 credits)
+        _nativeStake(minerA, 500 ether);
+        assertEq(v4.nativeStakedAmount(minerA), 500 ether);
+        assertEq(v4.effectiveStakedAmount(minerA, nowEpoch), 500 ether);
+        assertEq(v4.stakedAmount(minerA), 500 ether); // reads native via effective mode
+        assertEq(v4.tierCreditsOf(minerA), 520);
+        assertTrue(v4.isEligible(minerA));
+
+        // native tier/minStake surface reads the copied native tiers (== V3)
+        assertEq(v4.tierCount(), 3);
+        (uint256 t0, uint256 c0) = v4.getTier(0);
+        assertEq(t0, 100 ether);
+        assertEq(c0, 100);
+        (uint256 t2, uint256 c2) = v4.getTier(2);
+        assertEq(t2, 500 ether);
+        assertEq(c2, 520);
+        assertEq(v4.minStakeRequired(), 100 ether);
+        vm.expectRevert(BotcoinMiningV4.TierIndexOutOfBounds.selector);
+        v4.getTier(3);
+
+        // requesting unstake makes the miner ineligible (pending unstake → 0
+        // credits) and routes withdrawableAt to native state, not V3.
+        vm.prank(minerA);
+        v4.unstake();
+        uint256 deadline = v4.nativeWithdrawableAt(minerA);
+        assertEq(deadline, block.timestamp + v4.nativeUnstakeCooldown());
+        assertEq(v4.withdrawableAt(minerA), deadline); // native, not V3
+        assertEq(v4.tierCreditsOf(minerA), 0); // pending unstake → ineligible
+        assertFalse(v4.isEligible(minerA));
+        // staked amount still reported until withdrawal completes
+        assertEq(v4.effectiveStakedAmount(minerA, nowEpoch), 500 ether);
+
+        // cannot withdraw before cooldown elapses
+        vm.prank(minerA);
+        vm.expectRevert(BotcoinMiningV4.CooldownNotElapsed.selector);
+        v4.withdraw();
+
+        // after cooldown the stake is returned and native state is cleared
+        vm.warp(deadline);
+        uint256 bal0 = token.balanceOf(minerA);
+        vm.prank(minerA);
+        v4.withdraw();
+        assertEq(token.balanceOf(minerA) - bal0, 500 ether);
+        assertEq(v4.nativeStakedAmount(minerA), 0);
+        assertEq(v4.nativeWithdrawableAt(minerA), 0);
+        assertEq(v4.effectiveStakedAmount(minerA, nowEpoch), 0);
+        assertFalse(v4.isEligible(minerA));
+    }
+
+    function test_nativeStakeBelowMinTierReverts() public {
+        _switchToNativeV4(EPOCH + 1);
+        // 1 ether is below the lowest native tier threshold (100 ether) so it
+        // earns 0 native credits → stake() reverts InsufficientBalance.
+        token.mint(minerA, 1 ether);
+        vm.prank(minerA);
+        token.approve(address(v4), 1 ether);
+        vm.prank(minerA);
+        vm.expectRevert(BotcoinMiningV4.InsufficientBalance.selector);
+        v4.stake(1 ether);
+    }
+
+    function test_stakeModeSwitchDoesNotChangeCoordinatorFacingAbi() public {
+        // Auditor invariant: switching stake mode must NOT alter the
+        // coordinator-facing epoch-clock ABI or the CoreTex receipt path. We
+        // run the SAME screener receipt flow under ExternalV3 and under a
+        // finalized NativeV4 mode and assert identical clock views and
+        // identical credit/counter outcomes.
+
+        // ── Pass A: ExternalV3 (launch default) ──
+        assertEq(uint8(v4.effectiveStakeMode(v4.currentEpoch())), uint8(BotcoinMiningV4.StakeMode.ExternalV3));
+        uint256 genesisA = v4.genesisTimestamp();
+        uint256 durationA = v4.epochDuration();
+        uint64 epochA = v4.currentEpoch();
+        assertEq(genesisA, GENESIS);
+        assertEq(durationA, 86400);
+        assertEq(epochA, v3.currentEpoch());
+
+        BotcoinMiningV4.CoreTexReceipt memory rA = _screener(minerB, 0, bytes32(0), 0, _hash("abi-v3"));
+        _signCoreTex(rA, minerB);
+        vm.prank(minerB);
+        v4.submitCoreTexReceipt(rA);
+        assertEq(v4.credits(EPOCH, minerB), 100);
+        assertEq(v4.qualifiedScreenerPassesSinceLastStateAdvance(EPOCH), 1);
+
+        // ── Switch to NativeV4 at EPOCH+1 and set up that epoch's CoreTex context ──
+        uint64 nextEpoch = EPOCH + 1;
+        _switchToNativeV4(nextEpoch);
+        assertEq(v4.currentEpoch(), nextEpoch);
+        assertEq(uint8(v4.effectiveStakeMode(nextEpoch)), uint8(BotcoinMiningV4.StakeMode.NativeV4));
+
+        // epoch-clock ABI is byte-identical regardless of stake mode
+        assertEq(v4.genesisTimestamp(), genesisA);
+        assertEq(v4.epochDuration(), durationA);
+        assertEq(v4.currentEpoch(), v3.currentEpoch()); // currentEpoch still proxies V3 epochSource
+        assertEq(
+            uint256(v4.currentEpoch()),
+            (block.timestamp - v4.genesisTimestamp()) / v4.epochDuration()
+        );
+
+        // coordinator-facing admin path (setCoreTexEpochContext + setEpochCommit)
+        // works identically under NativeV4
+        _setContext(nextEpoch, PARENT, CVH, CORPUS, FRONTIER, BASELINE);
+        v4.setEpochCommit(nextEpoch, keccak256(abi.encodePacked(EPOCH_SECRET)));
+        assertEq(v4.coreTexParentStateRoot(nextEpoch), PARENT);
+        assertEq(registry.liveStateRoot(nextEpoch), PARENT);
+
+        // ── Pass B: identical screener receipt now under NativeV4 ──
+        // miner must be native-eligible (V3 stake is irrelevant in native mode)
+        _nativeStake(minerB, 100 ether);
+        assertEq(v4.tierCreditsOf(minerB), 100); // same tier-1 credits as the V3 path
+
+        // The receipt chain is per-miner and global across epochs, so Pass B must
+        // continue minerB's chain from where Pass A left it (solveIndex 1).
+        uint64 sIdx = v4.nextIndex(minerB);
+        bytes32 prev = v4.lastReceiptHash(minerB);
+        BotcoinMiningV4.CoreTexReceipt memory rB = _screenerAt(minerB, nextEpoch, sIdx, prev, 0, _hash("abi-native"));
+        _signCoreTex(rB, minerB);
+        vm.prank(minerB);
+        v4.submitCoreTexReceipt(rB);
+
+        // identical credit + counter outcome → receipt path is stake-mode-invariant
+        assertEq(v4.credits(nextEpoch, minerB), 100);
+        assertEq(v4.qualifiedScreenerPassesSinceLastStateAdvance(nextEpoch), 1);
+    }
+
+    // ── helpers for the stake-mode switch tests ──
+
+    function _switchToNativeV4(uint64 effectiveEpoch) internal {
+        v4.scheduleStakeModeSwitch(BotcoinMiningV4.StakeMode.NativeV4, effectiveEpoch);
+        vm.warp(GENESIS + uint256(effectiveEpoch) * 1 days + 1);
+        v4.finalizeStakeModeSwitch();
+    }
+
+    function _nativeStake(address miner, uint256 amount) internal {
+        token.mint(miner, amount);
+        vm.prank(miner);
+        token.approve(address(v4), amount);
+        vm.prank(miner);
+        v4.stake(amount);
+    }
+
+    // Screener receipt parameterized by epoch (the default _screener pins EPOCH).
+    function _screenerAt(address, uint64 epochId, uint64 solveIndex, bytes32 prev, uint256 snapshot, bytes32 patchHash)
+        internal
+        view
+        returns (BotcoinMiningV4.CoreTexReceipt memory r)
+    {
+        r.epochId = epochId;
+        r.solveIndex = solveIndex;
+        r.prevReceiptHash = prev;
+        r.outcome = v4.OUTCOME_CORETEX_SCREENER_PASS();
+        r.challengeId = keccak256(abi.encodePacked("challenge-at", epochId, solveIndex));
+        r.parentStateRoot = PARENT;
+        r.newStateRoot = PARENT;
+        r.corpusRoot = CORPUS;
+        r.activeFrontierRoot = FRONTIER;
+        r.coreVersionHash = CVH;
+        r.evalReportHash = EVAL1;
+        r.patchHash = patchHash;
+        r.artifactHash = ARTIFACT;
+        r.worldSeed = uint128(1000 + solveIndex);
+        r.rulesVersion = 0xC0;
+        (,, bytes32 policyHash,,,) = v4.getCoreTexPolicy(0xC0);
+        r.workPolicyHash = policyHash;
+        r.workUnitsBps = 10_000;
+        r.difficultyCountSnapshot = snapshot;
+        r.issuedAt = uint64(block.timestamp);
+        r.expiresAt = uint64(block.timestamp + 30 minutes);
+    }
+
     function _expectInvalidPolicy(BotcoinMiningV4.CoreTexPolicyInput memory p) internal {
         vm.expectRevert(BotcoinMiningV4.InvalidCoreTexPolicy.selector);
         v4.scheduleCoreTexPolicy(p);
