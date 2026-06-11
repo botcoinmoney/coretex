@@ -33,7 +33,7 @@ const m = await import(distIndex);
 const {
   RANGES, PATCH_TYPE, encodePatch, decodePatch, validatePatchType, encodeRelationCategoryLens,
   merkleizeState, bytesToHex, keccak256, computeCoreTexScreenerThresholdPpm, DEFAULT_CORETEX_WORK_POLICY, applyPatch,
-  splitForRecord,
+  splitForRecord, rewardActiveSubstrateSurfaces,
 } = m;
 
 import { makeLaunchFrontier } from './lib/epoch-frontier.mjs';
@@ -118,16 +118,11 @@ const profileHash = '0x' + createHash('sha256').update(canonicalJson(profile)).d
 const artifactManifestHash = '0x' + createHash('sha256').update(readFileSync(resolve(repoRoot, artifactManifestPath))).digest('hex');
 const rerankerRevision = manifest.model?.reranker?.revision ?? null;
 
-const activeSurfaceSet = new Set(profile.activeSubstrateSurfaces ?? []);
-if (profile.temporalStaleContrast !== false) activeSurfaceSet.add('temporal_update');
-if (profile.policyRelationTypedAdmission === true) activeSurfaceSet.add('relation_category_routing');
-if (profile.enableEvidenceBundleAtoms === true) activeSurfaceSet.add('evidence_bundle');
-if (profile.enableConflictLifecycleAtoms === true) activeSurfaceSet.add('conflict_lifecycle');
-if (profile.enableAbstentionAtoms === true) activeSurfaceSet.add('abstention_top1');
-if (profile.enableValidityAtoms !== false) activeSurfaceSet.add('validity_atom');
-if (profile.enableScopeAtoms === true) activeSurfaceSet.add('scope_atom');
-if (profile.enableEntityResolutionAtoms === true) activeSurfaceSet.add('entity_resolution_atom');
-const activeSubstrateSurfaces = [...activeSurfaceSet];
+// Single source of truth (B6): the canonical reward-active surface set the
+// production coordinator validates the advertised list against at boot. Keeping
+// this derivation here in sync with the boot assertion (one function) is the
+// whole point — the gate and production can no longer drift.
+const activeSubstrateSurfaces = [...rewardActiveSubstrateSurfaces(profile)];
 
 // Active substrate surfaces from the effective launch profile (default-off surfaces excluded).
 const surfaces = [];
