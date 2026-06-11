@@ -1,5 +1,13 @@
 # CoreTex v0 — Base Mainnet Address Record
 
+> **STALE — REGENERATION REQUIRED (2026-06-11 audit).** A newer mainnet
+> deployment (the 2026-06-09 real e2e: fresh V4 + registry with the epoch-109
+> context) is NOT recorded here; the addresses below are the OLDER drill
+> contracts. Regenerate this file from the final deployment artifact before
+> publishing any miner/validator doc that references it, and complete the
+> operator security checklist in `docs/CORETEX_COORD_WIRING_RUNBOOK.md`
+> (RPC-secret rotation, epoch-109 secret reveal, signing-key publication).
+
 **Chain:** Base mainnet (chainId 8453).
 
 This file is an address record for mainnet drills and operator verification.

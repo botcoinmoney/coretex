@@ -12,14 +12,21 @@ metadata: { "openclaw": { "emoji": "🧠" } }
 
 CoreTex is a separate mining lane from the standard solve lane. Instead of answering a challenge document, you submit **substrate patches** that improve the canonical CoreTex state. The coordinator scores each patch, issues an EIP-712 `CoreTexReceipt` classifying it as either a `SCREENER_PASS` (no state change) or a `STATE_ADVANCE` (moves the live root), and you post that receipt to **BotcoinMiningV4** on Base. V4 credits accumulate in the same per-epoch pool as the standard lane and are claimed post-epoch from the same `claim(uint64[])` surface.
 
-Launch status note, reconciled 2026-06-06: CoreTex v16 is the launch posture. The live `/coretex/status` is the only source of truth for which surfaces are reward-active in the current epoch. Treat every patch type, word range, screener threshold, and active surface as runtime-dynamic — read them off the live response and do not hardcode any byte or word index from this document or any other.
+Launch status note, reconciled 2026-06-06: CoreTex v16 is the launch posture. The live `/coretex/status` is the only source of truth for which surfaces are reward-active in the current epoch. Treat every patch type, state-cell range, screener threshold, and active surface as runtime-dynamic — read them off the live response and do not hardcode any byte or state-cell index from this document or any other.
+
+Terminology: a substrate state cell is one EVM `uint256`: 32 bytes, 256 bits,
+and usually represented as a 64-character hex value. It is a fixed-size storage
+lane, not an English word. The API and wire format still use `word` field names,
+such as `wordCount`, `wordIndexRange`, and `patchWordBudget`, because EVM
+convention calls a 32-byte `uint256` a word. Read those fields as state-cell
+count, state-cell index range, and state-cell budget.
 
 In v16, `activeSubstrateSurfaces` (in `/coretex/status`) may include any combination of:
 `temporal_update`, `conflict_lifecycle`, `relation_causal`, `relation_category_routing`,
 `abstention_top1`, `evidence_bundle`, `coreference`, `relation_lifecycle`,
 `noise_suppression`, `validity_atom`, `scope_atom`, `entity_resolution_atom`. A v16 atom
 is reward-active only when both (a) it appears in `activeSubstrateSurfaces` AND (b) its
-patch type / word range is exposed by `allowedPatchTypes` for the live epoch. Anything
+patch type / state-cell range is exposed by `allowedPatchTypes` for the live epoch. Anything
 not in both is structurally legal but will not score above the threshold.
 
 You do **not** need to run a local CoreTex client. The skill operates entirely
@@ -70,7 +77,7 @@ codes, etc.) live in this skill file. Dynamic per-epoch / per-miner data
 |---|---|---|
 | GET | `/coretex/health` | coordinator system health — version, epoch, chainId, confirmation depth, chain live root, confirmed live root, finality lag, epoch pins, `acceptingSubmissions`. No miner-specific data. |
 | GET | `/coretex/status?miner=0x…` | full per-miner dynamic context: current confirmed `currentStateRoot`, `confirmedTransitionCount`, `allowedPatchTypes` + `patchWordBudget` + `screenerThresholdPpm` + `minImprovementPpm`, `perMinerScreenerCap` + per-miner `{address, screenersThisEpoch, remaining, cap, nextIndex, lastReceiptHash}`, `qualifiedScreenerPassesSinceLastStateAdvance`, `activeSubstrateSurfaces`, `acceptingSubmissions`. This is the SOLE endpoint for the runtime context a miner needs to build a patch — `/coretex/challenge` no longer exists in v0. |
-| GET | `/coretex/substrate/:stateRoot` | full 1024-word substrate state by root (off-chain by root; `packedBytes` 32 768; response carries `{stateRoot, wordCount, packedBytes, packedHex}`). Only chain-confirmed historical roots are served; speculative `newStateRoot`s from pending receipts return 404. |
+| GET | `/coretex/substrate/:stateRoot` | full 1024-state-cell substrate state by root (off-chain by root; `packedBytes` 32 768; response carries `{stateRoot, wordCount, packedBytes, packedHex}`). Only chain-confirmed historical roots are served; speculative `newStateRoot`s from pending receipts return 404. |
 | POST | `/coretex/submit` | submit a patch: `{ patchBytesHex, parentStateRoot, minerAddress }`. The coordinator scores, signs if viable, returns either an accepted-receipt envelope or a rejection. |
 | GET | `/coretex/receipt/:hash` | re-fetch a previously signed coordinator receipt + pre-encoded V4 transaction by patchHash. Works for BOTH the miner-submitted (original) hash AND the coordinator-rewritten signed hash. Returns: `200` for pending/confirmed (envelope tagged with state), `409 + PendingReceiptStale` if a competing same-parent advance landed first (no transaction returned — re-fetch `/coretex/status` for the new root), `404 + "receipt expired"` once the receipt's `expiresAt` elapses. |
 
@@ -110,8 +117,8 @@ patch. Key fields:
 | `epochId`, `currentStateRoot` | epoch + the chain-confirmed substrate root your patch must build on. Also use `currentStateRoot` to GET `/coretex/substrate/:root`. |
 | `confirmedTransitionCount` | the registry's confirmed transition count (= chain transitionCount when the coord is caught up). |
 | `bundleHash` / `coreVersionHash`, `corpusRoot`, `activeFrontierRoot` | pinned scoring context (the registry enforces these per epoch) |
-| `allowedPatchTypes` | array of `{ name, byte, wordIndexRange: [start, end] }` — the byte VALUE you put in the wire is `allowedPatchTypes[i].byte` from this live response. **Do not hardcode** byte values from any document; always read them from the live status response. `wordIndexRange` is inclusive on both ends. |
-| `patchWordBudget` | **4** (max words per `STATE_ADVANCE` patch) |
+| `allowedPatchTypes` | array of `{ name, byte, wordIndexRange: [start, end] }` — the byte VALUE you put in the wire is `allowedPatchTypes[i].byte` from this live response. **Do not hardcode** byte values from any document; always read them from the live status response. `wordIndexRange` is the inclusive state-cell index range. |
+| `patchWordBudget` | **4** (max state cells per `STATE_ADVANCE` patch) |
 | `screenerThresholdPpm` | current dynamic screener threshold (live baseline + noise floor) |
 | `minImprovementPpm` / `replayTolerancePpm` | state-advance acceptance floor + replay tolerance |
 | `perMinerScreenerCap` | on-chain V4 cap (default **50**) — see _On-chain protocol caps_ below |
@@ -126,38 +133,38 @@ before reveal) cannot be derived; do not attempt to reconstruct it.
 
 ### B. Build a patch (wire layout, fixed)
 
-A patch is ≤ `patchWordBudget` (= 4) word writes against the current `parentStateRoot`, targeting an allowed `(patchType, wordIndexRange)`:
+A patch is ≤ `patchWordBudget` (= 4) state-cell writes against the current `parentStateRoot`, targeting an allowed `(patchType, wordIndexRange)`:
 
 ```
 patchType  : 1 byte    (one of allowedPatchTypes; byte value from the live status response)
-wordCount  : 1 byte    (1..4)
+wordCount  : 1 byte    (1..4 state cells)
 scoreDelta : 8 bytes BE  (informational — see below; use 0 if you don't know)
 parent     : 32 bytes  (must equal the current parentStateRoot exactly)
-[wordCount × (LEB128 wordIndex + 32-byte newWord)]
+[wordCount × (LEB128 state-cell index + 32-byte newWord)]
 ```
 
-`patchBytesHash = keccak256("coretex-patch-hash-v1" || patchBytes)`. `wordIndexRange` is **inclusive on both ends**: `range[0]` and `range[1]` are both valid; `range[1]+1` returns `E02`.
+`patchBytesHash = keccak256("coretex-patch-hash-v1" || patchBytes)`. `wordIndexRange` is **inclusive on both ends**: `range[0]` and `range[1]` are both valid state-cell indices; `range[1]+1` returns `E02`.
 
 **`parentStateRoot` is duplicated in two places** — the JSON body field on `POST /coretex/submit` AND the 32 bytes at wire offset 10–41. Both must equal the current live `parentStateRoot` from `/coretex/status`. The coordinator fast-path-checks the JSON field (returns `E01` immediately if stale) before decoding the wire; the wire's embedded parent is then checked again on-chain inside `_validateCompactPatch` (`CompactPatchParentMismatch`). Always set both to the same value.
 
-**The `exampleValidPatch` in the status response is a structural template, NOT a winning patch.** It shows the patch type byte, word indices, and a placeholder `newWords` set (typically all-zero, which is guaranteed to be a no-op on a fresh slot and return `E05`). Use it to verify your wire encoder produces the expected byte pattern; then encode REAL patches with content that actually moves the substrate. Submitting the template verbatim does not earn credit by design.
+**The `exampleValidPatch` in the status response is a structural template, NOT a winning patch.** It shows the patch type byte, state-cell indices, and a placeholder `newWords` set (typically all-zero, which is guaranteed to be a no-op on a fresh slot and return `E05`). Use it to verify your wire encoder produces the expected byte pattern; then encode REAL patches with content that actually moves the substrate. Submitting the template verbatim does not earn credit by design.
 
-**All `newWords` values are exactly 32 bytes (64 hex chars after `0x`).** If the example provides a shorter hex literal, left-pad with zeros to reach 32 bytes before encoding. A wrong-length word causes `DECODE`.
+**All `newWords` values are exactly 32 bytes (64 hex chars after `0x`).** If the example provides a shorter hex literal, left-pad with zeros to reach 32 bytes before encoding. A wrong-length state-cell value causes `DECODE`.
 
 **`scoreDelta` semantics:** you do not have a scoring oracle. For a screener attempt, write `0`. The coordinator runs the patch through the real scorer but does **not** return the per-patch score to you — you only learn accept/reject (the score is withheld so the screener cannot be probed as a gradient). When it issues a `STATE_ADVANCE` receipt, it fills in the correct `scoreDelta` on the receipt itself (not the wire bytes you submitted). The on-chain contract enforces `scoreDelta == scoreAfterPpm − scoreBeforePpm` on the **issued receipt**, not on the wire bytes you POSTed.
 
-The status response's `exampleValidPatch` shows the **structural template** (patch type byte, word indices, an illustrative `newWords` set). Treat it as guidance for shape only — do **not** submit it verbatim and expect it to clear the screener threshold; per-patch scoring depends on substrate state + corpus + query pack that you do not see, and a real screener pass requires genuine state-improving content.
+The status response's `exampleValidPatch` shows the **structural template** (patch type byte, state-cell indices, an illustrative `newWords` set). Treat it as guidance for shape only — do **not** submit it verbatim and expect it to clear the screener threshold; per-patch scoring depends on substrate state + corpus + query pack that you do not see, and a real screener pass requires genuine state-improving content.
 
 **Structural errors** (returned in the submit envelope; map 1:1 to on-chain `Compact*` errors on `STATE_ADVANCE`):
 
 | code | meaning |
 |---|---|
 | `E01` | `parentStateRoot` ≠ current live root (stale; re-fetch `/coretex/status`) |
-| `E02` | word index in reserved range / out of range / wrong patch type |
+| `E02` | state-cell index in reserved range / out of range / wrong patch type |
 | `E03` | wordCount > 4 (oversized wordCount that overruns the wire buffer surfaces as `DECODE` before `E03`) |
-| `E04` | result sets a reserved bit. Reserved-bit masks differ per substrate region: the per-region grammars are defined in the substrate spec (and on-chain in `_wordMatchesPatchType` + the r5 policy-region validators). The safest way to avoid `E04` is to write *bounded* values (e.g. small unsigned ints, an ASCII slug left-padded with zeros) rather than all-bits-set words. Writing `0xffff…ffff` into a slot that carries a typed sub-field will trip `E04`. |
-| `E05` | no-op (every new word equals the current word at that index) |
-| `DECODE` | wire bytes failed to parse (bad LEB128, wrong length, unpadded word, etc.) |
+| `E04` | result sets a reserved bit. Reserved-bit masks differ per substrate region: the per-region grammars are defined in the substrate spec and enforced by the coordinator's pinned evaluator (the on-chain `_wordMatchesPatchType` checks state-cell index ranges only; value grammar is enforced off-chain before the coordinator signs, and re-checked by validator replay). The safest way to avoid `E04` is to write *bounded* values (e.g. small unsigned ints, an ASCII slug left-padded with zeros) rather than all-bits-set state-cell values. Writing `0xffff…ffff` into a slot that carries a typed sub-field will trip `E04`. |
+| `E05` | no-op (every new state-cell value equals the current value at that index) |
+| `DECODE` | wire bytes failed to parse (bad LEB128, wrong length, unpadded state-cell value, etc.) |
 
 Each `code` is returned directly on the rejection envelope (e.g. `{ "code": "E02", "reason": "apply: E02_..." }`). Match on `code`, not on the `reason` string.
 
@@ -165,12 +172,16 @@ Each `code` is returned directly on the rejection envelope (e.g. `{ "code": "E02
 
 | code | meaning | response includes |
 |---|---|---|
-| `W02_STALE_PARENT` | parent matched at decode but the live root moved between request and evaluation | `currentStateRoot` |
+| `W02_STALE_PARENT_AT_SIGNING` | parent matched at decode but the live root moved between request and evaluation/signing | `currentStateRoot` |
 | `W03_DETERMINISTIC_DELTA_TOO_LOW` | scored below `screenerThresholdPpm` (most common rejection) | — |
-| `W05_RELEVANT_NEAR_COLLISION` | the patch collides with an already-indexed near-neighbor — bounded anti-spam | — |
-| `W06_STATE_NOT_ADVANCED` | requested `STATE_ADVANCE` outcome but the patch did not actually move the live root | — |
+| `duplicate_submission` | this `(parentStateRoot, patch)` was already evaluated this epoch — no re-draw | — |
+| `duplicate_in_flight` | another miner's identical patch+parent is mid-evaluation | — |
 | `CoreTexImprovementTooSmall` | `STATE_ADVANCE` delta below `minImprovementPpm` floor | — |
-| `DuplicateCoreTexPatch` | `(parentStateRoot, patchHash, outcome)` was already credited this epoch | — |
+| `DuplicateCoreTexPatch` | on-chain: `(parentStateRoot, patchHash, outcome)` was already credited this epoch | — |
+
+(`W05_RELEVANT_NEAR_COLLISION` / `W06_STATE_NOT_ADVANCED` are reserved codes —
+defined in the policy but not currently emitted by the submit path; do not
+branch on them.)
 
 ### C. Submit
 
@@ -233,7 +244,7 @@ The coordinator fills in every receipt field beyond the three you POSTed (`patch
 | `stateWordCount` | `0` for SCREENER_PASS; for STATE_ADVANCE, the patch's `wordCount` |
 | `scoreBeforePpm` / `scoreAfterPpm` | `0`/`0` for SCREENER_PASS; for STATE_ADVANCE, baseline-relative ppm scores such that `scoreAfter − scoreBefore ≥ minImprovementPpm` |
 | `issuedAt` / `expiresAt` | TTL window (≤ 1 hour); the miner must broadcast inside it |
-| `compactPatchBytes` | the wire bytes the miner submitted |
+| `compactPatchBytes` | for `SCREENER_PASS`, the wire bytes you submitted; for `STATE_ADVANCE`, the coordinator-rewritten wire bytes whose embedded `scoreDelta` equals `scoreAfterPpm − scoreBeforePpm` (the contract enforces that equality, so your original `0` placeholder is rewritten before signing) |
 | `signature` | EIP-712 signature over all of the above (excluding `compactPatchBytes` and `signature` themselves), keyed by `V4.coordinatorSigner` |
 
 V4 rejects any in-transit modification of these fields via the EIP-712 signature check; the only fields you submit are the three on `/coretex/submit`.
