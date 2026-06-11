@@ -812,6 +812,53 @@ dead `expectedHiddenSeedCommit` parameter, F15 stale first-read docs, the
 god-file decompositions (deliberately deferred), and the remaining low
 findings.
 
+## 6½. Second external-audit pass — blockers fixed (2026-06-11)
+
+A second external auditor surfaced additional blockers; each was reproduced
+against the actual code before fixing (cortex `d7e5e56..14842ce`, integration
+`24cc618..ded0743`; cortex 995/996 unit + 80/80 forge, integration 113/113,
+all gates green):
+
+- **B1 (scoreDelta reroll + replay break)** — `scoreDelta` lives in the patch
+  wire bytes but does not change the state transition; keying dedup / the
+  future-blockhash seed / the eval artifact off the literal bytes let a miner
+  vary 8 bytes to redraw the hidden pack for the same semantic patch, and the
+  coordinator's rewrite-before-sign meant the on-chain advance patchHash could
+  never equal the artifact's (state-advance post-reveal replay binding was
+  impossible for EVERY advance, not just an attack). Fix: `semanticPatchHash()`
+  (scoreDelta-zeroed); the core canonicalizes the submission to scoreDelta=0
+  for hash/dedup/seed/scoring; the validator binds via the semantic hash of the
+  on-chain bytes. One semantic patch = one hash. The contract still enforces the
+  real scoreDelta in the wire bytes independently.
+- **B2 (structural validation after scoring)** — `applyPatch` ran only after
+  the evaluator, so an invalid/no-op patch consumed a seed draw + admission +
+  scorer work. Fix: structural `applyPatch` immediately after the wire-parent
+  check, before evaluator dispatch.
+- **B3 (claim pays a reverted epoch)** — an owner revert lands inside the
+  registry's 6h window, AFTER V4 finalization, so the fund/finalize revert
+  check left a claim-after-revert hole. Fix: `claim()` requires a CoreTex-
+  context epoch to be registry-finalized, not reverted, and its audit window
+  CLOSED.
+- **B5 (lost original-hash alias on restart)** — the sidecar persisted only the
+  signed patchHash, so after a restart a miner's original (semantic) hash
+  returned null. Fix: persist both aliases; getReceipt also TTL-checks the
+  persisted row (expired → 404, no transaction).
+- **--allow-version-mismatch** is now genuinely read-only (no trusted-state
+  commit under a bundle mismatch).
+- **cross-epoch replay** verifies each advance's pins against ITS epoch's
+  registry pins instead of dropping the pin cross-check for the whole window.
+- **B6 (surface runway)** — `rewardActiveSubstrateSurfaces()` is the single
+  source of truth; the sidecar fails boot closed if the advertised
+  `CORETEX_ACTIVE_SUBSTRATE_SURFACES` includes a surface that is not
+  reward-active for the pinned profile. Economics unchanged. CALIBRATION
+  (operator-owned, not changed): demote zero-runway surfaces
+  (validity/scope/entity had ~0 A100 accepts) and require a supply-census gate.
+
+Still operator-only from this pass: **B4** is the same stale-bundle rebundle as
+F1 (the second auditor independently reproduced the 13/16 source-SHA mismatch);
+the integration `npm audit` advisories (no proven CoreTex exploit) are a
+dependency-hygiene follow-up.
+
 ## 7. Bottom line (original audit)
 
 The protocol core is in genuinely strong shape: every fail-closed claim
