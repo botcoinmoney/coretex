@@ -319,4 +319,4 @@ Identical retry/backoff conventions as the standard miner skill — see its **Er
 ## Notes
 
 - Standard-lane (V3) staking, unstake/withdraw flow, BOTCOIN purchase, and ETH bridging are unchanged — see the standard miner skill. CoreTex piggybacks on the same stake; do not double-stake.
-- Replay watcher: in production the coordinator's `coretex-replay` watcher continuously verifies on-chain events against the canonical state, so any misbehavior is caught off-chain. Miners do not need to run it but should be aware that the audit window for an owner revert is 6h.
+- Replay watcher: in production the coordinator's `coretex-replay` watcher continuously verifies on-chain events against the canonical state, and independent validators can replay the same public history. A bad local replay only forks that operator's view; it does not interrupt miner claims by itself.

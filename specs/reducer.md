@@ -226,5 +226,5 @@ reducer share the same deterministic algorithm; divergence is a bug.
 
 - `threshold` per family (not just global)
 - Soft-cap mode: additional merges in same epoch earn diminishing (not zero) uplift
-- ZK fraud proof replacing the 6-hour multisig audit window
+- ZK scoring fraud proofs
 - `BotcoinMining.submitCortexReceipt(...)` with explicit field names

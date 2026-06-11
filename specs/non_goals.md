@@ -68,13 +68,12 @@ compatibility rail). The existing `claim()` math reads `epochReward × minerCred
 directly from on-chain state, so CoreTex pays useful Cortex improvements as normal credits instead of a
 separate multiplier.
 
-### 10. On-chain fraud proofs for the audit window (CoreTex)
+### 10. On-chain fraud proofs for CoreTex scoring
 **Rejected because:** The EVM cannot re-run Botcoin Core. A full ZK or bond-based fraud proof
-system requires substantial additional engineering and is out of scope for CoreTex. The CoreTex audit window
-is a 6-hour delay with a 2-of-N operator multisig override (`revertEpoch`); this trust assumption
-is documented honestly in miner-facing docs.
-**V1 path:** Bond-based or ZK fraud proofs replacing the multisig audit-window override, tracked
-in Phase 9 release notes.
+system requires substantial additional engineering and is out of scope for CoreTex. Launch accountability
+comes from open coordinator code, independent validator replay, public roots, signed artifacts, and
+operator/governance response if validators expose cheating.
+**V1 path:** Bond-based or ZK scoring fraud proofs, tracked in Phase 9 release notes.
 
 ### 11. `?lane=cortex` query-string routing
 **Rejected because:** Query-string lane selection creates a misroute risk where a deliberately or
@@ -97,7 +96,7 @@ tracked for V1.
 | V1 Path | Rationale for CoreTex deferral | Where tracked |
 |---------|--------------------------|---------------|
 | `BotcoinMining.submitCortexReceipt(...)` sister function with explicit Cortex field names | current field-alias approach is acceptable because the contract only checks the signature; V1 adds clarity for explorers and removes the soft-coupling. | §9 Phase 9 release notes |
-| Bond-based or ZK fraud proofs for the audit window | Requires significant additional engineering; CoreTex multisig override is adequate for the trust assumptions of the launch window. | §9 Phase 9 release notes |
+| Bond-based or ZK scoring fraud proofs | Requires significant additional engineering; launch relies on independent replay and operator/governance response. | §9 Phase 9 release notes |
 | Adaptive compression across ECS levels (memory ↔ skills ↔ rules) | The ECS "missing diagonal" is the research frontier; CoreTex encodes all three levels in the state layout but does not implement adaptive cross-level compression. | Research brief §2.8 |
 | Per-subset BEIR license verification and automated per-subset loader | current loader uses manually verified subsets; V1 automates the per-subset license check in CI. | `specs/license_audit.md` Phase 4 note |
 

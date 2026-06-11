@@ -19,6 +19,15 @@ Before final launch, regenerate this file from the final deployment artifact
 after rebundle/repin/fresh deploy. Treat any address here as non-final unless
 it matches the final generated launch artifact and live chain readback.
 
+**Canonical publication path (do this at final deploy):** populate the `chain`
+block of the launch artifact manifest (`coretex-launch-v16-artifacts.json`)
+with `{ chainId, registryAddress, miningContractAddress, registryDeployBlock,
+confirmationDepth }`. `coretex-validator-setup` validates the block, records it
+into the validator state file, cross-checks any operator-provided env against
+it, and `--verify-chain-config` probes it on-chain (code present at both
+addresses + registry→V4 pin readback). This document is then a human-readable
+mirror of the manifest, not the source of truth.
+
 **Coordinator-signer / registry owner / V4 policy admin in the current drill
 deployment:** `0x6463f89F102e9f53168ABe557173f53c0bBbF635`.
 
