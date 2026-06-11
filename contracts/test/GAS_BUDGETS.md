@@ -6,7 +6,7 @@ CI fails (`GasBudget.t.sol`) if any function exceeds its ceiling.
 | Function | Gas ceiling | Rationale |
 |---|---|---|
 | `submitPatchAccepted` | 90,000 | ~1 SSTORE (patchCount) + event with calldata payload |
-| `finalizeEpoch` | 250,000 | 7 SSTORE writes (header struct) + 2 bool flags + event + ReentrancyGuard |
+| `finalizeEpoch` | 250,000 | header/timestamp/finalized writes + event + ReentrancyGuard |
 | `emitSnapshot` (32 KB calldata) | 600,000 | 32 768 bytes × ~16 gas/byte calldata + event overhead |
 | `claimMergeBonus` (per epoch) | 100,000 | 1 SSTORE (claimed flag) + Merkle verify + ERC20 transfer |
 

@@ -264,24 +264,15 @@ contract CoreTexRegistryTest is Test {
         reg.submitStateAdvance(7, miner, CHILD1, CHILD2, PATCH2, EVAL1, CVH, CORPUS, FRONTIER, 30000, 3, hex"ff03");
     }
 
-    function test_ownerRevertWithinWindow() public {
+    function test_finalizeRecordsHeaderAndTimestamp() public {
         _advance(7, PARENT, CHILD1, PATCH1);
         vm.prank(coord);
         reg.finalizeEpoch(7, CHILD1, CVH, CORPUS, FRONTIER, bytes32(0), bytes32(0), BASELINE);
-        vm.prank(owner);
-        reg.ownerRevertEpoch(7);
-        assertFalse(reg.epochFinalized(7));
-        assertTrue(reg.epochReverted(7));
-    }
-
-    function test_ownerRevertAfterWindowReverts() public {
-        _advance(7, PARENT, CHILD1, PATCH1);
-        vm.prank(coord);
-        reg.finalizeEpoch(7, CHILD1, CVH, CORPUS, FRONTIER, bytes32(0), bytes32(0), BASELINE);
-        vm.warp(block.timestamp + reg.CHALLENGE_WINDOW_SECONDS() + 1);
-        vm.prank(owner);
-        vm.expectRevert(CoreTexRegistry.AuditWindowClosed.selector);
-        reg.ownerRevertEpoch(7);
+        assertTrue(reg.epochFinalized(7));
+        assertEq(reg.finalizedAt(7), block.timestamp);
+        CoreTexRegistry.EpochHeader memory h = reg.getHeader(7);
+        assertEq(h.parentStateRoot, PARENT);
+        assertEq(h.finalStateRoot, CHILD1);
     }
 
     function test_noOnChainAdvanceCap_largeNumberOfAdvancesAccepted() public {

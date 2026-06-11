@@ -23,8 +23,6 @@ interface IBotcoinMiningV3StakeSource {
 interface ICoreTexRegistry {
     function liveStateRoot(uint64 epoch) external view returns (bytes32);
     function epochFinalized(uint64 epoch) external view returns (bool);
-    function epochReverted(uint64 epoch) external view returns (bool);
-    function auditWindowOpen(uint64 epoch) external view returns (bool);
     function transitionCount(uint64 epoch) external view returns (uint64);
     function epochCoreVersionHash(uint64 epoch) external view returns (bytes32);
     function epochCorpusRoot(uint64 epoch) external view returns (bytes32);
@@ -317,9 +315,6 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     error CompactPatchReservedWord();
     error CompactPatchDuplicateWord();
     error ActiveEpochHasCredits();
-    error CoreTexEpochReverted();
-    error CoreTexEpochNotRegistryFinalized();
-    error CoreTexAuditWindowOpen();
     error CoreTexScreenerCapExceeded();
     error InvalidStakeModeSwitch();
     error InvalidTierConfig();
@@ -749,7 +744,6 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         if (amount == 0) revert ZeroAmount();
         if (totalCredits[epochId] == 0) revert EpochHasNoCredits();
         if (epochFinalized[epochId]) revert EpochAlreadyFinalized();
-        _requireCoreTexEpochNotReverted(epochId);
         epochReward[epochId] += amount;
         rewardBalance += amount;
         botcoinToken.safeTransferFrom(msg.sender, address(this), amount);
@@ -760,7 +754,6 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         if (msg.sender != owner() && !authorizedFunders[msg.sender]) revert NotAuthorized();
         if (epochReward[epochId] == 0) revert EpochNotFunded();
         if (epochFinalized[epochId]) revert EpochAlreadyFinalized();
-        _requireCoreTexEpochNotReverted(epochId);
         epochFinalized[epochId] = true;
         emit EpochFinalized(epochId, epochReward[epochId]);
     }
@@ -774,7 +767,6 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         for (uint256 i; i < epochIds.length; ++i) {
             uint64 eid = epochIds[i];
             if (!epochFinalized[eid]) revert EpochNotFinalized();
-            _requireCoreTexEpochClaimable(eid);
             if (claimed[eid][miner]) revert AlreadyClaimed();
             uint256 minerCredits = credits[eid][miner];
             if (minerCredits == 0) revert NoCredits();
@@ -991,7 +983,7 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     }
 
     function _validateRegistryContext(CoreTexReceipt calldata r) internal view {
-        if (!coreTexEpochContextSet[r.epochId] || coreTexRegistry.epochFinalized(r.epochId) || coreTexRegistry.epochReverted(r.epochId)) {
+        if (!coreTexEpochContextSet[r.epochId] || coreTexRegistry.epochFinalized(r.epochId)) {
             revert InvalidCoreTexRoot();
         }
         if (coreTexRegistry.liveStateRoot(r.epochId) != r.parentStateRoot) revert InvalidCoreTexRoot();
@@ -1082,30 +1074,6 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         ) {
             revert InvalidCoreTexRoot();
         }
-    }
-
-    /// An owner-reverted registry epoch must not be funded or finalized: its
-    /// CoreTex credits were earned against state the 6h audit window rolled
-    /// back. No-op for standard-lane-only epochs (no CoreTex context set).
-    function _requireCoreTexEpochNotReverted(uint64 epochId) internal view {
-        if (coreTexEpochContextSet[epochId] && coreTexRegistry.epochReverted(epochId)) {
-            revert CoreTexEpochReverted();
-        }
-    }
-
-    /// CoreTex rewards must not be claimable until the registry epoch is
-    /// finalized AND its 6h owner-revert audit window has closed: a revert lands
-    /// AFTER V4 finalization (inside the window), so checking revert state only
-    /// at fund/finalize time leaves a claim-after-revert hole. Requiring the
-    /// window closed means no future revert is possible once claims open.
-    /// No-op for standard-lane-only epochs (no CoreTex context set). The CoreTex
-    /// cutover automation always registry-finalizes its epochs, so this couples
-    /// CoreTex-epoch claims to that step by design.
-    function _requireCoreTexEpochClaimable(uint64 epochId) internal view {
-        if (!coreTexEpochContextSet[epochId]) return;
-        if (coreTexRegistry.epochReverted(epochId)) revert CoreTexEpochReverted();
-        if (!coreTexRegistry.epochFinalized(epochId)) revert CoreTexEpochNotRegistryFinalized();
-        if (coreTexRegistry.auditWindowOpen(epochId)) revert CoreTexAuditWindowOpen();
     }
 
     function _coreTexEpochLocked(uint64 epochId) internal view returns (bool) {

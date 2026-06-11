@@ -10,7 +10,7 @@ import {CoreTexRegistry} from "../src/CoreTexRegistry.sol";
 ///   Requires MAINNET_CONFIRM=I-UNDERSTAND to broadcast. Secrets via env only (never printed):
 ///     export BASE_RPC_URL=...
 ///     export DEPLOYER_PK=...            (forge reads via --private-key or PRIVATE_KEY/wallet)
-///     export OWNER_ADDRESS=0x...        owner / sole revert authority
+///     export OWNER_ADDRESS=0x...        registry owner
 ///     export CORETEX_COORDINATOR_SIGNER_ADDRESS=0x...  coordinator signer
 ///     export MAINNET_CONFIRM=I-UNDERSTAND
 ///
@@ -37,7 +37,6 @@ contract DeployMainnet is Script {
         console2.log("CoreTexRegistry deployed at:", address(registry));
         console2.log("owner:", owner_);
         console2.log("coordinator:", coordinator_);
-        console2.log("CHALLENGE_WINDOW_SECONDS:", registry.CHALLENGE_WINDOW_SECONDS());
         // no on-chain per-epoch state-advance cap; scarcity is coordinator + frontier + V4 multipliers
     }
 }

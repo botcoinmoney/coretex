@@ -21,8 +21,6 @@ interface IBotcoinMiningV4CoreTexContext {
 ///         V4-mediated state advances and exposes V4 context through stable
 ///         registry views used by validators.
 contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
-    uint256 public constant CHALLENGE_WINDOW_SECONDS = 21600; // 6h owner-revert audit window
-
     address public botcoinMiningV4;
 
     mapping(address => bool) public isCoordinator;
@@ -31,7 +29,6 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
     mapping(uint64 => uint64) public transitionCount;
     mapping(uint64 => bool) public epochFinalized;
     mapping(uint64 => uint256) public finalizedAt;
-    mapping(uint64 => bool) public epochReverted;
 
     struct EpochHeader {
         bytes32 parentStateRoot;
@@ -73,7 +70,6 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         bytes32 baselineManifestHash
     );
 
-    event CoreTexEpochReverted(uint64 indexed epoch, address indexed by);
     event CoordinatorAdded(address indexed coordinator);
     event CoordinatorRemoved(address indexed coordinator);
     event BotcoinMiningV4Updated(address indexed oldMiningContract, address indexed newMiningContract);
@@ -83,8 +79,6 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
     error ZeroAddress();
     error EpochContextNotSet();
     error AlreadyFinalized();
-    error NotFinalized();
-    error EpochIsReverted();
     error ParentRootMismatch();
     error CoreVersionMismatch();
     error CorpusRootMismatch();
@@ -93,7 +87,6 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
     error ZeroPatchHash();
     error NoOpAdvance();
     error FinalRootMismatch();
-    error AuditWindowClosed();
     error MiningContractAlreadySet();
 
     constructor(address initialOwner, address initialCoordinator) Ownable(initialOwner) {
@@ -175,7 +168,6 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         bytes calldata compactPatchBytes
     ) external onlyBotcoinMiningV4 whenNotPaused nonReentrant {
         if (epochFinalized[epoch]) revert AlreadyFinalized();
-        if (epochReverted[epoch]) revert EpochIsReverted();
 
         IBotcoinMiningV4CoreTexContext v4 = _context(epoch);
         bytes32 liveRoot = _liveRootInitialized[epoch] ? _liveStateRoot[epoch] : v4.coreTexParentStateRoot(epoch);
@@ -219,7 +211,6 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         bytes32 baselineManifestHash
     ) external onlyCoordinator whenNotPaused nonReentrant {
         if (epochFinalized[epoch]) revert AlreadyFinalized();
-        if (epochReverted[epoch]) revert EpochIsReverted();
         IBotcoinMiningV4CoreTexContext v4 = _context(epoch);
         if (finalStateRoot != liveStateRoot(epoch)) revert FinalRootMismatch();
         if (coreVersionHash != v4.coreTexCoreVersionHash(epoch)) revert CoreVersionMismatch();
@@ -253,21 +244,8 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
         );
     }
 
-    function ownerRevertEpoch(uint64 epoch) external onlyOwner {
-        if (!epochFinalized[epoch]) revert NotFinalized();
-        if (block.timestamp > finalizedAt[epoch] + CHALLENGE_WINDOW_SECONDS) revert AuditWindowClosed();
-        epochFinalized[epoch] = false;
-        epochReverted[epoch] = true;
-        delete _headers[epoch];
-        emit CoreTexEpochReverted(epoch, msg.sender);
-    }
-
     function getHeader(uint64 epoch) external view returns (EpochHeader memory) {
         return _headers[epoch];
-    }
-
-    function auditWindowOpen(uint64 epoch) external view returns (bool) {
-        return epochFinalized[epoch] && block.timestamp <= finalizedAt[epoch] + CHALLENGE_WINDOW_SECONDS;
     }
 
     function pause() external onlyOwner {

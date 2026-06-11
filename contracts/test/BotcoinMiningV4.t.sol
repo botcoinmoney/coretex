@@ -215,17 +215,13 @@ contract BotcoinMiningV4Test is Test {
         vm.warp(GENESIS + uint256(EPOCH + 1) * 1 days + 1);
         vm.prank(funder);
         v4.fundEpoch(EPOCH, 620 ether);
+        // No registry-finalization gate: V4 finalize + claims are independent
+        // of the CoreTex registry seal (credits are already closed by rollover).
         vm.prank(funder);
         v4.finalizeEpoch(EPOCH);
 
         uint64[] memory epochs = new uint64[](1);
         epochs[0] = EPOCH;
-        // CoreTex-context epoch: claims wait for registry finalization + closed
-        // audit window (B3). Before that the claim reverts.
-        vm.prank(minerA);
-        vm.expectRevert(BotcoinMiningV4.CoreTexEpochNotRegistryFinalized.selector);
-        v4.claim(epochs);
-        _registryFinalizeAndCloseWindow(EPOCH);
 
         uint256 balA0 = token.balanceOf(minerA);
         uint256 balB0 = token.balanceOf(minerB);
@@ -541,6 +537,7 @@ contract BotcoinMiningV4Test is Test {
         v4.finalizeEpoch(EPOCH);
         vm.prank(funder);
         v4.fundEpoch(EPOCH, 100 ether);
+        // V4 finalize does not depend on the CoreTex registry seal.
         vm.prank(funder);
         v4.finalizeEpoch(EPOCH);
         vm.prank(funder);
@@ -548,10 +545,6 @@ contract BotcoinMiningV4Test is Test {
         v4.fundEpoch(EPOCH, 1 ether);
         vm.expectRevert(BotcoinMiningV4.EpochAlreadyFinalized.selector);
         v4.finalizeEpoch(EPOCH);
-
-        // CoreTex-context epoch: registry-finalize + close the audit window so
-        // the unified-pool claims below pass the CoreTex claimability gate (B3).
-        _registryFinalizeAndCloseWindow(EPOCH);
 
         vm.prank(minerB);
         vm.expectRevert(BotcoinMiningV4.NoCredits.selector);
@@ -703,43 +696,32 @@ contract BotcoinMiningV4Test is Test {
         v4.submitCoreTexReceipt(r);
     }
 
-    function test_coreTexRejectsFinalizedOrRevertedRegistry() public {
+    function test_coreTexRejectsFinalizedRegistry() public {
         vm.prank(coordinator);
         registry.finalizeEpoch(EPOCH, PARENT, CVH, CORPUS, FRONTIER, bytes32(0), bytes32(0), BASELINE);
         BotcoinMiningV4.CoreTexReceipt memory r = _screener(minerB, 0, bytes32(0), 0, _hash("patch1"));
         _signCoreTex(r, minerB);
-        vm.prank(minerB);
-        vm.expectRevert(BotcoinMiningV4.InvalidCoreTexRoot.selector);
-        v4.submitCoreTexReceipt(r);
-
-        vm.prank(owner);
-        registry.ownerRevertEpoch(EPOCH);
         vm.prank(minerB);
         vm.expectRevert(BotcoinMiningV4.InvalidCoreTexRoot.selector);
         v4.submitCoreTexReceipt(r);
     }
 
-    function test_fundEpochRejectsRegistryRevertedCoreTexEpoch() public {
-        // Earn a CoreTex screener credit so the epoch is otherwise fundable.
+    function test_fundEpochDoesNotRequireRegistryFinalizedForCoreTexEpoch() public {
         BotcoinMiningV4.CoreTexReceipt memory r = _screener(minerB, 0, bytes32(0), 0, _hash("patch1"));
         _signCoreTex(r, minerB);
         vm.prank(minerB);
         v4.submitCoreTexReceipt(r);
-
-        // Registry finalize + owner revert inside the 6h audit window.
-        vm.prank(coordinator);
-        registry.finalizeEpoch(EPOCH, PARENT, CVH, CORPUS, FRONTIER, bytes32(0), bytes32(0), BASELINE);
-        vm.prank(owner);
-        registry.ownerRevertEpoch(EPOCH);
 
         vm.warp(GENESIS + uint256(EPOCH + 1) * 1 days + 1);
         vm.prank(funder);
-        vm.expectRevert(BotcoinMiningV4.CoreTexEpochReverted.selector);
         v4.fundEpoch(EPOCH, 1 ether);
+        assertEq(v4.epochReward(EPOCH), 1 ether);
     }
 
-    function test_claimGatedOnRegistryFinalizationAndAuditWindow() public {
-        // Earn a CoreTex credit, fund + V4-finalize the epoch.
+    function test_finalizeAndClaimIndependentOfRegistrySealForCoreTexEpoch() public {
+        // The registry seal is a validator/replay checkpoint, NOT a payout
+        // gate: a CoreTex-context epoch funds, finalizes, and pays without it
+        // (credits are already closed by the epoch rollover time gate).
         BotcoinMiningV4.CoreTexReceipt memory r = _screener(minerB, 0, bytes32(0), 0, _hash("patch1"));
         _signCoreTex(r, minerB);
         vm.prank(minerB);
@@ -747,56 +729,39 @@ contract BotcoinMiningV4Test is Test {
         vm.warp(GENESIS + uint256(EPOCH + 1) * 1 days + 1);
         vm.prank(funder);
         v4.fundEpoch(EPOCH, 100 ether);
+        assertFalse(registry.epochFinalized(EPOCH));
         vm.prank(funder);
         v4.finalizeEpoch(EPOCH);
 
         uint64[] memory one = new uint64[](1);
         one[0] = EPOCH;
-
-        // (1) registry NOT finalized yet → claim refused.
-        vm.prank(minerB);
-        vm.expectRevert(BotcoinMiningV4.CoreTexEpochNotRegistryFinalized.selector);
-        v4.claim(one);
-
-        // (2) registry finalized but the 6h audit window is still OPEN → refused
-        //     (a revert is still possible, so rewards must not pay yet).
-        vm.prank(coordinator);
-        registry.finalizeEpoch(EPOCH, PARENT, CVH, CORPUS, FRONTIER, bytes32(0), bytes32(0), BASELINE);
-        vm.prank(minerB);
-        vm.expectRevert(BotcoinMiningV4.CoreTexAuditWindowOpen.selector);
-        v4.claim(one);
-
-        // (3) window closed → claim pays.
-        vm.warp(block.timestamp + registry.CHALLENGE_WINDOW_SECONDS() + 1);
         uint256 bal0 = token.balanceOf(minerB);
         vm.prank(minerB);
         v4.claim(one);
         assertEq(token.balanceOf(minerB) - bal0, 100 ether);
     }
 
-    function test_claimRejectsRevertedCoreTexEpochEvenAfterWindow() public {
+    function test_registrySealBeforeV4FinalizationDoesNotInterfere() public {
+        // Registry finalization landing FIRST (the normal cutover order) must
+        // leave V4 funding/finalization/claims untouched.
         BotcoinMiningV4.CoreTexReceipt memory r = _screener(minerB, 0, bytes32(0), 0, _hash("patch1"));
         _signCoreTex(r, minerB);
         vm.prank(minerB);
         v4.submitCoreTexReceipt(r);
         vm.warp(GENESIS + uint256(EPOCH + 1) * 1 days + 1);
+        vm.prank(coordinator);
+        registry.finalizeEpoch(EPOCH, PARENT, CVH, CORPUS, FRONTIER, bytes32(0), bytes32(0), BASELINE);
         vm.prank(funder);
         v4.fundEpoch(EPOCH, 100 ether);
         vm.prank(funder);
         v4.finalizeEpoch(EPOCH);
 
-        // Registry finalized then owner-reverted within the window.
-        vm.prank(coordinator);
-        registry.finalizeEpoch(EPOCH, PARENT, CVH, CORPUS, FRONTIER, bytes32(0), bytes32(0), BASELINE);
-        vm.prank(owner);
-        registry.ownerRevertEpoch(EPOCH);
-        vm.warp(block.timestamp + registry.CHALLENGE_WINDOW_SECONDS() + 1);
-
         uint64[] memory one = new uint64[](1);
         one[0] = EPOCH;
+        uint256 bal0 = token.balanceOf(minerB);
         vm.prank(minerB);
-        vm.expectRevert(BotcoinMiningV4.CoreTexEpochReverted.selector);
         v4.claim(one);
+        assertEq(token.balanceOf(minerB) - bal0, 100 ether);
     }
 
     function test_claimUnaffectedForStandardOnlyEpochWithoutCoreTexContext() public {
@@ -827,26 +792,23 @@ contract BotcoinMiningV4Test is Test {
         assertEq(token.balanceOf(minerA) - bal0, 100 ether);
     }
 
-    function test_finalizeEpochRejectsRegistryRevertWindowAfterFunding() public {
+    function test_registrySealAfterV4FinalizationStillWorks() public {
+        // The seal can also land late (manual catch-up): V4 finalization first
+        // must not block the registry checkpoint, and vice versa.
         BotcoinMiningV4.CoreTexReceipt memory r = _screener(minerB, 0, bytes32(0), 0, _hash("patch1"));
         _signCoreTex(r, minerB);
         vm.prank(minerB);
         v4.submitCoreTexReceipt(r);
 
-        // Funded BEFORE the registry revert lands…
         vm.warp(GENESIS + uint256(EPOCH + 1) * 1 days + 1);
         vm.prank(funder);
         v4.fundEpoch(EPOCH, 1 ether);
+        vm.prank(funder);
+        v4.finalizeEpoch(EPOCH);
 
-        // …then the owner reverts within the audit window: finalize must refuse.
         vm.prank(coordinator);
         registry.finalizeEpoch(EPOCH, PARENT, CVH, CORPUS, FRONTIER, bytes32(0), bytes32(0), BASELINE);
-        vm.prank(owner);
-        registry.ownerRevertEpoch(EPOCH);
-
-        vm.prank(funder);
-        vm.expectRevert(BotcoinMiningV4.CoreTexEpochReverted.selector);
-        v4.finalizeEpoch(EPOCH);
+        assertTrue(registry.epochFinalized(EPOCH));
     }
 
     function test_coreTexStateAdvanceRequiresRegistryMiningContractPin() public {
@@ -1621,16 +1583,6 @@ contract BotcoinMiningV4Test is Test {
                 coreVersionHash: coreVersion
             })
         );
-    }
-
-    /// Registry-finalize a (screener-only / unchanged-root) CoreTex epoch and
-    /// warp past its 6h owner-revert audit window so CoreTex credits become
-    /// claimable under _requireCoreTexEpochClaimable. finalStateRoot == PARENT
-    /// because no state advance moved the live root.
-    function _registryFinalizeAndCloseWindow(uint64 epoch) internal {
-        vm.prank(coordinator);
-        registry.finalizeEpoch(epoch, PARENT, CVH, CORPUS, FRONTIER, bytes32(0), bytes32(0), BASELINE);
-        vm.warp(block.timestamp + registry.CHALLENGE_WINDOW_SECONDS() + 1);
     }
 
     function _submitScreeners(address miner, uint256 count) internal {
