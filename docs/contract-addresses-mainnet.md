@@ -1,9 +1,20 @@
-# CoreTex v0 — Base Mainnet Addresses
+# CoreTex v0 — Base Mainnet Address Record
 
 **Chain:** Base mainnet (chainId 8453).
-**Coordinator-signer / registry owner / V4 policy admin (same address):** `0x6463f89F102e9f53168ABe557173f53c0bBbF635`.
 
-## Live contracts
+This file is an address record for mainnet drills and operator verification.
+Runtime code and scripts must read addresses from env/config/deployment
+artifacts (`CORETEX_REGISTRY_ADDRESS`, `BOTCOIN_MINING_CONTRACT_ADDRESS`,
+`BASE_RPC_URL`). Do not hardcode addresses from this document into source.
+
+Before final launch, regenerate this file from the final deployment artifact
+after rebundle/repin/fresh deploy. Treat any address here as non-final unless
+it matches the final generated launch artifact and live chain readback.
+
+**Coordinator-signer / registry owner / V4 policy admin in the current drill
+deployment:** `0x6463f89F102e9f53168ABe557173f53c0bBbF635`.
+
+## Current Drill Contracts
 
 | Contract | Address |
 |---|---|
@@ -12,12 +23,11 @@
 | CoreTexRegistry | [`0x0BE83fb9F214ea89C0277cd9e1b4f834b6E63fB8`](https://basescan.org/address/0x0BE83fb9F214ea89C0277cd9e1b4f834b6E63fB8) |
 | BotcoinMiningV4 | [`0xb53D3AF83FBe2dd469E26811BaBC4be02e0B0C47`](https://basescan.org/address/0xb53D3AF83FBe2dd469E26811BaBC4be02e0B0C47) |
 
-The CoreTexRegistry + V4 above are the **only** CoreTex deploys treated as
-canonical. Any earlier address that appeared in a prior revision of this doc is
-decommissioned. v0 has no backward-compat requirement; do not cite older
-addresses anywhere.
+The CoreTexRegistry + V4 above are the current drill deployment. They are not
+automatically final launch contracts. Final docs must be regenerated from the
+fresh deployment artifact.
 
-## v0 epoch context (epoch 109)
+## v0 Drill Epoch Context (epoch 109)
 
 Warning: this table is a launch drill snapshot. Before live launch or any real epoch cutover, verify every registry pin against `CoreTexRegistry` and the current `coretex-launch-v16-artifacts.json`.
 
@@ -37,11 +47,11 @@ Warning: this table is a launch drill snapshot. Before live launch or any real e
 | perMinerScreenerCap | 50 |
 | MAX_WORK_RECEIPT_TTL | 3600 s |
 
-The `hiddenSeedCommit` preimage lives at
-`/root/botcoin/.coretex-mainnet-epoch-109-secret-DO-NOT-COMMIT.txt` (gitignored). Reveal
-the seed via `V4.revealEpochSecret(109, <preimage>)` at epoch close
-(BotcoinMiningV4.sol — owner/coordinatorSigner only; the registry has no
-revealEpochSecret entry point).
+The `hiddenSeedCommit` preimage must live only in the operator secret store or
+local ignored secret material. Reveal the seed via
+`V4.revealEpochSecret(109, <preimage>)` at epoch close (BotcoinMiningV4.sol —
+owner/coordinatorSigner only; the registry has no revealEpochSecret entry
+point).
 
 ## Verification commands
 
