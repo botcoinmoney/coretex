@@ -118,19 +118,21 @@ def _make_valid_state(rng: random.Random) -> CortexState:
         wt = rng.randrange(0, 1 << 16)
         words[672 + i] = (src << 240) | (dst << 224) | (rt << 208) | (wt << 192)
 
-    # Temporal
+    # Temporal records use the launch one-cell layout:
+    # memorySlot[255:248], supersededBy[247:240], validFrom[239:200],
+    # validUntil[199:160], flags[159:152], reserved[151:0].
     for i in range(96):
-        mem_idx = rng.randrange(0, 1 << 16)
-        valid_from = rng.randrange(0, 1 << 64)
-        valid_until = rng.randrange(0, 1 << 64)
-        revoke = rng.randrange(0, 1 << 64)
+        mem_idx = rng.randrange(0, 1 << 8)
+        superseded_by = rng.randrange(0, 1 << 8)
+        valid_from = rng.randrange(0, 1 << 40)
+        valid_until = rng.randrange(0, 1 << 40)
         t_flags = rng.randrange(0, 2)  # bit 0 only
         words[800 + i] = (
-            (mem_idx << 240)
-            | (valid_from << 176)
-            | (valid_until << 112)
-            | (revoke << 48)
-            | (t_flags << 32)
+            (mem_idx << 248)
+            | (superseded_by << 240)
+            | (valid_from << 200)
+            | (valid_until << 160)
+            | (t_flags << 152)
         )
 
     # Codebook
