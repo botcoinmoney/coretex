@@ -2,29 +2,29 @@
 
 ## Overview
 
-The active CortexState is **1024 uint256 words = 32 768 bytes**. Words are indexed 0–1023 (inclusive). All words are big-endian 256-bit unsigned integers when serialised to / from bytes.
+The active CortexState is **1024 state cells = 32 768 bytes**. A state cell is one EVM `uint256`: 32 bytes, 256 bits, and usually displayed as a 64-character hex value. Ethereum and Solidity call this same 32-byte unit a word. State cells are indexed 0–1023 (inclusive). All cells are big-endian 256-bit unsigned integers when serialised to / from bytes.
 
-Each word is a packed bit field: sub-word fields are extracted by masking and shifting, MSB-first. Reserved bits inside any word MUST be zero; any state containing a non-zero reserved bit is rejected by both reference implementations with error code `RESERVED_BIT_SET`.
+Each state cell is a packed bit field: sub-cell fields are extracted by masking and shifting, MSB-first. Reserved bits inside any cell MUST be zero; any state containing a non-zero reserved bit is rejected by both reference implementations with error code `RESERVED_BIT_SET`.
 
 ---
 
-## Word-range layout
+## State-cell range layout
 
-| Range          | Words (inclusive) | Count | Purpose                                               |
+| Range          | Cells (inclusive) | Count | Purpose                                               |
 |----------------|-------------------|-------|-------------------------------------------------------|
 | Header         | 0 – 31            | 32    | Protocol header, schema hash fragments, score counters, epoch metadata |
-| MemoryIndex    | 32 – 383          | 352   | Memory-object index slots (Tier-2 stride-1: 352 one-word slots; recordId, family, domain, validity, retrievalSlot, expiry) |
+| MemoryIndex    | 32 – 383          | 352   | Memory-object index slots (Tier-2 stride-1: 352 single-cell slots; recordId, family, domain, validity, retrievalSlot, expiry) |
 | RetrievalKeys  | 384 – 671         | 288   | **r4:** binary / multi-vector retrieval keys · **r5:** reclaimed → PolicyAtoms (evidence-bundle 384–511, conflict_lifecycle 512–639, abstention 640–671) |
 | Relations      | 672 – 799         | 128   | Typed directed edges over MemoryIndex slots           |
 | Temporal       | 800 – 895         | 96    | Temporal validity / revocation map                    |
 | Codebook       | 896 – 991         | 96    | **r4:** codebook / operator table · **r5:** reclaimed → reserved r5 policy capacity (MUST be zero) |
 | Reserved       | 992 – 1023        | 32    | Reserved / experimental / future compatibility        |
 
-> **r5 protocol epoch (`coretex-retrieval-v2-policy-r5`).** The RetrievalKeys + Codebook word ranges are
+> **r5 protocol epoch (`coretex-retrieval-v2-policy-r5`).** The RetrievalKeys + Codebook state-cell ranges are
 > reclaimed for typed **PolicyAtoms** (see Range C-r5 / Range F-r5 below). The *static* forms of those regions
-> (dense lens, static EvidencePolicy) failed empirically — r5 reclaims their **words**, not their semantics, for a
+> (dense lens, static EvidencePolicy) failed empirically — r5 reclaims their **cells**, not their semantics, for a
 > typed/bounded/query-local policy grammar. Which interpretation is active is decided HARD by the bundle
-> `pipelineVersion` / profile: an r4 (lens) profile reads the words as RetrievalKeys/Codebook and ignores
+> `pipelineVersion` / profile: an r4 (lens) profile reads the cells as RetrievalKeys/Codebook and ignores
 > PolicyAtoms; an r5 (policy) profile reads them as PolicyAtoms and does NOT decode RetrievalKeys as a dense lens.
 > No silent reinterpretation.
 
@@ -32,11 +32,11 @@ Each word is a packed bit field: sub-word fields are extracted by masking and sh
 
 ## Per-range packed bit-field definitions
 
-### Range A: Header (words 0–31)
+### Range A: Header (cells 0–31)
 
-Each word in this range has dedicated semantics. Unused bit positions within each word are reserved and MUST be zero.
+Each cell in this range has dedicated semantics. Unused bit positions within each cell are reserved and MUST be zero.
 
-| Word | Field name            | Bits       | Type              | Description                                          |
+| Cell | Field name            | Bits       | Type              | Description                                          |
 |------|-----------------------|------------|-------------------|------------------------------------------------------|
 | 0    | MAGIC                 | 255:240    | uint16            | Fixed value `0xC07E` — "cortex" sentinel             |
 | 0    | SCHEMA_VERSION        | 239:224    | uint16            | Schema version; CoreTex = `0x0000`                        |
@@ -63,19 +63,19 @@ Each word in this range has dedicated semantics. Unused bit positions within eac
 | 10   | SCORE_ROOT            | 255:0      | bytes32           | Merkle root of per-miner score ledger                |
 | 11–31| reserved_11_31        | 255:0      | —                 | Reserved; MUST be zero                               |
 
-### Range B: MemoryIndex (words 32–383)
+### Range B: MemoryIndex (cells 32–383)
 
-**352 words = 352 memory-object slots × 1 word each (Tier-2 STRIDE-1; canonical).**
+**352 cells = 352 memory-object slots × 1 cell each (Tier-2 STRIDE-1; canonical).**
 
 Tier-2 (`TEMPORAL_DECOUPLING_DESIGN.md`, protocol epoch `coretex-retrieval-v2-lens-r4`)
-repacked MemoryIndex to **stride-1**: only word 0 of the old 8-word slot was ever used, so
+repacked MemoryIndex to **stride-1**: only cell 0 of the old 8-cell slot was ever used, so
 the region now holds up to **352 slots instead of 44**. This is what the V2 launch scorer
 (`substrate/retrieval-decoder.ts:decodeMemoryIndex`), the patch encoders
 (`scripts/lib/v2-patch-families.mjs`), and the reserved-bit validator (`state/validate.ts`,
-which applies the word-0 reserved mask to every word in the range) all agree on. Lifting the
+which applies the cell-0 reserved mask to every cell in the range) all agree on. Lifting the
 slot count is what decoupled the temporal current/stale PAIR cap from the MemoryIndex (18→96).
 
-**Canonical slot layout** (1 word per slot, slot `k` at word `32 + k`, for `k` ∈ [0, 351]):
+**Canonical slot layout** (1 cell per slot, slot `k` at cell `32 + k`, for `k` ∈ [0, 351]):
 
 | Bits    | Field         | Type    | Description                                                     |
 |---------|---------------|---------|-----------------------------------------------------------------|
@@ -86,7 +86,7 @@ slot count is what decoupled the temporal current/stale PAIR cap from the Memory
 | 47:40   | RETRIEVAL_SLOT| uint8   | Associated RetrievalKeys slot (must be < 36); 0 = unbound       |
 | 39:0    | EXPIRY_EPOCH  | uint40  | Epoch after which the object is expired (0 = never)             |
 
-A slot with a non-zero word but RECORD_ID=0, an unknown FAMILY, RETRIEVAL_SLOT≥36, or any
+A slot with a non-zero cell but RECORD_ID=0, an unknown FAMILY, RETRIEVAL_SLOT≥36, or any
 non-zero high padding decodes as a failure (counted, slot dropped). 8-bit slot-reference
 fields elsewhere (temporal `memorySlot`/`supersededBy`, relation `source`/`target`) cap
 referencible slots at 0–255 — ample for the 96-pair temporal ceiling (≤192 slots).
@@ -95,7 +95,7 @@ referencible slots at 0–255 — ample for the 96-pair temporal ceiling (≤192
 > all use the canonical stride-1 substrate
 > interpretation above through `packages/cortex/src/substrate/retrieval-decoder.ts`.
 
-### Range C: RetrievalKeys (words 384–671) — ⚠ RECLAIMED (r4): NOT a valid miner surface
+### Range C: RetrievalKeys (cells 384–671) — ⚠ RECLAIMED (r4): NOT a valid miner surface
 
 > **RECLAIMED 2026-05-25.** The static dense-lens surface FAILED (`LENS_THIRDCLASS_VERDICT.md`) and the
 > admission-headroom probe shows ~0 routing headroom for any static region. This region is **inactive** — no honest
@@ -103,36 +103,36 @@ referencible slots at 0–255 — ample for the 96-pair temporal ceiling (≤192
 > of a typed query-conditioned PolicyAtom region** (`SUBSTRATE_R5_POLICY_ATOMS.md`), NOT a static lens. Do not present
 > RetrievalKeys as a miner surface.
 
-288 words = 36 key-slots × 8 words each.
+288 cells = 36 key-slots × 8 cells each.
 
-**Key-slot layout** (8 words, slot `k` at words `384 + 8k` through `384 + 8k + 7`, for `k` ∈ [0, 35]):
+**Key-slot layout** (8 cells, slot `k` at cells `384 + 8k` through `384 + 8k + 7`, for `k` ∈ [0, 35]):
 
-| Slot-word | Field       | Bits    | Type    | Description                                           |
+| Slot cell | Field       | Bits    | Type    | Description                                           |
 |-----------|-------------|---------|---------|-------------------------------------------------------|
 | 0         | KEY_ID      | 255:128 | uint128 | Key identifier (matches an EVENT_ID in MemoryIndex)   |
 | 0         | KEY_TYPE    | 127:112 | uint16  | 0x0001 = binary key, 0x0002 = dense key, others reserved |
 | 0         | KEY_DIM     | 111:96  | uint16  | Dimensionality (bits for binary; floats for dense)    |
 | 0         | KEY_FLAGS   | 95:80   | uint16  | Bit 0: active. Bits 1–15: reserved MUST be zero       |
 | 0         | reserved_rk0| 79:0    | —       | Reserved; MUST be zero                                |
-| 1–7       | KEY_VECTOR  | 255:0   | bytes32 | Seven words of key data (224 bytes); for binary keys MSB-first bit packed |
+| 1–7       | KEY_VECTOR  | 255:0   | bytes32 | Seven cells of key data (224 bytes); for binary keys MSB-first bit packed |
 
 KEY_FLAGS reserved bits 1–15 MUST be zero.
 
-### Range C-r5 / F-r5: PolicyAtoms (words 384–671 + reserved 896–991) — r5 protocol epoch
+### Range C-r5 / F-r5: PolicyAtoms (cells 384–671 + reserved 896–991) — r5 protocol epoch
 
-Active under `pipelineVersion = coretex-retrieval-v2-policy-r5`. The same words that r4 reads as
+Active under `pipelineVersion = coretex-retrieval-v2-policy-r5`. The same cells that r4 reads as
 RetrievalKeys (384–671) and Codebook (896–991) are read as typed **PolicyAtoms**. A PolicyAtom is a typed,
 bounded, **query-local** routing/scoring policy a miner emits from PUBLIC Memory-IR / corpus structure — never
 from hidden qrels or direct answer identity. Atom families are implicit in the region:
 
-| Family region          | Words     | Slots | Allowed actions                  |
+| Family region          | Cells     | Slots | Allowed actions                  |
 |------------------------|-----------|-------|----------------------------------|
 | evidence-bundle / answer-density | 384–511 | 128 | include, boost, bundle, suppress(safe) |
 | conflict_lifecycle               | 512–639 | 128 | boost (resolved), suppress (candidate, in-set) |
 | abstention_missing               | 640–671 |  32 | abstain                          |
 | reserved r5 policy capacity      | 896–991 |  96 | none — MUST be zero (invalid-for-reward) |
 
-**Atom layout** (1 word per atom; atom `k` of a region at `regionStart + k`):
+**Atom layout** (1 cell per atom; atom `k` of a region at `regionStart + k`):
 
 | Bits    | Field           | Type   | Description                                                                   |
 |---------|-----------------|--------|-------------------------------------------------------------------------------|
@@ -154,16 +154,16 @@ Decode/validation rules (fail-closed per atom; an invalid atom is dropped + coun
 - reserved_pa (bits 111:0) MUST be zero.
 - The atom carries **no** qrel/answer-id field — its effect set is reconstructed by the scorer from PUBLIC
   edges out of TARGET_SLOT (answer-density = public support/provenance structure, not answer identity).
-- The reserved r5 policy region (896–991) MUST be entirely zero; any non-zero word there is invalid-for-reward.
-- **Hard gating:** under an r4 profile these words are NOT decoded as PolicyAtoms (zero effect); under r5 the
-  RetrievalKeys words are NOT decoded as a dense lens. The abstention low-top1/margin threshold is an OPERATOR
+- The reserved r5 policy region (896–991) MUST be entirely zero; any non-zero cell there is invalid-for-reward.
+- **Hard gating:** under an r4 profile these cells are NOT decoded as PolicyAtoms (zero effect); under r5 the
+  RetrievalKeys cells are NOT decoded as a dense lens. The abstention low-top1/margin threshold is an OPERATOR
   PROFILE knob (the miner atom only supplies the public no-evidence-path policy) — never a hardcoded constant.
 
-### Range D: Relations (words 672–799)
+### Range D: Relations (cells 672–799)
 
-128 words = 128 relation-weight entries × 1 word each.
+128 cells = 128 relation-weight entries × 1 cell each.
 
-**Entry layout** (1 word per entry, entry `k` at word `672 + k`, for `k` ∈ [0, 127]):
+**Entry layout** (1 cell per entry, entry `k` at cell `672 + k`, for `k` ∈ [0, 127]):
 
 | Bits     | Field            | Notes                                                |
 |----------|------------------|------------------------------------------------------|
@@ -184,19 +184,19 @@ edgeType enum:
 
 > Note (decoder authority). The canonical decoder lives at `packages/cortex/src/substrate/retrieval-decoder.ts:decodeRelations`. The bit layout above mirrors `specs/substrate_retrieval_semantics.md §Relations entries`, which is authoritative. The earlier RELATES_TO / SUPERSEDES (only) / ROUTES_TO and SRC_IDX-top framing was a planning sketch and is superseded — miners who follow it will produce patches the decoder drops.
 
-### Range E: Temporal (words 800–895)
+### Range E: Temporal (cells 800–895)
 
-96 words = **96 temporal records × 1 word each**. The canonical decoder
+96 cells = **96 temporal records × 1 cell each**. The canonical decoder
 (`packages/cortex/src/substrate/retrieval-decoder.ts:decodeTemporal`)
 and `substrate_retrieval_semantics.md §Temporal records` are
 authoritative for the per-record layout. The canonical decoder
-and `state/validate.ts` both use the same one-word layout with reserved
+and `state/validate.ts` both use the same one-cell layout with reserved
 bits 151:0.
 
-**Per-record layout** (1 word per record, record `k` occupies word
+**Per-record layout** (1 cell per record, record `k` occupies cell
 `800 + k`, for `k` ∈ [0, 95]).
 
-Word fields:
+Cell fields:
 
 | Field                      | Bits      | Type    | Description                                            |
 |----------------------------|-----------|---------|--------------------------------------------------------|
@@ -210,22 +210,22 @@ Word fields:
 Decoder failure modes (record dropped silently):
 - `memorySlot` references a slot that does not decode to a valid stale MemoryIndex slot
 - `validFromEpoch > validUntilEpoch`
-- non-zero reserved bits (151:0) in the record word
+- non-zero reserved bits (151:0) in the record cell
 - `currentStaleFlag` set without the referenced MemoryIndex slot's
   `revoked` bit also set
 
 > **Capacity note (Tier-2, `coretex-retrieval-v2-lens-r4`):** the temporal RANGE holds 96
-> one-word records, and the end-to-end current/stale temporal-PAIR capacity is now **96 pairs**.
+> one-cell records, and the end-to-end current/stale temporal-PAIR capacity is now **96 pairs**.
 > Tier-2 removed the artificial `retrievalSlot < 36` coupling (temporal slots pin
 > `retrievalSlot=0`; the scorer resolves temporal via the record's `recordId`/`memorySlot`,
 > never `retrievalSlot`) and repacked MemoryIndex to stride-1 (352 slots), so a pair consuming
-> two one-word MemoryIndex slots (≤192 slots for 96 pairs) is no longer MemoryIndex-bound. The
+> two single-cell MemoryIndex slots (≤192 slots for 96 pairs) is no longer MemoryIndex-bound. The
 > cross-layer invariant test (`temporal-capacity-crosslayer.test.mjs`) constructs and round-trips
 > N=12/18/24/48/96 identically across the canonical decoder and validator.
 > (Historical: the prior **18-pair** end-to-end cap was the `retrievalSlot<36` artifact, since
 > removed; beyond 96 needs a Temporal-region expansion, separately gated.)
 
-### Range F: Codebook (words 896–991) — ⚠ RECLAIMED (r4): NOT a valid miner surface
+### Range F: Codebook (cells 896–991) — ⚠ RECLAIMED (r4): NOT a valid miner surface
 
 > **RECLAIMED 2026-05-25.** The static EvidencePolicy/high-density-policy surface FAILED
 > (`EVIDENCE_POLICY_DESIGN.md` §VERDICT). This region is **inactive** — no honest patch generator emits it; decoded
@@ -233,11 +233,11 @@ Decoder failure modes (record dropped silently):
 > (`SUBSTRATE_R5_POLICY_ATOMS.md`) — a real query-conditioned mechanism, NOT another static policy atom. Do not present
 > Codebook as a miner surface.
 
-96 words = 48 codebook-entries × 2 words each.
+96 cells = 48 codebook-entries × 2 cells each.
 
-**Entry layout** (2 words per entry, entry `k` at words `896 + 2k` and `896 + 2k + 1`, for `k` ∈ [0, 47]):
+**Entry layout** (2 cells per entry, entry `k` at cells `896 + 2k` and `896 + 2k + 1`, for `k` ∈ [0, 47]):
 
-| Word | Field        | Bits    | Type    | Description                                         |
+| Cell | Field        | Bits    | Type    | Description                                         |
 |------|--------------|---------|---------|-----------------------------------------------------|
 | 0    | CODE         | 255:240 | uint16  | Codebook code (0 = unset)                           |
 | 0    | CODE_TYPE    | 239:224 | uint16  | 0x0001 = operator, 0x0002 = token, others reserved  |
@@ -245,15 +245,15 @@ Decoder failure modes (record dropped silently):
 | 0    | reserved_cb0 | 207:0   | —       | Reserved; MUST be zero                              |
 | 1    | CODE_DATA    | 255:0   | bytes32 | Arbitrary operator / token data                     |
 
-### Range G: Reserved (words 992–1023)
+### Range G: Reserved (cells 992–1023)
 
-All 32 words × 256 bits = entirely reserved. **Every bit in this range MUST be zero.**
+All 32 cells × 256 bits = entirely reserved. **Every bit in this range MUST be zero.**
 
 ---
 
 ## Reserved-bit rule
 
-> Any word where any reserved-bit position (as specified per range above) is non-zero MUST cause both reference implementations to reject the state with error `RESERVED_BIT_SET`.
+> Any cell where any reserved-bit position (as specified per range above) is non-zero MUST cause both reference implementations to reject the state with error `RESERVED_BIT_SET`.
 
 This is a hard rejection rule. It is not a warning and not a conditional skip.
 
@@ -267,7 +267,7 @@ The genesis state is seeded from the Phase 7 baseline E winner (revocation-aware
 
 ## Future ladder step: 1024 → 2048 (informational)
 
-The launch substrate is fixed at 1024 words. A future widening to 2048
+The launch substrate is fixed at 1024 state cells. A future widening to 2048
 is reserved as a single ladder step, not a recurring schedule. The
 mechanism is intentionally minimal:
 
@@ -307,7 +307,7 @@ alongside the epoch rotation manifest changes.
    surfaced via the canary-overfitting watchdog at
    `scripts/canary-overfitting-watchdog.mjs`) drops below `4` for `5`
    consecutive epoch rotations on the MemoryIndex region, retrieval
-   capacity in 1024-words is provably saturated.
+   capacity in 1024 cells is provably saturated.
 2. **Retrieval headroom flatness**: when the
    `minImprovementPpm` ratchet has been at `replayNoiseP90Ppm` (its
    floor) for `10` consecutive epochs AND `observedAdvances / target` >
@@ -326,10 +326,10 @@ contract. No additional governance contract — reuse the existing
 signer set.
 
 **Drill** (deferred, documented now): a dry-run bundle rotation against
-a 2048-word test substrate is scheduled for post-launch epoch 4. The
+a 2048-cell test substrate is scheduled for post-launch epoch 4. The
 drill must demonstrate (a) byte-identical reproducibility of the
-2048-word canonical state hash across the ≥3 calibrated hosts,
-(b) all replay watchers verify both 1024-word and 2048-word epoch
+2048-cell canonical state hash across the ≥3 calibrated hosts,
+(b) all replay watchers verify both 1024-cell and 2048-cell epoch
 manifests within the same binary, (c) miner-side substrate update
 flow rotates cleanly without lost in-flight patches.
 

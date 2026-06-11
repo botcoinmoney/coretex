@@ -16,10 +16,10 @@ Launch status note, reconciled 2026-06-06: CoreTex v16 is the launch posture. Th
 
 Terminology: a substrate state cell is one EVM `uint256`: 32 bytes, 256 bits,
 and usually represented as a 64-character hex value. It is a fixed-size storage
-lane, not an English word. The API and wire format still use `word` field names,
-such as `wordCount`, `wordIndexRange`, and `patchWordBudget`, because EVM
-convention calls a 32-byte `uint256` a word. Read those fields as state-cell
-count, state-cell index range, and state-cell budget.
+lane, not an English word. Ethereum and Solidity call this same 32-byte unit a
+word, so API and wire-format fields keep names such as `wordCount`,
+`wordIndexRange`, and `patchWordBudget`. Read those fields as state-cell count,
+state-cell index range, and state-cell budget.
 
 In v16, `activeSubstrateSurfaces` (in `/coretex/status`) may include any combination of:
 `temporal_update`, `conflict_lifecycle`, `relation_causal`, `relation_category_routing`,

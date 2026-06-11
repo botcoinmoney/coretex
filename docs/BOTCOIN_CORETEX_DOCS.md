@@ -137,9 +137,10 @@ retrieval-routing improvement rather than corpus-specific indexing churn.
 not English words. They are fixed-size storage lanes that can encode hashes,
 counters, compact IDs, bit fields, or typed routing atoms.
 
-The code and wire format still use `word` names, such as `wordCount` and
-`wordIndexRange`, because EVM convention calls a 32-byte `uint256` a word. In
-the public docs, read those names as state-cell count and state-cell index.
+Ethereum and Solidity call a 32-byte `uint256` a word. For readability, these
+docs call the same unit a state cell. API and wire-format names such as
+`wordCount` and `wordIndexRange` are protocol field names; read them as
+state-cell count and state-cell index.
 
 The current r5 interpretation is:
 
@@ -528,7 +529,7 @@ in-memory, :542). Additionally the "keyless" box requires
 the two derived eval seeds — a compromised GPU host leaks the pre-reveal
 grinding secret even without a signing key. Fix: shared-secret/mTLS on the
 route (or an asserted localhost-only bind), ship derived seeds instead of the
-raw secret, and remove the legacy `{}` seed-context fallback
+raw secret, and remove the `{}` seed-context fallback
 (:252-279) that lets a job draw its own blockhash with only process-local dedup.
 
 **F5. Fresh mainnet deployment recorded nowhere; RPC-secret rotation step
@@ -663,8 +664,8 @@ lane while the code defaults to v16. Fix: one stale-doc sweep before launch.
 - Validator: exit 0 with an undrained score backlog (only `--skip-score-replay`
   gets exit 3) — add a distinct exit code; no timeout/size-cap on any HTTP
   fetch (hangs an unattended loop); npm `version 0.1.0` vs
-  `CORTEX_CLIENT_VERSION '0.7.0'`; legacy `event-topics.ts` (old registry
-  topics) exported undeprecated beside canonical `CORETEX_EVENT_TOPICS`.
+  `CORTEX_CLIENT_VERSION '0.7.0'`; old-registry `event-topics.ts`
+  exported undeprecated beside canonical `CORETEX_EVENT_TOPICS`.
 - Integration: dedup-terminal write + receipt persistence are separate
   transactions (crash window strands an accepted patch as
   `duplicate_submission`; second window redispatches a GPU eval) —
@@ -770,8 +771,9 @@ bases for V5 instead of the current wholesale V3 copy-paste.
 evaluator and has zero importers — delete or wire to production (a second
 "evaluate a patch" entrypoint in the shipped package is a footgun);
 `reducer/multiplier-cap.ts` + `funding-tx.ts` (CortexMergeBonus,
-mathematically-zero uplift, removed from canonical registry) → `legacy/`;
-legacy `event-topics.ts` + `replay/v4.ts` decoders + `verify-epoch/` marked
+mathematically-zero uplift, removed from canonical registry) moved out of the
+default path; old-registry `event-topics.ts` + `replay/v4.ts` decoders +
+`verify-epoch/` marked
 deprecated or dropped from the default entrypoint; `writeTofuKeyPin`,
 `expectedHiddenSeedCommit`, `noProgressFlag` dead exports removed.
 
@@ -786,10 +788,10 @@ commits `9d1678e..955b723`, integration `24cc618..80dcfe4`):
   `<artifact-base>/epoch-rotations/epoch-signing-public.pem`.
 - **F4** scorer-server: bearer auth (required off-loopback), secretless host
   (the coordinator derives + ships the eval seeds; `CORETEX_EPOCH_SECRET` on
-  the scorer box is now a boot error), legacy self-drawn-blockhash fallback
+  the scorer box is now a boot error), self-drawn-blockhash fallback
   removed.
 - **F6** `reduce-epoch` CLI delegates to the canonical reducer.
-- **F7** header words frozen under r5 (E02 on any 0–31 write; HEADER_UPDATE
+- **F7** header cells frozen under r5 (E02 on any 0–31 write; HEADER_UPDATE
   r5-suppressed; MIXED advertises from the MemoryIndex start).
 - **F8/F9/qualified-F11** cutover intra-epoch retry; resume re-verifies
   previously published artifacts; `PublishBeforeReveal` hard guard.
