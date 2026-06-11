@@ -371,6 +371,10 @@ function publicKeyMetadata({ outDir, evolveOut }) {
   const publicKeyPath = flag('public-key', evolveOut.artifacts?.devPublicKey ?? null);
   const publicKeyPem = publicKeyPath ? readFileSync(resolve(repoRoot, publicKeyPath)) : null;
   const rotationPath = resolve(outDir, `epoch-rotation-${evolveOut.epoch}.json`);
+  // OPTIONAL public URL where the operator publishes the epoch signing key (PEM).
+  // When set it flows into the launch manifest status so validator-sync can
+  // auto-discover `--public-key`. Omitted when neither flag nor env is provided.
+  const publicKeyUrl = flag('public-key-url', env.CORETEX_EPOCH_SIGNING_PUBLIC_KEY_URL ?? null);
   let signerKeyId = flag('key-id', null);
   try {
     const rotation = JSON.parse(readFileSync(rotationPath, 'utf8'));
@@ -379,6 +383,7 @@ function publicKeyMetadata({ outDir, evolveOut }) {
     // The evolve command already verified the signature; metadata is best-effort for public status.
   }
   return {
+    ...(publicKeyUrl ? { epochSigningPublicKeyUrl: publicKeyUrl } : {}),
     ...(signerKeyId ? { epochSigningPublicKeyId: signerKeyId } : {}),
     ...(publicKeyPem ? { epochSigningPublicKeyFingerprint: bytes32FromBytes(publicKeyPem) } : {}),
   };
