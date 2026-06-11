@@ -316,6 +316,7 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     error CompactPatchReservedWord();
     error CompactPatchDuplicateWord();
     error ActiveEpochHasCredits();
+    error CoreTexEpochReverted();
     error CoreTexScreenerCapExceeded();
     error InvalidStakeModeSwitch();
     error InvalidTierConfig();
@@ -745,6 +746,7 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         if (amount == 0) revert ZeroAmount();
         if (totalCredits[epochId] == 0) revert EpochHasNoCredits();
         if (epochFinalized[epochId]) revert EpochAlreadyFinalized();
+        _requireCoreTexEpochNotReverted(epochId);
         epochReward[epochId] += amount;
         rewardBalance += amount;
         botcoinToken.safeTransferFrom(msg.sender, address(this), amount);
@@ -755,6 +757,7 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         if (msg.sender != owner() && !authorizedFunders[msg.sender]) revert NotAuthorized();
         if (epochReward[epochId] == 0) revert EpochNotFunded();
         if (epochFinalized[epochId]) revert EpochAlreadyFinalized();
+        _requireCoreTexEpochNotReverted(epochId);
         epochFinalized[epochId] = true;
         emit EpochFinalized(epochId, epochReward[epochId]);
     }
@@ -1074,6 +1077,15 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
                 || ctx.baselineManifestHash == bytes32(0) || ctx.coreVersionHash == bytes32(0)
         ) {
             revert InvalidCoreTexRoot();
+        }
+    }
+
+    /// An owner-reverted registry epoch must not be funded or finalized: its
+    /// CoreTex credits were earned against state the 6h audit window rolled
+    /// back. No-op for standard-lane-only epochs (no CoreTex context set).
+    function _requireCoreTexEpochNotReverted(uint64 epochId) internal view {
+        if (coreTexEpochContextSet[epochId] && coreTexRegistry.epochReverted(epochId)) {
+            revert CoreTexEpochReverted();
         }
     }
 

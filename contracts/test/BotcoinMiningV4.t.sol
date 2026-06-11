@@ -708,6 +708,47 @@ contract BotcoinMiningV4Test is Test {
         v4.submitCoreTexReceipt(r);
     }
 
+    function test_fundEpochRejectsRegistryRevertedCoreTexEpoch() public {
+        // Earn a CoreTex screener credit so the epoch is otherwise fundable.
+        BotcoinMiningV4.CoreTexReceipt memory r = _screener(minerB, 0, bytes32(0), 0, _hash("patch1"));
+        _signCoreTex(r, minerB);
+        vm.prank(minerB);
+        v4.submitCoreTexReceipt(r);
+
+        // Registry finalize + owner revert inside the 6h audit window.
+        vm.prank(coordinator);
+        registry.finalizeEpoch(EPOCH, PARENT, CVH, CORPUS, FRONTIER, bytes32(0), bytes32(0), BASELINE);
+        vm.prank(owner);
+        registry.ownerRevertEpoch(EPOCH);
+
+        vm.warp(GENESIS + uint256(EPOCH + 1) * 1 days + 1);
+        vm.prank(funder);
+        vm.expectRevert(BotcoinMiningV4.CoreTexEpochReverted.selector);
+        v4.fundEpoch(EPOCH, 1 ether);
+    }
+
+    function test_finalizeEpochRejectsRegistryRevertWindowAfterFunding() public {
+        BotcoinMiningV4.CoreTexReceipt memory r = _screener(minerB, 0, bytes32(0), 0, _hash("patch1"));
+        _signCoreTex(r, minerB);
+        vm.prank(minerB);
+        v4.submitCoreTexReceipt(r);
+
+        // Funded BEFORE the registry revert lands…
+        vm.warp(GENESIS + uint256(EPOCH + 1) * 1 days + 1);
+        vm.prank(funder);
+        v4.fundEpoch(EPOCH, 1 ether);
+
+        // …then the owner reverts within the audit window: finalize must refuse.
+        vm.prank(coordinator);
+        registry.finalizeEpoch(EPOCH, PARENT, CVH, CORPUS, FRONTIER, bytes32(0), bytes32(0), BASELINE);
+        vm.prank(owner);
+        registry.ownerRevertEpoch(EPOCH);
+
+        vm.prank(funder);
+        vm.expectRevert(BotcoinMiningV4.CoreTexEpochReverted.selector);
+        v4.finalizeEpoch(EPOCH);
+    }
+
     function test_coreTexStateAdvanceRequiresRegistryMiningContractPin() public {
         CoreTexRegistry replacement = new CoreTexRegistry(owner, coordinator);
         v4.setCoreTexRegistry(address(replacement));
