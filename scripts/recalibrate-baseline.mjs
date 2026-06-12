@@ -169,12 +169,29 @@ for (let i = 0; i < samples; i++) {
 }
 
 const summary = summarizeBaselineComposites(composites);
+const baselineVarianceSource = profile.baselineVarianceSource ?? 'unavailable';
+const currentProductionVariancePpm = baselineVarianceSource === 'rotating_pack' || baselineVarianceSource === 'broad_sampling'
+  ? (profile.baselineVariancePpm ?? 0)
+  : 0;
+const proposedProductionVariancePpm = baselineVarianceSource === 'rotating_pack' || baselineVarianceSource === 'broad_sampling'
+  ? summary.stddevPpm
+  : 0;
+const currentStateAdvanceThresholdPpm =
+  (profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500)
+  + (profile.replayTolerancePpm ?? 0)
+  + currentProductionVariancePpm;
+const proposedStateAdvanceThresholdPpm =
+  (profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500)
+  + (profile.replayTolerancePpm ?? 0)
+  + proposedProductionVariancePpm;
 const currentThresholdPpm = computeCoreTexScreenerThresholdPpm({
   baselineScorePpm: profile.baselineParentScorePpm,
+  stateAdvanceThresholdPpm: currentStateAdvanceThresholdPpm,
   policy: DEFAULT_CORETEX_WORK_POLICY,
 });
 const proposedThresholdPpm = computeCoreTexScreenerThresholdPpm({
   baselineScorePpm: summary.baselineParentScorePpm,
+  stateAdvanceThresholdPpm: proposedStateAdvanceThresholdPpm,
   policy: DEFAULT_CORETEX_WORK_POLICY,
 });
 
@@ -227,6 +244,9 @@ const report = {
     field: 'profile.baselineParentScorePpm',
     currentValue: profile.baselineParentScorePpm ?? null,
     proposedValue: summary.baselineParentScorePpm,
+    baselineVarianceSource,
+    currentStateAdvanceThresholdPpm,
+    proposedStateAdvanceThresholdPpm,
     currentScreenerThresholdPpm: Number(currentThresholdPpm),
     proposedScreenerThresholdPpm: Number(proposedThresholdPpm),
     note: 'Apply only through the coordinator bundle-profile signing flow; this script does not rewrite the signed profile.',

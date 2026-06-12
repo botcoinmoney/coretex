@@ -200,8 +200,17 @@ const opts = scoringOptionsFromProfile(profile, {
 });
 
 // ─── Threshold + acceptance floors (production-faithful) ─────────────────────
+const baselineVarianceSource = profile.baselineVarianceSource ?? 'unavailable';
+const productionVariancePpm = baselineVarianceSource === 'rotating_pack' || baselineVarianceSource === 'broad_sampling'
+  ? (profile.baselineVariancePpm ?? 0)
+  : 0;
+const stateAdvanceThresholdPpm =
+  (profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500)
+  + (profile.replayTolerancePpm ?? 0)
+  + productionVariancePpm;
 const screenerThresholdPpm = Number(computeCoreTexScreenerThresholdPpm({
   baselineScorePpm: profile.baselineParentScorePpm,
+  stateAdvanceThresholdPpm,
   policy: DEFAULT_CORETEX_WORK_POLICY,
 }));
 const acceptanceFloors = {
@@ -545,6 +554,7 @@ const runContext = {
   rerankerInputTopK: profile.rerankerInputTopK ?? null,
   packSize: packProfile().packSize,
   hiddenPackQuotasCleared: Boolean(maxQueries),
+  stateAdvanceThresholdPpm,
   screenerThresholdPpm,
   replayTolerancePpm,
   fixedSeedInputs: {

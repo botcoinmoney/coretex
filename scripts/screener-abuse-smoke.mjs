@@ -23,17 +23,18 @@ const {
   applyPatch, merkleizeState, encodeRelationCategoryLens, RANGES, PATCH_TYPE, POLICY_SELECTOR, RESERVED_MASKS,
 } = m;
 const policy = DEFAULT_CORETEX_WORK_POLICY;
+const STATE_ADVANCE_THRESHOLD_PPM = 2750;
 let pass = true; const log = [];
 const check = (n, ok, d = '') => { log.push(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`); if (!ok) pass = false; };
 
 // churn: old active baseline A vs current active baseline B (activeRoot rotated → baseline re-pinned)
 const baselineA = 285458; // old activeRoot baseline (from churn-launch-e2e)
 const baselineB = 281389; // current activeRoot baseline
-const thrA = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baselineA, policy }));
-const thrB = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baselineB, policy }));
+const thrA = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baselineA, stateAdvanceThresholdPpm: STATE_ADVANCE_THRESHOLD_PPM, policy }));
+const thrB = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baselineB, stateAdvanceThresholdPpm: STATE_ADVANCE_THRESHOLD_PPM, policy }));
 check('threshold tracks the CURRENT active baseline (recomputed on churn)', Number.isFinite(thrB), `thr(A)=${thrA} thr(B current)=${thrB}`);
 
-const qual = (over, opts = {}) => evaluateCoreTexWorkQualification({ outcome: OUTCOME_CORETEX_SCREENER_PASS, parentMatchesLiveRoot: true, baselineScorePpm: baselineB, deterministicDeltaPpm: thrB + over, policy, ...opts });
+const qual = (over, opts = {}) => evaluateCoreTexWorkQualification({ outcome: OUTCOME_CORETEX_SCREENER_PASS, parentMatchesLiveRoot: true, baselineScorePpm: baselineB, stateAdvanceThresholdPpm: STATE_ADVANCE_THRESHOLD_PPM, deterministicDeltaPpm: thrB + over, policy, ...opts });
 
 // 1. duplicate patches → admission dedup collapse (no new credit)
 const dk = '0x' + 'ab'.repeat(32), miner = '0x' + '11'.repeat(20), ph = '0x' + 'cd'.repeat(32);
@@ -49,7 +50,7 @@ const stale = qual(5000, { parentMatchesLiveRoot: false });
 check('3) stale-state submission → W02, 0 credit', stale.reason === 'W02_STALE_PARENT' && stale.workUnitsBps === 0n);
 
 // 4. random junk (large negative delta) → W03
-const junk = evaluateCoreTexWorkQualification({ outcome: OUTCOME_CORETEX_SCREENER_PASS, parentMatchesLiveRoot: true, baselineScorePpm: baselineB, deterministicDeltaPpm: -50000, policy });
+const junk = evaluateCoreTexWorkQualification({ outcome: OUTCOME_CORETEX_SCREENER_PASS, parentMatchesLiveRoot: true, baselineScorePpm: baselineB, stateAdvanceThresholdPpm: STATE_ADVANCE_THRESHOLD_PPM, deterministicDeltaPpm: -50000, policy });
 check('4) random junk → W03, 0 credit', junk.reason === 'W03_DETERMINISTIC_DELTA_TOO_LOW' && junk.workUnitsBps === 0n);
 
 // 5. near-collision spam → W05
@@ -67,7 +68,7 @@ check('6) per-miner credit bounded by cap', admitted === cap, `admitted ${admitt
 
 // 7. screener-pass-but-fail-advance: viable delta, screener outcome → 1x credit; SAME delta as state advance w/o liveStateAdvanced → W06 (no advance credit)
 const sp = qual(5000);
-const advNoLive = evaluateCoreTexWorkQualification({ outcome: OUTCOME_CORETEX_STATE_ADVANCE, parentMatchesLiveRoot: true, baselineScorePpm: baselineB, deterministicDeltaPpm: thrB + 50000, liveStateAdvanced: false, policy });
+const advNoLive = evaluateCoreTexWorkQualification({ outcome: OUTCOME_CORETEX_STATE_ADVANCE, parentMatchesLiveRoot: true, baselineScorePpm: baselineB, stateAdvanceThresholdPpm: STATE_ADVANCE_THRESHOLD_PPM, deterministicDeltaPpm: thrB + 50000, liveStateAdvanced: false, policy });
 check('7) viable-but-non-advancing → screener pass = limited (1x) credit', sp.reason === 'OK' && sp.workUnitsBps === 10000n);
 check('7) same work as state advance WITHOUT live advance → W06, 0 advance credit', advNoLive.reason === 'W06_STATE_NOT_ADVANCED' && advNoLive.workUnitsBps === 0n);
 
@@ -75,11 +76,11 @@ check('7) same work as state advance WITHOUT live advance → W06, 0 advance cre
 // model: patch composite gave +deltaVsA against A, but vs the CURRENT baseline B it is below threshold.
 const patchComposite = baselineA + thrA + 100;     // would pass against the OLD baseline A
 const deltaVsCurrentB = patchComposite - baselineB; // measured against CURRENT B
-const staleFrontier = evaluateCoreTexWorkQualification({ outcome: OUTCOME_CORETEX_STATE_ADVANCE, parentMatchesLiveRoot: true, baselineScorePpm: baselineB, deterministicDeltaPpm: Math.min(deltaVsCurrentB, thrB - 1), liveStateAdvanced: true, policy });
+const staleFrontier = evaluateCoreTexWorkQualification({ outcome: OUTCOME_CORETEX_STATE_ADVANCE, parentMatchesLiveRoot: true, baselineScorePpm: baselineB, stateAdvanceThresholdPpm: STATE_ADVANCE_THRESHOLD_PPM, deterministicDeltaPpm: Math.min(deltaVsCurrentB, thrB - 1), liveStateAdvanced: true, policy });
 check('8) improve-OLD-frontier-not-CURRENT → judged vs current baseline → rejected', staleFrontier.qualified === false, `reason=${staleFrontier.reason}`);
 
 // 9. accepted advance stays strict (live advance + above the higher state-advance floor)
-const accepted = evaluateCoreTexWorkQualification({ outcome: OUTCOME_CORETEX_STATE_ADVANCE, parentMatchesLiveRoot: true, baselineScorePpm: baselineB, deterministicDeltaPpm: thrB + 50000, liveStateAdvanced: true, qualifiedScreenerPassesSinceLastStateAdvance: 0, policy });
+const accepted = evaluateCoreTexWorkQualification({ outcome: OUTCOME_CORETEX_STATE_ADVANCE, parentMatchesLiveRoot: true, baselineScorePpm: baselineB, stateAdvanceThresholdPpm: STATE_ADVANCE_THRESHOLD_PPM, deterministicDeltaPpm: thrB + 50000, liveStateAdvanced: true, qualifiedScreenerPassesSinceLastStateAdvance: 0, policy });
 check('9) genuine accepted advance → OK, tiered credit', accepted.reason === 'OK' && accepted.workUnitsBps >= 30000n);
 
 // 10. state-advance credit saturates (anti-grinding ceiling) regardless of accumulated passes

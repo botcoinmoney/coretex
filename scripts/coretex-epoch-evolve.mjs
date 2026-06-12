@@ -584,9 +584,13 @@ async function main() {
   };
   const controllerOutput = nextMinImprovementPpm(controllerInputs);
   const minImprovementPpm = numberFlag('min-improvement-ppm', controllerOutput.next.toString());
+  const stateAdvanceThresholdPpm = minImprovementPpm
+    + (profile.replayTolerancePpm ?? 0)
+    + (baselineVariancePpm ?? 0);
   const screenerThresholdPpm = numberFlag('screener-threshold-ppm', computeCoreTexScreenerThresholdPpm({
     baselineScorePpm: baselineParentScorePpm,
     recentNoiseFloorPpm,
+    stateAdvanceThresholdPpm,
     policy: DEFAULT_CORETEX_WORK_POLICY,
   }).toString());
   const controllerForManifest = {
@@ -612,6 +616,7 @@ async function main() {
     challengeBook,
     bundleHash: bundle.bundleHash,
     minImprovementPpm,
+    stateAdvanceThresholdPpm,
     baselineParentScorePpm,
     ...(baselineVariancePpm !== undefined ? { baselineVariancePpm } : {}),
     baselineVarianceSource,
@@ -733,6 +738,7 @@ async function main() {
       baselineVarianceSource,
       fixedPackRepeatabilityPpm,
       screenerThresholdPpm,
+      stateAdvanceThresholdPpm,
       minImprovementPpm,
       recentNoiseFloorPpm,
       controller: controllerForManifest,

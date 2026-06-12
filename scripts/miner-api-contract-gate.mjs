@@ -7,7 +7,8 @@
  *
  *   A) Required public fields present (epochId, currentStateRoot,
  *      bundleHash, corpusRoot, pipelineVersion, allowedPatchTypes + wordRanges,
- *      minImprovementPpm, screenerThresholdPpm, perMinerScreenerCap, memoryIRSchemaVersion,
+ *      minImprovementPpm, stateAdvanceThresholdPpm, screenerThresholdPpm,
+ *      perMinerScreenerCap, memoryIRSchemaVersion,
  *      activeSubstrateSurfaces, exampleValidPatch, hiddenEvalWarning).
  *   B) NO hidden leakage: deep scan finds no qrel / answer / truthDocument /
  *      epochSecret / hiddenPack-contents / per-query-failure-stat fields.
@@ -127,7 +128,16 @@ if (profile.enableScopeAtoms) surfaces.push({ surface: 'scope_atom', patchType: 
 if (profile.enableEntityResolutionAtoms) surfaces.push({ surface: 'entity_resolution_atom', patchType: 'MIXED', wordRange: [RANGES.MEMORY_INDEX_START + 128, RANGES.MEMORY_INDEX_START + 191] });
 
 const minImprovementPpm = Number(profile.patchAcceptanceFloors.minImprovementPpm);
-const screenerThresholdPpm = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: profile.baselineParentScorePpm, policy: DEFAULT_CORETEX_WORK_POLICY }));
+const baselineVarianceSource = profile.baselineVarianceSource ?? 'unavailable';
+const productionVariancePpm = baselineVarianceSource === 'rotating_pack' || baselineVarianceSource === 'broad_sampling'
+  ? (profile.baselineVariancePpm ?? 0)
+  : 0;
+const stateAdvanceThresholdPpm = minImprovementPpm + (profile.replayTolerancePpm ?? 0) + productionVariancePpm;
+const screenerThresholdPpm = Number(computeCoreTexScreenerThresholdPpm({
+  baselineScorePpm: profile.baselineParentScorePpm,
+  stateAdvanceThresholdPpm,
+  policy: DEFAULT_CORETEX_WORK_POLICY,
+}));
 const baselineManifestHash = hashJson({
   parentStateRoot,
   corpusRoot,
@@ -166,8 +176,9 @@ const challenge = {
   patchWordRanges: surfaces, // active candidate surfaces (subset that is reward-active this candidate)
   patchWordBudget: 4,
   minImprovementPpm,
+  stateAdvanceThresholdPpm,
   baselineParentScorePpm: Number(profile.baselineParentScorePpm ?? 0),
-  baselineVarianceSource: 'unavailable',
+  baselineVarianceSource,
   fixedPackRepeatabilityPpm: Number(profile.baselineVariancePpm ?? 0),
   recentNoiseFloorPpm: 0,
   replayTolerancePpm: profile.replayTolerancePpm,
@@ -180,9 +191,10 @@ const challenge = {
   thresholds: {
     minImprovementPpm,
     replayTolerancePpm: profile.replayTolerancePpm,
+    stateAdvanceThresholdPpm,
     screenerThresholdPpm,
     baselineParentScorePpm: Number(profile.baselineParentScorePpm ?? 0),
-    baselineVarianceSource: 'unavailable',
+    baselineVarianceSource,
     recentNoiseFloorPpm: 0,
   },
   hiddenEvalWarning: 'Hidden eval query pack, qrels, answer IDs, and epochSecret are NOT public. Patches are scored against a hidden pack derived from a post-submission blockhash + epoch secret.',
@@ -192,7 +204,7 @@ let pass = true; const log = [];
 const check = (n, ok, d = '') => { log.push(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`); if (!ok) pass = false; };
 
 // A) required public fields present in the canonical /coretex/status payload
-const required = ['epochId', 'currentStateRoot', 'substrate', 'bundleHash', 'corpusRoot', 'activeFrontierRoot', 'artifactManifestHash', 'profileHash', 'rerankerRevision', 'baselineManifestHash', 'pipelineVersion', 'allowedPatchTypes', 'patchWordRanges', 'minImprovementPpm', 'screenerThresholdPpm', 'perMinerScreenerCap', 'memoryIRSchemaVersion', 'activeSubstrateSurfaces', 'exampleValidPatch', 'baselineParentScorePpm', 'baselineVarianceSource', 'recentNoiseFloorPpm', 'pins', 'thresholds', 'hiddenEvalWarning'];
+const required = ['epochId', 'currentStateRoot', 'substrate', 'bundleHash', 'corpusRoot', 'activeFrontierRoot', 'artifactManifestHash', 'profileHash', 'rerankerRevision', 'baselineManifestHash', 'pipelineVersion', 'allowedPatchTypes', 'patchWordRanges', 'minImprovementPpm', 'stateAdvanceThresholdPpm', 'screenerThresholdPpm', 'perMinerScreenerCap', 'memoryIRSchemaVersion', 'activeSubstrateSurfaces', 'exampleValidPatch', 'baselineParentScorePpm', 'baselineVarianceSource', 'recentNoiseFloorPpm', 'pins', 'thresholds', 'hiddenEvalWarning'];
 const missing = required.filter((k) => challenge[k] === undefined || challenge[k] === null);
 check('A) all required public fields present in /coretex/status', missing.length === 0, missing.length ? `missing: ${missing.join(',')}` : `${required.length} fields`);
 // A2) v0 canonical naming — perMinerScreenerCap only; perMinerCap is removed and MUST NOT appear.
@@ -201,6 +213,11 @@ check('A2) public status uses perMinerScreenerCap (canonical) and not perMinerCa
   challenge.perMinerCap !== undefined ? 'REMOVED perMinerCap present' :
   challenge.stateRoot !== undefined ? 'REMOVED stateRoot alias present' :
   challenge.transitionCount !== undefined ? 'REMOVED transitionCount alias present' : 'OK');
+const stateFloorBps = Number(DEFAULT_CORETEX_WORK_POLICY.screenerPass.calibration.stateAdvanceThresholdFloorBps ?? 0);
+const minScreenerFromState = Math.ceil((stateAdvanceThresholdPpm * stateFloorBps) / 10_000);
+check('A2.b) screener threshold is state-threshold-coupled',
+  screenerThresholdPpm >= minScreenerFromState && screenerThresholdPpm <= stateAdvanceThresholdPpm,
+  `screener=${screenerThresholdPpm} floor=${minScreenerFromState} state=${stateAdvanceThresholdPpm}`);
 
 // A3) Canonical v0 route surface — exactly 5 endpoints. The production router (CORETEX_ENDPOINTS
 // in packages/cortex/src/coordinator/endpoints.ts) MUST match this set, and removed routes MUST
@@ -274,6 +291,6 @@ check('D) over-budget (>4 words) → rejected', overBudget !== null, overBudget 
 console.log(log.join('\n'));
 console.log('────────────────────────────────────────────────────────');
 console.log(`status fields: ${Object.keys(challenge).length} | activeSurfaces: ${challenge.activeSubstrateSurfaces.join(', ')}`);
-console.log(`minImprovementPpm=${minImprovementPpm} screenerThresholdPpm=${screenerThresholdPpm} perMinerScreenerCap=${challenge.perMinerScreenerCap} budget=${challenge.patchWordBudget}w`);
+console.log(`minImprovementPpm=${minImprovementPpm} stateAdvanceThresholdPpm=${stateAdvanceThresholdPpm} screenerThresholdPpm=${screenerThresholdPpm} perMinerScreenerCap=${challenge.perMinerScreenerCap} budget=${challenge.patchWordBudget}w`);
 console.log(pass ? 'RESULT: ALL PASS ✅ (public contract complete, no hidden leakage)' : 'RESULT: FAIL ❌');
 exit(pass ? 0 : 1);

@@ -37,27 +37,32 @@ const {
 } = m;
 
 const policy = DEFAULT_CORETEX_WORK_POLICY;
+const STATE_ADVANCE_THRESHOLD_PPM = 2750;
+const STATE_FLOOR_PPM = Math.ceil(STATE_ADVANCE_THRESHOLD_PPM * Number(policy.screenerPass.calibration.stateAdvanceThresholdFloorBps ?? 0) / 10_000);
 let pass = true; const log = [];
 const check = (n, ok, d = '') => { log.push(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`); if (!ok) pass = false; };
 
 // ── A) dynamic threshold under two baselines ────────────────────────────────
-// Baseline A: the launch-pinned dgen1-r5-synth genesis score (304958ppm).
-// Baseline B: a higher score (less headroom) → lower threshold.
+// Baseline headroom/noise still moves the threshold, but the launch invariant is
+// that it cannot fall below a fraction of the real state-advance threshold.
 const baselineA = 304958, baselineB = 600000;
-const thrA = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baselineA, policy }));
-const thrB = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baselineB, policy }));
-check('A1) higher baseline (less headroom) → lower/equal threshold', thrB <= thrA, `thr(A=${baselineA})=${thrA} ≥ thr(B=${baselineB})=${thrB}`);
-const thrNoise = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baselineA, recentNoiseFloorPpm: 200, policy }));
+const thrA = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baselineA, stateAdvanceThresholdPpm: STATE_ADVANCE_THRESHOLD_PPM, policy }));
+const thrB = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baselineB, stateAdvanceThresholdPpm: STATE_ADVANCE_THRESHOLD_PPM, policy }));
+check('A1) threshold is floored by the state-advance economics line',
+  thrA >= STATE_FLOOR_PPM && thrB >= STATE_FLOOR_PPM && thrA <= STATE_ADVANCE_THRESHOLD_PPM && thrB <= STATE_ADVANCE_THRESHOLD_PPM,
+  `floor=${STATE_FLOOR_PPM} thr(A=${baselineA})=${thrA} thr(B=${baselineB})=${thrB} state=${STATE_ADVANCE_THRESHOLD_PPM}`);
+const thrNoise = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baselineA, recentNoiseFloorPpm: 1000, stateAdvanceThresholdPpm: STATE_ADVANCE_THRESHOLD_PPM, policy }));
 check('A2) recent noise floor raises threshold', thrNoise > thrA, `noiseThr=${thrNoise} > ${thrA}`);
-const thrFloor = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: 999_999, policy }));
-const thrCeil = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: 0, recentNoiseFloorPpm: 10_000_000, policy }));
-check('A3) threshold clamps to [minDelta, maxThreshold]',
-  thrFloor >= Number(policy.screenerPass.calibration.minDeltaPpm) && thrCeil <= Number(policy.screenerPass.calibration.maxThresholdPpm),
-  `floor=${thrFloor}≥${policy.screenerPass.calibration.minDeltaPpm} ceil=${thrCeil}≤${policy.screenerPass.calibration.maxThresholdPpm}`);
-check('A4) threshold recomputes from live baseline (re-pin changes it)', thrA !== thrB, `A→B re-pin: ${thrA}→${thrB}`);
+const thrFloor = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: 999_999, stateAdvanceThresholdPpm: STATE_ADVANCE_THRESHOLD_PPM, policy }));
+const thrCeil = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: 0, recentNoiseFloorPpm: 10_000_000, stateAdvanceThresholdPpm: STATE_ADVANCE_THRESHOLD_PPM, policy }));
+check('A3) threshold clamps between state-coupled floor and state threshold',
+  thrFloor >= STATE_FLOOR_PPM && thrCeil <= STATE_ADVANCE_THRESHOLD_PPM,
+  `floor=${thrFloor}≥${STATE_FLOOR_PPM} ceil=${thrCeil}≤${STATE_ADVANCE_THRESHOLD_PPM}`);
+const higherStateThr = Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baselineA, stateAdvanceThresholdPpm: 5000, policy }));
+check('A4) threshold recomputes when state-advance threshold changes', higherStateThr > thrA, `${thrA}→${higherStateThr}`);
 
 // ── B) outcome matrix at baseline A ─────────────────────────────────────────
-const baseQ = { parentMatchesLiveRoot: true, baselineScorePpm: baselineA, policy };
+const baseQ = { parentMatchesLiveRoot: true, baselineScorePpm: baselineA, stateAdvanceThresholdPpm: STATE_ADVANCE_THRESHOLD_PPM, policy };
 const bogus = evaluateCoreTexWorkQualification({ ...baseQ, outcome: OUTCOME_CORETEX_SCREENER_PASS, deterministicDeltaPpm: thrA - 1 });
 check('B1) bogus (delta < threshold) → W03, 0 credit', bogus.reason === 'W03_DETERMINISTIC_DELTA_TOO_LOW' && bogus.workUnitsBps === 0n, bogus.reason);
 const stale = evaluateCoreTexWorkQualification({ ...baseQ, parentMatchesLiveRoot: false, outcome: OUTCOME_CORETEX_SCREENER_PASS, deterministicDeltaPpm: thrA + 5000 });
@@ -98,7 +103,7 @@ check('D4) structurally-invalid rejected', admitBad.admit === false && admitBad.
 
 console.log(log.join('\n'));
 console.log('────────────────────────────────────────────────────────');
-console.log(`baseline A=${baselineA}ppm → screenerThreshold ${thrA}ppm ; baseline B=${baselineB}ppm → ${thrB}ppm ; +noise → ${thrNoise}ppm`);
+console.log(`stateAdvanceThreshold=${STATE_ADVANCE_THRESHOLD_PPM}ppm floor=${STATE_FLOOR_PPM}ppm ; baseline A=${baselineA}ppm → screenerThreshold ${thrA}ppm ; baseline B=${baselineB}ppm → ${thrB}ppm ; +noise → ${thrNoise}ppm`);
 console.log(`state-advance tiers by qualifiedPasses ${JSON.stringify(tierCounts)} = [${tiers.join(',')}] bps (screenerPass=10000 bps)`);
 console.log(pass ? 'RESULT: ALL PASS ✅' : 'RESULT: FAIL ❌');
 exit(pass ? 0 : 1);

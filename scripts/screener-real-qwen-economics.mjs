@@ -293,9 +293,11 @@ const dedup = new Set();                // `${parentRoot}|${patchHash}|${outcome
 function logSubmission(rec) { appendFileSync(SUBMISSIONS_LOG, JSON.stringify(rec) + '\n'); }
 function logTransition(rec) { appendFileSync(TRANSITIONS_LOG, JSON.stringify(rec) + '\n'); }
 function screenerThresholdContext() {
+  const stateAdvanceThresholdPpm = FLOORS.minImprovementPpm + REPLAY_TOL_PPM + recentNoiseFloorPpm;
   return {
     baselineScorePpm,
     recentNoiseFloorPpm,
+    stateAdvanceThresholdPpm,
     recentScreenerPasses,
     recentStateAdvances,
     targetStateAdvances: TARGET_STATE_ADVANCES,
@@ -415,9 +417,10 @@ async function handleSubmit(body) {
   const minerL = minerAddress.toLowerCase();
   const minImprovement = FLOORS.minImprovementPpm;
   const replayTol = REPLAY_TOL_PPM;
+  const stateAdvanceThresholdPpm = minImprovement + recentNoiseFloorPpm + replayTol;
 
   // STATE_ADVANCE attempt (auto when delta crosses floor, or explicit outcomeHint)
-  const wantsAdvance = outcomeHint === 'STATE_ADVANCE' || deltaPpm >= (minImprovement + recentNoiseFloorPpm + replayTol);
+  const wantsAdvance = outcomeHint === 'STATE_ADVANCE' || deltaPpm >= stateAdvanceThresholdPpm;
   if (wantsAdvance) {
     // CANONICAL acceptance gate: a STATE_ADVANCE MUST pass evaluatePatchAcceptance
     // (structural/protected/family floors + acceptanceThreshold), exactly as the production
@@ -697,7 +700,10 @@ function overwriteState(dst, src) {
 function snapshotCtx() {
   return {
     epochId, liveRoot, activeFrontierRoot, corpusRoot, profileHash, rerankerHash, bundleHash,
-    baselineScorePpm, recentNoiseFloorPpm, screenerThresholdPpm,
+    baselineScorePpm,
+    recentNoiseFloorPpm,
+    stateAdvanceThresholdPpm: FLOORS.minImprovementPpm + REPLAY_TOL_PPM + recentNoiseFloorPpm,
+    screenerThresholdPpm,
     thresholdDynamics: {
       recentScreenerPasses,
       recentStateAdvances,

@@ -112,7 +112,15 @@ const reranker = makeInstrumentedReranker({
 const biEncoderHash = biEncoderModelIdHash(BE.modelId, BE.revision, 'dense');
 const rt = { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT };
 const opts = scoringOptionsFromProfile(profile, rt);
-const floors = { ...profile.patchAcceptanceFloors, acceptanceThresholdPpm: profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500 };
+const baselineVarianceSource = profile.baselineVarianceSource ?? 'unavailable';
+const productionVariancePpm = baselineVarianceSource === 'rotating_pack' || baselineVarianceSource === 'broad_sampling'
+  ? (profile.baselineVariancePpm ?? 0)
+  : 0;
+const stateAdvanceThresholdPpm =
+  (profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500)
+  + (profile.replayTolerancePpm ?? 0)
+  + productionVariancePpm;
+const floors = { ...profile.patchAcceptanceFloors, acceptanceThresholdPpm: stateAdvanceThresholdPpm };
 const baseline = BigInt(profile.baselineParentScorePpm ?? 0);
 const POLICY = DEFAULT_CORETEX_WORK_POLICY;
 const OUTCOME_SCREENER = POLICY.screenerPass.outcome;
@@ -361,10 +369,15 @@ const legacyMixedControlFloorPpm = p90(mixedControlDeltas);
 if (!cleanNoiseDeltas.length || !Number.isFinite(recentNoiseFloorPpm) || recentNoiseFloorPpm < 0) {
   console.error(`HARD FAIL: clean noise-floor sampling produced invalid signal (${recentNoiseFloorPpm}, raw=${JSON.stringify(noiseSamples)})`); exit(1);
 }
-const screenerThresholdPpm = computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baseline, recentNoiseFloorPpm: BigInt(recentNoiseFloorPpm) });
+const screenerThresholdPpm = computeCoreTexScreenerThresholdPpm({
+  baselineScorePpm: baseline,
+  recentNoiseFloorPpm: BigInt(recentNoiseFloorPpm),
+  stateAdvanceThresholdPpm,
+});
 const plateauEasedThresholdPpm = computeCoreTexScreenerThresholdPpm({
   baselineScorePpm: baseline,
   recentNoiseFloorPpm: BigInt(recentNoiseFloorPpm),
+  stateAdvanceThresholdPpm,
   targetStateAdvances: 2,
   recentStateAdvances: 0,
   recentScreenerPasses: 2,
@@ -372,9 +385,113 @@ const plateauEasedThresholdPpm = computeCoreTexScreenerThresholdPpm({
 const antiGaming5PctThresholdPpm = computeCoreTexScreenerThresholdPpm({
   baselineScorePpm: baseline,
   recentNoiseFloorPpm: BigInt(recentNoiseFloorPpm),
+  stateAdvanceThresholdPpm,
   recentProbePassRatePpm: 50_000,
 });
 console.log(`[screener-threshold] baseline=${baseline}ppm cleanNoiseFloor(p90)=${recentNoiseFloorPpm}ppm structuralFailureFloor(p90)=${structuralFailureControlFloorPpm ?? 'n/a'}ppm → screenerThreshold=${screenerThresholdPpm}ppm`);
+
+function legacyLaunchPolicyWithoutStateFloor() {
+  const policy = structuredClone(POLICY);
+  policy.screenerPass.calibration.stateAdvanceThresholdFloorBps = '0';
+  policy.screenerPass.calibration.maxThresholdPpm = '5000';
+  return policy;
+}
+
+const priorLaunchPolicy = legacyLaunchPolicyWithoutStateFloor();
+const priorScreenerThresholdPpm = computeCoreTexScreenerThresholdPpm({
+  baselineScorePpm: baseline,
+  recentNoiseFloorPpm: BigInt(recentNoiseFloorPpm),
+  stateAdvanceThresholdPpm,
+  policy: priorLaunchPolicy,
+});
+
+function qualificationOutcome(q, outcome) {
+  if (!q.qualified) return 'REJECT';
+  return outcome === OUTCOME_STATE_ADVANCE ? 'STATE_ADVANCE' : 'SCREENER_PASS';
+}
+
+function classifyBoundaryDelta({ deltaPpm, outcome, policy = POLICY, liveStateAdvanced = false }) {
+  const q = evaluateCoreTexWorkQualification({
+    baselineScorePpm: baseline,
+    recentNoiseFloorPpm: BigInt(recentNoiseFloorPpm),
+    stateAdvanceThresholdPpm,
+    deterministicDeltaPpm: BigInt(deltaPpm),
+    localModelDeltaPpm: 0n,
+    parentMatchesLiveRoot: true,
+    liveStateAdvanced,
+    outcome,
+    policy,
+  });
+  return {
+    outcome: qualificationOutcome(q, outcome),
+    reason: q.reason,
+    requiredDeterministicDeltaPpm: Number(q.requiredDeterministicDeltaPpm),
+    workUnitsBps: Number(q.workUnitsBps),
+  };
+}
+
+const oldPassNowRejectDelta = Math.floor((Number(priorScreenerThresholdPpm) + Number(screenerThresholdPpm)) / 2);
+const screenerOnlyDelta = Math.floor((Number(screenerThresholdPpm) + Number(stateAdvanceThresholdPpm)) / 2);
+if (!(Number(priorScreenerThresholdPpm) < oldPassNowRejectDelta && oldPassNowRejectDelta < Number(screenerThresholdPpm))) {
+  console.error(`HARD FAIL: no boundary room between prior screener ${priorScreenerThresholdPpm}ppm and current screener ${screenerThresholdPpm}ppm`);
+  exit(1);
+}
+if (!(Number(screenerThresholdPpm) <= screenerOnlyDelta && screenerOnlyDelta < Number(stateAdvanceThresholdPpm))) {
+  console.error(`HARD FAIL: no boundary room between current screener ${screenerThresholdPpm}ppm and state advance ${stateAdvanceThresholdPpm}ppm`);
+  exit(1);
+}
+
+const boundaryQualificationChecks = [
+  {
+    class: 'old_screener_pass_band_now_reject',
+    band: '(priorScreenerThresholdPpm,currentScreenerThresholdPpm)',
+    deltaPpm: oldPassNowRejectDelta,
+    priorScreener: classifyBoundaryDelta({ deltaPpm: oldPassNowRejectDelta, outcome: OUTCOME_SCREENER, policy: priorLaunchPolicy }),
+    currentScreener: classifyBoundaryDelta({ deltaPpm: oldPassNowRejectDelta, outcome: OUTCOME_SCREENER }),
+    expected: {
+      priorScreenerOutcome: 'SCREENER_PASS',
+      currentScreenerOutcome: 'REJECT',
+    },
+  },
+  {
+    class: 'current_screener_only_not_state_advance',
+    band: '[currentScreenerThresholdPpm,stateAdvanceThresholdPpm)',
+    deltaPpm: screenerOnlyDelta,
+    currentScreener: classifyBoundaryDelta({ deltaPpm: screenerOnlyDelta, outcome: OUTCOME_SCREENER }),
+    currentStateAdvance: classifyBoundaryDelta({ deltaPpm: screenerOnlyDelta, outcome: OUTCOME_STATE_ADVANCE, liveStateAdvanced: true }),
+    expected: {
+      currentScreenerOutcome: 'SCREENER_PASS',
+      currentStateAdvanceOutcome: 'REJECT',
+    },
+  },
+  {
+    class: 'state_advance_exact_boundary',
+    band: '[stateAdvanceThresholdPpm,stateAdvanceThresholdPpm]',
+    deltaPpm: Number(stateAdvanceThresholdPpm),
+    currentScreener: classifyBoundaryDelta({ deltaPpm: Number(stateAdvanceThresholdPpm), outcome: OUTCOME_SCREENER }),
+    currentStateAdvance: classifyBoundaryDelta({ deltaPpm: Number(stateAdvanceThresholdPpm), outcome: OUTCOME_STATE_ADVANCE, liveStateAdvanced: true }),
+    expected: {
+      currentScreenerOutcome: 'SCREENER_PASS',
+      currentStateAdvanceOutcome: 'STATE_ADVANCE',
+    },
+  },
+];
+const boundaryFailures = boundaryQualificationChecks.filter((row) => {
+  if (row.class === 'old_screener_pass_band_now_reject') {
+    return row.priorScreener.outcome !== row.expected.priorScreenerOutcome
+      || row.currentScreener.outcome !== row.expected.currentScreenerOutcome;
+  }
+  if (row.class === 'current_screener_only_not_state_advance') {
+    return row.currentScreener.outcome !== row.expected.currentScreenerOutcome
+      || row.currentStateAdvance.outcome !== row.expected.currentStateAdvanceOutcome;
+  }
+  return row.currentScreener.outcome !== row.expected.currentScreenerOutcome
+    || row.currentStateAdvance.outcome !== row.expected.currentStateAdvanceOutcome;
+});
+if (boundaryFailures.length > 0) {
+  console.error(`HARD FAIL: boundary qualification checks failed: ${JSON.stringify(boundaryFailures, null, 2)}`);
+  exit(1);
+}
 
 // ─── CANONICAL classification via evaluateCoreTexWorkQualification ───
 function classifyCanonically({ applyAccepted, applyReason, deltaPpm, parentMatchesLiveRoot, liveStateAdvanced }) {
@@ -387,6 +504,7 @@ function classifyCanonically({ applyAccepted, applyReason, deltaPpm, parentMatch
   const baseInput = {
     baselineScorePpm: baseline,
     recentNoiseFloorPpm: BigInt(recentNoiseFloorPpm),
+    stateAdvanceThresholdPpm,
     deterministicDeltaPpm: BigInt(Math.max(0, Math.round(deltaPpm))),
     localModelDeltaPpm: 0n,
     parentMatchesLiveRoot,
@@ -445,12 +563,15 @@ const summary = {
     legacyMixedControlFloorPpm: legacyMixedControlFloorPpm === null ? null : Number(legacyMixedControlFloorPpm),
     minImprovementPpm: profile.patchAcceptanceFloors?.minImprovementPpm,
     replayTolerancePpm: profile.replayTolerancePpm,
+    stateAdvanceThresholdPpm: Number(stateAdvanceThresholdPpm),
+    priorScreenerThresholdPpm: Number(priorScreenerThresholdPpm),
     screenerThresholdPpm: Number(screenerThresholdPpm),
     dynamicScreenerThresholdSensitivity: {
       plateauEasedThresholdPpm: Number(plateauEasedThresholdPpm),
       antiGamingProbePassRate5PctThresholdPpm: Number(antiGaming5PctThresholdPpm),
       note: 'Plateau easing affects only the headroom component; clean noise remains the floor. Probe pass pressure raises the threshold.',
     },
+    boundaryQualificationChecks,
     canonical_qualification: 'evaluateCoreTexWorkQualification (REJECT / SCREENER_PASS / STATE_ADVANCE)',
   },
   per_class: Object.fromEntries(results.map((r) => [r.class, {
@@ -531,7 +652,8 @@ const report = {
   summary,
   canonicalAPIsUsed: [
     'evaluateRetrievalBenchmarkPatch(state, patch, corpus, pack, opts, floors)',
-    'computeCoreTexScreenerThresholdPpm({baselineScorePpm, recentNoiseFloorPpm, recentScreenerPasses?, recentStateAdvances?, targetStateAdvances?, recentProbePassRatePpm?})',
+    'computeCoreTexScreenerThresholdPpm({baselineScorePpm, recentNoiseFloorPpm, stateAdvanceThresholdPpm, recentScreenerPasses?, recentStateAdvances?, targetStateAdvances?, recentProbePassRatePpm?})',
+    'boundaryQualificationChecks: canonical evaluateCoreTexWorkQualification rows in (prior,current) and [current,state) bands',
     'evaluateCoreTexWorkQualification({outcome, parentMatchesLiveRoot, deterministicDeltaPpm, baselineScorePpm, recentNoiseFloorPpm, dynamic threshold inputs..., ...})',
   ],
 };

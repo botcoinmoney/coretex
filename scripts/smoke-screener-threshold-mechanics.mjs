@@ -45,6 +45,14 @@ function fail(m) { console.error(`SMOKE FAIL: ${m}`); exit(1); }
 function pass(m) { console.log(`SMOKE PASS: ${m}`); }
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, PROFILE), 'utf8'));
+const baselineVarianceSource = profile.baselineVarianceSource ?? 'unavailable';
+const productionVariancePpm = baselineVarianceSource === 'rotating_pack' || baselineVarianceSource === 'broad_sampling'
+  ? (profile.baselineVariancePpm ?? 0)
+  : 0;
+const stateAdvanceThresholdPpm =
+  (profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500)
+  + (profile.replayTolerancePpm ?? 0)
+  + productionVariancePpm;
 
 console.log(`smoke: loading materialized full corpus (NO rebuild) ...`);
 const t0 = Date.now();
@@ -81,12 +89,13 @@ catch (e) { fail(`noise-floor eval threw: ${e.message?.slice(0, 120)}`); }
 const recentNoiseFloorPpm = BigInt(noiseAbs);
 pass(`noise floor sampled: ${noiseAbs}ppm`);
 
-const screenerThreshold = computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baseline, recentNoiseFloorPpm });
+const screenerThreshold = computeCoreTexScreenerThresholdPpm({ baselineScorePpm: baseline, recentNoiseFloorPpm, stateAdvanceThresholdPpm });
 if (screenerThreshold <= 0n) fail(`canonical screenerThreshold non-positive: ${screenerThreshold}`);
 pass(`computeCoreTexScreenerThresholdPpm returned ${screenerThreshold}ppm`);
 const plateauThreshold = computeCoreTexScreenerThresholdPpm({
   baselineScorePpm: baseline,
   recentNoiseFloorPpm,
+  stateAdvanceThresholdPpm,
   targetStateAdvances: 2,
   recentStateAdvances: 0,
   recentScreenerPasses: 2,
@@ -94,6 +103,7 @@ const plateauThreshold = computeCoreTexScreenerThresholdPpm({
 const probePressureThreshold = computeCoreTexScreenerThresholdPpm({
   baselineScorePpm: baseline,
   recentNoiseFloorPpm,
+  stateAdvanceThresholdPpm,
   recentProbePassRatePpm: 50_000,
 });
 if (plateauThreshold > screenerThreshold) fail(`plateau-eased threshold increased: ${plateauThreshold} > ${screenerThreshold}`);
@@ -103,7 +113,7 @@ pass(`dynamic threshold controls responded — plateau=${plateauThreshold}ppm pr
 // Canonical qualification path — try REJECT, SCREENER_PASS, STATE_ADVANCE outcomes via the
 // canonical evaluator (mechanics check; deterministic reranker gives delta≈0 so we expect REJECT).
 const POLICY = DEFAULT_CORETEX_WORK_POLICY;
-const baseInput = { baselineScorePpm: baseline, recentNoiseFloorPpm, deterministicDeltaPpm: 0n, localModelDeltaPpm: 0n, parentMatchesLiveRoot: true };
+const baseInput = { baselineScorePpm: baseline, recentNoiseFloorPpm, stateAdvanceThresholdPpm, deterministicDeltaPpm: 0n, localModelDeltaPpm: 0n, parentMatchesLiveRoot: true };
 const sp = evaluateCoreTexWorkQualification({ ...baseInput, outcome: POLICY.screenerPass.outcome });
 const sa = evaluateCoreTexWorkQualification({ ...baseInput, outcome: POLICY.stateAdvance.outcome, liveStateAdvanced: true });
 if (typeof sp.qualified !== 'boolean' || typeof sa.qualified !== 'boolean') fail(`canonical evaluateCoreTexWorkQualification did not return boolean qualified field`);

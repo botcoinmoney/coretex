@@ -76,7 +76,7 @@ codes, etc.) live in this skill file. Dynamic per-epoch / per-miner data
 | method | path | purpose |
 |---|---|---|
 | GET | `/coretex/health` | coordinator system health — version, epoch, chainId, confirmation depth, chain live root, confirmed live root, finality lag, epoch pins, `acceptingSubmissions`. No miner-specific data. |
-| GET | `/coretex/status?miner=0x…` | full per-miner dynamic context: current confirmed `currentStateRoot`, `confirmedTransitionCount`, `allowedPatchTypes` + `patchWordBudget` + `screenerThresholdPpm` + `minImprovementPpm`, `perMinerScreenerCap` + per-miner `{address, screenersThisEpoch, remaining, cap, nextIndex, lastReceiptHash}`, `qualifiedScreenerPassesSinceLastStateAdvance`, `activeSubstrateSurfaces`, `acceptingSubmissions`. This is the SOLE endpoint for the runtime context a miner needs to build a patch — `/coretex/challenge` no longer exists in v0. |
+| GET | `/coretex/status?miner=0x…` | full per-miner dynamic context: current confirmed `currentStateRoot`, `confirmedTransitionCount`, `allowedPatchTypes` + `patchWordBudget` + `screenerThresholdPpm` + `minImprovementPpm` + `stateAdvanceThresholdPpm`, `perMinerScreenerCap` + per-miner `{address, screenersThisEpoch, remaining, cap, nextIndex, lastReceiptHash}`, `qualifiedScreenerPassesSinceLastStateAdvance`, `activeSubstrateSurfaces`, `acceptingSubmissions`. This is the SOLE endpoint for the runtime context a miner needs to build a patch — `/coretex/challenge` no longer exists in v0. |
 | GET | `/coretex/substrate/:stateRoot` | full 1024-state-cell substrate state by root (off-chain by root; `packedBytes` 32 768; response carries `{stateRoot, wordCount, packedBytes, packedHex}`). Only chain-confirmed historical roots are served; speculative `newStateRoot`s from pending receipts return 404. |
 | POST | `/coretex/submit` | submit a patch: `{ patchBytesHex, parentStateRoot, minerAddress }`. The coordinator scores, signs if viable, returns either an accepted-receipt envelope or a rejection. |
 | GET | `/coretex/receipt/:hash` | re-fetch a previously signed coordinator receipt + pre-encoded V4 transaction by patchHash. Works for BOTH the miner-submitted (original) hash AND the coordinator-rewritten signed hash. Returns: `200` for pending/confirmed (envelope tagged with state), `409 + PendingReceiptStale` if a competing same-parent advance landed first (no transaction returned — re-fetch `/coretex/status` for the new root), `404 + "receipt expired"` once the receipt's `expiresAt` elapses. |
@@ -119,8 +119,9 @@ patch. Key fields:
 | `bundleHash` / `coreVersionHash`, `corpusRoot`, `activeFrontierRoot` | pinned scoring context (the registry enforces these per epoch) |
 | `allowedPatchTypes` | array of `{ name, byte, wordIndexRange: [start, end] }` — the byte VALUE you put in the wire is `allowedPatchTypes[i].byte` from this live response. **Do not hardcode** byte values from any document; always read them from the live status response. `wordIndexRange` is the inclusive state-cell index range. |
 | `patchWordBudget` | **4** (max state cells per `STATE_ADVANCE` patch) |
-| `screenerThresholdPpm` | current dynamic screener threshold (live baseline + noise floor) |
-| `minImprovementPpm` / `replayTolerancePpm` | state-advance acceptance floor + replay tolerance |
+| `screenerThresholdPpm` | current dynamic screener threshold (live baseline + noise floor, floored against `stateAdvanceThresholdPpm`) |
+| `minImprovementPpm` / `replayTolerancePpm` | state-advance floor terms |
+| `stateAdvanceThresholdPpm` | real state-advance threshold: `minImprovementPpm + replayTolerancePpm + production variancePpm` |
 | `perMinerScreenerCap` | on-chain V4 cap (default **50**) — see _On-chain protocol caps_ below |
 | `qualifiedScreenerPassesSinceLastStateAdvance` | global screener counter that drives the state-advance work-multiplier tier |
 | `activeSubstrateSurfaces` | the live earned surfaces for this epoch (see v0 list above). |

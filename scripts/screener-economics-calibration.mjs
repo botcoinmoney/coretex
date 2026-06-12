@@ -51,6 +51,7 @@ const N_MINERS = Number(flag('miners', '30'));
 const N_EPOCHS = Number(flag('epochs', '5'));
 const SUBMITS_PER_MINER_PER_EPOCH = Number(flag('submits', '80'));
 const EMIT = argv.includes('--emit');
+const STATE_ADVANCE_THRESHOLD_PPM = BigInt(Number(flag('state-advance-threshold-ppm', '2750')));
 
 // ── helpers ───────────────────────────────────────────────────────────────
 function rng(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 0x100000000; }; }
@@ -123,7 +124,11 @@ class SimState {
     this.r = rng(seed);
   }
   threshold(policy) {
-    return Number(computeCoreTexScreenerThresholdPpm({ baselineScorePpm: this.baselineScorePpm, policy }));
+    return Number(computeCoreTexScreenerThresholdPpm({
+      baselineScorePpm: this.baselineScorePpm,
+      stateAdvanceThresholdPpm: STATE_ADVANCE_THRESHOLD_PPM,
+      policy,
+    }));
   }
   // Returns a snapshot of the immutable per-receipt context the coordinator would sign.
   snapshotContext() {
@@ -307,6 +312,7 @@ function simulate({ nMiners, sybilFrac, screenerCap, advanceCapSensitivity, mult
           outcome: p.outcome,
           parentMatchesLiveRoot: p.parentMatchesLiveRoot,
           baselineScorePpm: sim.baselineScorePpm,
+          stateAdvanceThresholdPpm: STATE_ADVANCE_THRESHOLD_PPM,
           deterministicDeltaPpm: p.deltaPpm,
           liveStateAdvanced: p.outcome === OUTCOME_CORETEX_STATE_ADVANCE ? (p.liveStateAdvanced ?? false) : false,
           qualifiedScreenerPassesSinceLastStateAdvance: sim.globalScreenerCount,

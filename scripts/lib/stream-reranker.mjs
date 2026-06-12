@@ -125,6 +125,7 @@ export function makeStreamReranker({ model, revision, python, allowCuda }) {
       return m.scores;
     },
     async close() {
+      clearTimeout(startupTimer);
       if (exited) return;
       try { proc.stdin.end(); } catch { /* noop */ }
       await new Promise((res) => {

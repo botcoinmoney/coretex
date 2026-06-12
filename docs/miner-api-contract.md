@@ -43,8 +43,9 @@ The following routes are NOT part of the v0 public surface and the gate
 | `activeFrontierRoot` | active-frontier root for the C3 launch frontier. Launch profiles should expose a non-null root; `null` / all-zero is only for smoke, disabled, or an explicitly churn-off deployment. |
 | `allowedPatchTypes` + `patchWordRanges` | writable patch types and their state-cell index ranges, per active surface |
 | `patchWordBudget` | max state cells per STATE_ADVANCE patch (**4**) |
-| `minImprovementPpm` / `replayTolerancePpm` | acceptance floor + replay tolerance |
-| `screenerThresholdPpm` | current dynamic screener threshold (from live baseline + noise floor; recomputes after baseline/churn/corpus/reranker changes) |
+| `minImprovementPpm` / `replayTolerancePpm` | state-advance floor terms |
+| `stateAdvanceThresholdPpm` | real state-advance threshold: `minImprovementPpm + replayTolerancePpm + production variancePpm` |
+| `screenerThresholdPpm` | current dynamic screener threshold, derived from live baseline + noise floor and floored as a fraction of `stateAdvanceThresholdPpm`; recomputes after baseline/churn/corpus/reranker/difficulty changes |
 | `perMinerScreenerCap` | on-chain V4 `coreTexScreenerCapPerMinerPerEpoch` (default **50**, adjustable by owner/policyAdmin). Hard ceiling on SCREENER_PASS receipts per miner per epoch; persists across state advances within the epoch; STATE_ADVANCE receipts and standard-lane receipts are not counted. Receipts above the cap revert `CoreTexScreenerCapExceeded`. |
 | `memoryIRSchemaVersion` | the fixed Memory-IR protocol grammar version (renderer is protocol-owned) |
 | `activeSubstrateSurfaces` | the live earned surfaces from the status response. For v16 this must include the promoted atom surfaces when active: `validity_atom`, `scope_atom`, and `entity_resolution_atom`. |
