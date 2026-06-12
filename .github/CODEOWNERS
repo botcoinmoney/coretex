@@ -4,8 +4,8 @@
 * @botcoinmoney
 
 # Specs
-/specs/cortex_state.md           @botcoinmoney
-/specs/cortex_schema.json        @botcoinmoney
+/specs/coretex_state.md           @botcoinmoney
+/specs/coretex_schema.json        @botcoinmoney
 /specs/packing_spec.md           @botcoinmoney
 /specs/merkleization_spec.md     @botcoinmoney
 /specs/patch_format.md           @botcoinmoney
@@ -19,8 +19,8 @@
 /contracts/                         @botcoinmoney
 
 # Packages
-/packages/cortex/                   @botcoinmoney
-/packages/cortex-handler/           @botcoinmoney
+/packages/coretex/                   @botcoinmoney
+/packages/coretex-handler/           @botcoinmoney
 
 # Benchmark
 /benchmark/                         @botcoinmoney
