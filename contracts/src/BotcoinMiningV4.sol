@@ -23,6 +23,7 @@ interface IBotcoinMiningV3StakeSource {
 interface ICoreTexRegistry {
     function liveStateRoot(uint64 epoch) external view returns (bytes32);
     function epochFinalized(uint64 epoch) external view returns (bool);
+    function paused() external view returns (bool);
     function transitionCount(uint64 epoch) external view returns (uint64);
     function epochCoreVersionHash(uint64 epoch) external view returns (bytes32);
     function epochCorpusRoot(uint64 epoch) external view returns (bytes32);
@@ -192,8 +193,7 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     mapping(uint32 => CoreTexPolicy) private _coreTexPolicies;
     uint32[] private _scheduledCoreTexRulesVersions;
     mapping(uint64 => uint256) public qualifiedScreenerPassesSinceLastStateAdvance;
-    mapping(uint64 => mapping(bytes32 => mapping(bytes32 => mapping(uint8 => bool)))) public
-        coreTexPatchOutcomeCredited;
+    mapping(uint64 => mapping(bytes32 => mapping(bytes32 => bool))) public coreTexPatchCredited;
 
     // Per-miner per-epoch screener anti-inflation cap. Persists across state advances within an epoch
     // (a state advance resets only the global qualifiedScreenerPassesSinceLastStateAdvance counter, NOT
@@ -553,6 +553,7 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     // ── Native V4 staking ─────────────────────────────────────────────────
 
     function stake(uint256 amount) external nonReentrant {
+        if (effectiveStakeMode(currentEpoch()) != StakeMode.NativeV4) revert NotEligible();
         if (amount == 0) revert ZeroAmount();
         address miner = msg.sender;
         botcoinToken.safeTransferFrom(miner, address(this), amount);
@@ -682,7 +683,7 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         );
         if (receiptUsed[receiptHash]) revert DuplicateReceipt();
 
-        if (coreTexPatchOutcomeCredited[r.epochId][r.parentStateRoot][r.patchHash][r.outcome]) {
+        if (coreTexPatchCredited[r.epochId][r.parentStateRoot][r.patchHash]) {
             revert DuplicateCoreTexPatch();
         }
 
@@ -715,7 +716,7 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
             revert InvalidCoreTexOutcome();
         }
 
-        coreTexPatchOutcomeCredited[r.epochId][r.parentStateRoot][r.patchHash][r.outcome] = true;
+        coreTexPatchCredited[r.epochId][r.parentStateRoot][r.patchHash] = true;
         _acceptCredit(r.epochId, miner, r.solveIndex, receiptHash, creditsEarned);
 
         emit CoreTexCreditAccepted(
@@ -888,6 +889,7 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     }
 
     function finalizeStakeModeSwitch() external {
+        if (msg.sender != owner() && msg.sender != policyAdmin) revert NotAuthorized();
         if (!stakeModeSwitchScheduled || currentEpoch() < scheduledStakeModeEffectiveEpoch) revert InvalidStakeModeSwitch();
         StakeMode oldMode = stakeMode;
         stakeMode = scheduledStakeMode;
@@ -983,7 +985,7 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
     }
 
     function _validateRegistryContext(CoreTexReceipt calldata r) internal view {
-        if (!coreTexEpochContextSet[r.epochId] || coreTexRegistry.epochFinalized(r.epochId)) {
+        if (!coreTexEpochContextSet[r.epochId] || coreTexRegistry.paused() || coreTexRegistry.epochFinalized(r.epochId)) {
             revert InvalidCoreTexRoot();
         }
         if (coreTexRegistry.liveStateRoot(r.epochId) != r.parentStateRoot) revert InvalidCoreTexRoot();

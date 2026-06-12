@@ -474,6 +474,12 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
   // up to the pinned per-epoch quota, and retire hidden rows past the horizon oldest-first.
   const freshEvalHiddenQueryIds = [];
   const retiredQueryIds = [];
+  const retiredQuerySet = new Set();
+  const retireQuery = (id) => {
+    if (retiredQuerySet.has(id)) return;
+    retiredQuerySet.add(id);
+    retiredQueryIds.push(id);
+  };
   if (evalHiddenPolicy) {
     const { splitOf, minFreshPerEpoch = 0, retireAfterEpochs = Infinity, maxRetiredPerEpoch = Infinity, maxMintedPerEpoch = Infinity, excludeRetireIds = null } = evalHiddenPolicy;
     for (const q of addedQueries) if (splitOf(q.id, epoch) === 'eval_hidden') freshEvalHiddenQueryIds.push(q.id);
@@ -500,6 +506,16 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
       freshEvalHiddenQueryIds.push(qid);
       minted++;
     }
+    // If a retracted doc was a positive qrel target, the hidden query is no
+    // longer answerable and must leave the eval pool regardless of age.
+    for (const q of baseLogical.queries ?? []) {
+      if (!q || typeof q.id !== 'string') continue;
+      if (splitOf(q.id, q.liveUpdateEpoch) !== 'eval_hidden') continue;
+      const qrels = Array.isArray(q.qrels) ? q.qrels : [];
+      if (qrels.some((r) => Number(r?.relevance ?? 0) > 0 && retractedSet.has(String(r?.docId ?? '')))) {
+        retireQuery(q.id);
+      }
+    }
     if (Number.isFinite(retireAfterEpochs)) {
       const candidates = (baseLogical.queries ?? [])
         .filter((q) => {
@@ -507,10 +523,12 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
           const mintEpoch = Number.isInteger(q.liveUpdateEpoch) ? q.liveUpdateEpoch : 0;
           if (epoch - mintEpoch < retireAfterEpochs) return false;
           if (excludeRetireIds && excludeRetireIds.has(q.id)) return false;
+          if (retiredQuerySet.has(q.id)) return false;
           return splitOf(q.id, q.liveUpdateEpoch) === 'eval_hidden';
         })
         .sort((a, b) => ((a.liveUpdateEpoch ?? 0) - (b.liveUpdateEpoch ?? 0)) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-      for (const q of candidates.slice(0, Math.max(0, maxRetiredPerEpoch))) retiredQueryIds.push(q.id);
+      const remainingCap = Math.max(0, maxRetiredPerEpoch - retiredQueryIds.length);
+      for (const q of candidates.slice(0, remainingCap)) retireQuery(q.id);
     }
   }
 

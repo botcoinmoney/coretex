@@ -36,6 +36,7 @@ const {
   controllerParamsFromProfile,
   DEFAULT_CORETEX_WORK_POLICY,
   hashJson,
+  isMajorDelta,
   liveTailQueryId,
   loadProductionCorpus,
   logicalQueryIdFromProductionEventId,
@@ -439,17 +440,53 @@ async function main() {
   const logicalDocsById = new Map(logical.docs.map((d) => [d.id, d]));
   const logicalQueriesById = new Map(logical.queries.map((q) => [q.id, q]));
   const removedIds = [];
+  const removedIdSet = new Set();
+  const removedEvalHiddenIds = [];
+  const removedEvalHiddenSet = new Set();
+  const pushRemoved = (id) => {
+    if (removedIdSet.has(id)) return;
+    removedIdSet.add(id);
+    removedIds.push(id);
+  };
+  const pushRemovedEvalHidden = (id) => {
+    pushRemoved(id);
+    if (!removedEvalHiddenSet.has(id)) {
+      removedEvalHiddenSet.add(id);
+      removedEvalHiddenIds.push(id);
+    }
+  };
+  const retractedProdDocIds = new Set();
+  const retractedQrelDocIds = new Set(logicalDelta.retractedDocIds);
   for (const docId of logicalDelta.retractedDocIds) {
     const prodId = productionEventIdForLogicalDoc(previousCorpus, logicalDocsById.get(docId) ?? { id: docId });
     if (!prodId) fail(`retracted doc ${docId} does not resolve to a production corpus event — logical/production state divergence`);
-    removedIds.push(prodId);
+    pushRemoved(prodId);
+    retractedProdDocIds.add(prodId);
+    const prodEvent = previousCorpus.byId.get(prodId);
+    for (const truth of prodEvent?.truthDocuments ?? []) {
+      if (truth?.id) retractedQrelDocIds.add(String(truth.id));
+    }
   }
-  const removedEvalHiddenIds = [];
+  if (retractedProdDocIds.size > 0 || retractedQrelDocIds.size > 0) {
+    const retiredLogicalQuerySet = new Set(logicalDelta.retiredQueryIds);
+    for (const event of previousCorpus.events) {
+      if (event.split !== 'eval_hidden') continue;
+      const qrels = Array.isArray(event.qrels) ? event.qrels : [];
+      const broken = qrels.some((qrel) => {
+        if (Number(qrel?.relevance ?? 0) <= 0) return false;
+        const docId = String(qrel?.documentId ?? '');
+        return retractedProdDocIds.has(docId) || retractedQrelDocIds.has(docId);
+      });
+      if (!broken) continue;
+      pushRemovedEvalHidden(event.id);
+      retiredLogicalQuerySet.add(logicalQueryIdFromProductionEventId(event.id));
+    }
+    logicalDelta.retiredQueryIds = [...retiredLogicalQuerySet];
+  }
   for (const queryId of logicalDelta.retiredQueryIds) {
     const prodId = productionEventIdForLogicalQuery(previousCorpus, logicalQueriesById.get(queryId) ?? { id: queryId });
     if (!prodId) fail(`retired hidden query ${queryId} does not resolve to a production corpus event — logical/production state divergence`);
-    removedIds.push(prodId);
-    removedEvalHiddenIds.push(prodId);
+    pushRemovedEvalHidden(prodId);
   }
   // ── Root-delta cap: hidden-pool removals are forced frontier-root churn ───────
   if (removedEvalHiddenIds.length > maxRootDeltaPerEpoch) {
@@ -486,6 +523,24 @@ async function main() {
   if (nextCorpus.corpusRoot.toLowerCase() !== delta.nextRoot.toLowerCase()) {
     fail(`applyCorpusDelta root ${nextCorpus.corpusRoot} != delta.nextRoot ${delta.nextRoot}`);
   }
+  const missingPositiveQrels = [];
+  const availableQrelDocIds = new Set();
+  for (const event of nextCorpus.events) {
+    availableQrelDocIds.add(event.id);
+    for (const truth of event.truthDocuments ?? []) if (truth?.id) availableQrelDocIds.add(String(truth.id));
+  }
+  for (const event of nextCorpus.events) {
+    if (event.split !== 'eval_hidden') continue;
+    for (const qrel of event.qrels ?? []) {
+      if (Number(qrel.relevance ?? 0) <= 0) continue;
+      if (!availableQrelDocIds.has(qrel.documentId) || retractedQrelDocIds.has(qrel.documentId) || retractedProdDocIds.has(qrel.documentId)) {
+        missingPositiveQrels.push(`${event.id}->${qrel.documentId}`);
+      }
+    }
+  }
+  if (missingPositiveQrels.length > 0) {
+    fail(`post-delta invariant failed: eval_hidden positive qrels reference missing docs (${missingPositiveQrels.slice(0, 8).join(', ')})`);
+  }
   const frontier = makeFrontier(profile, previousCorpus, nextCorpus, additions, outDir, {
     initialStateRaw: frontierInitialStateRaw,
     maxRootDeltaPerEpoch,
@@ -513,11 +568,18 @@ async function main() {
   const recentNoiseFloorPpm = numberFlag('recent-noise-floor-ppm', 0);
   const currentMinImprovementPpm = numberFlag('current-min-improvement-ppm', profile.patchAcceptanceFloors?.minImprovementPpm ?? bundle.scoring?.minImprovementPpm ?? 2500);
   const targetAdvances = numberFlag('target-advances', profile.epochFrontier?.targetAccepts ?? 3);
+  const previousEvalHiddenCount = previousCorpus.events.filter((e) => e.split === 'eval_hidden').length;
+  const nextEvalHiddenCount = nextCorpus.events.filter((e) => e.split === 'eval_hidden').length;
+  const majorDeltaThreshold = profile.majorDeltaThreshold;
+  const majorDeltaActive = Number.isInteger(majorDeltaThreshold)
+    ? isMajorDelta(nextEvalHiddenCount, previousEvalHiddenCount, majorDeltaThreshold)
+    : false;
   const controllerInputs = {
     current: BigInt(Math.round(currentMinImprovementPpm)),
     observedAdvances: advancesObserved,
     targetAdvances,
     qualityAttempts: qualityAttemptsObserved,
+    majorDeltaActive,
     ...controllerParamsFromProfile(profile, targetAdvances),
   };
   const controllerOutput = nextMinImprovementPpm(controllerInputs);
@@ -536,6 +598,12 @@ async function main() {
       clamped: controllerOutput.clamped,
     },
     reason: controllerOutput.reason,
+    majorDelta: {
+      active: majorDeltaActive,
+      previousEvalHiddenCount,
+      nextEvalHiddenCount,
+      threshold: majorDeltaThreshold ?? null,
+    },
   };
   const hiddenSeedCommit = flag('hidden-seed-commit', bytes32FromString(`coretex:hidden:${epoch}:${seed}:${delta.nextRoot}`));
   let rotation = buildEpochRotationManifest({

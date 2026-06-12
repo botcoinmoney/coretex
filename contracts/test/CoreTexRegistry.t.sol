@@ -103,6 +103,7 @@ contract CoreTexRegistryTest is Test {
         bytes32 scoreRoot,
         bytes32 baselineManifestHash
     );
+    event BotcoinMiningV4Updated(address indexed oldMiningContract, address indexed newMiningContract);
 
     function setUp() public {
         reg = new CoreTexRegistry(owner, coord);
@@ -137,6 +138,19 @@ contract CoreTexRegistryTest is Test {
         assertEq(reg.epochBaselineManifestHash(7), BASELINE);
         assertEq(reg.epochHiddenSeedCommit(7), SEEDCOMMIT);
         assertEq(reg.transitionCount(7), 0);
+    }
+
+    function test_ownerCanUpdateBotcoinMiningV4Pointer() public {
+        MockV4Context replacement = new MockV4Context();
+        replacement.setContext(7, CHILD1, CVH, CORPUS, FRONTIER, BASELINE, SEEDCOMMIT);
+
+        vm.prank(owner);
+        vm.expectEmit(true, true, false, true);
+        emit BotcoinMiningV4Updated(address(v4), address(replacement));
+        reg.setBotcoinMiningV4(address(replacement));
+
+        assertEq(reg.botcoinMiningV4(), address(replacement));
+        assertEq(reg.liveStateRoot(7), CHILD1);
     }
 
     function test_missingContextReverts() public {

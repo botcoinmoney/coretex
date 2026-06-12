@@ -87,7 +87,6 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
     error ZeroPatchHash();
     error NoOpAdvance();
     error FinalRootMismatch();
-    error MiningContractAlreadySet();
 
     constructor(address initialOwner, address initialCoordinator) Ownable(initialOwner) {
         if (initialOwner == address(0)) revert ZeroAddress();
@@ -119,9 +118,9 @@ contract CoreTexRegistry is Ownable, Pausable, ReentrancyGuard {
 
     function setBotcoinMiningV4(address miningContract) external onlyOwner {
         if (miningContract == address(0)) revert ZeroAddress();
-        if (botcoinMiningV4 != address(0)) revert MiningContractAlreadySet();
+        address oldMiningContract = botcoinMiningV4;
         botcoinMiningV4 = miningContract;
-        emit BotcoinMiningV4Updated(address(0), miningContract);
+        emit BotcoinMiningV4Updated(oldMiningContract, miningContract);
     }
 
     function liveStateRoot(uint64 epoch) public view returns (bytes32) {

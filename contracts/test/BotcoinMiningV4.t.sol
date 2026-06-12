@@ -1174,6 +1174,44 @@ contract BotcoinMiningV4Test is Test {
         assertEq(v4.coreTexScreenerPassesByMiner(EPOCH, minerB), 1, "failed must not bump");
     }
 
+    function test_coreTexPatchDedupIgnoresOutcome() public {
+        bytes memory patchBytes = _patch(PARENT, 5, 384);
+        bytes32 patchHash = _patchHash(patchBytes);
+
+        BotcoinMiningV4.CoreTexReceipt memory screener = _screener(minerB, 0, bytes32(0), 0, patchHash);
+        _signCoreTex(screener, minerB);
+        vm.prank(minerB);
+        v4.submitCoreTexReceipt(screener);
+
+        BotcoinMiningV4.CoreTexReceipt memory advance =
+            _stateAdvance(minerB, 1, v4.lastReceiptHash(minerB), 1, PARENT, CHILD1, patchHash, patchBytes, 30_000);
+        _signCoreTex(advance, minerB);
+        vm.prank(minerB);
+        vm.expectRevert(BotcoinMiningV4.DuplicateCoreTexPatch.selector);
+        v4.submitCoreTexReceipt(advance);
+    }
+
+    function test_coreTexReceiptsRejectWhileRegistryPaused() public {
+        registry.pause();
+
+        BotcoinMiningV4.CoreTexReceipt memory screener = _screener(minerB, 0, bytes32(0), 0, _hash("paused-screen"));
+        _signCoreTex(screener, minerB);
+        vm.prank(minerB);
+        vm.expectRevert(BotcoinMiningV4.InvalidCoreTexRoot.selector);
+        v4.submitCoreTexReceipt(screener);
+
+        bytes memory patchBytes = _patch(PARENT, 5, 384);
+        BotcoinMiningV4.CoreTexReceipt memory advance =
+            _stateAdvance(minerB, 0, bytes32(0), 0, PARENT, CHILD1, _patchHash(patchBytes), patchBytes, 30_000);
+        _signCoreTex(advance, minerB);
+        vm.prank(minerB);
+        vm.expectRevert(BotcoinMiningV4.InvalidCoreTexRoot.selector);
+        v4.submitCoreTexReceipt(advance);
+
+        assertEq(v4.qualifiedScreenerPassesSinceLastStateAdvance(EPOCH), 0);
+        assertEq(v4.credits(EPOCH, minerB), 0);
+    }
+
     // ── Audit finding #18: native-staking switch path (StakeMode) ──
     //
     // Launch runs StakeMode.ExternalV3 (the V3-backed source). NativeV4 is a
@@ -1183,9 +1221,9 @@ contract BotcoinMiningV4Test is Test {
     //   * effectiveStakeMode(epochId) flips to the scheduled mode as soon as
     //     epochId >= scheduledStakeModeEffectiveEpoch — i.e. BEFORE finalize,
     //     while stakeModeSwitchScheduled is still true.
-    //   * finalizeStakeModeSwitch: callable only once currentEpoch has reached
-    //     the scheduled epoch (`currentEpoch < effectiveEpoch` reverts); it has
-    //     NO access-control gate (any caller may finalize) — asserted below.
+    //   * finalizeStakeModeSwitch: owner/policyAdmin only, and callable only
+    //     once currentEpoch has reached the scheduled epoch
+    //     (`currentEpoch < effectiveEpoch` reverts).
 
     function test_stakeModeLaunchDefaultReadsV3Source() public view {
         // Launch behavior: ExternalV3 at the current epoch, all stake/tier/
@@ -1210,6 +1248,17 @@ contract BotcoinMiningV4Test is Test {
         assertTrue(v4.isEligible(minerA));
         assertEq(v4.tierCreditsOf(minerA), 520);
         assertEq(v4.withdrawableAt(minerA), v3.withdrawableAt(minerA));
+    }
+
+    function test_nativeStakeDisabledWhileExternalV3ModeActive() public {
+        assertEq(uint8(v4.effectiveStakeMode(v4.currentEpoch())), uint8(BotcoinMiningV4.StakeMode.ExternalV3));
+        token.mint(minerA, 100 ether);
+        vm.prank(minerA);
+        token.approve(address(v4), 100 ether);
+        vm.prank(minerA);
+        vm.expectRevert(BotcoinMiningV4.NotEligible.selector);
+        v4.stake(100 ether);
+        assertEq(v4.nativeStakedAmount(minerA), 0);
     }
 
     function test_scheduleStakeModeSwitchAuthAndFutureEpochGuard() public {
@@ -1282,11 +1331,11 @@ contract BotcoinMiningV4Test is Test {
         vm.expectRevert(BotcoinMiningV4.InvalidStakeModeSwitch.selector);
         v4.finalizeStakeModeSwitch();
 
-        // AT the scheduled epoch finalize succeeds. NOTE: finalizeStakeModeSwitch
-        // has NO access-control check in the source — any caller may finalize.
-        // Prove that with a non-owner, non-policyAdmin caller.
+        // AT the scheduled epoch non-authorized callers still cannot finalize.
         vm.warp(GENESIS + uint256(EPOCH + 2) * 1 days + 1);
         vm.prank(minerB);
+        vm.expectRevert(BotcoinMiningV4.NotAuthorized.selector);
+        v4.finalizeStakeModeSwitch();
         v4.finalizeStakeModeSwitch();
 
         assertEq(uint8(v4.stakeMode()), uint8(BotcoinMiningV4.StakeMode.NativeV4));
