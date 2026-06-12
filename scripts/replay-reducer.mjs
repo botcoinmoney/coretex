@@ -44,10 +44,10 @@
  *   Sort patches by (-scoreDelta, +wordCount, +patchHash) then apply greedily,
  *   skipping target-overlap (R01) and marginal-gain-below-threshold (R02).
  *
- * Phase 4 dependency: the marginal evaluator (real score formula) is STUBBED.
- * TODO(phase-4): Replace stubMarginalEvaluator with CoreTex pre-launch evaluator.
- * Until then, marginal gain = declared scoreDelta (conservative: no semantic
- * conflict detection beyond explicit threshold).
+ * Marginal evaluator: declared scoreDelta (matches the coordinator reducer's
+ * offline default — conservative: it cannot invent a pass, and semantic
+ * conflicts beyond the explicit threshold are not detected). The live lane
+ * never uses this path; production scoring is coordinator/production-evaluator.
  */
 
 import { createHash } from 'node:crypto';
@@ -133,11 +133,26 @@ function computePatchSetRoot(acceptedBytes) {
   return keccak256(leafBuf);
 }
 
+// ── Canonical patchHash (domain-prefixed) ────────────────────────────────────
+// Mirrors packages/cortex/src/eval/seed-derivation.ts computePatchHash:
+// keccak256('coretex-patch-hash-v1' || patchBytes). The raw un-prefixed
+// keccak256(patchBytes) is NOT the canonical patch id — using it for the
+// sort tiebreak would diverge from the coordinator reducer on equal-score,
+// equal-size patch sets.
+const PATCH_HASH_DOMAIN_PREFIX = 'coretex-patch-hash-v1';
+function computePatchHash(patchBytes) {
+  const prefix = new TextEncoder().encode(PATCH_HASH_DOMAIN_PREFIX);
+  const buf = new Uint8Array(prefix.length + patchBytes.length);
+  buf.set(prefix, 0);
+  buf.set(patchBytes, prefix.length);
+  return bytesToHex(keccak256(buf));
+}
+
 // ── Marginal evaluator stub ───────────────────────────────────────────────────
 /**
- * TODO(phase-4): Replace with the real CoreTex pre-launch evaluator.
- * Currently returns the patch's declared scoreDelta unchanged.
- * This is conservative: no semantic-conflict detection beyond threshold checks.
+ * Returns the patch's declared scoreDelta unchanged (the offline-reducer
+ * convention; see header). Conservative: no semantic-conflict detection
+ * beyond threshold checks.
  */
 function stubMarginalEvaluator(_currentWords, scoreDelta) {
   return scoreDelta;
@@ -148,7 +163,7 @@ function reduce(parentStateWords, events, threshold) {
   // Build reducer inputs from on-chain events
   const patches = events.map(ev => {
     const patchBytes = hexToBytes(ev.compactPatchBytesHex);
-    const patchHashHex = bytesToHex(keccak256(patchBytes));
+    const patchHashHex = computePatchHash(patchBytes);
     return {
       patchHashHex,
       patchBytes,

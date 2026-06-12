@@ -93,6 +93,7 @@ const window = allReceiptFiles.slice(0, windowReceipts);
 const canaryScores = []; // per-receipt canary-score in ppm
 const gateConfirmGaps = []; // per-receipt |gate - confirm| in ppm
 const minerCounts = Object.create(null);
+let skippedReceipts = 0;
 
 for (const file of window) {
   try {
@@ -112,7 +113,10 @@ for (const file of window) {
     minerCounts[miner] = (minerCounts[miner] ?? 0) + 1;
   } catch (e) {
     // Skip unreadable receipts but don't abort — a corrupted one-off
-    // shouldn't silence the watchdog.
+    // shouldn't silence the watchdog. Systemic corruption is alarmed on
+    // below: unbounded silent skips could drive the canary sample under
+    // the alarm floor and mute the watchdog entirely.
+    skippedReceipts += 1;
     console.error(`canary-watchdog: skipping unreadable receipt ${file}: ${e.message}`);
   }
 }
@@ -138,6 +142,18 @@ const gateConfirmGapMean = mean(gateConfirmGaps);
 const gateConfirmGapStd = stddev(gateConfirmGaps, gateConfirmGapMean);
 
 const alarms = [];
+// Receipt-read failures above a small tolerance are themselves an alarm:
+// an adversary (or a corrupting host) writing unparseable receipts must
+// page the operator, not mute the canary by starving its sample.
+const skipTolerance = Math.max(2, Math.floor(window.length * 0.1));
+if (skippedReceipts > skipTolerance) {
+  alarms.push({
+    kind: 'receipt-read-failures',
+    skippedReceipts,
+    receiptsInWindow: window.length,
+    tolerance: skipTolerance,
+  });
+}
 if (canaryScores.length >= 10 && driftSigma > sigmaThreshold) {
   alarms.push({
     kind: 'canary-drift',
@@ -165,6 +181,7 @@ const report = {
   receiptsDir,
   windowReceipts,
   observedReceipts: window.length,
+  skippedReceipts,
   sigmaThreshold,
   baseline: { ppm: baselinePpm, stdDev: baselineStdDev },
   canary: { count: canaryScores.length, mean: canaryMean, stdDev: canaryStd },

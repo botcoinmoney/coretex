@@ -27,6 +27,7 @@ import {
 
 const C = await import(distIndex);
 const {
+  canonicalJson,
   RANGES,
   DEFAULT_CORETEX_WORK_POLICY,
   biEncoderModelIdHash,
@@ -45,11 +46,7 @@ function flag(name, fb) {
 }
 const has = (name) => argv.includes(`--${name}`);
 const shaFile = (path) => '0x' + createHash('sha256').update(readFileSync(resolve(repoRoot, path))).digest('hex');
-function canonicalJson(v) {
-  if (v === null || typeof v !== 'object') return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
-  return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`;
-}
+// canonicalJson: the package's single canonical serializer (canonical/json.ts).
 const queryPackRoot = (pack) => '0x' + createHash('sha256').update(pack.events.map((e) => e.id).sort().join('\n')).digest('hex');
 
 const DEFAULT_ARTIFACT_MANIFEST = 'release/calibration/2026-06-04-memory-atom-v16/coretex-launch-v16-artifacts.json';

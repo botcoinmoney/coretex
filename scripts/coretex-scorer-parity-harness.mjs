@@ -44,6 +44,7 @@ import { calibrationProvenance } from './lib/calibration-provenance.mjs';
 
 const C = await import(distIndex);
 const {
+  canonicalJson,
   RANGES,
   DEFAULT_CORETEX_WORK_POLICY,
   biEncoderModelIdHash,
@@ -125,11 +126,7 @@ const FIXED = Object.freeze({
 
 // ─── Hashing helpers (match recalibrate-baseline canonicalization) ───────────
 const shaFile = (path) => '0x' + createHash('sha256').update(readFileSync(resolve(repoRoot, path))).digest('hex');
-function canonicalJson(v) {
-  if (v === null || typeof v !== 'object') return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
-  return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`;
-}
+// canonicalJson: the package's single canonical serializer (canonical/json.ts).
 const queryPackRoot = (pack) => '0x' + createHash('sha256').update(pack.events.map((e) => e.id).sort().join('\n')).digest('hex');
 const u8ToHex = (u8) => '0x' + Buffer.from(u8).toString('hex');
 

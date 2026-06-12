@@ -41,6 +41,20 @@ class RANGES:
     RESERVED_START: int = 992
     RESERVED_END: int = 1023
 
+    # r5 PolicyAtom regions (protocol epoch coretex-retrieval-v2-policy-r5).
+    # These OVERLAY the reclaimed words: r4 (lens) profiles read 384-671 as
+    # RetrievalKeys and 896-991 as Codebook; r5 (policy) profiles read them as
+    # typed PolicyAtoms. Mirrors state/types.ts RANGES (TS is the launch
+    # reference implementation; cortex-py is the dev-only cross-impl harness).
+    POLICY_EVIDENCE_START: int = 384
+    POLICY_EVIDENCE_END: int = 511
+    POLICY_CONFLICT_START: int = 512
+    POLICY_CONFLICT_END: int = 639
+    POLICY_ABSTENTION_START: int = 640
+    POLICY_ABSTENTION_END: int = 671
+    POLICY_RESERVED_START: int = 896
+    POLICY_RESERVED_END: int = 991
+
 
 class PATCH_TYPE:
     """Patch type codes from specs/patch_format.md."""
@@ -50,6 +64,7 @@ class PATCH_TYPE:
     RELATION_UPDATE: int = 0x04
     CODEBOOK_UPDATE: int = 0x05
     HEADER_UPDATE: int = 0x06
+    POLICY_UPDATE: int = 0x07  # r5 typed PolicyAtom write (evidence-bundle / conflict / abstention)
     MIXED: int = 0xFF
 
 

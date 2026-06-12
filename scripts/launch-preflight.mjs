@@ -88,9 +88,10 @@ for (const p of [CORPUS, EMB, PROFILE, BUNDLE]) {
 }
 
 // 1. git provenance (commit + dirty flag) — fingerprint captures actual file bytes, so dirty is allowed but recorded.
-const gitCommit = (() => { try { return execSync('git rev-parse HEAD', { cwd: repoRoot }).toString().trim(); } catch { return 'unknown'; } })();
-const dirty = (() => { try { return execSync('git status --porcelain', { cwd: repoRoot }).toString().trim().length > 0; } catch { return null; } })();
-console.log(`git ${gitCommit}${dirty ? ' (DIRTY — fingerprint pins actual bytes)' : ''}`);
+// A failed git probe must be VISIBLE: 'unknown'/null may never render as a clean tree.
+const gitCommit = (() => { try { return execSync('git rev-parse HEAD', { cwd: repoRoot }).toString().trim(); } catch (e) { console.error(`WARN: git commit unavailable (${e.message}) — provenance degraded`); return 'unknown'; } })();
+const dirty = (() => { try { return execSync('git status --porcelain', { cwd: repoRoot }).toString().trim().length > 0; } catch (e) { console.error(`WARN: git dirty-check unavailable (${e.message})`); return null; } })();
+console.log(`git ${gitCommit}${dirty === null ? ' (dirty state UNKNOWN — git probe failed)' : dirty ? ' (DIRTY — fingerprint pins actual bytes)' : ''}`);
 
 // 2. profile/bundle/corpus load + bundle verification (the runtime-attested set).
 const profile = JSON.parse(readFileSync(resolve(repoRoot, PROFILE), 'utf8'));

@@ -58,49 +58,68 @@ const famById = new Map(evalHidden.map((e) => [e.id, e.logicalFamily ?? e.family
 const fr = makeEpochFrontier({ evalHiddenIds: evalHidden.map((e) => e.id), familyOf: (id) => famById.get(id) ?? 'unknown', mode: 'C3', activeWindow: 30, seed: 'baseline-e2e', minChurn: 4, maxChurn: 12, headroomLowWatermark: 1, headroomHighWatermark: 3, targetAccepts: 2, expectedYieldPerUnit: 0.17, maxRootDeltaPerEpoch: 24 });
 
 const seedHex = '0x' + createHash('sha256').update('baseline-e2e').digest('hex');
-// full-corpus pack (scorer retrieves over full corpus); then restrict the SCORED queries to the active frontier
-const fullPack = deriveQueryPack(0, seedHex, corpus, { ...profile.hiddenPack, packSize: 64, quotas: [] });
-const activePackFor = (activeIds) => ({ ...fullPack, events: fullPack.events.filter((e) => activeIds.has(e.id)) });
+// Derive the scored pack FROM the active frontier: eval_hidden is restricted to
+// the active ids before pack derivation, so the scored set follows the frontier.
+// (The previous form derived 64 queries over the FULL corpus and then filtered
+// by a 30-event active window — the intersection was empty, so every "baseline"
+// here was the n=0 default and the gate scored nothing.)
+const activePackFor = (activeIds) => {
+  const restricted = { ...corpus, events: corpus.events.filter((e) => e.split !== 'eval_hidden' || activeIds.has(e.id)) };
+  return deriveQueryPack(0, seedHex, restricted, { ...profile.hiddenPack, packSize: Math.min(64, activeIds.size), quotas: [] });
+};
 
 let pass = true; const log = [];
 const check = (n, ok, d = '') => { log.push(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`); if (!ok) pass = false; };
+const requireNonEmpty = (name, pack) => { if (pack.events.length === 0) { console.error(`HARD FAIL: ${name} scored pack is empty — the gate would prove nothing`); exit(1); } };
 
 // epoch 0: frontier A
 const snapA = fr.stepEpoch(0, null, null);
 const packA = activePackFor(snapA.activeIds);
+requireNonEmpty('pack A', packA);
 const baselineA = await evaluateBaseline({ words: new Array(1024).fill(0n) }, corpus, packA, opts, { samples: 1 });
 
 // rotate: starve to force C3 replenishment → activeRoot B ≠ A
 const snapB = fr.stepEpoch(1, 0, 4);
 const packB = activePackFor(snapB.activeIds);
+requireNonEmpty('pack B', packB);
 const baselineB = await evaluateBaseline({ words: new Array(1024).fill(0n) }, corpus, packB, opts, { samples: 1 });
 
 check('1) activeRoot rotates (A ≠ B)', snapA.activeRoot !== snapB.activeRoot, `${snapA.activeRoot} → ${snapB.activeRoot}`);
-check('2) baseline B recomputed on rotated active pack', baselineB.parentScorePpm !== undefined && (packB.events.length !== packA.events.length || baselineB.parentScorePpm !== baselineA.parentScorePpm || true), `A=${baselineA.parentScorePpm}ppm (n=${packA.events.length}) B=${baselineB.parentScorePpm}ppm (n=${packB.events.length})`);
+const packAIds = new Set(packA.events.map((e) => e.id));
+const scoredPackRotated = packB.events.length !== packA.events.length || packB.events.some((e) => !packAIds.has(e.id));
+check('2) baseline B recomputed on rotated active pack', Number.isFinite(baselineB.parentScorePpm) && scoredPackRotated, `A=${baselineA.parentScorePpm}ppm (n=${packA.events.length}) B=${baselineB.parentScorePpm}ppm (n=${packB.events.length})`);
 
 // 3+4) next-epoch patch delta measured against baseline B
 const replayTol = profile.replayTolerancePpm;
 const minImpr = Number(profile.patchAcceptanceFloors.minImprovementPpm);
 const thresholdB = minImpr + baselineB.variancePpm + replayTol;
-// build a temporal honest patch and score it on packB
+// Build a temporal honest patch and score it on packB. Mining/scoring errors
+// propagate (uncaught → nonzero exit): a broken scorer must FAIL this gate,
+// never pass it. "No unit minable" is the one legitimate skip, and only via
+// the explicit zero-indices path below.
 const empty = { words: new Array(1024).fill(0n) };
-let patchDeltaVsB = null, patchDeltaVsA = null;
-try {
-  const patch = honestPatch({ state: empty, family: 'temporal', pack: packB, logicalQById, recordSlot: 0, skipDocIds: new Set() });
-  if (patch.indices.length > 0) {
-    const res = applyPatch(empty, patch);
-    if (res.ok) {
-      const patched = await evaluateRetrievalBenchmarkState(res.state, corpus, packB, opts);
-      const patchPpm = Math.round(patched.composite * 1_000_000);
-      patchDeltaVsB = patchPpm - baselineB.parentScorePpm;
-      patchDeltaVsA = patchPpm - baselineA.parentScorePpm;
-    }
+let patchDeltaVsB = null, patchDeltaVsA = null, patchFailure = null;
+const patch = honestPatch({ state: empty, family: 'temporal', pack: packB, logicalQById, recordSlot: 0, skipDocIds: new Set() });
+if (patch.indices.length > 0) {
+  const res = applyPatch(empty, patch);
+  if (!res.ok) {
+    patchFailure = `applyPatch failed: ${res.code ?? 'unknown'}`;
+  } else {
+    const patched = await evaluateRetrievalBenchmarkState(res.state, corpus, packB, opts);
+    const patchPpm = Math.round(patched.composite * 1_000_000);
+    patchDeltaVsB = patchPpm - baselineB.parentScorePpm;
+    patchDeltaVsA = patchPpm - baselineA.parentScorePpm;
   }
-} catch (e) { /* temporal mining may not apply on this pack subset */ }
+}
 check('3) acceptance threshold uses baseline B variance', Number.isFinite(thresholdB), `${minImpr} + ${baselineB.variancePpm} + ${replayTol} = ${thresholdB}`);
 check('4) patch delta is measured vs baseline B (the active comparison point)',
-  patchDeltaVsB === null || patchDeltaVsA === null || true,
-  patchDeltaVsB === null ? 'no temporal unit minable on this pack subset (delta semantics still: patchPpm - B.parentScorePpm)' : `Δ_vs_B=${patchDeltaVsB} vs Δ_vs_A=${patchDeltaVsA} (stale-baseline error would be ${patchDeltaVsB - patchDeltaVsA}ppm)`);
+  patchFailure === null && (patch.indices.length === 0
+    ? true
+    : Number.isFinite(patchDeltaVsB) && Number.isFinite(patchDeltaVsA)
+      && (patchDeltaVsB - patchDeltaVsA) === (baselineA.parentScorePpm - baselineB.parentScorePpm)),
+  patchFailure ?? (patch.indices.length === 0
+    ? 'no temporal unit minable on this pack subset (verified: honestPatch returned 0 indices; scoring errors propagate)'
+    : `Δ_vs_B=${patchDeltaVsB} vs Δ_vs_A=${patchDeltaVsA} (stale-baseline error would be ${patchDeltaVsB - patchDeltaVsA}ppm)`));
 
 // 5) difficulty: activeRootChanged-only → no grace; corpusRootChanged → grace
 const cp = controllerParamsFromProfile(profile, 3);

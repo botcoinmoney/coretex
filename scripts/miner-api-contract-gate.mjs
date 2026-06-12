@@ -33,7 +33,7 @@ const m = await import(distIndex);
 const {
   RANGES, PATCH_TYPE, encodePatch, decodePatch, validatePatchType, encodeRelationCategoryLens,
   merkleizeState, bytesToHex, keccak256, computeCoreTexScreenerThresholdPpm, DEFAULT_CORETEX_WORK_POLICY, applyPatch,
-  splitForRecord, rewardActiveSubstrateSurfaces,
+  splitForRecord, rewardActiveSubstrateSurfaces, canonicalJson,
 } = m;
 
 import { makeLaunchFrontier } from './lib/epoch-frontier.mjs';
@@ -57,23 +57,17 @@ if (artifactManifest.bundleHash && manifest.bundleHash !== artifactManifest.bund
   console.error(`FATAL: bundleHash drift ${manifest.bundleHash} != artifact manifest ${artifactManifest.bundleHash}`);
   exit(1);
 }
-let corpusMeta = {};
-let rawCorpus = null;
-try {
-  // API contract shape does not depend on qrels/embeddings; read raw metadata so this
-  // gate remains useful while stale pre-regen corpora intentionally fail scorer/linter gates.
-  const raw = JSON.parse(readFileSync(resolve(repoRoot, corpusPath), 'utf8'));
-  rawCorpus = raw;
-  corpusMeta = {
-    ...(Array.isArray(raw.docs) ? { docs: raw.docs.length } : {}),
-    ...(Array.isArray(raw.queries) ? { queries: raw.queries.length } : {}),
-    ...(Array.isArray(raw.events) ? { events: raw.events.length } : {}),
-    ...(raw.biEncoderModelId ? { biEncoderModelId: raw.biEncoderModelId } : {}),
-    ...(raw.biEncoderRevision ? { biEncoderRevision: raw.biEncoderRevision } : {}),
-  };
-} catch {
-  corpusMeta = { note: 'corpus metadata unavailable; contract shape only' };
-}
+// The logical corpus is mandatory on this path (activeFrontierRoot derivation
+// below hard-fails without it), so a read/parse failure surfaces directly
+// instead of being masked behind a "metadata unavailable" note.
+const rawCorpus = JSON.parse(readFileSync(resolve(repoRoot, corpusPath), 'utf8'));
+const corpusMeta = {
+  ...(Array.isArray(rawCorpus.docs) ? { docs: rawCorpus.docs.length } : {}),
+  ...(Array.isArray(rawCorpus.queries) ? { queries: rawCorpus.queries.length } : {}),
+  ...(Array.isArray(rawCorpus.events) ? { events: rawCorpus.events.length } : {}),
+  ...(rawCorpus.biEncoderModelId ? { biEncoderModelId: rawCorpus.biEncoderModelId } : {}),
+  ...(rawCorpus.biEncoderRevision ? { biEncoderRevision: rawCorpus.biEncoderRevision } : {}),
+};
 const corpusRoot = manifest.corpus?.root ?? profile.corpusRoot ?? '0x' + '00'.repeat(32);
 if (artifactManifest.corpusRoot && artifactManifest.corpusRoot.toLowerCase() !== corpusRoot.toLowerCase()) {
   console.error(`FATAL: corpusRoot drift ${corpusRoot} != artifact manifest ${artifactManifest.corpusRoot}`);
@@ -108,11 +102,8 @@ if (!activeFrontierRoot || /^0x0+$/.test(activeFrontierRoot)) { console.error('F
 const genesis = { words: new Array(1024).fill(0n) };
 const parentStateRoot = bytesToHex(merkleizeState(genesis));
 
-function canonicalJson(v) {
-  if (v === null || typeof v !== 'object') return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
-  return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`;
-}
+// canonicalJson is the package's single canonical serializer (canonical/json.ts);
+// the keccak hashJson composition below is this gate's own hash domain.
 const hashJson = (v) => bytesToHex(keccak256(new TextEncoder().encode(canonicalJson(v))));
 const profileHash = '0x' + createHash('sha256').update(canonicalJson(profile)).digest('hex');
 const artifactManifestHash = '0x' + createHash('sha256').update(readFileSync(resolve(repoRoot, artifactManifestPath))).digest('hex');

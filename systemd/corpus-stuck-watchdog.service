@@ -1,7 +1,0 @@
-[Unit]
-Description=CoreTex corpus stuck-process watchdog
-Documentation=file:///root/cortex/docs/CORETEX_LAUNCH_PLAN_v2.md
-
-[Service]
-Type=oneshot
-ExecStart=/root/cortex/scripts/corpus-stuck-watchdog.sh

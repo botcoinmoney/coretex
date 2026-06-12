@@ -12,6 +12,24 @@ CANON_BUNDLE=0x474cd8851eebd097a7f1480818c1ccdb0dd473c5da08cd6909b071ac8c101715
 CORPUS_SHA=5771438ded7b695682147c82dd86bfc2cdd430fdd6941be97e483f61534e58a8
 CDIR=release/calibration/2026-05-21-memory-corpus-v2
 
+# ── Stale-pin guard (fail-closed) ─────────────────────────────────────────────
+# This harness proves reproduction of SPECIFIC pinned artifacts. If the
+# canonical launch manifest has moved past these pins, a green result here
+# would prove the WRONG bundle. Refuse to run until the pins above
+# (CANON_BUNDLE / CORPUS_SHA / CDIR and the canonical roots) are re-derived
+# against the current launch artifacts.
+LAUNCH_MANIFEST=release/calibration/2026-06-04-memory-atom-v16/coretex-launch-v16-artifacts.json
+CANON_NOW=$(node -e "console.log(require('$SRC/$LAUNCH_MANIFEST').bundleHash)")
+if [ "$CANON_NOW" != "$CANON_BUNDLE" ]; then
+  echo "STALE PINS: this harness pins CANON_BUNDLE=$CANON_BUNDLE"
+  echo "but the canonical launch manifest ($LAUNCH_MANIFEST)"
+  echo "pins bundleHash=$CANON_NOW."
+  echo "Re-pin this script's CANON_* / CORPUS_SHA / CDIR constants to the current"
+  echo "launch artifacts before trusting this gate. Refusing to green-light a"
+  echo "superseded bundle."
+  exit 2
+fi
+
 echo "=== 1. fresh clone (tracked files only) ==="
 rm -rf "$DST"; git clone -q "$SRC" "$DST"; cd "$DST"
 echo "tracked corpus present in clone? $(ls $CDIR/dgen1-r5-synth-corpus.json 2>/dev/null && echo yes || echo 'NO (git-excluded → must fetch by hash)')"

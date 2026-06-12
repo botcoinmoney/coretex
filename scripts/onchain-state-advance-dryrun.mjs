@@ -30,6 +30,7 @@ import { makeLaunchFrontier } from './lib/epoch-frontier.mjs';
 
 const m = await import(distIndex);
 const {
+  canonicalJson,
   merkleizeState,
   bytesToHex,
   decodePatch,
@@ -85,12 +86,9 @@ const corpus = {
 };
 
 const hexToBytes = (h) => { const s = h.replace(/^0x/, ''); const o = new Uint8Array(s.length / 2); for (let i = 0; i < o.length; i++) o[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16); return o; };
-const kjson = (v) => bytesToHex(keccak256(new TextEncoder().encode(canonical(v))));
-function canonical(v) {
-  if (v === null || typeof v !== 'object') return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
-  return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}`;
-}
+// canonicalJson is the package's single canonical serializer (canonical/json.ts);
+// kjson (keccak over canonical bytes) is this drill's own hash composition.
+const kjson = (v) => bytesToHex(keccak256(new TextEncoder().encode(canonicalJson(v))));
 
 // the real state advance: the mixed-relation-conflict L4 vector
 const adv = fx.vectors.find((v) => v.name === 'mixed-relation-conflict');
@@ -113,7 +111,7 @@ if (!activeFrontierRoot || /^0x0+$/.test(activeFrontierRoot)) throw new Error('d
 const evalSeedHex = profile.baselineEvalSeedHex;
 const pack = deriveQueryPack(0, evalSeedHex, corpus, { ...hiddenPackProfileFromEvaluatorProfile(profile), packSize: 64, quotas: [] });
 const queryPackRoot = bytesToHex(keccak256(new TextEncoder().encode(pack.events.map((e) => e.id).sort().join('\n'))));
-const profileHash = '0x' + createHash('sha256').update(canonical(profile)).digest('hex');
+const profileHash = '0x' + createHash('sha256').update(canonicalJson(profile)).digest('hex');
 const artifactManifestHash = '0x' + createHash('sha256').update(readFileSync(resolve(repoRoot, artifactManifestPath))).digest('hex');
 const rerankerRevision = manifest.model?.reranker?.revision ?? null;
 const baselineManifest = {

@@ -1,6 +1,0 @@
-[Unit]
-Description=Cross-host corpus health check (this host + coretex-2)
-
-[Service]
-Type=oneshot
-ExecStart=/root/cortex/scripts/cross-host-health-check.sh
