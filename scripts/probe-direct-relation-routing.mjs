@@ -32,7 +32,7 @@ const {
   applyPatch,
   PATCH_TYPE,
 } = C;
-const { RANGES } = await import(resolve(repoRoot, 'packages/cortex/dist/state/types.js'));
+const { RANGES } = await import(resolve(repoRoot, 'packages/coretex/dist/state/types.js'));
 
 const argv = process.argv.slice(2);
 const flag = (n, d) => {

@@ -31,7 +31,7 @@ const {
   stableRecordIdFor, encodeMemoryIndexSlot, encodePolicyAtom, decodeSubstrate, parseQueryRelationIntent,
   POLICY_SELECTOR, POLICY_EVIDENCE_FEATURE,
 } = C;
-const { RANGES } = await import(resolve(repoRoot, 'packages/cortex/dist/state/types.js'));
+const { RANGES } = await import(resolve(repoRoot, 'packages/coretex/dist/state/types.js'));
 
 const argv = process.argv.slice(2);
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };

@@ -54,7 +54,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 // ── Inline Keccak-256 (matches EVM keccak256, NOT NIST SHA-3) ─────────────────
-// Identical implementation to packages/cortex/src/state/keccak256.ts
+// Identical implementation to packages/coretex/src/state/keccak256.ts
 function keccak256(data) {
   const RC = [
     [0x00000000,0x00000001],[0x00000000,0x00008082],[0x80000000,0x0000808A],[0x80000000,0x80008000],
@@ -134,7 +134,7 @@ function computePatchSetRoot(acceptedBytes) {
 }
 
 // ── Canonical patchHash (domain-prefixed) ────────────────────────────────────
-// Mirrors packages/cortex/src/eval/seed-derivation.ts computePatchHash:
+// Mirrors packages/coretex/src/eval/seed-derivation.ts computePatchHash:
 // keccak256('coretex-patch-hash-v1' || patchBytes). The raw un-prefixed
 // keccak256(patchBytes) is NOT the canonical patch id — using it for the
 // sort tiebreak would diverge from the coordinator reducer on equal-score,

@@ -27,7 +27,7 @@
  *     --out /etc/coretex/bundle-manifest.json   # in-place rewrite OK
  *
  * Environment:
- *   CORETEX_BIENCODER_PYTHON=/opt/cortex-venv/bin/python (or .venv/bin/python)
+ *   CORETEX_BIENCODER_PYTHON=/opt/coretex-venv/bin/python (or .venv/bin/python)
  *   CORETEX_RERANKER_PYTHON=…
  *   HF_HUB_CACHE=/var/lib/coretex/model-cache
  *   HF_HUB_OFFLINE=1
@@ -54,7 +54,7 @@ import {
   memReranker4BManifest,
   verifyBundleManifest,
   hiddenPackProfileFromEvaluatorProfile,
-} from '@botcoin/cortex';
+} from '@botcoin/coretex';
 
 function flag(name, fb) {
   const i = argv.indexOf(`--${name}`);
@@ -68,7 +68,7 @@ const evalSeedHex = flag('eval-seed-hex');
 const epochId = Number(flag('epoch-id', '0'));
 const samples = Number(flag('samples', '1'));
 const outPath = flag('out', bundlePath);
-const repoRoot = flag('repo-root', '/root/cortex');
+const repoRoot = flag('repo-root', '/root/coretex');
 
 if (!bundlePath || !corpusPath || !evalSeedHex) {
   console.error('pin-baseline-into-bundle: --bundle-manifest, --corpus, --eval-seed-hex required');

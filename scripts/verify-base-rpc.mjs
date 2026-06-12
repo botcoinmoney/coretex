@@ -23,7 +23,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { argv, exit } from 'node:process';
 
-import { createBaseRpcClient } from '@botcoin/cortex';
+import { createBaseRpcClient } from '@botcoin/coretex';
 
 function flag(name, fallback) {
   const i = argv.indexOf(`--${name}`);

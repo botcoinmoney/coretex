@@ -220,7 +220,7 @@ check('A2.b) screener threshold is state-threshold-coupled',
   `screener=${screenerThresholdPpm} floor=${minScreenerFromState} state=${stateAdvanceThresholdPpm}`);
 
 // A3) Canonical v0 route surface — exactly 5 endpoints. The production router (CORETEX_ENDPOINTS
-// in packages/cortex/src/coordinator/endpoints.ts) MUST match this set, and removed routes MUST
+// in packages/coretex/src/coordinator/endpoints.ts) MUST match this set, and removed routes MUST
 // NOT reappear. The gate fails the build if either condition is violated.
 const CANONICAL_V0_ROUTES = [
   'GET /coretex/health',

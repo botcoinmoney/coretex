@@ -3,7 +3,7 @@
 # Pre-flight (GPU + CUDA python + tiny smoke) → provenance manifest → bounded cap sweep
 # {8,16,32,64,128} OFF(stage1) vs ON(substrate-routed) via the production scorer → verify → cleanup.
 set -uo pipefail
-cd /workspace/cortex
+cd /workspace/coretex
 
 # Corpus-parametric (default P0). Override: CORPUS_PATH, EMB_PATH, PACK, TAG, CAPS.
 CORPUS_PATH="${CORPUS_PATH:-release/calibration/2026-05-21-memory-corpus-v2/p0-corpus.json}"
@@ -53,7 +53,7 @@ PY
 
 echo "### 4. provenance manifest"
 GIT_SHA=$(git rev-parse HEAD)
-DIST_HASH=$(sha256sum packages/cortex/dist/index.js | cut -d' ' -f1)
+DIST_HASH=$(sha256sum packages/coretex/dist/index.js | cut -d' ' -f1)
 cat > "$MAN" <<JSON
 {
   "run": "layer6-cap-sweep", "date": "$(date -u +%FT%TZ)",

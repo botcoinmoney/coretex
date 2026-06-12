@@ -32,7 +32,7 @@ import {
   rerankerFromEnv,
   biEncoderFromEnv,
   biEncoderModelIdHash,
-} from '@botcoin/cortex';
+} from '@botcoin/coretex';
 
 function flag(name, fallback) {
   const i = argv.indexOf(`--${name}`);

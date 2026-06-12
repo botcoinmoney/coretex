@@ -52,7 +52,7 @@ import { argv, exit } from 'node:process';
 
 import {
   loadProductionCorpus,
-} from '@botcoin/cortex';
+} from '@botcoin/coretex';
 
 function flag(name, fallback) {
   const i = argv.indexOf(`--${name}`);

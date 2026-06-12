@@ -180,7 +180,7 @@ the source of truth.
 
 ## See also
 
-- `cortex_state.md` — field definitions and rejection error codes
+- `coretex_state.md` — field definitions and rejection error codes
 - `merkleization_spec.md` — computing `parentStateRoot`
 - `packing_spec.md` — word serialization
 - `docs/CORETEX_V4_ONCHAIN_RANDOMNESS_PLAN.md` — per-patch eval-seed derivation, dual-pack confirmation

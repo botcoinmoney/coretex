@@ -28,7 +28,7 @@ PROMPTS = [
 ]
 MODEL = "Qwen/Qwen3-Reranker-0.6B"
 REV = "e61197ed45024b0ed8a2d74b80b4d909f1255473"
-RUNNER = "/workspace/cortex/scripts/reranker_runner.py"
+RUNNER = "/workspace/coretex/scripts/reranker_runner.py"
 
 
 def make_request(pairs):

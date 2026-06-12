@@ -75,7 +75,7 @@ comes from open coordinator code, independent validator replay, public roots, si
 operator/governance response if validators expose cheating.
 **V1 path:** Bond-based or ZK scoring fraud proofs, tracked in Phase 9 release notes.
 
-### 11. `?lane=cortex` query-string routing
+### 11. `?lane=coretex` query-string routing
 **Rejected because:** Query-string lane selection creates a misroute risk where a deliberately or
 accidentally malformed query string could silently fall through to the SWCP handler. Cortex routing
 is path-prefix only: `/coretex/*` → coordinator upstream (nginx path-prefix routing). No

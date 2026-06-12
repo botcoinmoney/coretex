@@ -1,7 +1,7 @@
 # Substrate Retrieval Semantics — Packed-State Decoder
 
 Status: legacy companion spec. The canonical range table is
-`specs/cortex_state.md`; this document describes the retrieval decoder semantics
+`specs/coretex_state.md`; this document describes the retrieval decoder semantics
 and has been updated for the Tier-2/r5 layout.
 
 ## Scope
@@ -11,7 +11,7 @@ typed structures the production retrieval scorer reads. The contract layer
 (`CortexState.acceptTransition`) is agnostic to the byte semantics; this
 spec is the off-chain source of truth.
 
-Word-range constants are pinned in `packages/cortex/src/state/types.ts`
+Word-range constants are pinned in `packages/coretex/src/state/types.ts`
 (`RANGES`).
 
 ## Region map
@@ -26,7 +26,7 @@ Word-range constants are pinned in `packages/cortex/src/state/types.ts`
 | Codebook / r5 reserved | 896..991 | r4: 48 × 2 words; r5: reserved-zero |
 | Reserved        | 992..1023   | 32 words       |
 
-Header layout is unchanged from `cortex_state.md`.
+Header layout is unchanged from `coretex_state.md`.
 Reserved-word writes are forbidden by the contract (`E04 RESERVED_BIT_SET`).
 
 ## MemoryIndex slots

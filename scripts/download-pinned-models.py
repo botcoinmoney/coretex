@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Download pinned BGE-M3, Qwen3-Reranker-0.6B, and MemReranker-4B and verify
-per-file SHA-256 matches the bundle manifest in packages/cortex/src/bundle/index.ts.
+per-file SHA-256 matches the bundle manifest in packages/coretex/src/bundle/index.ts.
 
 Usage: download-pinned-models.py <cache-dir> <model-id>
 

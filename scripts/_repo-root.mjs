@@ -1,8 +1,8 @@
 /**
  * Resolves the CoreTex repo root, dist root, and dist entry path for
- * calibration scripts. Used in place of `/root/cortex` literals so the
- * harness works on any host (Vast `/workspace/cortex`, dev laptops, CI)
- * without silently importing a stale `/root/cortex` copy.
+ * calibration scripts. Used in place of `/root/coretex` literals so the
+ * harness works on any host (Vast `/workspace/coretex`, dev laptops, CI)
+ * without silently importing a stale `/root/coretex` copy.
  *
  * Resolution order:
  *   1. `CORETEX_REPO_ROOT` env var, when set.
@@ -18,7 +18,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const repoRoot = process.env.CORETEX_REPO_ROOT
   ? resolve(process.env.CORETEX_REPO_ROOT)
   : resolve(here, '..');
-export const distRoot = resolve(repoRoot, 'packages/cortex/dist');
+export const distRoot = resolve(repoRoot, 'packages/coretex/dist');
 export const distIndex = resolve(distRoot, 'index.js');
 export const distValidator = resolve(distRoot, 'validator.js');
 export const distBiEncoder = resolve(distRoot, 'eval/bi-encoder.js');

@@ -4,7 +4,7 @@
  * Single source of the resolved-state / public-structure feature extraction used by BOTH the exporter
  * (training data) and the eval harness (serve-time scorer lookup), so the IR a candidate carries at
  * train time is byte-identical to the IR it carries at serve time. Rendering is separate and owned by the
- * protocol renderer `renderMemoryIRDoc` (compiled from packages/cortex, imported by every JS consumer).
+ * protocol renderer `renderMemoryIRDoc` (compiled from packages/coretex, imported by every JS consumer).
  *
  * lifecycle is NOT computed here (it depends on resolved substrate vs corpus-smoke source) — the caller
  * passes the resolved lifecycle string. Every other field is a deterministic function of public corpus
@@ -65,7 +65,7 @@ export function buildMemoryIRContext(corpus) {
 
 /** Resolve event lifecycle (current/superseded) from a DECODED substrate's temporal records — the SAME
  * mapping the exporter and the eval harness use, so train-time and serve-time lifecycle agree. `decoded` is
- * `decodeSubstrate(state, {policyAtomsMode:true})`; `stableRecordIdFor` is the cortex helper. */
+ * `decodeSubstrate(state, {policyAtomsMode:true})`; `stableRecordIdFor` is the coretex helper. */
 export function resolvedLifecycleFromDecoded(decoded, docs, stableRecordIdFor) {
   const m = new Map();
   const recordIdToEvent = new Map();

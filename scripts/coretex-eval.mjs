@@ -80,7 +80,7 @@ if (!scoreOnly && !patchPath) fail('--patch is required (or pass --score-only)')
 if (patchPath && !existsSync(patchPath)) fail(`--patch not found: ${patchPath}`);
 
 const dist = distIndex;
-if (!existsSync(dist)) fail(`@botcoin/cortex dist not built: ${dist}`);
+if (!existsSync(dist)) fail(`@botcoin/coretex dist not built: ${dist}`);
 
 const {
   loadProductionCorpus,

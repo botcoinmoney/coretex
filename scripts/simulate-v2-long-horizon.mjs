@@ -374,7 +374,7 @@ for (let epoch = startEpoch; epoch <= epochs; epoch++) {
   console.error(`[v2-lh] ep ${epoch}/${epochs} frac=${frac} packN=${pack.events.length} thr=${acceptanceThresholdPpm} | honest ${honestAccepts}/${honestAttempts}(Δ${pcDelta}) rand ${randAccepts}/${randomProbes} hill ${hillAccepts}/${hillclimbProbes} | minImpr ${minImprBefore}→${Number(current)} [${reason}]`);
 }
 const gitSha = (() => { try { return execSync('git rev-parse --short HEAD', { cwd: repoRoot }).toString().trim(); } catch { return 'unknown'; } })();
-const distHash = (() => { try { return execSync('sha256sum packages/cortex/dist/eval/retrieval-benchmark.js', { cwd: repoRoot }).toString().trim().slice(0, 16); } catch { return 'unknown'; } })();
+const distHash = (() => { try { return execSync('sha256sum packages/coretex/dist/eval/retrieval-benchmark.js', { cwd: repoRoot }).toString().trim().slice(0, 16); } catch { return 'unknown'; } })();
 const dirtyTree = (() => { try { return execSync('git status --porcelain', { cwd: repoRoot }).toString().trim().length > 0; } catch { return null; } })();
 const mean = (xs) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
 const out = {

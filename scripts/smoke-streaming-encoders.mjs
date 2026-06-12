@@ -13,7 +13,7 @@ import {
   BGE_M3_DEFAULT_LAYOUT,
   BGE_M3_DEFAULT_REVISION,
   QWEN3_RERANKER_DEFAULT_REVISION,
-} from '@botcoin/cortex';
+} from '@botcoin/coretex';
 
 function ms() { return Number(process.hrtime.bigint() / 1_000_000n); }
 function checkSize(name, bytes, expected) {
@@ -29,7 +29,7 @@ async function biEncoderSmoke() {
     modelId: 'BAAI/bge-m3',
     revision: BGE_M3_DEFAULT_REVISION,
     layout: BGE_M3_DEFAULT_LAYOUT,
-    pythonBin: '/root/cortex/.venv/bin/python',
+    pythonBin: '/root/coretex/.venv/bin/python',
   });
   const tSpawned = ms();
   const probe1 = await encoder.encode([{ text: 'capital of France' }]);
@@ -70,7 +70,7 @@ async function rerankerSmoke(model, revision, label) {
   const reranker = createStreamingQwen3Reranker({
     model,
     revision,
-    pythonBin: '/root/cortex/.venv/bin/python',
+    pythonBin: '/root/coretex/.venv/bin/python',
     batchSize: 2,
     numThreads: 16,
   });

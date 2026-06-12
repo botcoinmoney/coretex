@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Re-pin source SHAs in a bundle manifest after a canonical-code change (e.g. tuning
- * packages/cortex/src/coordinator/epoch-frontier.ts during calibration). Updates the
+ * packages/coretex/src/coordinator/epoch-frontier.ts during calibration). Updates the
  * sha256 of every pinned file in substrate.{specs,implementation} + evaluator.files +
  * corpus.files + replay.snapshots, then recomputes bundleHash via the canonical
  * `withRecomputedBundleHash`. CORPUS content + bi-encoder/reranker pins are NOT
@@ -24,7 +24,7 @@ import { resolve, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import { argv, exit } from 'node:process';
 import { repoRoot } from './_repo-root.mjs';
-import { withRecomputedBundleHash } from '../packages/cortex/dist/bundle/index.js';
+import { withRecomputedBundleHash } from '../packages/coretex/dist/bundle/index.js';
 
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
 const IN = flag('in');

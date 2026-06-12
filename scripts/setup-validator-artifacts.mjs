@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Forwarding shim — the CANONICAL setup logic lives in the compiled
- * @botcoin/cortex CLI (packages/cortex/src/validator-setup-cli.ts →
+ * @botcoin/coretex CLI (packages/coretex/src/validator-setup-cli.ts →
  * dist/validator-setup-cli.js, bin `coretex-validator-setup`). This shim runs
  * it in repo-hydration mode: payloads land at their committed repo-relative
  * paths and the bundle manifest source-tree pins are verified.

@@ -244,7 +244,7 @@ const interpretation =
   `CONCLUSION: there is NO clean, additive routing headroom that a NEW substrate surface (query-conditioned routing / entity-coreference / provenance) would capture on top of the current composition — temporal is saturated, and the relation/near_collision residual is a corpus-validity + embedding-separability problem upstream/downstream of routing, not an admission-routing gap. Filling the reclaimable RetrievalKeys+Codebook words with a new routing region is LOW-VALUE; the residual is better spent on corpus validity (relation well-posedness) and the already-identified rerank/metric levers. Treat the high nominal residual as a flag to FIX THE CORPUS, not to open a new routing region.`;
 
 const gitSha = (() => { try { return execSync('git rev-parse --short HEAD', { cwd: repoRoot }).toString().trim(); } catch { return 'unknown'; } })();
-const distHash = (() => { try { return execSync('sha256sum packages/cortex/dist/eval/retrieval-benchmark.js', { cwd: repoRoot }).toString().trim().slice(0, 16); } catch { return 'unknown'; } })();
+const distHash = (() => { try { return execSync('sha256sum packages/coretex/dist/eval/retrieval-benchmark.js', { cwd: repoRoot }).toString().trim().slice(0, 16); } catch { return 'unknown'; } })();
 const dirtyTree = (() => { try { return execSync('git status --porcelain', { cwd: repoRoot }).toString().trim().length > 0; } catch { return null; } })();
 
 const report = {

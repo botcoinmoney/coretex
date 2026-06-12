@@ -41,7 +41,7 @@ import { dirname, resolve } from 'node:path';
 import { argv, env, exit } from 'node:process';
 import { createHash } from 'node:crypto';
 
-import { createStreamingQwen3Reranker } from '@botcoin/cortex';
+import { createStreamingQwen3Reranker } from '@botcoin/coretex';
 
 function flag(name, fb) {
   const i = argv.indexOf(`--${name}`);
@@ -110,7 +110,7 @@ console.log(`[audit] labeling reranker: ${labelingModelId}@${labelingRevision.sl
 const reranker = createStreamingQwen3Reranker({
   model: labelingModelId,
   revision: labelingRevision,
-  pythonBin: env.CORETEX_RERANKER_PYTHON ?? '/root/cortex/.venv/bin/python',
+  pythonBin: env.CORETEX_RERANKER_PYTHON ?? '/root/coretex/.venv/bin/python',
   batchSize: 8,
   numThreads: Number(env.RERANKER_NUM_THREADS ?? '16'),
 });

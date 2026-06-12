@@ -15,7 +15,7 @@ import {
   qwen3Reranker06BManifest,
   memReranker4BManifest,
   loadProductionCorpus,
-} from '@botcoin/cortex';
+} from '@botcoin/coretex';
 
 function flag(name, fallback) {
   const i = argv.indexOf(`--${name}`);

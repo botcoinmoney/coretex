@@ -32,7 +32,7 @@ jobs:
 
       - name: Verify tag matches client version constant
         run: |
-          CLIENT_VERSION=$(node -e "const fs=require('fs');const s=fs.readFileSync('packages/cortex/src/version.ts','utf8');const m=s.match(/CORTEX_CLIENT_VERSION\\s*=\\s*'([^']+)'/);if(!m)process.exit(1);process.stdout.write(m[1]);")
+          CLIENT_VERSION=$(node -e "const fs=require('fs');const s=fs.readFileSync('packages/coretex/src/version.ts','utf8');const m=s.match(/CORTEX_CLIENT_VERSION\\s*=\\s*'([^']+)'/);if(!m)process.exit(1);process.stdout.write(m[1]);")
           TAG_VERSION="${GITHUB_REF_NAME#coretex-v}"
           if [ "${CLIENT_VERSION}" != "${TAG_VERSION}" ]; then
             echo "tag/version mismatch: tag=${TAG_VERSION} client=${CLIENT_VERSION}"
@@ -43,15 +43,15 @@ jobs:
         run: |
           mkdir -p release-artifacts
           tar -czf release-artifacts/coretex-client-${GITHUB_REF_NAME}.tgz \
-            packages/cortex/dist \
-            packages/cortex/package.json \
-            packages/cortex/README.md
-          cp packages/cortex/dist/replay-cli.js release-artifacts/coretex-replay.js
-          cp packages/cortex/dist/cli.js release-artifacts/botcoin-cortex.js
+            packages/coretex/dist \
+            packages/coretex/package.json \
+            packages/coretex/README.md
+          cp packages/coretex/dist/replay-cli.js release-artifacts/coretex-replay.js
+          cp packages/coretex/dist/cli.js release-artifacts/botcoin-coretex.js
           node scripts/build-coretex-release-manifest.mjs release-artifacts
           sha256sum release-artifacts/coretex-client-${GITHUB_REF_NAME}.tgz \
             release-artifacts/coretex-replay.js \
-            release-artifacts/botcoin-cortex.js \
+            release-artifacts/botcoin-coretex.js \
             release-artifacts/coretex-release-manifest.json \
             > release-artifacts/SHA256SUMS.txt
 
@@ -63,6 +63,6 @@ jobs:
           files: |
             release-artifacts/coretex-client-${{ github.ref_name }}.tgz
             release-artifacts/coretex-replay.js
-            release-artifacts/botcoin-cortex.js
+            release-artifacts/botcoin-coretex.js
             release-artifacts/SHA256SUMS.txt
             release-artifacts/coretex-release-manifest.json

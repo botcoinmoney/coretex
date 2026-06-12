@@ -6,7 +6,7 @@ the same V4 receipt and claim path used by the broader BOTCOIN mining system.
 
 This document is a technical overview. Live miner parameters come from
 `/coretex/status`. Validator truth comes from Base RPC reads, `BotcoinMiningV4`,
-`CoreTexRegistry`, signed public artifacts, and the installed `@botcoin/cortex`
+`CoreTexRegistry`, signed public artifacts, and the installed `@botcoin/coretex`
 client.
 
 ## Contents
@@ -80,9 +80,9 @@ becoming a visible gradient.
 | Contracts | V4 verifies and settles receipts. The registry serializes CoreTex state advances and exposes epoch pins |
 | Validator client | Standalone CPU replay package that verifies roots and, after reveal, rescoring evidence |
 
-The package boundary matters. The default `@botcoin/cortex` entry point is the
-validator surface. Coordinator code is exposed through `@botcoin/cortex/coordinator`.
-Full internal exports live under `@botcoin/cortex/full`.
+The package boundary matters. The default `@botcoin/coretex` entry point is the
+validator surface. Coordinator code is exposed through `@botcoin/coretex/coordinator`.
+Full internal exports live under `@botcoin/coretex/full`.
 
 ## Corpus
 
@@ -320,11 +320,11 @@ artifact after rebundle, repin, and deploy.
 
 ## Validator Client
 
-The standalone validator package is `@botcoin/cortex`. It installs as its own
+The standalone validator package is `@botcoin/coretex`. It installs as its own
 validator client and defaults to CPU replay.
 
 ```bash
-npm install @botcoin/cortex
+npm install @botcoin/coretex
 ```
 
 Required environment:

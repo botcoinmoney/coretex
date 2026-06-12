@@ -27,7 +27,7 @@
  *   - Inner-batch honors `BIENCODER_INNER_BATCH` (default 64).
  *
  * Recommended local invocation (Ryzen 9 7950X / 32-thread / 124 GiB RAM):
- *   export CORETEX_BIENCODER_PYTHON=/root/cortex/.venv/bin/python
+ *   export CORETEX_BIENCODER_PYTHON=/root/coretex/.venv/bin/python
  *   export CORTEX_LOCAL_MODEL_CACHE=/var/lib/coretex/model-cache
  *   export HF_HUB_OFFLINE=1
  *   export BIENCODER_NUM_THREADS=8

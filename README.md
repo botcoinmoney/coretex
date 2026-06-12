@@ -37,7 +37,7 @@ Current high-level state:
 
 ## Canonical Architecture
 
-The active substrate layout is defined in `specs/cortex_state.md` and implemented by the V2 substrate decoder:
+The active substrate layout is defined in `specs/coretex_state.md` and implemented by the V2 substrate decoder:
 
 ```text
 Header:          32 words
@@ -49,21 +49,21 @@ Codebook:        96 words   static policy failed; reclaim candidate
 Reserved:        32 words
 ```
 
-`packages/cortex/src/substrate/retrieval-decoder.ts` is the canonical V2 retrieval decoder. `packages/cortex/src/decoder/index.ts`
+`packages/coretex/src/substrate/retrieval-decoder.ts` is the canonical V2 retrieval decoder. `packages/coretex/src/decoder/index.ts`
 still exists for legacy/raw compatibility and must not be treated as the current V2 MemoryIndex authority.
 
 ## Canonical Code Paths
 
 Core implementation:
 
-- `packages/cortex/src/eval/retrieval-benchmark.ts` — scorer, candidate routing, source attribution, Qwen scoring path.
-- `packages/cortex/src/substrate/retrieval-decoder.ts` — V2 substrate decode/encode helpers.
-- `packages/cortex/src/state/types.ts` — state ranges and constants.
-- `packages/cortex/src/state/validate.ts` — reserved-bit and cross-region validation.
-- `packages/cortex/src/bundle/index.ts` — evaluator profile schema and profile-to-runtime options.
-- `packages/cortex/src/rewards/difficulty.ts` — difficulty controller.
-- `packages/cortex/src/eval/reranker.ts` — reranker interface.
-- `packages/cortex/src/eval/hidden-query-pack.ts` — hidden query pack derivation.
+- `packages/coretex/src/eval/retrieval-benchmark.ts` — scorer, candidate routing, source attribution, Qwen scoring path.
+- `packages/coretex/src/substrate/retrieval-decoder.ts` — V2 substrate decode/encode helpers.
+- `packages/coretex/src/state/types.ts` — state ranges and constants.
+- `packages/coretex/src/state/validate.ts` — reserved-bit and cross-region validation.
+- `packages/coretex/src/bundle/index.ts` — evaluator profile schema and profile-to-runtime options.
+- `packages/coretex/src/rewards/difficulty.ts` — difficulty controller.
+- `packages/coretex/src/eval/reranker.ts` — reranker interface.
+- `packages/coretex/src/eval/hidden-query-pack.ts` — hidden query pack derivation.
 
 Canonical corpus/eval/mining scripts:
 
@@ -89,16 +89,16 @@ Canonical runway/calibration scripts:
 
 Primary tests for the current path:
 
-- `packages/cortex/test/unit/retrieval-decoder.test.mjs`
-- `packages/cortex/test/unit/temporal-capacity-crosslayer.test.mjs`
-- `packages/cortex/test/unit/controller-params-from-profile.test.mjs`
-- `packages/cortex/test/unit/v2-profile-scoring-options.test.mjs`
-- `packages/cortex/test/unit/difficulty.test.mjs`
-- `packages/cortex/test/unit/owner-scope-and-promotion.test.mjs`
-- `packages/cortex/test/unit/relation-qrels.test.mjs`
-- `packages/cortex/test/unit/evidence-policy.test.mjs`
-- `packages/cortex/test/unit/retrieval-benchmark.test.mjs`
-- `packages/cortex/test/unit/candidate-source-attribution.test.mjs`
+- `packages/coretex/test/unit/retrieval-decoder.test.mjs`
+- `packages/coretex/test/unit/temporal-capacity-crosslayer.test.mjs`
+- `packages/coretex/test/unit/controller-params-from-profile.test.mjs`
+- `packages/coretex/test/unit/v2-profile-scoring-options.test.mjs`
+- `packages/coretex/test/unit/difficulty.test.mjs`
+- `packages/coretex/test/unit/owner-scope-and-promotion.test.mjs`
+- `packages/coretex/test/unit/relation-qrels.test.mjs`
+- `packages/coretex/test/unit/evidence-policy.test.mjs`
+- `packages/coretex/test/unit/retrieval-benchmark.test.mjs`
+- `packages/coretex/test/unit/candidate-source-attribution.test.mjs`
 
 Run the standard suite with:
 

@@ -9,7 +9,7 @@
  * Two distinct mechanisms could explain a pass:
  *
  *   (i)  The derive-from-corpus fallback in `evaluateRetrievalBenchmarkState`
- *        (`packages/cortex/src/eval/retrieval-benchmark.ts:2456-2465`) populates
+ *        (`packages/coretex/src/eval/retrieval-benchmark.ts:2456-2465`) populates
  *        `policyEntityRegistry` from `corpus.entities` when admission requires
  *        one and none was injected. This is the CORRECT mechanism.
  *

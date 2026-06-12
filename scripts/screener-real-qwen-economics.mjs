@@ -56,7 +56,7 @@
  * Driver (separate process, spawned by the parent orchestrator):
  *   scripts/screener-real-qwen-miner-driver.mjs — wraps a Claude Sonnet subagent that gets
  *   ONLY the skill file + COORDINATOR_URL + wallet env. The subagent has no read access to
- *   this script, the launch profile, or any internal cortex source.
+ *   this script, the launch profile, or any internal coretex source.
  */
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';

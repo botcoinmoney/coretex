@@ -3,7 +3,7 @@
 # Proves a clean checkout — tracked files only, NO warmed calibration scratch — can build, fetch the
 # corpus by checksum, verify the bundle, and reproduce the canonical pinned roots/bundleHash.
 set -euo pipefail
-SRC=/root/cortex
+SRC=/root/coretex
 DST=${1:-/tmp/cx-freshclone}
 CANON_GENESIS=0xe026cc5a4aed3c22a58cbd3d2ac754c9352c5436f638042dca99034e83636516
 CANON_TEMPORAL=0x04d107ad97465d9fbdb448d4ff2d21131bf2ee38ce72de641b7c17dedec72146
@@ -36,10 +36,10 @@ echo "tracked corpus present in clone? $(ls $CDIR/dgen1-r5-synth-corpus.json 2>/
 
 echo "=== 2. install deps (symlink the workspace node_modules; no warmed calibration state) ==="
 ln -s "$SRC/node_modules" node_modules
-ln -s "$SRC/packages/cortex/node_modules" packages/cortex/node_modules 2>/dev/null || true
+ln -s "$SRC/packages/coretex/node_modules" packages/coretex/node_modules 2>/dev/null || true
 
 echo "=== 3. build from source ==="
-npm run build --prefix packages/cortex 2>&1 | tail -1
+npm run build --prefix packages/coretex 2>&1 | tail -1
 
 echo "=== 4. corpus-INDEPENDENT gates reproduce pinned roots (tracked files only) ==="
 G=$(node scripts/state-root-vectors.mjs 2>&1)

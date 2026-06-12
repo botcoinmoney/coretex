@@ -21,11 +21,11 @@ import {
   createStreamingQwen3Reranker,
   BGE_M3_DEFAULT_LAYOUT,
   BGE_M3_DEFAULT_REVISION,
-} from '@botcoin/cortex';
+} from '@botcoin/coretex';
 import { argv } from 'node:process';
 
 const MEMRERANKER_REVISION = '7fe33c1385f652f52d370b8822d6b620b32b6ec4';
-const PYTHON = '/root/cortex/.venv/bin/python';
+const PYTHON = '/root/coretex/.venv/bin/python';
 
 function flag(name, fallback) {
   const i = argv.indexOf(`--${name}`);

@@ -14,7 +14,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { withRecomputedBundleHash } from '../packages/cortex/dist/bundle/index.js';
+import { withRecomputedBundleHash } from '../packages/coretex/dist/bundle/index.js';
 
 function flag(name) {
   const i = process.argv.indexOf(name);

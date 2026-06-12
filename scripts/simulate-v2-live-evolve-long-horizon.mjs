@@ -62,7 +62,7 @@ const {
   encodePolicyAtom, POLICY_SELECTOR, POLICY_EVIDENCE_FEATURE,
   merkleizeState, decodeSubstrate, stableRecordIdFor,
   // CANONICAL: live-update logical-delta → production additions bridge. The harness used to
-  // inline this 50-line mapping; it now lives in packages/cortex/src/corpus/logical-delta-bridge.ts.
+  // inline this 50-line mapping; it now lives in packages/coretex/src/corpus/logical-delta-bridge.ts.
   bridgeLogicalDeltaToProductionEvents,
 } = C;
 
@@ -2026,7 +2026,7 @@ for (let epoch = 1; epoch <= EPOCHS; epoch++) {
   if (!ld.addedDocs.length) { console.warn(`[live-evolve] epoch ${epoch}: no churn signal at fraction=${CHURN_FRACTION}; skipping`); continue; }
 
   // CANONICAL: bridge the logical delta into production additions via
-  // bridgeLogicalDeltaToProductionEvents (packages/cortex/src/corpus/logical-delta-bridge.ts).
+  // bridgeLogicalDeltaToProductionEvents (packages/coretex/src/corpus/logical-delta-bridge.ts).
   // The harness owns ONLY the Python embedding step; the package owns the mapping.
   const docVecs = MOCK_EMBEDDINGS
     ? ld.addedDocs.map((_, i) => mockVec(epoch * 1000 + i))

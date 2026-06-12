@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CoreTex real-Qwen calibration campaign — runs ON the A100 under /workspace/cortex.
+# CoreTex real-Qwen calibration campaign — runs ON the A100 under /workspace/coretex.
 # Fail-fast (set -euo pipefail): any track failure stops the campaign IMMEDIATELY.
 # By default every track is fresh — existing prior outputs are DELETED (NOT quarantined) so no
 # stale artifact can be mistaken for current-bundle evidence. Pass --resume to keep outputs
@@ -49,7 +49,7 @@ while [ $# -gt 0 ]; do
 done
 [ -z "$SCALE" ] && { echo "HARD FAIL: scale required (100k|300k)" >&2; exit 1; }
 
-cd /workspace/cortex
+cd /workspace/coretex
 CORPUS_DIR=release/calibration/2026-05-21-memory-corpus-v2
 C=${CORPUS_OVERRIDE:-$CORPUS_DIR/dgen1-r5-synth-$SCALE-final-corpus.json}
 E=${EMB_OVERRIDE:-$CORPUS_DIR/dgen1-r5-synth-$SCALE-final-embeddings.json}
@@ -84,7 +84,7 @@ REFERENCED_SCRIPTS=(
   scripts/lib/load-materialized-corpus.mjs
   scripts/_embed-v2.mjs
   scripts/reranker_runner.py
-  packages/cortex/scripts/reranker_runner.py
+  packages/coretex/scripts/reranker_runner.py
   scripts/bi_encoder_runner.py
 )
 echo "=== gate1: script-presence + syntax checks ==="

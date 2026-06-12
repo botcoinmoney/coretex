@@ -7,10 +7,10 @@ import {
   bgeM3DenseManifest,
   qwen3Reranker06BManifest,
   memReranker4BManifest,
-} from '@botcoin/cortex';
+} from '@botcoin/coretex';
 
 const PLACEHOLDER_CORPUS_ROOT = '0x' + '00'.repeat(32);
-const repoRoot = '/root/cortex';
+const repoRoot = '/root/coretex';
 
 const manifest = buildBundleManifest({
   repoRoot,

@@ -6,7 +6,7 @@
  * activeFrontierRoot/profileHash) that every result artifact MUST embed and that the A100 side must
  * reproduce byte-identically before any calibration/economics run.
  *
- * Discipline: the canonical /root/cortex launch tree is the authority; A100 is compute only; no
+ * Discipline: the canonical /root/coretex launch tree is the authority; A100 is compute only; no
  * standalone reimplementation of launch policy. Any mismatch is a hard stop.
  *
  * Usage:
@@ -65,10 +65,10 @@ console.log(`corpus:  ${CORPUS}`);
 // 0. HARD-FAIL on missing fingerprint roots before doing anything expensive. Silent skip used to
 //    let parity runs proceed with under-counted file walks; now any missing root is an instant stop.
 const FINGERPRINT_ROOTS = [
-  'packages/cortex/dist',
-  'packages/cortex/src',
-  'packages/cortex/scripts',
-  'packages/cortex-py/cortex_py',
+  'packages/coretex/dist',
+  'packages/coretex/src',
+  'packages/coretex/scripts',
+  'packages/coretex-py/coretex_py',
   'contracts/src',
   'specs',
   'scripts',
@@ -178,7 +178,7 @@ const walk = (rel) => { const abs = resolve(repoRoot, rel); if (!existsSync(abs)
 // (so dist can be proven to come from attested src), harness scripts, contracts, specs, the signed
 // bundle, and the corpus+embeddings data. (node_modules excluded — not launch-authored; deps are
 // pinned via lockfile separately.)
-['packages/cortex/dist', 'packages/cortex/src', 'packages/cortex/scripts', 'packages/cortex-py/cortex_py', 'contracts/src', 'specs', 'scripts', 'release/bundle'].forEach(walk);
+['packages/coretex/dist', 'packages/coretex/src', 'packages/coretex/scripts', 'packages/coretex-py/coretex_py', 'contracts/src', 'specs', 'scripts', 'release/bundle'].forEach(walk);
 [CORPUS, EMB].forEach((p) => fileSet.push(p));
 const fileHashes = {};
 for (const p of fileSet.sort()) { const h = sha256File(p); if (h) fileHashes[p] = h; }

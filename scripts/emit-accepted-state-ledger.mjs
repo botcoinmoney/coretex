@@ -21,7 +21,7 @@ import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 const C = await import(distIndex);
 const { merkleizeState, bytesToHex, encodeMemoryIndexSlot, encodeTemporalRecord, stableRecordIdFor } = C;
-const { RANGES } = await import(resolve(repoRoot, 'packages/cortex/dist/state/types.js'));
+const { RANGES } = await import(resolve(repoRoot, 'packages/coretex/dist/state/types.js'));
 const argv = process.argv.slice(2);
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : d; };
 const base = 'release/calibration/2026-05-21-memory-corpus-v2';

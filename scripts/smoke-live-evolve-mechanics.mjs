@@ -7,11 +7,11 @@
  *
  *   - canonical stepEpoch(epoch, prevHonestAccepts:number|null, prevQualityAttempts:number|null)
  *     signature is correct (NOT roots);
- *   - bridgeLogicalDeltaToProductionEvents (packages/cortex/src/corpus/logical-delta-bridge.ts)
+ *   - bridgeLogicalDeltaToProductionEvents (packages/coretex/src/corpus/logical-delta-bridge.ts)
  *     turns the logical delta into production events through the SAME package path used in
  *     simulate-v2-live-evolve-long-horizon.mjs — NO inline mock event construction;
  *   - buildCorpusDelta + applyCorpusDelta produce a real corpusRoot advance;
- *   - frontier.addReserveIds (packages/cortex/src/coordinator/epoch-frontier.ts) injects new
+ *   - frontier.addReserveIds (packages/coretex/src/coordinator/epoch-frontier.ts) injects new
  *     eval_hidden ids into the persisted frontier reserve, totalUnits getter reflects the
  *     post-injection length, and at least one injected id rotates into the active set.
  *
@@ -63,7 +63,7 @@ let prevHonestAccepts = 0, prevQualityAttempts = 0;
 // CANONICAL: build the frontier ONCE and step the persisted instance every epoch.
 const frontier = makeLaunchFrontier(profile, baseProd);
 if (!frontier) fail('profile has no epochFrontier — smoke cannot validate frontier mechanics; use the calibration profile (epochFrontier C3)');
-if (typeof frontier.addReserveIds !== 'function') fail('frontier.addReserveIds is not a function — package-level API not exported (build packages/cortex/dist)');
+if (typeof frontier.addReserveIds !== 'function') fail('frontier.addReserveIds is not a function — package-level API not exported (build packages/coretex/dist)');
 const totalUnitsGenesis = frontier.totalUnits;
 pass(`frontier built — totalUnits(getter)=${totalUnitsGenesis} K=${frontier.K} addReserveIds=function`);
 

@@ -9,10 +9,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "=== [1/3] typecheck (source must compile) ==="
-npm run typecheck --workspace @botcoin/cortex
+npm run typecheck --workspace @botcoin/coretex
 
 echo "=== [2/3] build — dist FRESH from current source ==="
-npm run build --workspace @botcoin/cortex
+npm run build --workspace @botcoin/coretex
 
 echo "=== [3/3] coherence + launch fingerprint gate ==="
 NODE_OPTIONS=--max-old-space-size=20480 node scripts/launch-preflight.mjs "$@"

@@ -92,7 +92,7 @@ if (mode === 'replay' && !existsSync(fixturesPath)) fail(`fixtures not found: ${
 
 const distEntry = distIndex;
 if (!existsSync(distEntry)) {
-  fail(`@botcoin/cortex dist not built — run 'npm run build --workspace @botcoin/cortex' first`);
+  fail(`@botcoin/coretex dist not built — run 'npm run build --workspace @botcoin/coretex' first`);
 }
 
 const {
@@ -102,7 +102,7 @@ const {
 
 if (typeof createCoreTexCoordinatorRouteHandler !== 'function'
     || typeof createRetrievalDataSource !== 'function') {
-  fail('@botcoin/cortex dist missing required exports — rebuild');
+  fail('@botcoin/coretex dist missing required exports — rebuild');
 }
 
 const bundleManifest = JSON.parse(readFileSync(bundlePath, 'utf8'));

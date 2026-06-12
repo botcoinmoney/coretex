@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a subprocess with /root/cortex/.env loaded into its environment, without
+"""Run a subprocess with /root/coretex/.env loaded into its environment, without
 ever echoing values to stdout/stderr. Treats the .env as opaque KEY=VALUE
 lines (ignores blank lines and # comments). Exits with the child's exit code.
 
@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-ENV_PATH = Path('/root/cortex/.env')
+ENV_PATH = Path('/root/coretex/.env')
 
 
 def parse_env(text: str) -> dict[str, str]:

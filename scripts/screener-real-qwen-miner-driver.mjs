@@ -16,7 +16,7 @@
  *   5. BASE_RPC_URL                                   (Path-B optional)
  *
  * The subagent MUST NOT see:
- *   - any other repo source (cortex internals, scoring code, profile JSON)
+ *   - any other repo source (coretex internals, scoring code, profile JSON)
  *   - any handoff document, calibration finding, or CURRENT.md
  *   - this script or screener-real-qwen-economics.mjs
  *   - the launch profile or bundle manifest (only what the /coretex/status response exposes)

@@ -1276,7 +1276,7 @@ contract BotcoinMiningV4 is EIP712, Ownable, Pausable, ReentrancyGuard {
         if (patchType == 0x06) return index <= 31;
         // POLICY_UPDATE (r5): typed PolicyAtom write across the three contiguous policy regions
         // (evidence-bundle 384–511, conflict 512–639, abstention 640–671). MUST match the TS
-        // PATCH_TYPE.POLICY_UPDATE / patchTypeRange in packages/cortex/src/state/{types,patch}.ts
+        // PATCH_TYPE.POLICY_UPDATE / patchTypeRange in packages/coretex/src/state/{types,patch}.ts
         // so real miner policy/conflict/abstention atoms pass V4 compact-patch validation.
         if (patchType == 0x07) return index >= 384 && index <= 671;
         return false;

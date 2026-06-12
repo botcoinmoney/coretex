@@ -9,7 +9,7 @@ echo "=== a100-setup START $(date -u) ==="
 MODEL_CACHE=/var/lib/coretex/model-cache
 QWEN_REV=e61197ed45024b0ed8a2d74b80b4d909f1255473
 BGE_REV=5617a9f61b028005a4858fdac845db406aefb181
-mkdir -p "$MODEL_CACHE" /workspace/cortex
+mkdir -p "$MODEL_CACHE" /workspace/coretex
 
 # 1. Node (official binary tarball, no apt) -----------------------------------
 if ! command -v node >/dev/null 2>&1; then

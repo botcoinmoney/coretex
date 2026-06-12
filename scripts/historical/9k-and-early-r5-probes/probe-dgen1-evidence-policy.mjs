@@ -57,7 +57,7 @@ const {
   evaluateRetrievalBenchmarkState, biEncoderModelIdHash, computeCorpusRoot,
   createDeterministicReranker, rerankerFromEnv, encodeCodebookEntry, scoringOptionsFromProfile,
 } = await import(distIndex);
-const { RANGES } = await import(resolve(repoRoot, 'packages/cortex/dist/state/types.js'));
+const { RANGES } = await import(resolve(repoRoot, 'packages/coretex/dist/state/types.js'));
 
 const manifest = JSON.parse(readFileSync(resolve(repoRoot, 'release/bundle/bundle-manifest-v2-ownerscope-candidate.json'), 'utf8'));
 const BE = manifest.model.biEncoder;
@@ -212,7 +212,7 @@ const gate = hd ? { liftOK: (hd.deltaNDCG10 >= 0.02 || hd.deltaRecall10 >= 0.02)
 if (gate) gate.PASS = gate.liftOK && gate.attributionOK && gate.junkOK && gate.controlsOK;
 
 const gitSha = (() => { try { return execSync('git rev-parse --short HEAD', { cwd: repoRoot }).toString().trim(); } catch { return 'unknown'; } })();
-const distHash = (() => { try { return execSync('sha256sum packages/cortex/dist/eval/retrieval-benchmark.js', { cwd: repoRoot }).toString().trim().slice(0, 16); } catch { return 'unknown'; } })();
+const distHash = (() => { try { return execSync('sha256sum packages/coretex/dist/eval/retrieval-benchmark.js', { cwd: repoRoot }).toString().trim().slice(0, 16); } catch { return 'unknown'; } })();
 const report = { probe: 'dgen1-evidence-policy-high-density', runbook: 'Phase 2 §2 shape; EVIDENCE_POLICY_DESIGN.md',
   provenance: { specVersion: logical.specVersion, phase: logical.phase, corpusPath, embPath, corpusRoot, gitSha, distHashRetrievalBenchmark: distHash,
     reranker: rerankerArg === 'gpu' ? `Qwen/Qwen3-Reranker-0.6B@${RR.revision} (gpu)` : 'deterministic-stub', cap: rerankCap, packSize: pack.length, packSeed,

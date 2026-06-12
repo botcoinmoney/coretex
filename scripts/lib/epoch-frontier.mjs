@@ -1,5 +1,5 @@
 // Thin re-export shim. The CANONICAL EpochFrontier implementation now lives in
-// packages/cortex/src/coordinator/epoch-frontier.ts (shipped in the bundle-attested library and used
+// packages/coretex/src/coordinator/epoch-frontier.ts (shipped in the bundle-attested library and used
 // by the production launch coordinator). Scripts import it from here for path stability, but there is
 // ONE implementation — do NOT reimplement frontier logic in this file. (Per the launch discipline:
 // calibration scripts observe/wrap the canonical launch path; they never duplicate launch policy.)

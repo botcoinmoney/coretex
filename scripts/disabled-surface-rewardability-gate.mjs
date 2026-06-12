@@ -18,7 +18,7 @@ const {
   biEncoderModelIdHash, encodeMemoryIndexSlot, encodeRelationEdge, encodePolicyAtom,
   stableRecordIdFor, POLICY_SELECTOR, POLICY_EVIDENCE_FEATURE,
 } = C;
-const { RANGES } = await import(resolve(repoRoot, 'packages/cortex/dist/state/types.js'));
+const { RANGES } = await import(resolve(repoRoot, 'packages/coretex/dist/state/types.js'));
 
 const flag = (n, d) => {
   const i = argv.indexOf(`--${n}`);

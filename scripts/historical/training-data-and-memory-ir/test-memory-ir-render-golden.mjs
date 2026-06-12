@@ -12,7 +12,7 @@ import { resolve } from 'node:path';
 
 const C = await import(distIndex);
 const { renderMemoryIRDoc } = C;
-if (typeof renderMemoryIRDoc !== 'function') { console.error('FAIL: renderMemoryIRDoc not exported from cortex dist'); process.exit(2); }
+if (typeof renderMemoryIRDoc !== 'function') { console.error('FAIL: renderMemoryIRDoc not exported from coretex dist'); process.exit(2); }
 
 // Fixed candidate set — every field present/absent, ordering, dedup/sort of path, scope true/false/null,
 // density 0/>0, evidence true/false, and the all-default → raw-text case.

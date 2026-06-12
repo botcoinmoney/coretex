@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coretex-py"
+version = "0.1.0"
+description = "Botcoin Cortex — Python 3 second reference implementation (Phase 1)"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+# pycryptodome provides Keccak-256 (distinct from NIST SHA3-256).
+# pycryptodome's Crypto.Hash.keccak.new(digest_bits=256) matches Ethereum's
+# on-chain keccak256 — verified against the known vector keccak256("") ==
+# c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470.
+dependencies = [
+    "pycryptodome>=3.18.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["coretex_py*"]
+
+[project.scripts]
+coretex-py = "coretex_py.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["coretex_py/tests"]
+addopts = "-v"

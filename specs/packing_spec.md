@@ -68,7 +68,7 @@ words[word] = cleared | ((value & mask) << BigInt(bitsLo))
 
 ## Reserved-bit enforcement
 
-After unpack and before any use, a validator MUST check that every reserved bit (any bit position in any word that is not covered by a named field in `cortex_schema.json`) is zero.
+After unpack and before any use, a validator MUST check that every reserved bit (any bit position in any word that is not covered by a named field in `coretex_schema.json`) is zero.
 
 Reserved range (words 992–1023): every bit in all 32 words must be zero.
 
@@ -94,12 +94,12 @@ All multi-byte fields inside a word are defined MSB-first (big-endian). When a b
 
 ## Round-trip test requirement
 
-The canonical pack/unpack checks now live in `packages/cortex/test/unit/codec.test.mjs`.
+The canonical pack/unpack checks now live in `packages/coretex/test/unit/codec.test.mjs`.
 
 ---
 
 ## See also
 
-- `cortex_state.md` — field definitions
-- `cortex_schema.json` — machine-readable field registry
+- `coretex_state.md` — field definitions
+- `coretex_schema.json` — machine-readable field registry
 - `merkleization_spec.md` — Merkle root derivation (builds on packed bytes)

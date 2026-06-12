@@ -16,7 +16,7 @@ The active documentation authority is the consolidated CoreTex production launch
 
 ## Specs
 
-- [`../specs/cortex_state.md`](../specs/cortex_state.md) — canonical 1024-state-cell substrate layout.
+- [`../specs/coretex_state.md`](../specs/coretex_state.md) — canonical 1024-state-cell substrate layout.
 - [`../specs/coretex_memory_control_plane.md`](../specs/coretex_memory_control_plane.md) — Memory IR / control-plane spec.
 - [`../specs/substrate_retrieval_semantics.md`](../specs/substrate_retrieval_semantics.md) — retrieval semantics.
 - [`../specs/hidden_query_pack.md`](../specs/hidden_query_pack.md) — hidden-query pack structure.

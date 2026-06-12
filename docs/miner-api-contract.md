@@ -12,7 +12,7 @@ they are present in `activeSubstrateSurfaces`.
 Validation gate: `scripts/miner-api-contract-gate.mjs` must be rerun against the
 current launch profile, bundle, and corpus before signing.
 
-Routes (`packages/cortex/src/coordinator/endpoints.ts`) — v0 canonical surface
+Routes (`packages/coretex/src/coordinator/endpoints.ts`) — v0 canonical surface
 (exactly 5; anything not in this list is removed from public v0):
 
 | method | path | purpose |

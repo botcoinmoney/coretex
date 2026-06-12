@@ -2,7 +2,7 @@
 # P1.5 A100 GPU batch (standard runner): clean-config multi-seed cap sweep + abstention separability.
 # Clean config: --rel-mode no-query (leak quarantined) --first-stage-topk 128 (relation lever active).
 set -uo pipefail
-cd /workspace/cortex
+cd /workspace/coretex
 D="release/calibration/a100-$(date +%F)"
 mkdir -p "$D"
 CORPUS=release/calibration/2026-05-21-memory-corpus-v2/p1-corpus.json
@@ -17,7 +17,7 @@ echo "### preflight"; nvidia-smi --query-gpu=name --format=csv,noheader || exit 
 printf '%s' '{"model":"Qwen/Qwen3-Reranker-0.6B","revision":"e61197ed45024b0ed8a2d74b80b4d909f1255473","pairs":[{"query":"what pet does maya have","document":"Maya adopted a border collie named Pepper"},{"query":"x","document":"unrelated text about taxes"}]}' \
   | /usr/bin/python3 scripts/reranker_runner.py 2>/dev/null | python3 -c "import json,sys;s=json.load(sys.stdin)['scores'];assert s[0]>0.7 and s[1]<0.2,s;print('smoke ok',s)" || { echo SMOKE_FAIL; exit 4; }
 
-GIT=$(git rev-parse HEAD); DIST=$(sha256sum packages/cortex/dist/index.js | cut -d' ' -f1)
+GIT=$(git rev-parse HEAD); DIST=$(sha256sum packages/coretex/dist/index.js | cut -d' ' -f1)
 echo "{\"run\":\"p1.5-clean-multiseed\",\"git\":\"$GIT\",\"dist\":\"$DIST\",\"config\":\"no-query+firstStageTopK128\",\"seeds\":[\"s1\",\"s2\",\"s3\"],\"caps\":[16,32,64,128],\"pack\":24}" > "$D/P15_MANIFEST.json"
 
 echo "### multi-seed clean cap sweep (no-query, firstStageTopK=128)"

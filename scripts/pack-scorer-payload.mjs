@@ -28,9 +28,9 @@ if (!['scorer', 'parity-harness'].includes(mode)) { console.error(`unknown --mod
 
 // ── ALLOWLIST: exactly what each payload needs, nothing else ──────────────
 const SCORER = [
-  'packages/cortex/dist',
-  'packages/cortex/scripts', // reranker_runner.py + parity bench/diff + materializer + lib
-  'packages/cortex/package.json',
+  'packages/coretex/dist',
+  'packages/coretex/scripts', // reranker_runner.py + parity bench/diff + materializer + lib
+  'packages/coretex/package.json',
 ];
 const PARITY_EXTRA = [
   'scripts/coretex-scorer-parity-harness.mjs',

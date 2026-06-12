@@ -1,6 +1,6 @@
 """Python replica of the protocol-owned Memory-IR render grammar.
 
-Byte-identical to packages/cortex/src/eval/memory-ir-render.ts (renderMemoryIRDoc). The trainer renders the
+Byte-identical to packages/coretex/src/eval/memory-ir-render.ts (renderMemoryIRDoc). The trainer renders the
 candidate document with this so train-time text == serve-time text. A golden test
 (scripts/test-memory-ir-render-golden.mjs) asserts equality with the TS/JS renderer on a fixed candidate set.
 
