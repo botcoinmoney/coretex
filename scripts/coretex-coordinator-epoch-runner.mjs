@@ -108,6 +108,14 @@ export function readinessCheckedItems({ baselineBindsRotation, parentRootChainVe
   ];
 }
 
+export function metricsRequiredForEpoch(epochNum, launchGenesis = false) {
+  return epochNum >= 2 && !launchGenesis;
+}
+
+export function shouldDeriveParentStateRootFromChain({ rpcUrl, registry, parentStateRoot, launchGenesis }) {
+  return Boolean(rpcUrl && registry && !(launchGenesis && parentStateRoot));
+}
+
 function fail(msg) {
   console.error(`HARD FAIL: ${msg}`);
   exit(1);
@@ -483,9 +491,10 @@ async function main() {
   mkdirSync(outDir, { recursive: true });
 
   // ── Metrics: provenance + freshness before use; default-to-zero forbidden ──
+  const launchGenesis = has('launch-genesis');
   const metricsPath = flag('metrics', null);
-  if (!metricsPath && epochNum >= 2) {
-    fail('--metrics is required for epoch >= 2 (silent default-to-zero is forbidden); only epoch 1 genesis may omit prior-epoch telemetry');
+  if (!metricsPath && metricsRequiredForEpoch(epochNum, launchGenesis)) {
+    fail('--metrics is required for epoch >= 2 (silent default-to-zero is forbidden); only explicit launch genesis may omit prior-epoch telemetry');
   }
   let fileMetrics = {};
   if (metricsPath) {
@@ -507,7 +516,7 @@ async function main() {
   const registry = flag('registry', env.CORETEX_REGISTRY_ADDRESS ?? null);
   let parentStateRoot = flag('parent-state-root', null)?.toLowerCase() ?? null;
   let parentRootChainVerified = false;
-  if (rpcUrl && registry) {
+  if (shouldDeriveParentStateRootFromChain({ rpcUrl, registry, parentStateRoot, launchGenesis })) {
     const chainRoot = deriveParentStateRootFromChain({ rpcUrl, registry, completedEpoch: epochNum - 1 });
     if (!chainRoot || chainRoot === ZERO32) {
       fail(`stale parent state root: chain returned no parent state root for completed epoch ${epochNum - 1}`);

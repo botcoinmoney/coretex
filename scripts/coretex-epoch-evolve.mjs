@@ -219,9 +219,9 @@ function payloadPath(manifest, role) {
   return manifest.payloads?.find((p) => p.role === role)?.path ?? null;
 }
 
-function loadPreviousCorpus({ manifest, bundlePath, corpusPayload, embPayload }) {
+function loadPreviousCorpus({ manifest, bundlePath, corpusPayload, embPayload, launchGenesis }) {
   const previousCorpusPath = flag('previous-corpus', null);
-  if (previousCorpusPath) {
+  if (previousCorpusPath && (!launchGenesis || existsSync(resolve(repoRoot, previousCorpusPath)))) {
     return loadProductionCorpus(resolve(repoRoot, previousCorpusPath), {
       verifyCorpusRoot: !has('skip-previous-root-verify'),
       verifySplits: !has('skip-previous-split-verify'),
@@ -235,7 +235,7 @@ function loadPreviousCorpus({ manifest, bundlePath, corpusPayload, embPayload })
   }).corpus;
 }
 
-function makeFrontier(profile, previousCorpus, nextCorpus, additions, outDir, { initialStateRaw, maxRootDeltaPerEpoch }) {
+function makeFrontier(profile, previousCorpus, nextCorpus, additions, outDir, { initialStateRaw, launchGenesis, maxRootDeltaPerEpoch }) {
   const fp = profile.epochFrontier;
   if (!fp || fp.mode === 'off') fail('profile epochFrontier is off; cannot emit nonzero activeFrontierRoot');
   const statePath = flag('frontier-state', null);
@@ -249,8 +249,8 @@ function makeFrontier(profile, previousCorpus, nextCorpus, additions, outDir, { 
   if (initialStateRaw) {
     pruned = pruneEpochFrontierState(initialStateRaw, (id) => nextCorpus.byId.has(id));
     initialState = pruned.state;
-  } else if (epoch > 1) {
-    fail('frontier state is required after epoch 1; epoch >= 2 must thread the previous epoch frontier state (no bootstrap)');
+  } else if (epoch > 1 && !launchGenesis) {
+    fail('frontier state is required after epoch 1; epoch >= 2 must thread the previous epoch frontier state unless --launch-genesis is explicitly bootstrapping CoreTex');
   }
   const ids = initialState
     ? nextCorpus.events.filter((e) => e.split === 'eval_hidden').map((e) => e.id)
@@ -321,19 +321,19 @@ async function main() {
   if (!bundlePath || !profilePath || !corpusPayload) fail('manifest/profile/bundle/source corpus paths are required');
 
   // ── Mandatory state threading (epoch continuity) ────────────────────────────
-  // Production must NEVER silently evolve from the genesis launch corpus. Epoch 1 may bootstrap
-  // from genesis defaults ONLY via the explicit --launch-genesis flag; epoch >= 2 hard-fails
-  // unless the previous epoch's checkpoint (logical state + frontier state + materialized
-  // corpus root) is supplied and internally consistent.
+  // Production must NEVER silently evolve from the genesis launch corpus. A chain can launch
+  // CoreTex after contract epoch 1, so genesis defaults are allowed ONLY via the explicit
+  // --launch-genesis flag; all non-genesis epochs hard-fail unless the previous epoch's
+  // checkpoint (logical state + frontier state + materialized corpus root) is supplied and
+  // internally consistent.
   const launchGenesis = has('launch-genesis');
-  if (launchGenesis && epoch !== 1) fail('--launch-genesis is only valid for --epoch 1 (genesis bootstrap)');
   const logicalStateFlag = flag('logical-state', null);
   if (!logicalStateFlag && !launchGenesis) {
-    fail('--logical-state is required: pass the previous epoch evolved logical state, or --launch-genesis (epoch 1 only) to bootstrap from the launch corpus');
+    fail('--logical-state is required: pass the previous epoch evolved logical state, or --launch-genesis to bootstrap CoreTex from the launch corpus');
   }
   const frontierStateFlag = flag('frontier-state', null);
   let checkpoint = null;
-  if (epoch >= 2) {
+  if (epoch >= 2 && !launchGenesis) {
     if (has('allow-frontier-bootstrap')) fail('--allow-frontier-bootstrap is no longer permitted for epoch >= 2; thread the previous epoch frontier state');
     if (!frontierStateFlag) fail('--frontier-state is required for epoch >= 2 (mandatory state threading)');
     if (!flag('previous-corpus', null)) fail('--previous-corpus is required for epoch >= 2: the manifest materialized corpus is the GENESIS corpus and must not be re-used after epoch 1');
@@ -356,7 +356,7 @@ async function main() {
       fail(`--frontier-state ${frontierStateFlag} sha256 ${frontierSha} does not match checkpoint.frontierStateSha256 ${checkpoint.frontierStateSha256}`);
     }
   }
-  const frontierInitialStateRaw = frontierStateFlag && existsSync(resolve(repoRoot, frontierStateFlag))
+  const frontierInitialStateRaw = !launchGenesis && frontierStateFlag && existsSync(resolve(repoRoot, frontierStateFlag))
     ? readJson(frontierStateFlag)
     : null;
 
@@ -365,7 +365,10 @@ async function main() {
   const { keyId, privateKeyPem, devPublicKeyPem } = readSigningKey(outDir);
   const bundle = readJson(bundlePath);
   const profile = readJson(profilePath);
-  const previousCorpus = loadPreviousCorpus({ manifest, bundlePath, corpusPayload, embPayload });
+  const previousCorpus = loadPreviousCorpus({ manifest, bundlePath, corpusPayload, embPayload, launchGenesis });
+  if (launchGenesis && manifest.corpusRoot && previousCorpus.corpusRoot.toLowerCase() !== manifest.corpusRoot.toLowerCase()) {
+    fail(`launch genesis must evolve from launch corpus root ${manifest.corpusRoot}; got ${previousCorpus.corpusRoot}`);
+  }
   const expectedPrevRoot = flag('previous-root', previousCorpus.corpusRoot);
   if (previousCorpus.corpusRoot.toLowerCase() !== expectedPrevRoot.toLowerCase()) {
     fail(`previous corpus root ${previousCorpus.corpusRoot} != expected ${expectedPrevRoot}`);
@@ -374,7 +377,7 @@ async function main() {
     fail(`previous corpus root ${previousCorpus.corpusRoot} != checkpoint corpus root ${checkpoint.corpusRoot} — epoch ${epoch} must evolve from epoch ${epoch - 1}'s materialized corpus, not genesis`);
   }
 
-  const logicalPath = flag('logical-state', corpusPayload);
+  const logicalPath = launchGenesis ? corpusPayload : flag('logical-state', corpusPayload);
   const logical = readJson(logicalPath);
   logical.docs ??= [];
   logical.relations ??= [];
@@ -543,6 +546,7 @@ async function main() {
   }
   const frontier = makeFrontier(profile, previousCorpus, nextCorpus, additions, outDir, {
     initialStateRaw: frontierInitialStateRaw,
+    launchGenesis,
     maxRootDeltaPerEpoch,
   });
   const challengeBook = {
