@@ -30,10 +30,17 @@ contracts and the V4 policy admin.
 screenerWorkBps `10000`, stateAdvanceThresholds `[0,25,100,250,500]`,
 stateAdvanceWorkBps `[30000,40000,60000,90000,120000]`; on-chain
 `policyHash == 0xd15e904997bdb2bb13d932953a77c0ed3ef309076146a4416cfe5a4e0cdb3775`.
-(The 2026-06-12 work-units policy v3 change — the state-advance screener-threshold
-floor — is OFF-chain coordinator calibration; it does not alter this on-chain
-`CoreTexPolicy` struct or its hash. The coordinator's separate
-`CORETEX_WORK_POLICY_HASH` is computed from the full off-chain work policy.)
+
+**`CORETEX_WORK_POLICY_HASH` = this on-chain `policyHash` `0xd15e9049…`** (read
+it live via `V4.activeCoreTexPolicyHash(epoch)`). The coordinator copies this
+env value verbatim into `receipt.workPolicyHash`, and
+`BotcoinMiningV4._activePolicyForReceipt` reverts `InvalidWorkPolicyHash` unless
+it matches — so any other value bricks every CoreTex receipt. Do **NOT** use the
+launch manifest's off-chain `workPolicyHash` `0x4defd562…`: that is the
+work-units (screener-calibration) provenance hash, recorded for attestation
+only, and is NOT a coordinator env value. The 2026-06-12 work-units policy v3
+change (the state-advance screener-threshold floor) is OFF-chain calibration and
+does not alter the on-chain `CoreTexPolicy` struct or its `policyHash`.
 
 ## Starting state (verified blank, 2026-06-12)
 
