@@ -2,9 +2,7 @@
 /**
  * UNIFIED r5 A100 ORACLE — all SIX r5 PolicyAtom families, BOUNDED QUERY-LOCAL atoms, real Qwen.
  *
- * This is the batched real-Qwen oracle justified in
- *   docs/HANDOFFS/Substrate_reclaim_finalization_churn_tuning_guidance.md
- * It UNIFIES the two CPU oracle-ladder probes
+ * This batched real-Qwen oracle UNIFIES the two CPU oracle-ladder probes
  *   scripts/probe-r5-oracle-ladder-fam5-fam2.mjs   (fam1 evidence-bundle, fam2 subject-entity, fam5a noise)
  *   scripts/probe-r5-oracle-ladder-fam3-fam4-fam5b.mjs (fam3 conflict, fam4 aspect, fam5b abstention)
  * into ONE harness that runs every family against the SAME scored corpus, with the SAME

@@ -9,8 +9,8 @@
  * coord via the public /coretex/* surface using ONLY the canonical miner skill — exactly
  * what a real miner will see at launch.
  *
- * Per docs/HANDOFFS/REAL_QWEN_SCREENER_ECONOMICS_HANDOFF.md, this harness REFUSES to fall
- * back to a deterministic-proxy scorer for any launch-economics conclusion. The CPU
+ * This harness REFUSES to fall back to a deterministic-proxy scorer for any
+ * launch-economics conclusion. The CPU
  * screener-economics-calibration.mjs is arithmetic sanity only and is NOT this script.
  *
  * Stop conditions (the script refuses to start):
@@ -99,8 +99,7 @@ const has = (n) => argv.includes(`--${n}`);
 const MODE = has('gpu') ? 'gpu' : (has('cpu-smoke') ? 'cpu-smoke' : null);
 if (!MODE) {
   fail(
-    'Mode required: --cpu-smoke (real Qwen on CPU; plumbing only) or --gpu (launch-authoritative; requires CORETEX_RERANKER_ALLOW_CUDA=1).\n' +
-    'See docs/HANDOFFS/REAL_QWEN_SCREENER_ECONOMICS_HANDOFF.md for the full gate set.'
+    'Mode required: --cpu-smoke (real Qwen on CPU; plumbing only) or --gpu (launch-authoritative; requires CORETEX_RERANKER_ALLOW_CUDA=1).'
   );
 }
 const OFFLINE_SMOKE = has('offline-smoke');     // refuse on-chain reads; warn loud
@@ -862,10 +861,10 @@ Raw artifacts:
 
 ## Status
 
-This is the FIRST scaffold of the real-Qwen production-flow screener-economics harness per
-\`docs/HANDOFFS/REAL_QWEN_SCREENER_ECONOMICS_HANDOFF.md\`. It runs the SAME production
-scoring path the launch coordinator will use (Qwen3-Reranker-0.6B + retrieval-benchmark)
-and refuses to fall back to a deterministic-proxy scorer.
+This is the real-Qwen production-flow screener-economics harness. It runs the
+SAME production scoring path the launch coordinator will use
+(Qwen3-Reranker-0.6B + retrieval-benchmark) and refuses to fall back to a
+deterministic-proxy scorer.
 
 The launch verdict (cap, multipliers, withheld-advance profitability, false-screener rate,
 state-advances/epoch) is decided AFTER a multi-seed \`--gpu\` run on an A100 with the real

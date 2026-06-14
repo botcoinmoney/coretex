@@ -20,9 +20,10 @@
  * manifest. Any independent verifier reproduces it from the bundle +
  * corpus root + eval seed + pinned models.
  *
- * Spec: docs/HANDOFFS/NEW_CORPUS_HANDOFF.md and release/calibration/CURRENT.md
- * define the current baseline-reset / rate-matching lane.
- */
+   * Spec: epoch rotation manifests define the current baseline-reset /
+   * rate-matching lane; verifier reproducibility is pinned by bundle, corpus
+   * root, eval seed, and model hashes.
+   */
 
 import type { CortexState } from '../state/types.js';
 import type { CompositeScore, ScoringOptions } from '../eval/retrieval-benchmark.js';

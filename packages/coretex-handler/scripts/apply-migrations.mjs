@@ -8,8 +8,6 @@
  * Reads CORTEX_STORE_DB_PATH env (default: data/coordinator/coretex-store.db).
  * Applies all SQL files in packages/coretex-handler/migrations/ in version order.
  * Safe to run multiple times — already-applied migrations are skipped.
- *
- * Referenced in instructions.md §5.
  */
 
 import { DatabaseSync } from 'node:sqlite';

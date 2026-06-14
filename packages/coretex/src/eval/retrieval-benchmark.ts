@@ -874,7 +874,7 @@ export interface PatchEvalResult {
  * Score a single query against the substrate using the v2-lens pipeline.
  *
  * Spec: specs/substrate_retrieval_semantics.md plus the active evaluator
- * profile described in release/calibration/CURRENT.md.
+ * profile pinned by the launch artifact manifest.
  *
  * Two-stage retrieval, substrate is the bias not the gate:
  *   Stage 1: blind BGE-M3 cosine over the full public corpus index →

@@ -1,38 +1,42 @@
 # CoreTex Documentation Map
 
-Last updated: 2026-06-08.
+Last updated: 2026-06-14.
 
-This repo has been pruned so auditors do not have to sort through pre-V2 launch plans as if they are current.
-The active documentation authority is the consolidated CoreTex production launch handoff plus the launch artifact manifest.
+Public documentation is limited to canonical protocol, runtime, miner, validator,
+and deployment surfaces. Agent handoffs, launch scratch notes, and calibration
+runbooks are intentionally local-only.
 
 ## Read First
 
-- [`../README.md`](../README.md) — current system overview and canonical code path map.
-- [`HANDOFFS/PRODUCTION_LAUNCH_HARDENING_HANDOFF.md`](./HANDOFFS/PRODUCTION_LAUNCH_HARDENING_HANDOFF.md) — canonical launch/auditor handoff.
-- [`../release/calibration/CURRENT.md`](../release/calibration/CURRENT.md) — authoritative current calibration state.
-- [`../release/calibration/2026-05-21-memory-corpus-v2/DIFFICULTY_LONGEVITY_CALIBRATION_RUNBOOK.md`](../release/calibration/2026-05-21-memory-corpus-v2/DIFFICULTY_LONGEVITY_CALIBRATION_RUNBOOK.md) — execution gates and run discipline.
-- [`../release/calibration/2026-05-21-memory-corpus-v2/SUBSTRATE_SURFACE_RUNWAY_MATRIX.md`](../release/calibration/2026-05-21-memory-corpus-v2/SUBSTRATE_SURFACE_RUNWAY_MATRIX.md) — substrate surface audit.
-- [`../release/calibration/2026-05-21-memory-corpus-v2/SUBSTRATE_VNEXT_COMPOSITION.md`](../release/calibration/2026-05-21-memory-corpus-v2/SUBSTRATE_VNEXT_COMPOSITION.md) — trim/replace audit.
+- [`../README.md`](../README.md) — repo overview and canonical code path map.
+- [`BOTCOIN_CORETEX_DOCS.md`](./BOTCOIN_CORETEX_DOCS.md) — CoreTex system overview.
+- [`BOTCOIN_CORETEX_MINER_SKILL.md`](./BOTCOIN_CORETEX_MINER_SKILL.md) — miner-facing CoreTex lane contract.
+- [`CORETEX_VALIDATOR_STANDALONE_RUNBOOK.md`](./CORETEX_VALIDATOR_STANDALONE_RUNBOOK.md) — standalone validator setup/sync/replay.
+- [`CORETEX_COORD_WIRING_RUNBOOK.md`](./CORETEX_COORD_WIRING_RUNBOOK.md) — production coordinator wiring and launch gates.
 
 ## Specs
 
 - [`../specs/coretex_state.md`](../specs/coretex_state.md) — canonical 1024-state-cell substrate layout.
-- [`../specs/coretex_memory_control_plane.md`](../specs/coretex_memory_control_plane.md) — Memory IR / control-plane spec.
+- [`../specs/patch_format.md`](../specs/patch_format.md) — compact patch wire format.
+- [`../specs/merkleization_spec.md`](../specs/merkleization_spec.md) — state/root hashing.
 - [`../specs/substrate_retrieval_semantics.md`](../specs/substrate_retrieval_semantics.md) — retrieval semantics.
+- [`../specs/retrieval_benchmark.md`](../specs/retrieval_benchmark.md) — scoring benchmark contract.
 - [`../specs/hidden_query_pack.md`](../specs/hidden_query_pack.md) — hidden-query pack structure.
 - [`../specs/determinism.md`](../specs/determinism.md) — determinism requirements.
 
-## Calibration Evidence
+## Runtime Docs
 
-Durable findings live under:
+- [`miner-api-contract.md`](./miner-api-contract.md) — public miner API contract.
+- [`CORETEX_SCORER_PARITY_RELEASE_GATE.md`](./CORETEX_SCORER_PARITY_RELEASE_GATE.md) — scorer parity release gate.
+- [`CORETEX_EPOCH_EVOLVE_IAM_RUNBOOK.md`](./CORETEX_EPOCH_EVOLVE_IAM_RUNBOOK.md) — IAM shape for epoch artifact publication.
+- [`contract-addresses-mainnet.md`](./contract-addresses-mainnet.md) — current deployed contract addresses.
 
-```text
-release/calibration/2026-05-21-memory-corpus-v2/
-```
+## Public Launch Artifacts
 
-Use `release/calibration/CALIBRATION_LEDGER.jsonl` as the run registry. Generated scratch output and old `/var/lib`
-reports are not current authority.
+The public source tree keeps only the minimal launch manifests and replay
+fixtures needed by validators/tests:
 
-## Handoffs
-
-`docs/HANDOFFS/PRODUCTION_LAUNCH_HARDENING_HANDOFF.md` is the active handoff. Other handoff files are historical or ignored unless explicitly referenced by the launch handoff.
+- `release/calibration/fixtures/state-root-vectors.json`
+- `release/calibration/2026-06-04-memory-atom-v16/coretex-launch-v16-artifacts.json`
+- `release/calibration/2026-06-04-memory-atom-v16/bundle-manifest-v2-dgen1-policy-r5-atom-v16-300k-enabled.json`
+- `release/calibration/2026-06-04-memory-atom-v16/evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json`

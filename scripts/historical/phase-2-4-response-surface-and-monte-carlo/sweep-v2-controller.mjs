@@ -13,7 +13,7 @@
  * then every (controller-params × scenario × target × majorDelta) cell is swept
  * in-memory — so the large P2/P3 corpora are parsed exactly once.
  *
- * Grid defaults follow DIFFICULTY_LONGEVITY_CALIBRATION_RUNBOOK.md Phase 2.
+ * Grid defaults follow the historical phase-2/4 response-surface sweep settings.
  *
  * Usage:
  *   node --max-old-space-size=16384 scripts/sweep-v2-controller.mjs \

@@ -919,7 +919,7 @@ export const DEFAULT_PROFILE: EvaluatorProfile = {
   // NOTE: this DEFAULT_PROFILE is the CONSERVATIVE r4 baseline (PolicyAtoms OFF — the r5-no-atoms==r4 safety
   // baseline). It is NOT the launch config. The SIGNED LAUNCH profile is r5 with the 3 PolicyAtom families active:
   // release/bundle/evaluator-profile-v2-dgen1-policy-r5-{100k,300k}.json. Do not read these defaults as "what ships".
-  // Canonical r4/r5 explainer: release/calibration/CURRENT.md (top) + specs/coretex_state.md §Range C-r5/F-r5.
+  // Canonical r4/r5 layout: specs/coretex_state.md §Range C-r5/F-r5 plus signed launch profiles.
   pipelineVersion: 'coretex-retrieval-v2-lens-r4',  // Tier-2 substrate epoch (stride-1 MemoryIndex, 96-pair temporal)
   firstStageTopK: 200,             // calibration Run 1 will tune per-stratum
   rerankerInputTopK: 128,          // §6.5 MemReranker-style cross-encoder pool cap
