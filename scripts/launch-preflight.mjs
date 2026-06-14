@@ -77,7 +77,7 @@ const FINGERPRINT_ROOTS = [
 const missingRoots = FINGERPRINT_ROOTS.filter((r) => !existsSync(resolve(repoRoot, r)));
 if (missingRoots.length > 0) {
   console.error(`HARD FAIL: missing fingerprint roots — ${missingRoots.join(', ')}`);
-  console.error('Sync these paths before running preflight (a100-sync.sh sync_code includes all roots).');
+  console.error('Sync these paths with the approved scorer/launch payload workflow before running preflight.');
   exit(1);
 }
 for (const p of [CORPUS, EMB, PROFILE, BUNDLE]) {

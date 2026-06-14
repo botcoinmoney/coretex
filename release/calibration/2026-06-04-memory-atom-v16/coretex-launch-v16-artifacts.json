@@ -1,0 +1,187 @@
+{
+  "schema": "coretex.launch-artifacts.v1",
+  "name": "coretex-launch-v16-atom-300k",
+  "status": "launch-candidate-full-active-epoch-evolve-production-wiring-s3-published",
+  "artifactBaseUrlEnv": "CORETEX_ARTIFACT_BASE_URL",
+  "defaultBaseUrl": "https://coretex-launch-artifacts-429971482539-us-east-2-an.s3.us-east-2.amazonaws.com/coretex/launch/v16",
+  "notes": [
+    "Large payloads are not stored in plain git. Publish them under artifact storage and set CORETEX_ARTIFACT_BASE_URL, or place them at the expected local paths before running setup.",
+    "The active materialized corpus cache is required for validator replay/evolve setup and is generated locally from verified corpus+embeddings+bundle/profile inputs. It is not a source-of-truth payload.",
+    "Post-evolve corpus states should be replayed from the launch corpus plus accepted state advances/deltas, not shipped as replacement launch corpora.",
+    "2026-06-06 baseline repin: profile.baselineParentScorePpm 163371 -> 288438 from release/calibration/2026-06-04-memory-atom-v16/baseline-recalibration-v16-a100.json; corpus/embeddings unchanged; profile/bundle S3 objects require republish.",
+    "2026-06-08 source-SHA/byte repin: canonical source changes update the enabled bundle manifest to bundleHash 0xe393037ec04b7ce631ff44be4f2882238b92d59fc2d48fd775c210a6e7e036ee; profile/corpus/embeddings unchanged; bundle/profile/artifact manifest republished to S3. Runway verdict still says do not launch.",
+    "2026-06-08 runway expansion repin: canonical active-live public-intent dedupe changed hidden-query-pack.ts; enabled bundle manifest updated to 0xe6082ad221d144596b6861b566ff238d5da562869e1eb401fa216734c7a44ca1; profile/corpus/embeddings unchanged; S3 republish required before validator launch verification.",
+    "2026-06-08 closeout full-active repin: canonical enabled launch profile epochFrontier.activeWindow promoted 3072 -> 9639; retrieval-data-source telemetry source SHA repinned; enabled bundle manifest updated to 0xf62536b5c75edbd05b8e8f045695d234bf988ed56124edc1e44f228045f95207; profile/bundle/artifact manifest require S3 republish.",
+    "2026-06-08 closeout S3 publish: full-active bundle/profile republished to S3 after slot-paced runway verdict; artifact manifest consistency marked true.",
+    "2026-06-08 epoch-evolve production wiring repin: canonical epoch-frontier state restore and corpus delta metadata-preserving serialization changed launch source SHA; enabled bundle manifest updated to 0x7118ee2ab68e6c46de94231b62ebe43919b2d687d47823e5616c5d53318fd920; corpus/profile unchanged; S3 republish required before validator launch verification.",
+    "2026-06-08 epoch-evolve S3 publish: repinned bundle/profile uploaded after production epoch-evolve wiring; public bytes must match bundleHash 0x7118ee2ab68e6c46de94231b62ebe43919b2d687d47823e5616c5d53318fd920.",
+    "2026-06-08 coordinator epoch-runner repin: retrieval-data-source public epoch-rotation status fields changed launch source SHA; enabled bundle manifest updated to 0x9050103e7e80a46c708e8d230210bf0b6169494f911d72f48bb7f4640acfff88; profile/corpus/embeddings unchanged; S3 republish required before validator launch verification.",
+    "2026-06-08 coordinator epoch-runner S3 publish: repinned bundle uploaded after production coordinator epoch-runner/status wiring; public bytes must match bundleHash 0x9050103e7e80a46c708e8d230210bf0b6169494f911d72f48bb7f4640acfff88.",
+    "2026-06-08 coordinator integration public-key status repin: retrieval-data-source exposes epoch signing public key id/fingerprint and validator sync import-boundary tests were added; enabled bundle manifest updated to 0x78336d1d11a0796047baff340f4f90f154d98d9de064678471cbdf50e974069b; profile/corpus/embeddings unchanged; S3 republish required before validator launch verification.",
+    "2026-06-08 coordinator integration S3 publish: repinned bundle uploaded after public epoch signing status support; public bytes must match bundleHash 0x78336d1d11a0796047baff340f4f90f154d98d9de064678471cbdf50e974069b.",
+    "2026-06-12 screener threshold state-floor repin: DEFAULT_CORETEX_WORK_POLICY v3 floors screenerThresholdPpm at 50% of real stateAdvanceThresholdPpm; enabled bundle manifest updated to 0xf77cfb0fc69aab59fabf439268fff990acd20d3c6998ad0953ead8283ad40361; 4090 Qwen calibration report screener-threshold-v16-4090-statefloor-2026-06-12.json measured threshold 1375ppm; S3 republish required before validator launch verification.",
+    "2026-06-12 screener hardening follow-up repin: policy v3 threshold floor now fails closed without stateAdvanceThresholdPpm, shared base-blockhash RPC client handles credentialed URLs, enabled bundle manifest updated to 0x73172e2bc77e2f066a160bc94a48ae73c5221cf11591c3958c03aa5884793506, workPolicyHash is 0x4defd562f027e350cc4537ef6b7e1baecdf9387ff19e10e5599325bedfe8b715, and 4090 Qwen calibration report screener-threshold-v16-4090-statefloor-boundary-2026-06-12.json adds boundary-band checks with cachePath=null. S3, chain config, on-chain epoch context, and coordinator integration workPolicyHash repin remain required before validator launch verification."
+  ],
+  "generation": {
+    "corpusCommand": "node scripts/generate-dgen1-corpus.mjs --subjects 4200 --depth 30 --seed dgen1-r5-synth-300k-atom-v16-2026-06-04 --r5-synthesis --atom-v16-metadata --out release/calibration/2026-06-04-memory-atom-v16/dgen1-r5-synth-300k-atom-v16-corpus.json",
+    "embeddingCommand": "node scripts/embed-corpus-v2-resumable.mjs release/calibration/2026-06-04-memory-atom-v16/dgen1-r5-synth-300k-atom-v16-corpus.json release/calibration/2026-06-04-memory-atom-v16/dgen1-r5-synth-300k-atom-v16-embeddings.json",
+    "materializeCommand": "node scripts/materialize-production-corpus.mjs --profile release/calibration/2026-06-04-memory-atom-v16/evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json --bundle release/calibration/2026-06-04-memory-atom-v16/bundle-manifest-v2-dgen1-policy-r5-atom-v16-300k-enabled.json --corpus release/calibration/2026-06-04-memory-atom-v16/dgen1-r5-synth-300k-atom-v16-corpus.json --emb release/calibration/2026-06-04-memory-atom-v16/dgen1-r5-synth-300k-atom-v16-embeddings.json --materialized-root release/calibration/2026-06-04-memory-atom-v16/materialized"
+  },
+  "corpusRoot": "0xb692b4a133963399257979bc5f632a0900d2d5d73dbadf191d3cf9889188e57e",
+  "payloads": [
+    {
+      "role": "corpus",
+      "path": "release/calibration/2026-06-04-memory-atom-v16/dgen1-r5-synth-300k-atom-v16-corpus.json",
+      "fileName": "dgen1-r5-synth-300k-atom-v16-corpus.json",
+      "sha256": "aa84271dade558e6dad9625cf4b59687dc21a3ce2211edc1e39b084c1b7e23df",
+      "bytes": 236975364,
+      "s3": {
+        "bucket": "coretex-launch-artifacts-429971482539-us-east-2-an",
+        "region": "us-east-2",
+        "key": "coretex/launch/v16/dgen1-r5-synth-300k-atom-v16-corpus.json",
+        "url": "https://coretex-launch-artifacts-429971482539-us-east-2-an.s3.us-east-2.amazonaws.com/coretex/launch/v16/dgen1-r5-synth-300k-atom-v16-corpus.json",
+        "versionId": "J7zxd0kiTd9c8.KiXT007htQkbHRx8rL",
+        "eTag": "7e85f9b59b979ed3bb6c8a08d471a49b-29",
+        "lastModified": "2026-06-06T07:26:36+00:00"
+      }
+    },
+    {
+      "role": "embeddings",
+      "path": "release/calibration/2026-06-04-memory-atom-v16/dgen1-r5-synth-300k-atom-v16-embeddings.json",
+      "fileName": "dgen1-r5-synth-300k-atom-v16-embeddings.json",
+      "sha256": "3f590dfa2a58161e213ced613e42dc663a37039b5946a5971c66b2047d0bda04",
+      "bytes": 475912682,
+      "s3": {
+        "bucket": "coretex-launch-artifacts-429971482539-us-east-2-an",
+        "region": "us-east-2",
+        "key": "coretex/launch/v16/dgen1-r5-synth-300k-atom-v16-embeddings.json",
+        "url": "https://coretex-launch-artifacts-429971482539-us-east-2-an.s3.us-east-2.amazonaws.com/coretex/launch/v16/dgen1-r5-synth-300k-atom-v16-embeddings.json",
+        "versionId": "MvL837Rg.pZlrubTPk0_eBq3dftXbY7j",
+        "eTag": "d492f364c3ae5463cbdc1bf0522cb21b-57",
+        "lastModified": "2026-06-06T07:26:38+00:00"
+      }
+    }
+  ],
+  "materializedRoot": "release/calibration/2026-06-04-memory-atom-v16/materialized",
+  "stateReplay": {
+    "baseCorpusRoot": "0xb692b4a133963399257979bc5f632a0900d2d5d73dbadf191d3cf9889188e57e",
+    "rule": "Replay accepted state advances/deltas from this base corpus/root. Do not hydrate a post-evolve corpus as the canonical launch corpus."
+  },
+  "profile": "enabled",
+  "bundlePath": "release/calibration/2026-06-04-memory-atom-v16/bundle-manifest-v2-dgen1-policy-r5-atom-v16-300k-enabled.json",
+  "bundleHash": "0x73172e2bc77e2f066a160bc94a48ae73c5221cf11591c3958c03aa5884793506",
+  "profilePath": "release/calibration/2026-06-04-memory-atom-v16/evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json",
+  "profileSha256": "0e019ef4efd28ab3e475c81798ac0b5e204746f3540dc1c4766bb50b32724392",
+  "bundleSha256": "d61e3a2f6ee8a925d2f7421432c82b6832f3ba47e208fd9df15ae3d2c198233d",
+  "s3": {
+    "bucket": "coretex-launch-artifacts-429971482539-us-east-2-an",
+    "region": "us-east-2",
+    "prefix": "coretex/launch/v16",
+    "publicBaseUrl": "https://coretex-launch-artifacts-429971482539-us-east-2-an.s3.us-east-2.amazonaws.com/coretex/launch/v16",
+    "versioning": "Enabled",
+    "access": "public-read GetObject on launch prefix; write/admin private",
+    "bundle-manifest-v2-dgen1-policy-r5-atom-v16-300k-enabled.json": {
+      "key": "coretex/launch/v16/bundle-manifest-v2-dgen1-policy-r5-atom-v16-300k-enabled.json",
+      "url": "https://coretex-launch-artifacts-429971482539-us-east-2-an.s3.us-east-2.amazonaws.com/coretex/launch/v16/bundle-manifest-v2-dgen1-policy-r5-atom-v16-300k-enabled.json",
+      "versionId": "CuWM6mI9ZTUJkVNnRIFAm.6jaFwW1hFn",
+      "eTag": "eeeeb52173ee9113b91e4d288d91c23a",
+      "lastModified": "2026-06-12T08:55:02+00:00"
+    },
+    "evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json": {
+      "key": "coretex/launch/v16/evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json",
+      "url": "https://coretex-launch-artifacts-429971482539-us-east-2-an.s3.us-east-2.amazonaws.com/coretex/launch/v16/evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json",
+      "versionId": "EtaWbjKYEfLMCtvbQp.F8anliAoDdKB4",
+      "eTag": "f75fad44b5fa6d27ea792914a1bc8dce",
+      "lastModified": "2026-06-08T21:16:32+00:00"
+    }
+  },
+  "baselineRecalibration": {
+    "report": "release/calibration/2026-06-04-memory-atom-v16/baseline-recalibration-v16-a100.json",
+    "oldBaselineParentScorePpm": 163371,
+    "baselineParentScorePpm": 288438,
+    "baselineVariancePpm": 0,
+    "baselineSamples": 3,
+    "evalSeedHex": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+    "preRecalibrationBundleHash": "0x45a62284b5b59540a188ae05cc78f541016c224765c0b0af19048e292a431d87",
+    "bundleHash": "0xe393037ec04b7ce631ff44be4f2882238b92d59fc2d48fd775c210a6e7e036ee"
+  },
+  "s3RepublishRequired": false,
+  "s3ConsistencyCheck": {
+    "checkedAt": "2026-06-12T11:08:19Z",
+    "method": "manifest workPolicyHash disambiguation re-publish (added coordinatorWorkPolicyHash = on-chain 0xd15e9049); bundle 0x73172e2b unchanged; public GET-rehash verified",
+    "localBundleHash": "0x73172e2bc77e2f066a160bc94a48ae73c5221cf11591c3958c03aa5884793506",
+    "localBundleSha256": "d61e3a2f6ee8a925d2f7421432c82b6832f3ba47e208fd9df15ae3d2c198233d",
+    "localProfileSha256": "0e019ef4efd28ab3e475c81798ac0b5e204746f3540dc1c4766bb50b32724392",
+    "s3BundleVersionId": "CuWM6mI9ZTUJkVNnRIFAm.6jaFwW1hFn",
+    "s3ProfileVersionId": "EtaWbjKYEfLMCtvbQp.F8anliAoDdKB4",
+    "consistent": true
+  },
+  "screenerThresholdCalibration": {
+    "report": "release/calibration/2026-06-04-memory-atom-v16/screener-threshold-v16-4090-statefloor-boundary-2026-06-12.json",
+    "reportSha256": "3eaa7ffe2eb27bb079134c3e1dba91477a52b66a65248abe8fb4df1b9a19f6b8",
+    "bundleHash": "0x73172e2bc77e2f066a160bc94a48ae73c5221cf11591c3958c03aa5884793506",
+    "workPolicyHash": "0x4defd562f027e350cc4537ef6b7e1baecdf9387ff19e10e5599325bedfe8b715",
+    "baselineParentScorePpm": 288438,
+    "minImprovementPpm": 2500,
+    "replayTolerancePpm": 250,
+    "stateAdvanceThresholdPpm": 2750,
+    "priorScreenerThresholdPpm": 355,
+    "screenerThresholdPpm": 1375,
+    "measuredRecentNoiseFloorPpm": 0,
+    "boundaryQualificationChecks": [
+      {
+        "class": "old_screener_pass_band_now_reject",
+        "band": "(priorScreenerThresholdPpm,currentScreenerThresholdPpm)",
+        "deltaPpm": 865,
+        "outcomes": {
+          "priorScreener": "SCREENER_PASS",
+          "currentScreener": "REJECT",
+          "currentStateAdvance": null
+        }
+      },
+      {
+        "class": "current_screener_only_not_state_advance",
+        "band": "[currentScreenerThresholdPpm,stateAdvanceThresholdPpm)",
+        "deltaPpm": 2062,
+        "outcomes": {
+          "priorScreener": null,
+          "currentScreener": "SCREENER_PASS",
+          "currentStateAdvance": "REJECT"
+        }
+      },
+      {
+        "class": "state_advance_exact_boundary",
+        "band": "[stateAdvanceThresholdPpm,stateAdvanceThresholdPpm]",
+        "deltaPpm": 2750,
+        "outcomes": {
+          "priorScreener": null,
+          "currentScreener": "SCREENER_PASS",
+          "currentStateAdvance": "STATE_ADVANCE"
+        }
+      }
+    ],
+    "rerankerBackendPairs": 4110,
+    "rerankerBackendCalls": 523,
+    "qwenCachePath": null,
+    "falseScreenerRateByRejectClass": 0,
+    "viableScreenerRecall": 1,
+    "stateAdvanceAcceptanceRate": 1
+  },
+  "workPolicyHash": "0x4defd562f027e350cc4537ef6b7e1baecdf9387ff19e10e5599325bedfe8b715",
+  "launchRepinRequired": {
+    "s3": false,
+    "chainConfig": false,
+    "onChainEpochContext": true,
+    "coordinatorIntegrationWorkPolicyHash": true,
+    "reason": "set CORETEX_WORK_POLICY_HASH to coordinatorWorkPolicyHash (on-chain activeCoreTexPolicyHash 0xd15e9049\u2026, NOT the off-chain workPolicyHash 0x4defd562\u2026); and pin the on-chain epoch context (setCoreTexEpochContext+setEpochCommit) at arm time"
+  },
+  "chain": {
+    "chainId": 8453,
+    "registryAddress": "0x79A9e5a1Ab4D7834CB4f4fB952f1F583032021Bb",
+    "miningContractAddress": "0xBc71E2428cc0955b3dF9f38F5cF5DE22a1fC1D9b",
+    "registryDeployBlock": 47231958,
+    "confirmationDepth": 4
+  },
+  "coordinatorWorkPolicyHash": "0xd15e904997bdb2bb13d932953a77c0ed3ef309076146a4416cfe5a4e0cdb3775",
+  "coordinatorWorkPolicyHashNote": "CORETEX_WORK_POLICY_HASH MUST be set to this value (= V4.activeCoreTexPolicyHash(epoch); goes into receipt.workPolicyHash; contract reverts InvalidWorkPolicyHash otherwise). The 'workPolicyHash' field above is the OFF-chain work-units provenance hash and is NOT a coordinator env value."
+}

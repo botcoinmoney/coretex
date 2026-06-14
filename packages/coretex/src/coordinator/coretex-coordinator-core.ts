@@ -1,9 +1,9 @@
 /**
- * v0 CoreTex production coordinator core — the hardened semantics that
- * `coretex_miner_testing/mainnet-coord-v16.mjs` prototyped, ported into a
- * production-shaped TypeScript module. NO sims, NO proxy scoring, NO local
- * shell-outs — those are the responsibility of the production server harness
- * that mounts this core via the dependency interfaces below.
+ * v0 CoreTex production coordinator core. This is the production-shaped
+ * TypeScript module for receipt issuance, root tracking, and submit
+ * admission. NO sims, NO proxy scoring, NO local shell-outs — those are the
+ * responsibility of the production server harness that mounts this core via
+ * the dependency interfaces below.
  *
  * Hardened invariants enforced here:
  *   1. Chain-confirmed-only root tracking: `liveState` / `liveRoot` /

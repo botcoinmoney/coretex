@@ -18,12 +18,15 @@ eval lift, reclaiming regions that do not, and validating any new surface with b
 
 Read these first:
 
-- `docs/HANDOFFS/NEW_CORPUS_HANDOFF.md` — zero-context current handoff.
-- `release/calibration/CURRENT.md` — authoritative calibration state.
-- `release/calibration/2026-05-21-memory-corpus-v2/DIFFICULTY_LONGEVITY_CALIBRATION_RUNBOOK.md` — execution gates.
-- `release/calibration/2026-05-21-memory-corpus-v2/SUBSTRATE_SURFACE_RUNWAY_MATRIX.md` — miner-facing surface audit.
-- `release/calibration/2026-05-21-memory-corpus-v2/SUBSTRATE_VNEXT_COMPOSITION.md` — trim/replace audit.
-- `release/calibration/CALIBRATION_LEDGER.jsonl` — calibration run registry.
+- `docs/BOTCOIN_CORETEX_DOCS.md` — protocol and validator overview.
+- `docs/BOTCOIN_CORETEX_MINER_SKILL.md` — miner-facing API contract.
+- `docs/CORETEX_COORD_WIRING_RUNBOOK.md` — production coordinator wiring and launch gates.
+- `release/calibration/2026-06-04-memory-atom-v16/coretex-launch-v16-artifacts.json` — public launch artifact manifest.
+- `release/calibration/fixtures/state-root-vectors.json` — committed replay/root parity vectors.
+
+Detailed calibration runbooks, raw hidden-eval artifacts, materialized corpora,
+and GPU host notes are intentionally not part of the public source tree. Keep
+them in private artifact storage or ignored local scratch.
 
 Current high-level state:
 

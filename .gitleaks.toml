@@ -1,0 +1,11 @@
+[allowlist]
+description = "Project-specific non-secret identifiers that match generic key heuristics."
+regexes = [
+  '''"tokenizerRevision"\s*:\s*"[a-f0-9]{40}"''',
+  '''"dedupKey"\s*:\s*"[a-f0-9]{64}"''',
+  '''\('special_tokens_map\.json',\s*'[a-f0-9]{40}',\s*\d+\)''',
+  '''\('tokenizer\.json',\s*'[a-f0-9]{40}',\s*\d+\)''',
+  '''\('tokenizer_config\.json',\s*'[a-f0-9]{40}',\s*\d+\)''',
+  '''BOTCOIN token:\s*0x[a-fA-F0-9]{40}''',
+  '''const ANVIL_KEY = '0x[0-9a-fA-F]{64}' ''',
+]

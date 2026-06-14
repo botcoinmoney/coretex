@@ -94,6 +94,18 @@ venv/
 .local-wip/
 experiments/results/phase7-real-smoke/
 experiments/results/synthetic-dryrun/winner.json
+coretex_miner_testing/
+
+# Calibration/provenance artifacts are private local data. Public git keeps only
+# the minimal launch manifests and replay fixtures needed by validators/tests.
+release/calibration/**
+!release/calibration/
+!release/calibration/fixtures/
+!release/calibration/fixtures/state-root-vectors.json
+!release/calibration/2026-06-04-memory-atom-v16/
+!release/calibration/2026-06-04-memory-atom-v16/coretex-launch-v16-artifacts.json
+!release/calibration/2026-06-04-memory-atom-v16/bundle-manifest-v2-dgen1-policy-r5-atom-v16-300k-enabled.json
+!release/calibration/2026-06-04-memory-atom-v16/evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json
 
 # Generated DACR corpus (regenerated from HF dataset by scripts/build-corpus-from-dacr.mjs)
 benchmark/fixtures/dacr/
