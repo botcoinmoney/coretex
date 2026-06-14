@@ -26,7 +26,7 @@ contract DeployMiningV4Mainnet is Script {
         );
 
         address botcoin = vm.envAddress("BOTCOIN_TOKEN_ADDRESS");
-        address v3 = vm.envAddress("BOTCOIN_STAKE_SOURCE_ADDRESS");
+        address stakeSource = vm.envAddress("BOTCOIN_STAKE_SOURCE_ADDRESS");
         address registry = vm.envAddress("CORETEX_REGISTRY_ADDRESS");
         address coordinator = vm.envAddress("CORETEX_COORDINATOR_SIGNER_ADDRESS");
         address policyAdmin = vm.envOr("POLICY_ADMIN", address(0));
@@ -49,17 +49,18 @@ contract DeployMiningV4Mainnet is Script {
         policy.stateAdvanceWorkBps[4] = 120_000;
 
         vm.startBroadcast();
-        BotcoinMiningV4 miningV4 = new BotcoinMiningV4(botcoin, v3, registry, coordinator, policyAdmin, policy);
+        BotcoinMiningV4 miningV4 =
+            new BotcoinMiningV4(botcoin, stakeSource, registry, coordinator, policyAdmin, policy);
         vm.stopBroadcast();
 
         (,, bytes32 policyHash,,,) = miningV4.getCoreTexPolicy(0xC0);
         console2.log("BotcoinMiningV4 deployed at:", address(miningV4));
         console2.log("BOTCOIN_TOKEN_ADDRESS:", botcoin);
-        console2.log("BOTCOIN_STAKE_SOURCE_ADDRESS:", v3);
+        console2.log("BOTCOIN_STAKE_SOURCE_ADDRESS:", stakeSource);
         console2.log("CORETEX_REGISTRY_ADDRESS:", registry);
         console2.log("CORETEX_COORDINATOR_SIGNER_ADDRESS:", coordinator);
         console2.log("POLICY_ADMIN:", miningV4.policyAdmin());
-        console2.log("currentEpoch from V3:", miningV4.currentEpoch());
+        console2.log("currentEpoch from stake source:", miningV4.currentEpoch());
         console2.logBytes32(policyHash);
         console2.log(
             "NEXT: call CoreTexRegistry.setBotcoinMiningV4(BotcoinMiningV4) from registry owner before first CoreTex state advance."

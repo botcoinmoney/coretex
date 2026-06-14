@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {BotcoinMiningV3} from "../src/BotcoinMiningV3.sol";
+import {MockStakeSource} from "./MockStakeSource.sol";
 import {BotcoinMiningV4} from "../src/BotcoinMiningV4.sol";
 import {CoreTexRegistry} from "../src/CoreTexRegistry.sol";
 
@@ -46,7 +46,7 @@ contract BotcoinMiningV4Test is Test {
     bytes32 private constant ARTIFACT = bytes32(uint256(0xA47));
 
     MockBOT token;
-    BotcoinMiningV3 v3;
+    MockStakeSource stakeSource;
     BotcoinMiningV4 v4;
     CoreTexRegistry registry;
 
@@ -63,10 +63,10 @@ contract BotcoinMiningV4Test is Test {
         tierCredits[1] = 205;
         tierCredits[2] = 520;
 
-        v3 = new BotcoinMiningV3(address(token), coordinator, thresholds, tierCredits, GENESIS, 1 days);
+        stakeSource = new MockStakeSource(address(token), thresholds, tierCredits, GENESIS, 1 days, 1 days);
         registry = new CoreTexRegistry(owner, coordinator);
         v4 = new BotcoinMiningV4(
-            address(token), address(v3), address(registry), coordinator, owner, _defaultPolicy(0xC0, 0)
+            address(token), address(stakeSource), address(registry), coordinator, owner, _defaultPolicy(0xC0, 0)
         );
         registry.setBotcoinMiningV4(address(v4));
 
@@ -265,13 +265,13 @@ contract BotcoinMiningV4Test is Test {
     function test_constructorRejectsZeroCoreAddresses() public {
         BotcoinMiningV4.CoreTexPolicyInput memory p = _defaultPolicy(0xF0, 0);
         vm.expectRevert(BotcoinMiningV4.ZeroAddress.selector);
-        new BotcoinMiningV4(address(0), address(v3), address(registry), coordinator, owner, p);
+        new BotcoinMiningV4(address(0), address(stakeSource), address(registry), coordinator, owner, p);
         vm.expectRevert(BotcoinMiningV4.ZeroAddress.selector);
         new BotcoinMiningV4(address(token), address(0), address(registry), coordinator, owner, p);
         vm.expectRevert(BotcoinMiningV4.ZeroAddress.selector);
-        new BotcoinMiningV4(address(token), address(v3), address(0), coordinator, owner, p);
+        new BotcoinMiningV4(address(token), address(stakeSource), address(0), coordinator, owner, p);
         vm.expectRevert(BotcoinMiningV4.ZeroAddress.selector);
-        new BotcoinMiningV4(address(token), address(v3), address(registry), address(0), owner, p);
+        new BotcoinMiningV4(address(token), address(stakeSource), address(registry), address(0), owner, p);
     }
 
     function test_adminSurfacesRejectUnauthorizedAndZeroValues() public {
@@ -419,7 +419,7 @@ contract BotcoinMiningV4Test is Test {
         );
 
         vm.prank(minerB);
-        v3.unstake();
+        stakeSource.unstake();
         BotcoinMiningV4.CoreTexReceipt memory r = _screener(minerB, 0, bytes32(0), 0, _hash("patch1"));
         _signCoreTex(r, minerB);
         vm.prank(minerB);
@@ -470,7 +470,7 @@ contract BotcoinMiningV4Test is Test {
         assertEq(v4.genesisTimestamp(), GENESIS);
         assertEq(v4.epochDuration(), 86400);
         assertEq(uint256(v4.currentEpoch()), (block.timestamp - v4.genesisTimestamp()) / v4.epochDuration());
-        assertEq(v4.currentEpoch(), v3.currentEpoch());
+        assertEq(v4.currentEpoch(), stakeSource.currentEpoch());
     }
 
     function test_registryLiveRootInitializesFromV4ParentRoot() public {
@@ -1233,21 +1233,21 @@ contract BotcoinMiningV4Test is Test {
         assertFalse(v4.stakeModeSwitchScheduled());
 
         // tier surface == V3 tier surface
-        assertEq(v4.tierCount(), v3.tierCount());
-        (uint256 vt, uint256 vc) = v3.getTier(2);
+        assertEq(v4.tierCount(), stakeSource.tierCount());
+        (uint256 vt, uint256 vc) = stakeSource.getTier(2);
         (uint256 t, uint256 c) = v4.getTier(2);
         assertEq(t, vt);
         assertEq(c, vc);
-        assertEq(v4.minStakeRequired(), v3.minStakeRequired());
+        assertEq(v4.minStakeRequired(), stakeSource.minStakeRequired());
 
         // staked amount / eligibility read V3, NOT native (native is empty)
-        assertEq(v4.effectiveStakedAmount(minerA, EPOCH), v3.stakedAmount(minerA));
+        assertEq(v4.effectiveStakedAmount(minerA, EPOCH), stakeSource.stakedAmount(minerA));
         assertEq(v4.effectiveStakedAmount(minerA, EPOCH), 500 ether);
-        assertEq(v4.stakedAmount(minerA), v3.stakedAmount(minerA));
+        assertEq(v4.stakedAmount(minerA), stakeSource.stakedAmount(minerA));
         assertEq(v4.nativeStakedAmount(minerA), 0); // proves V3, not native
         assertTrue(v4.isEligible(minerA));
         assertEq(v4.tierCreditsOf(minerA), 520);
-        assertEq(v4.withdrawableAt(minerA), v3.withdrawableAt(minerA));
+        assertEq(v4.withdrawableAt(minerA), stakeSource.withdrawableAt(minerA));
     }
 
     function test_nativeStakeDisabledWhileExternalV3ModeActive() public {
@@ -1289,7 +1289,7 @@ contract BotcoinMiningV4Test is Test {
         assertEq(uint8(v4.stakeMode()), uint8(BotcoinMiningV4.StakeMode.ExternalV3));
 
         // currentEpoch-driven views still read V3 before the boundary epoch...
-        assertEq(v4.tierCount(), v3.tierCount());
+        assertEq(v4.tierCount(), stakeSource.tierCount());
         // ...and flip to native once the clock crosses the scheduled epoch.
         vm.warp(GENESIS + uint256(EPOCH + 2) * 1 days + 1);
         assertEq(uint8(v4.effectiveStakeMode(v4.currentEpoch())), uint8(BotcoinMiningV4.StakeMode.NativeV4));
@@ -1303,9 +1303,9 @@ contract BotcoinMiningV4Test is Test {
         // guard is unreachable on a normally-deployed instance. Document that the
         // copied native tiers exactly mirror the V3 source (the precondition that
         // keeps this guard satisfied), then prove a NativeV4 schedule succeeds.
-        uint256 len = v3.tierCount();
+        uint256 len = stakeSource.tierCount();
         for (uint256 i; i < len; ++i) {
-            (uint256 vt, uint256 vc) = v3.getTier(i);
+            (uint256 vt, uint256 vc) = stakeSource.getTier(i);
             // getTier under ExternalV3 proxies to V3; under native it returns the
             // copied tier. Schedule+finalize then re-read to prove the copy.
             assertEq(vt, vt);
@@ -1437,9 +1437,9 @@ contract BotcoinMiningV4Test is Test {
         uint64 epochA = v4.currentEpoch();
         assertEq(genesisA, GENESIS);
         assertEq(durationA, 86400);
-        assertEq(epochA, v3.currentEpoch());
+        assertEq(epochA, stakeSource.currentEpoch());
 
-        BotcoinMiningV4.CoreTexReceipt memory rA = _screener(minerB, 0, bytes32(0), 0, _hash("abi-v3"));
+        BotcoinMiningV4.CoreTexReceipt memory rA = _screener(minerB, 0, bytes32(0), 0, _hash("abi-stakeSource"));
         _signCoreTex(rA, minerB);
         vm.prank(minerB);
         v4.submitCoreTexReceipt(rA);
@@ -1455,7 +1455,7 @@ contract BotcoinMiningV4Test is Test {
         // epoch-clock ABI is byte-identical regardless of stake mode
         assertEq(v4.genesisTimestamp(), genesisA);
         assertEq(v4.epochDuration(), durationA);
-        assertEq(v4.currentEpoch(), v3.currentEpoch()); // currentEpoch still proxies V3 epochSource
+        assertEq(v4.currentEpoch(), stakeSource.currentEpoch()); // currentEpoch still proxies V3 epochSource
         assertEq(
             uint256(v4.currentEpoch()),
             (block.timestamp - v4.genesisTimestamp()) / v4.epochDuration()
@@ -1609,9 +1609,9 @@ contract BotcoinMiningV4Test is Test {
     function _stake(address miner, uint256 amount) internal {
         token.mint(miner, amount);
         vm.prank(miner);
-        token.approve(address(v3), amount);
+        token.approve(address(stakeSource), amount);
         vm.prank(miner);
-        v3.stake(amount);
+        stakeSource.stake(amount);
     }
 
     function _setContext(

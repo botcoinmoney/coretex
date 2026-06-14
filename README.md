@@ -7,9 +7,12 @@ receipt when the patch clears either the screener gate or the state-advance
 gate. Validators independently verify public artifacts, replay on-chain state
 advances, and check registry-pinned roots.
 
-CoreTex is not a base-model memory layer. It is a protocol for proposing,
-scoring, crediting, publishing, and replaying changes to a deterministic memory
-retrieval substrate.
+CoreTex is a protocol for proposing, scoring, crediting, publishing, and
+replaying changes to a deterministic memory retrieval substrate.
+
+The standalone validator client lives at
+[botcoinmoney/coretex-client](https://github.com/botcoinmoney/coretex-client).
+Use that repo as the default entry point for running the client.
 
 ## Quick Start
 
@@ -186,7 +189,6 @@ Main contracts:
 
 - `contracts/src/CoreTexRegistry.sol` — live root, epoch context pins, transition events, registry seal.
 - `contracts/src/BotcoinMiningV4.sol` — standard lane + CoreTex receipts, credits, funding, claims.
-- `contracts/src/BotcoinMiningV3.sol` — existing stake source for launch eligibility.
 
 Run:
 
@@ -315,12 +317,6 @@ python3 -m pytest packages/coretex-py/coretex_py/tests/ -v
 ```
 
 ## Repository Hygiene
-
-Do not commit `.env`, private keys, wallet material, API tokens,
-authenticated RPC URLs, production logs, database dumps, user data, or
-coordinator signing material. Generated corpora, embeddings, model caches,
-materialized state, score caches, and machine-local run outputs belong outside
-Git unless an explicit release policy says otherwise.
 
 CI includes repository scanning with gitleaks and TruffleHog. The package
 tarball for `@botcoin/coretex` is limited to `dist`, package metadata, README,

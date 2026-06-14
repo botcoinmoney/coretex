@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {BotcoinMiningV3} from "../src/BotcoinMiningV3.sol";
+import {MockStakeSource} from "./MockStakeSource.sol";
 import {BotcoinMiningV4} from "../src/BotcoinMiningV4.sol";
 import {CoreTexRegistry} from "../src/CoreTexRegistry.sol";
 
@@ -251,7 +251,7 @@ contract BotcoinMiningV4InvariantTest is Test {
     bytes32 private constant EPOCH_SECRET = bytes32(uint256(0x515151));
 
     InvariantBOT token;
-    BotcoinMiningV3 v3;
+    MockStakeSource stakeSource;
     BotcoinMiningV4 v4;
     CoreTexRegistry registry;
     BotcoinMiningV4Handler handler;
@@ -268,10 +268,10 @@ contract BotcoinMiningV4InvariantTest is Test {
         tierCredits[0] = 100;
         tierCredits[1] = 205;
         tierCredits[2] = 520;
-        v3 = new BotcoinMiningV3(address(token), coordinator, thresholds, tierCredits, GENESIS, 1 days);
+        stakeSource = new MockStakeSource(address(token), thresholds, tierCredits, GENESIS, 1 days, 1 days);
         registry = new CoreTexRegistry(address(this), coordinator);
         v4 = new BotcoinMiningV4(
-            address(token), address(v3), address(registry), coordinator, address(this), _defaultPolicy(0xC0, 0)
+            address(token), address(stakeSource), address(registry), coordinator, address(this), _defaultPolicy(0xC0, 0)
         );
         registry.setBotcoinMiningV4(address(v4));
         // Raise screener cap above the fuzz budget so the invariant exercises credit-accounting,
@@ -334,9 +334,9 @@ contract BotcoinMiningV4InvariantTest is Test {
     function _stake(address miner, uint256 amount) internal {
         token.mint(miner, amount);
         vm.prank(miner);
-        token.approve(address(v3), amount);
+        token.approve(address(stakeSource), amount);
         vm.prank(miner);
-        v3.stake(amount);
+        stakeSource.stake(amount);
     }
 
     function _defaultPolicy(uint32 rulesVersion, uint64 effectiveEpoch)
