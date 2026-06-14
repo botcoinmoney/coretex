@@ -43,7 +43,7 @@ the substrate, generates retrieval candidates, renders the memory representation
 used for scoring, reranks query/document pairs with `Qwen/Qwen3-Reranker-0.6B`,
 and compares the patch against the current parent baseline.
 
-## Why The Design Looks This Way
+## Design Intent
 
 LLMs have limited context windows. Larger context also raises compute cost and
 can degrade answer quality when useful evidence is surrounded by stale,
