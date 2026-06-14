@@ -2,7 +2,7 @@
   "name": "botcoin-coretex",
   "private": true,
   "version": "0.0.0",
-  "description": "Botcoin Cortex — on-chain memory codec mining lane",
+  "description": "Botcoin CoreTex — retrieval-memory substrate mining lane",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22.5"

@@ -17,7 +17,7 @@
  *
  * The subagent MUST NOT see:
  *   - any other repo source (coretex internals, scoring code, profile JSON)
- *   - any handoff document, calibration finding, or CURRENT.md
+ *   - any calibration finding, working note, or generated run output
  *   - this script or screener-real-qwen-economics.mjs
  *   - the launch profile or bundle manifest (only what the /coretex/status response exposes)
  *

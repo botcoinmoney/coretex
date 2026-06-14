@@ -2,7 +2,7 @@
   "name": "@botcoin/coretex",
   "version": "0.1.0",
   "private": false,
-  "description": "Botcoin Core decoder, evaluator, and CLI for the Cortex memory codec.",
+  "description": "Botcoin CoreTex decoder, evaluator, validator, and CLI.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "dist/validator.js",

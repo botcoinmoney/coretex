@@ -2,7 +2,7 @@
 /**
  * Layer 4 — Qwen-0.6B verifier-candidate test for Corpus V2.
  *
- * Question (handoff Layer 4): does routing BETTER EVIDENCE into the reranker
+ * Question (Layer 4 gate): does routing BETTER EVIDENCE into the reranker
  * improve final metrics — not by leaking labels, but because the answer now
  * reaches the reranker? Compares two candidate pools at a cheap cap K:
  *   - dense   : stage-1 dense top-K (BGE-M3 int8/243)

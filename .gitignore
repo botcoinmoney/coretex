@@ -36,10 +36,10 @@ id_ed25519
 *private-key*
 *wallet*.json
 
-# Local working handoff/findings notes stay local.
+# Local working notes stay out of source control.
 docs/HANDOFFS/**
 
-# Local process / agent handoff docs stay local; public docs live under docs/ and specs/.
+# Local process notes stay out of source control; public docs live under docs/ and specs/.
 /CONTRIBUTING.md
 /instructions.md
 /REPO_LAUNCH_SURFACE.md

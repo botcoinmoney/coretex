@@ -13,7 +13,7 @@
  * → byte-identical delta, so any verifier reconstructs the same corpusRoot.
  *
  * This module is the LOGICAL-delta generator (text + structure, CPU-deterministic). The embedding +
- * production-event + corpusRoot step is the pipeline/A100 wiring (see the handoff).
+ * production-event + corpusRoot step is the epoch-runner wiring.
  */
 import { createHash } from 'node:crypto';
 
@@ -410,12 +410,12 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
         publicIntent: { atom: 'relation_lifecycle', subjectEntityId: subj.id, relationType: 'supersedes', lifecycleState: 'current_relation', scopeLabel },
         band: 'very_hard', operationFamily: 'relation_lifecycle', liveUpdateEpoch: epoch });
     } else if (branch === 'noise_suppression') {
-      const scopeLabel = isProject ? 'rollback drill' : 'handoff drill';
+      const scopeLabel = isProject ? 'rollback drill' : 'operator drill';
       const owner = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-clear-${epoch}`;
       const wrongOwner = `${API_HOSTS[Math.floor(rnd() * API_HOSTS.length)]}-draft-${epoch}`;
       const rightId = `d_${idBase}_ns_r`, wrongId = `d_${idBase}_ns_w`, qid = `q_${idBase}_ns`;
       addedDocs.push({ id: rightId, lane: 'deep', kind: 'noise_suppression_answer', entityIds: tagU,
-        text: `The signed handoff ledger for ${canonical}'s ${scopeLabel} lists approved owner ${owner}.`,
+        text: `The signed run ledger for ${canonical}'s ${scopeLabel} lists approved owner ${owner}.`,
         shape: 'noise_suppression_answer', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
       addedDocs.push({ id: wrongId, lane: 'deep', kind: 'noise_suppression_distractor', entityIds: tagU,
         text: `For ${canonical}'s ${scopeLabel}, the current approved owner is ${wrongOwner}.`,

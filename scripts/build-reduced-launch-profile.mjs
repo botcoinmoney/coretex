@@ -3,7 +3,7 @@
  * Build the reduced CoreTex launch-candidate profile and matching bundle.
  *
  * This derives from the all-on v15 calibration profile, keeps only the surfaces
- * promoted by the 2026-06-02 handoff, and leaves sandbox/damaging surfaces off.
+ * promoted by the reduced-launch profile pass, and leaves sandbox/damaging surfaces off.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';

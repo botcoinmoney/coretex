@@ -4,7 +4,7 @@
  * artifact against the hard invariants the calibration phase requires. Exits non-zero on ANY
  * gate failure, with a per-track summary of what failed.
  *
- * Hard gates per the calibration handoff:
+ * Hard gates for calibration campaign metrics:
  *
  *   oracle:                  output exists, locality + no-op + random checks present, runWentToCompletion
  *   conflict:                no-op gate PASS recorded; honest > random > 0; off-family worst <= 0.03

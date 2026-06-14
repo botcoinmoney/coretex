@@ -522,7 +522,7 @@ async function handleSubmit(body) {
   return out;
 }
 
-// Admin endpoints — drive state transitions the handoff requires us to exercise.
+// Admin endpoints — drive the state transitions this harness must exercise.
 // IMPORTANT: these bump pin hashes synthetically (random sha256). They model the on-chain
 // CONSEQUENCE (baseline recompute + stale-context rejection of receipts built against the
 // old pin) but they do NOT exercise the upstream MACHINERY (real EpochFrontier rotate,
@@ -880,7 +880,7 @@ parameter on its own.
 
 (populated by analyze; see transitions.jsonl)
 
-## Gates (handoff §Gates)
+## Gates
 
 | gate | status |
 |---|---|

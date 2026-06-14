@@ -3,7 +3,7 @@
  * CoreTex-only screener threshold calibration (v2 — canonical qualification + noise-floor).
  * NOT the miner / V4 / wallet / chain harness.
  *
- * Per the calibration handoff:
+ * Screener threshold calibration:
  *   - patch classes scored via canonical evaluateRetrievalBenchmarkPatch
  *   - REJECT / SCREENER_PASS / STATE_ADVANCE via canonical evaluateCoreTexWorkQualification
  *     (NOT manual delta bands). Passes outcome, parentMatchesLiveRoot, liveStateAdvanced,

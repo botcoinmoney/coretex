@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Live-update churn endurance gate — proves the evolveCorpus delta path reconstructs corpusRoot
- * with real pinned-bi-encoder embeddings. Closes the handoff churn gate:
+ * with real pinned-bi-encoder embeddings. Closes the churn gate:
  *   "added docs embedded by pinned bi-encoder; buildCorpusDelta -> applyCorpusDelta reconstruct same corpusRoot".
  *
  * Steps:

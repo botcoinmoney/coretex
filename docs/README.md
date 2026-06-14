@@ -2,9 +2,9 @@
 
 Last updated: 2026-06-14.
 
-Public documentation is limited to canonical protocol, runtime, miner, validator,
-and deployment surfaces. Agent handoffs, launch scratch notes, and calibration
-runbooks are intentionally local-only.
+Public documentation is limited to canonical protocol, runtime, miner,
+validator, and deployment surfaces. Working notes, launch scratch output, and
+generated run logs stay out of source control.
 
 ## Read First
 

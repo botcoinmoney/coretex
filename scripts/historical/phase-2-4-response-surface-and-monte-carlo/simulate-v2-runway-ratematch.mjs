@@ -2,7 +2,7 @@
 /**
  * Network runway RATE-MATCHING simulator (CPU-only, deterministic).
  *
- * Answers the launch-gating question the handoff/runbook defer to a growth+churn
+ * Answers the launch-gating question the runbook defers to a growth+churn
  * model: does the temporal working-set CAPACITY (a SHARED ~96-pair buffer, of which
  * ~64 are mineable end-to-end on the current static corpus) translate into
  * launch-PERIOD RUNWAY under realistic miner counts + corpus growth?
