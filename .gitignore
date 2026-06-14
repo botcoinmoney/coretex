@@ -39,11 +39,11 @@ id_ed25519
 # Local working notes stay out of source control.
 docs/HANDOFFS/**
 
-# Local process notes stay out of source control; public docs live under docs/ and specs/.
+# Local process notes stay out of source control; maintained docs live under docs/ and specs/.
 /CONTRIBUTING.md
 /instructions.md
-/REPO_LAUNCH_SURFACE.md
-/COORDINATOR_INTEGRATION_MAP.md
+/*LAUNCH*SURFACE*.md
+/*INTEGRATION*MAP*.md
 /.github/PULL_REQUEST_TEMPLATE.md
 /.github/ISSUE_TEMPLATE/*.md
 

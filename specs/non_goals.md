@@ -22,7 +22,7 @@ CortexState stores *how to find, route, update, and invalidate memory* — not m
 **Rejected because:** LoRA mining turns Cortex into a model-training lane and introduces
 subjective quality judgments (which model is better?). The canonical verifier cannot
 deterministically evaluate model quality without an API model in consensus — which is explicitly
-rejected (see §3 ORGANISM_CORTEX_STATE_PLAN.md).
+rejected by the deterministic-verifier design.
 
 ### 3. Arbitrary memory text stored on-chain
 **Rejected because:** Raw text storage on-chain is expensive, non-deterministic in value, and

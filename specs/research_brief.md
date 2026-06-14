@@ -1,7 +1,7 @@
 # CoreTex Research Brief
 
-> Phase 0 deliverable — Research subagent. All weights and pass-rate targets are LOCKED per §9 Phase 0
-> of ORGANISM_CORTEX_STATE_PLAN.md. Do not change them; record concerns in-line instead.
+> Phase 0 research snapshot. Historical weights and pass-rate targets are preserved here for
+> traceability; record concerns in-line instead of changing this baseline.
 
 ---
 
@@ -232,7 +232,7 @@ dataset license is CC-BY-4.0.
 
 ### 2.7 ERM — Correctness-Gated Key Updates
 
-**What it is in the Cortex design context:** "ERM" in the ORGANISM_CORTEX_STATE_PLAN.md refers to
+**What it is in the Cortex design context:** "ERM" in the CoreTex design refers to
 the *principle* of correctness-gated key updates — the idea that memory keys should only be updated
 when the new value is demonstrably more correct, not on every new experience. This informs the
 validity-interval and revocation-bit design in CortexState words 800–895.
@@ -355,7 +355,7 @@ bands themselves.
 
 ---
 
-## 6. Score Formula (from §5 ORGANISM_CORTEX_STATE_PLAN.md)
+## 6. Score Formula (Historical Phase 0 Baseline)
 
 Per-component score ∈ [0,1]; weights frozen before Phase 4 lock:
 
@@ -415,10 +415,9 @@ Useful patches are best submitted immediately because another miner can advance 
 **7.5 Core version instability**
 Risk: Core upgrades invalidate previously-good patches, creating a moving-target that rewards
 miners who track Core version rather than improving the codec.
-Mitigation: Core upgrades publish a `state_translation_patch` mapping V_n → V_{n+1} or an
-explicit reset with documented rationale. Ambiguity is a hard non-goal (§3 ORGANISM_CORTEX_STATE_PLAN.md
-Phase 3). `coreVersionHash` is committed on-chain per epoch so all participants know which version
-scored which patches.
+Mitigation: Core upgrades publish a `state_translation_patch` mapping V_n -> V_{n+1} or an
+explicit reset with documented rationale. Ambiguity is a hard non-goal. `coreVersionHash` is
+committed on-chain per epoch so all participants know which version scored which patches.
 
 ---
 

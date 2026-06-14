@@ -10,12 +10,8 @@ on:
 env:
   NODE_VERSION: "22"
 
-# The former e2e-phase-* matrix, contracts-fork, and context-freshness jobs were
-# removed 2026-06-12: they invoked scripts/run-e2e.mjs (which walked a deleted
-# test/e2e/ tree and always exited 0), a fork test contract that does not exist
-# (CortexForkTest), and a context.md convention this repo never adopted — all
-# permanently green while testing nothing. The real coverage they carried
-# (coretex-py pytest, from the old e2e-phase-1b job) lives in python-tests below.
+# Obsolete legacy matrix jobs were removed after they stopped exercising live
+# code paths. Python parity coverage lives in python-tests below.
 
 jobs:
   lint-type-unit:
