@@ -1,11 +1,7 @@
-# Code ownership — see ORGANISM_CORTEX_STATE_PLAN.md §10 subagent assignments
-# for the canonical mapping between code areas and the agent role responsible.
-
 * @botcoinmoney
 
 # Specs
 /specs/coretex_state.md           @botcoinmoney
-/specs/coretex_schema.json        @botcoinmoney
 /specs/packing_spec.md           @botcoinmoney
 /specs/merkleization_spec.md     @botcoinmoney
 /specs/patch_format.md           @botcoinmoney
@@ -25,10 +21,5 @@
 # Benchmark
 /benchmark/                         @botcoinmoney
 
-# Ops + release surface
-/ops/                               @botcoinmoney
-/instructions.md                    @botcoinmoney
-
-# Strict §13.5 file — driver-only updates
-/context.md                         @botcoinmoney
-/context-archive.md                 @botcoinmoney
+# Release artifacts
+/release/                           @botcoinmoney
