@@ -56,12 +56,12 @@ Confirmed by readback at deploy (currentEpoch `112`, delegated from V3):
   nativeTotalStaked == 0`, `coreTexScreenerCapPerMinerPerEpoch == 50`,
   `coreTexPolicyCount == 1`, `nextIndex(owner) == 0`.
 
-The epoch context (`setCoreTexEpochContext` + `setEpochCommit`) is pinned at the
-arm step per `docs/CORETEX_COORD_WIRING_RUNBOOK.md` (§"V3→V4 Cutover"), against
-the FINAL rebundled `coreVersionHash`/`corpusRoot`/`baselineManifestHash` from
+The epoch context (`setCoreTexEpochContext` + `setEpochCommit`) is pinned by the
+production coordinator arm step against the FINAL rebundled
+`coreVersionHash`/`corpusRoot`/`baselineManifestHash` from
 `coretex-launch-v16-artifacts.json` — NOT pinned by this deploy.
 
-## Chain-config publication (runbook R7)
+## Chain-config publication
 
 The launch manifest `chain` block is populated to:
 

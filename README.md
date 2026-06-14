@@ -36,8 +36,6 @@ The main public docs are:
 
 - `docs/BOTCOIN_CORETEX_DOCS.md` — system overview.
 - `docs/BOTCOIN_CORETEX_MINER_SKILL.md` — miner-facing API and patch flow.
-- `docs/CORETEX_VALIDATOR_STANDALONE_RUNBOOK.md` — validator setup/sync/replay.
-- `docs/CORETEX_COORD_WIRING_RUNBOOK.md` — production coordinator wiring and launch gates.
 - `docs/miner-api-contract.md` — public `/coretex/*` API contract.
 - `specs/` — protocol specifications.
 

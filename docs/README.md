@@ -11,8 +11,6 @@ generated run logs stay out of source control.
 - [`../README.md`](../README.md) — repo overview and canonical code path map.
 - [`BOTCOIN_CORETEX_DOCS.md`](./BOTCOIN_CORETEX_DOCS.md) — CoreTex system overview.
 - [`BOTCOIN_CORETEX_MINER_SKILL.md`](./BOTCOIN_CORETEX_MINER_SKILL.md) — miner-facing CoreTex lane contract.
-- [`CORETEX_VALIDATOR_STANDALONE_RUNBOOK.md`](./CORETEX_VALIDATOR_STANDALONE_RUNBOOK.md) — standalone validator setup/sync/replay.
-- [`CORETEX_COORD_WIRING_RUNBOOK.md`](./CORETEX_COORD_WIRING_RUNBOOK.md) — production coordinator wiring and launch gates.
 
 ## Specs
 
@@ -27,8 +25,6 @@ generated run logs stay out of source control.
 ## Runtime Docs
 
 - [`miner-api-contract.md`](./miner-api-contract.md) — public miner API contract.
-- [`CORETEX_SCORER_PARITY_RELEASE_GATE.md`](./CORETEX_SCORER_PARITY_RELEASE_GATE.md) — scorer parity release gate.
-- [`CORETEX_EPOCH_EVOLVE_IAM_RUNBOOK.md`](./CORETEX_EPOCH_EVOLVE_IAM_RUNBOOK.md) — IAM shape for epoch artifact publication.
 - [`contract-addresses-mainnet.md`](./contract-addresses-mainnet.md) — current deployed contract addresses.
 
 ## Public Launch Artifacts

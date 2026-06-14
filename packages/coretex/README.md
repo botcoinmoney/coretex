@@ -86,6 +86,5 @@ import { … } from '@botcoin/coretex/full';        // everything
 
 ## More
 
-See `docs/CORETEX_VALIDATOR_STANDALONE_RUNBOOK.md` in the repository for the
-full standalone validator runbook (state-dir layout, incremental replay
-snapshots, epoch-secret reveal flow, troubleshooting).
+The standalone validator client lives at
+https://github.com/botcoinmoney/coretex-client.
