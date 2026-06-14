@@ -490,6 +490,77 @@ describe('scorer-server — mandatory pinned seed + secretless host', () => {
   });
 });
 
+describe('scorer-server — bounded job queue', () => {
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+  test('createScorerJobQueue drains a FIFO backlog under serial concurrency', async () => {
+    const releases = [];
+    const started = [];
+    const finished = [];
+    const queue = createScorerJobQueue({
+      concurrency: 1,
+      maxQueueDepth: 4,
+      run: (job) => new Promise((resolve) => {
+        started.push(job.id);
+        releases.push(() => {
+          finished.push(job.id);
+          resolve({ status: 200, body: { id: job.id } });
+        });
+      }),
+    });
+
+    const p1 = queue.enqueue({ id: 'a' });
+    const p2 = queue.enqueue({ id: 'b' });
+    const p3 = queue.enqueue({ id: 'c' });
+
+    assert.deepEqual(started, ['a']);
+    assert.deepEqual(queue.snapshot(), { active: 1, queued: 2, maxQueueDepth: 4, concurrency: 1 });
+
+    releases.shift()();
+    assert.deepEqual(await p1, { status: 200, body: { id: 'a' } });
+    await tick();
+    assert.deepEqual(started, ['a', 'b']);
+    assert.deepEqual(queue.snapshot(), { active: 1, queued: 1, maxQueueDepth: 4, concurrency: 1 });
+
+    releases.shift()();
+    assert.deepEqual(await p2, { status: 200, body: { id: 'b' } });
+    await tick();
+    assert.deepEqual(started, ['a', 'b', 'c']);
+
+    releases.shift()();
+    assert.deepEqual(await p3, { status: 200, body: { id: 'c' } });
+    await tick();
+    assert.deepEqual(finished, ['a', 'b', 'c']);
+    assert.deepEqual(queue.snapshot(), { active: 0, queued: 0, maxQueueDepth: 4, concurrency: 1 });
+  });
+
+  test('createScorerJobQueue returns 503 when the waiting backlog is saturated', async () => {
+    const releases = [];
+    const queue = createScorerJobQueue({
+      concurrency: 1,
+      maxQueueDepth: 1,
+      run: (job) => new Promise((resolve) => {
+        releases.push(() => resolve({ status: 200, body: { id: job.id } }));
+      }),
+    });
+
+    const active = queue.enqueue({ id: 'active' });
+    const queued = queue.enqueue({ id: 'queued' });
+    const saturated = await queue.enqueue({ id: 'overflow' });
+
+    assert.equal(saturated.status, 503);
+    assert.equal(saturated.body.error, 'scorer-queue-full');
+    assert.match(saturated.body.reason, /queue is full \(1 waiting, 1 active\)/);
+    assert.deepEqual(queue.snapshot(), { active: 1, queued: 1, maxQueueDepth: 1, concurrency: 1 });
+
+    releases.shift()();
+    assert.deepEqual(await active, { status: 200, body: { id: 'active' } });
+    await tick();
+    releases.shift()();
+    assert.deepEqual(await queued, { status: 200, body: { id: 'queued' } });
+  });
+});
+
 describe('scorer-server — auth policy', () => {
   test('loopback bind without a token is allowed', () => {
     assert.deepEqual(resolveScorerAuth({}), { host: '127.0.0.1' });
