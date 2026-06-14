@@ -1,4 +1,4 @@
-name: Secret Scan
+name: Repository Checks
 
 on:
   push:
@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  secret-scan:
-    name: Gitleaks + TruffleHog
+  repository-scan:
+    name: Repository scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +24,7 @@ jobs:
             | tar -xz gitleaks
           sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
 
-      - name: Scan Git history with gitleaks
+      - name: Check Git history with gitleaks
         run: gitleaks detect --source . --redact --no-banner --verbose
 
       - name: Install TruffleHog
@@ -33,5 +33,5 @@ jobs:
             | tar -xz trufflehog
           sudo install -m 0755 trufflehog /usr/local/bin/trufflehog
 
-      - name: Scan Git history with TruffleHog
+      - name: Check Git history with TruffleHog
         run: trufflehog git "file://${PWD}" --only-verified --fail --no-update
