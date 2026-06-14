@@ -174,6 +174,7 @@ export interface PerPatchReceipt {
     | 'gate-acceptance-floor'            // gate pack failed structural/protected/family acceptance floors
     | 'confirm-acceptance-floor'         // confirm pack failed structural/protected/family acceptance floors
     | 'admit-malformed-input';
+  readonly innerRejectionReason?: string;
 }
 
 export interface PerPatchDualPackEvaluationProof {
@@ -402,6 +403,7 @@ export async function runPerPatchEvaluation(
       gateScorePpm, confirmScorePpm: 0,
       accepted: false,
       rejectionReason: !gate.accepted ? 'gate-acceptance-floor' : 'gate-below-threshold',
+      ...(!gate.accepted && gate.rejectionReason ? { innerRejectionReason: gate.rejectionReason } : {}),
     };
   }
 
@@ -424,7 +426,7 @@ export async function runPerPatchEvaluation(
     gateSeed, confirmSeed,
     gateScorePpm, confirmScorePpm,
     accepted: confirmPass,
-    ...(!confirmPass ? { rejectionReason: confirmReason } : {}),
+    ...(!confirmPass ? { rejectionReason: confirmReason, ...(!confirm.accepted && confirm.rejectionReason ? { innerRejectionReason: confirm.rejectionReason } : {}) } : {}),
   };
 }
 

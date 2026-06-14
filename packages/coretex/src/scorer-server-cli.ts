@@ -148,6 +148,7 @@ export interface ScorerJobResult {
   readonly jobId: string;
   readonly accepted: boolean;
   readonly rejectionReason?: string;
+  readonly innerRejectionReason?: string;
   readonly scoreBeforePpm: number | null;
   readonly scoreAfterPpm: number | null;
   readonly deltaPpm: number;
@@ -428,6 +429,7 @@ export async function handleScoreJob(
         ...base,
         accepted: false,
         rejectionReason: result.code,
+        ...(result.innerRejectionReason ? { innerRejectionReason: result.innerRejectionReason } : {}),
         scoreBeforePpm: null,
         scoreAfterPpm: null,
         deltaPpm: 0,

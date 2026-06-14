@@ -189,7 +189,7 @@ export type EvalResult =
   // §8 envelope strip: reject results carry NO score telemetry. The core never
   // forwards deterministicDeltaPpm / requiredDeltaPpm (or any equivalent score
   // gradient) into a rejection envelope.
-  | { readonly outcome: 'reject'; readonly code: string; readonly reason: string }
+  | { readonly outcome: 'reject'; readonly code: string; readonly reason: string; readonly innerRejectionReason?: string }
   | { readonly outcome: 'screener_pass'; readonly deterministicDeltaPpm: number;
       readonly evalReportHash: string; readonly artifactHash: string;
       readonly evaluationProof?: CoreTexDualPackEvaluationProof }

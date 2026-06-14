@@ -320,6 +320,7 @@ export type ProductionEvalRejectResult = {
   readonly outcome: 'reject';
   readonly code: string;
   readonly reason: string;
+  readonly innerRejectionReason?: string;
 };
 
 /** §3 artifact-bytes return: accepted production results carry the FULL
@@ -614,6 +615,7 @@ export function createCoreTexEvaluatorCore(deps: ProductionCoreTexEvaluatorCoreD
           outcome: 'reject',
           code,
           reason: 'dual-pack evaluator rejected patch',
+          ...(dual.innerRejectionReason ? { innerRejectionReason: dual.innerRejectionReason } : {}),
         };
       }
 
