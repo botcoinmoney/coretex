@@ -632,6 +632,15 @@ export class CoreTexCoordinatorCore {
 
   // ── chain-event verification + apply ─────────────────────────────────────
   private applyChainEvent(ev: CoreTexStateAdvancedEvent): void {
+    if (ev.epoch < this.config.epoch) {
+      // Finalized PRIOR-epoch advance — already folded into this epoch's on-chain
+      // start root (liveRoot was seeded to it at load). Skip; re-applying would fail
+      // the parent/transitionIndex checks. Lets the watcher replay from a start block
+      // that predates the live epoch (e.g. a stale CORETEX_REPLAY_FROM_BLOCK after an
+      // epoch advance) WITHOUT dead-locking; transitionIndex is per-epoch (resets to 0)
+      // so contiguity is preserved.
+      return;
+    }
     if (ev.epoch !== this.config.epoch) {
       throw new Error(`watcher: event epoch ${ev.epoch} ≠ configured ${this.config.epoch}`);
     }

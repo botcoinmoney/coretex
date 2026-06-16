@@ -240,6 +240,22 @@ describe('CoreTexCoordinatorCore — chain-confirmed-only semantics', () => {
     assert.equal(s.unhealthyReason, null);
   });
 
+  test('watcher SKIPS finalized prior-epoch events (stale replay start does not fail-close)', async () => {
+    // A finalized event from a PRIOR epoch sits in the replay window (e.g. a stale
+    // CORETEX_REPLAY_FROM_BLOCK still pointing before this epoch's boundary). It must
+    // be SKIPPED, not rejected with "watcher: event epoch N != configured N+1".
+    const chainGen = new EventChain();
+    const priorEpochEv = { ...chainGen.next({ blockNumber: 500, blockHash: '0x' + '55'.repeat(32) }), epoch: EPOCH - 1n };
+    const chain = new MockChain({ head: 1000, events: [priorEpochEv], regEpoch: { liveStateRoot: GENESIS_ROOT, transitionCount: 0 } });
+    const coord = new CoreTexCoordinatorCore(baseConfig, chain, loadGenesis, evaluator);
+    await coord.boot();
+    const s = coord.getState();
+    assert.equal(s.transitionCount, 0, 'prior-epoch event must be skipped, not applied');
+    assert.equal(s.liveRoot.toLowerCase(), GENESIS_ROOT.toLowerCase(), 'liveRoot unchanged by skipped event');
+    assert.equal(s.signingEnabled, true, 'boot must not fail-close on a prior-epoch event');
+    assert.equal(s.unhealthyReason, null);
+  });
+
   test('mid-run epoch rollover disables signing with CoordEpochMismatch', async () => {
     const chain = new MockChain({ head: 1000 });
     const coord = new CoreTexCoordinatorCore(baseConfig, chain, loadGenesis, evaluator, signer);
