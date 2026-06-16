@@ -177,11 +177,11 @@ const proposedProductionVariancePpm = baselineVarianceSource === 'rotating_pack'
   ? summary.stddevPpm
   : 0;
 const currentStateAdvanceThresholdPpm =
-  (profile.patchAcceptanceFloors?.minImprovementPpm ?? 500)
+  (profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500)
   + (profile.replayTolerancePpm ?? 0)
   + currentProductionVariancePpm;
 const proposedStateAdvanceThresholdPpm =
-  (profile.patchAcceptanceFloors?.minImprovementPpm ?? 500)
+  (profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500)
   + (profile.replayTolerancePpm ?? 0)
   + proposedProductionVariancePpm;
 const currentThresholdPpm = computeCoreTexScreenerThresholdPpm({

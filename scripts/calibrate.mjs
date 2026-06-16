@@ -87,7 +87,7 @@ if (evalHiddenEvents.length === 0) {
 
 // ─── Replay tolerance ────────────────────────────────────────────────────────
 
-const minImprovementPpm = Number(flag('min-improvement-ppm', '500'));
+const minImprovementPpm = Number(flag('min-improvement-ppm', '2500'));
 const replayTolerancePpm = Math.max(
   Number(flag('min-replay-tolerance-ppm', '250')),
   Math.ceil(detAgg.p99PpmDiff || 0),

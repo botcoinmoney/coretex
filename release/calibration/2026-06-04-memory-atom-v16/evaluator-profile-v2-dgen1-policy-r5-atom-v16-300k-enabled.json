@@ -27,7 +27,7 @@
     "w_structural_sanity": 0.05
   },
   "patchAcceptanceFloors": {
-    "minImprovementPpm": 500,
+    "minImprovementPpm": 2500,
     "structuralFloor": 0.95,
     "protectedRegressionFloor": 0.05,
     "familyCatastrophicFloor": 0.85

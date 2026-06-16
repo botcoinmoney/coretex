@@ -50,7 +50,7 @@ const productionVariancePpm = baselineVarianceSource === 'rotating_pack' || base
   ? (profile.baselineVariancePpm ?? 0)
   : 0;
 const stateAdvanceThresholdPpm =
-  (profile.patchAcceptanceFloors?.minImprovementPpm ?? 500)
+  (profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500)
   + (profile.replayTolerancePpm ?? 0)
   + productionVariancePpm;
 
@@ -64,7 +64,7 @@ const reranker = await createDeterministicReranker();
 const biEncoderHash = biEncoderModelIdHash(BE.modelId, BE.revision, 'dense');
 const rt = { biEncoder: inertBiEncoder(BE, LAYOUT), reranker, biEncoderHash, retrievalKeyLayout: LAYOUT };
 const opts = scoringOptionsFromProfile(profile, rt);
-const floors = { ...profile.patchAcceptanceFloors, acceptanceThresholdPpm: profile.patchAcceptanceFloors?.minImprovementPpm ?? 500 };
+const floors = { ...profile.patchAcceptanceFloors, acceptanceThresholdPpm: profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500 };
 
 const evalSeed = profile.baselineEvalSeedHex ?? '0x' + 'a5'.repeat(32);
 const pack = deriveQueryPack(0, evalSeed, corpus, { packSize: PACK_SIZE, quotas: [] });

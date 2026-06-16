@@ -824,7 +824,7 @@ export const DEFAULT_COMPOSITE_WEIGHTS_PIN: CompositeWeightPin = {
 };
 
 export const DEFAULT_PATCH_FLOORS: PatchAcceptanceFloorsPin = {
-  minImprovementPpm: 500,
+  minImprovementPpm: 2500,
   structuralFloor: 0.95,
   protectedRegressionFloor: 0.05,
   familyCatastrophicFloor: 0.85,

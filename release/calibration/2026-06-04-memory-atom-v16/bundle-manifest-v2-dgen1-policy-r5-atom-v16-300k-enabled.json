@@ -8,33 +8,33 @@
     "specs": [
       {
         "role": "substrate-spec",
-        "path": "specs/coretex_state.md",
-        "sha256": "88460dfecac8195658569e57913e9cbcb861e46aff7320811170408deafada55",
-        "bytes": 24032
+        "path": "specs/cortex_state.md",
+        "sha256": "b42a04a26e83d000763ed10af54978027b027857206ac7af072b6c571e0d4c68",
+        "bytes": 24026
       },
       {
         "role": "substrate-spec",
-        "path": "specs/coretex_schema.json",
-        "sha256": "3e14ac9292479558e43dd9be4e95f6c53d1f313b3a78c624620110d58bc8f498",
-        "bytes": 9351
+        "path": "specs/cortex_schema.json",
+        "sha256": "d6328375da87ae59c55f1777771ca37d68749b9c3e089841b82f14a2bc02fead",
+        "bytes": 9350
       },
       {
         "role": "substrate-spec",
         "path": "specs/packing_spec.md",
-        "sha256": "4b9685e3155cd8cb10883d70c1a70c1d186d604eab0c067e6172505f6abfce09",
-        "bytes": 3235
+        "sha256": "dbe7813581fcf5c3c49436a7eba1600282274db9d2b9fba710dd3ece3b2a2c45",
+        "bytes": 3231
       },
       {
         "role": "substrate-spec",
         "path": "specs/merkleization_spec.md",
-        "sha256": "0e3ac9063da0aa039254c89e5409affca52bb619ecde156378a31876e685a862",
-        "bytes": 4533
+        "sha256": "1f01cb437b51e235328b228e9908682f075cc5d393f32fe08a1e19336f4a9562",
+        "bytes": 4532
       },
       {
         "role": "substrate-spec",
         "path": "specs/patch_format.md",
-        "sha256": "ff6f9d352d152945cb568af7e664e39e80d9c5bfb8b22ee650628d18a2e1d765",
-        "bytes": 7450
+        "sha256": "89e31b19cbe2bcabb55e2a1c49e4aba0315d986fad15f87d768130203b6df128",
+        "bytes": 7449
       },
       {
         "role": "substrate-spec",
@@ -45,8 +45,8 @@
       {
         "role": "substrate-spec",
         "path": "specs/substrate_retrieval_semantics.md",
-        "sha256": "9562c35d5de368dc68e0a4051108d1af138fef153ba865a05d38dd96eeeca2ed",
-        "bytes": 8564
+        "sha256": "ae32db66002aac45679e3044c03d2b0bb92f21a1244a1082dcf64908a6808e0f",
+        "bytes": 8561
       },
       {
         "role": "substrate-spec",
@@ -70,33 +70,33 @@
     "implementation": [
       {
         "role": "substrate-impl",
-        "path": "packages/coretex/src/state/codec.ts",
+        "path": "packages/cortex/src/state/codec.ts",
         "sha256": "b1d30678701c3c9d96ae37106f4c534361bd7a91c27479b3afefe913b194e6e1",
         "bytes": 2960
       },
       {
         "role": "substrate-impl",
-        "path": "packages/coretex/src/state/merkle.ts",
+        "path": "packages/cortex/src/state/merkle.ts",
         "sha256": "e079a3a91506fc68820cc2115a4abb1469e94450d12c54c53de0e6b83ca89307",
         "bytes": 4669
       },
       {
         "role": "substrate-impl",
-        "path": "packages/coretex/src/state/patch.ts",
+        "path": "packages/cortex/src/state/patch.ts",
         "sha256": "ab1fa9942f7fc2657aeacaf5d72e2d9ecab80aa98e18383e476d7a8226d51672",
         "bytes": 21589
       },
       {
         "role": "substrate-impl",
-        "path": "packages/coretex/src/state/types.ts",
+        "path": "packages/cortex/src/state/types.ts",
         "sha256": "f607667f52acf6a88e8dceac5f578a8d142e59e33063d7d9162c391cfc78dfe5",
         "bytes": 5511
       },
       {
         "role": "substrate-impl",
-        "path": "packages/coretex/src/state/validate.ts",
-        "sha256": "f779ba5498f709c081c21ef93ba6c78bab6790ada03c3964dfe08c6f64868dad",
-        "bytes": 8250
+        "path": "packages/cortex/src/state/validate.ts",
+        "sha256": "365d68a68abf5e0a1e756a626559ce7e6ed4c6713d3740cdf00dc5208b31d1e6",
+        "bytes": 8248
       }
     ]
   },
@@ -105,9 +105,15 @@
     "files": [
       {
         "role": "corpus",
-        "path": "release/calibration/2026-06-04-memory-atom-v16/materialized/73172e2b/corpus.json",
-        "sha256": "c094cd5166b9d132d275921bf8bd3d9052c49c9bcd8b2f02478b298e778c4e47",
-        "bytes": 2114801
+        "path": "release/calibration/2026-06-04-memory-atom-v16/dgen1-r5-synth-300k-atom-v16-corpus.json",
+        "sha256": "aa84271dade558e6dad9625cf4b59687dc21a3ce2211edc1e39b084c1b7e23df",
+        "bytes": 236975364
+      },
+      {
+        "role": "corpus",
+        "path": "release/calibration/2026-06-04-memory-atom-v16/dgen1-r5-synth-300k-atom-v16-embeddings.json",
+        "sha256": "3f590dfa2a58161e213ced613e42dc663a37039b5946a5971c66b2047d0bda04",
+        "bytes": 475912682
       }
     ]
   },
@@ -141,7 +147,7 @@
         "w_structural_sanity": 0.05
       },
       "patchAcceptanceFloors": {
-        "minImprovementPpm": 500,
+        "minImprovementPpm": 2500,
         "structuralFloor": 0.95,
         "protectedRegressionFloor": 0.05,
         "familyCatastrophicFloor": 0.85
@@ -339,157 +345,157 @@
     "files": [
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/eval/retrieval-corpus.ts",
-        "sha256": "1b5de7b92ca42820ccd64e1d4cd2ec12422b62362a63c2513cfb4134e60ddb4f",
-        "bytes": 41862
+        "path": "packages/cortex/src/eval/retrieval-corpus.ts",
+        "sha256": "4ae4e15f6e740d42afb66515e7ca677841e4b39b6616a317e19f0d6659c3d310",
+        "bytes": 37505
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/eval/retrieval-benchmark.ts",
-        "sha256": "b7dd77d597bb4a370c572d0ac2a71e1ced35af95414a1dd058ca62b58fa1b369",
-        "bytes": 167579
+        "path": "packages/cortex/src/eval/retrieval-benchmark.ts",
+        "sha256": "1bb78a1c08c19dd0e8d723d1b095c5bd60d07ac3cba4cb990d19510e8e2ea9a8",
+        "bytes": 167584
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/eval/ir-metrics.ts",
+        "path": "packages/cortex/src/eval/ir-metrics.ts",
         "sha256": "7e8ac68f671f56e7d131d6600a1ae382f3f7a801cc86a386e202aac8ea8c98d6",
         "bytes": 6130
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/eval/hidden-query-pack.ts",
+        "path": "packages/cortex/src/eval/hidden-query-pack.ts",
         "sha256": "5d06d65cdae4dc9cee8ab1af26dc018c91def9c2fdfc8edd8f2461cf93b7fb19",
         "bytes": 21682
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/eval/bi-encoder.ts",
+        "path": "packages/cortex/src/eval/bi-encoder.ts",
         "sha256": "8cb4e55b88b5080a37b2828b62cabcd608f3e410967cced043c6b60ed0269d6d",
         "bytes": 12968
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/eval/reranker.ts",
-        "sha256": "7a99461eb1cee8d193f4a85cfbc10d21da6fd0e2159023e11005b4885f3226f5",
-        "bytes": 38285
+        "path": "packages/cortex/src/eval/reranker.ts",
+        "sha256": "419a6747f5183d86108283a574d55ea5ae7e0123c84323303f1f4e7575363f50",
+        "bytes": 38274
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/eval/seed-derivation.ts",
+        "path": "packages/cortex/src/eval/seed-derivation.ts",
         "sha256": "0a71f90e4e380dda397f121c8dd966d7bd78e752e353cd8c7f2cb73a1da3e306",
         "bytes": 9793
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/eval/live-eval-admission.ts",
+        "path": "packages/cortex/src/eval/live-eval-admission.ts",
         "sha256": "fe93e2a39fa1005c22d4a2904cc701a80da4ecbbb4787d4a9bea3ed48c9a9e66",
         "bytes": 4855
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/coordinator/base-blockhash.ts",
+        "path": "packages/cortex/src/coordinator/base-blockhash.ts",
         "sha256": "576aefcecd8dcb130128eaad6e7ad521b3c4ace2e5f2b5bad0d02b5540c048a9",
         "bytes": 5747
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/coordinator/patch-received-notice.ts",
+        "path": "packages/cortex/src/coordinator/patch-received-notice.ts",
         "sha256": "31cf517bcb510ea839cd3032c9707fd50368e012ce5aeb026bc8c608fe067dd4",
         "bytes": 8836
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/coordinator/per-patch-evaluator.ts",
-        "sha256": "e91389ca10bbe08a547cdf3db112a6ef64c0c77844519e10ee71d545933a13e1",
-        "bytes": 20063
+        "path": "packages/cortex/src/coordinator/per-patch-evaluator.ts",
+        "sha256": "df4f613f881c4c0f7f6884da69fd595afcc8accb1afec444a32cdc0b9647cdcd",
+        "bytes": 19808
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/coordinator/retrieval-data-source.ts",
-        "sha256": "6f27b7a37da0ff6fa353640eb1a1f5ba7ae54420a5713001d5d3457d0c4717ac",
-        "bytes": 22807
+        "path": "packages/cortex/src/coordinator/retrieval-data-source.ts",
+        "sha256": "1182d6727a9a56b6917297099bf7af5876e537b1d214962017669b140be0e32c",
+        "bytes": 22696
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/coordinator/epoch-frontier.ts",
-        "sha256": "c1cd65edb6432092d1183b1e67fc678301a79eb0eefa483d5e5f567185826cb5",
-        "bytes": 14042
+        "path": "packages/cortex/src/coordinator/epoch-frontier.ts",
+        "sha256": "c76d53d8705eaab7509cde9e3c1c9fe01be81af37e4b5d9bbc7dfe6d89bc0eb0",
+        "bytes": 14041
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/replay/per-patch.ts",
+        "path": "packages/cortex/src/replay/per-patch.ts",
         "sha256": "34a34cc4f380026f3775bca3e722af3f10fe42ddfac195c587624d9044babafc",
         "bytes": 9338
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/substrate/retrieval-decoder.ts",
+        "path": "packages/cortex/src/substrate/retrieval-decoder.ts",
         "sha256": "77bc67bea34cec0e991629d0562681519340f0c44b3a06a45cb347c3b1d52ba8",
         "bytes": 46847
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/substrate/structural-validity.ts",
+        "path": "packages/cortex/src/substrate/structural-validity.ts",
         "sha256": "6ac4711138d0396340a1b5237b7ea84a8808c7cc9eee5c8d23b17aab6460c0c9",
         "bytes": 945
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/substrate/slot-policy.ts",
+        "path": "packages/cortex/src/substrate/slot-policy.ts",
         "sha256": "5a18ea15c86284ec5da1611a5e40159654ef2b1aba7b15ffa50295069e3c8ae5",
         "bytes": 3408
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/corpus/admission.ts",
+        "path": "packages/cortex/src/corpus/admission.ts",
         "sha256": "33b883c926d8713374ea86b9a9b4a16c004c7a2babd4e32b6443343ac41064da",
         "bytes": 5019
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/corpus/delta.ts",
+        "path": "packages/cortex/src/corpus/delta.ts",
         "sha256": "63ae28be62f70e7ab3dbd7d9624ff65bd3d853e074753946ed26c1012f1de0c4",
         "bytes": 13835
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/corpus/logical-delta-bridge.ts",
-        "sha256": "08c31d3671d1498e42386223358eb5a993fa7db12a7bc1bd09edbd11366aef24",
-        "bytes": 17511
+        "path": "packages/cortex/src/corpus/logical-delta-bridge.ts",
+        "sha256": "f242c3e4c7ac6995e1d3a289a8f5bde0ae2af159ebd7c03acb44145a419113fc",
+        "bytes": 17510
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/corpus/epoch-rotation.ts",
+        "path": "packages/cortex/src/corpus/epoch-rotation.ts",
         "sha256": "d6d07a0f3ac6e8495cf8fd0a74260533e16e58514febfd7c6e5ea3bc34f59ea0",
         "bytes": 8787
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/rewards/difficulty.ts",
-        "sha256": "a13c8dec2bf11ff9fe9f657816254db1ff342fcf6afae3f1e4f34d71d653c4e7",
-        "bytes": 9824
+        "path": "packages/cortex/src/rewards/difficulty.ts",
+        "sha256": "18f35fc2040f989f4d29340a665c8b508804940b35dac95f99577b6b3fa4dcbc",
+        "bytes": 9826
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/rewards/work-units.ts",
+        "path": "packages/cortex/src/rewards/work-units.ts",
         "sha256": "9b8765ebd9c1011985876280cb2ca2f378f2917dc946a1a1a80635b3aaf1fc90",
         "bytes": 22111
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/coordinator/endpoints.ts",
-        "sha256": "596b521a48defbf0d50a622b394103ede9d507e4020c2c7602b686ce91601876",
-        "bytes": 12407
+        "path": "packages/cortex/src/coordinator/endpoints.ts",
+        "sha256": "47478c1cba2819e4ad60e67e41d14c4d86ec9fcf920e5360ea7a10d72988a7eb",
+        "bytes": 10738
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/replay/v4.ts",
+        "path": "packages/cortex/src/replay/v4.ts",
         "sha256": "ec03c3e0da73b8a6aa9ff3023b73bf800c2761240d0c822eb11bd6825fa3c01e",
         "bytes": 13591
       },
       {
         "role": "evaluator",
-        "path": "packages/coretex/src/replay-cli.ts",
+        "path": "packages/cortex/src/replay-cli.ts",
         "sha256": "1df9568a1743b71a3b7d0aeb5a7d84b07a281cc0a0e0fdded4d693f579d202c2",
         "bytes": 10275
       }
@@ -716,5 +722,5 @@
     "coordinatorCacheOptional": true,
     "snapshots": []
   },
-  "bundleHash": "0x2a0557dad380456c12255d5285e7605cba9d589e9bd23a1dd65a30cd13e99776"
+  "bundleHash": "0x73172e2bc77e2f066a160bc94a48ae73c5221cf11591c3958c03aa5884793506"
 }

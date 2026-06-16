@@ -123,7 +123,7 @@ const coordinator = {
     ?? `0x${'0'.repeat(64)}`,
   wordCount: bundleManifest.substrate?.wordCount ?? 1024,
   transitionCount: 0,
-  minImprovementPpm: bundleManifest.evaluator?.profile?.minImprovementPpm ?? 500,
+  minImprovementPpm: bundleManifest.evaluator?.profile?.minImprovementPpm ?? 2500,
   rulesVersion: bundleManifest.rulesVersion ?? 0,
   workPolicyHash: bundleManifest.workPolicyHash ?? `0x${'0'.repeat(64)}`,
   corpusRoot: bundleManifest.corpusRoot ?? `0x${'0'.repeat(64)}`,
