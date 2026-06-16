@@ -88,15 +88,15 @@ describe('epoch rotation manifest', () => {
       delta,
       challengeBook: { epoch: 8, ids: delta.addedIds },
       bundleHash: '0x' + '11'.repeat(32),
-      minImprovementPpm: 2500,
+      minImprovementPpm: 500,
       baselineParentScorePpm: 288438,
       baselineVarianceSource: 'unavailable',
       fixedPackRepeatabilityPpm: 0,
       screenerThresholdPpm: 347,
       recentNoiseFloorPpm: 12,
       controller: {
-        inputs: { current: '2500', observedAdvances: 12, targetAdvances: 3, qualityAttempts: 40 },
-        output: { next: '3750', reason: 'ramp_up', ratioApplied: 1.5, clamped: false },
+        inputs: { current: '500', observedAdvances: 12, targetAdvances: 3, qualityAttempts: 40 },
+        output: { next: '750', reason: 'ramp_up', ratioApplied: 1.5, clamped: false },
         reason: 'ramp_up',
       },
       activeFrontierRoot: '0x' + '09'.repeat(32),
@@ -109,7 +109,7 @@ describe('epoch rotation manifest', () => {
     assert.equal(manifest.previousCorpusRoot, delta.previousRoot);
     assert.equal(manifest.nextCorpusRoot, delta.nextRoot);
     assert.equal(manifest.corpusDeltaHash, hashCorpusDelta(delta));
-    assert.equal(manifest.minImprovementPpm, 2500);
+    assert.equal(manifest.minImprovementPpm, 500);
     assert.equal(manifest.baselineParentScorePpm, 288438);
     assert.equal(manifest.screenerThresholdPpm, 347);
     assert.equal(manifest.controller.reason, 'ramp_up');

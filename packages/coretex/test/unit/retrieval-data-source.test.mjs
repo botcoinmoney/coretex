@@ -77,7 +77,7 @@ function makeFactoryOpts(overrides = {}) {
       currentEpoch: 7,
       bundleHash: BUNDLE_HASH,
       coreVersionHash: BUNDLE_HASH,
-      minImprovementPpm: 2500,
+      minImprovementPpm: 500,
       replayTolerancePpm: 250,
       screenerThresholdPpm: 347,
       baselineParentScorePpm: 288438,
@@ -93,7 +93,7 @@ function makeFactoryOpts(overrides = {}) {
       patchWordRanges: [{ surface: 'temporal_update', patchType: 'MIXED', wordRanges: [[32, 383], [800, 895]] }],
       exampleValidPatch: { patchType: 4, wordCount: 1, indexRange: [672, 799], encodedHex: '0x04' },
       pins: { corpusRoot: `0x${'77'.repeat(32)}`, activeFrontierRoot: `0x${'78'.repeat(32)}` },
-      difficultyController: { reason: 'under_target_recovery', output: { next: '2500' } },
+      difficultyController: { reason: 'under_target_recovery', output: { next: '500' } },
       runwayTelemetry: {
         updatedAtEpoch: 7,
         activeLivePackFamilyDistribution: { temporal_update: 12, validity_atom: 8, scope_atom: 6 },

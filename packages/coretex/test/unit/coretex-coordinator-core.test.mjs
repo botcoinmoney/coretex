@@ -61,11 +61,11 @@ const baseConfig = {
   receiptTtlSec: 60,
   perMinerScreenerCap: 50,
   // §7 launch baseline for the pinned (genesis) context. 288438 with the
-  // default policy and 2700ppm state threshold derives a live screener
-  // threshold of 1350ppm.
+  // default policy and the cold-start 700ppm state threshold derives a live
+  // screener threshold of 355ppm.
   baselineParentScorePpm: 288438,
   screenerThresholdPpm: 355,
-  minImprovementPpm: 2500,
+  minImprovementPpm: 500,
   replayTolerancePpm: 200,
   targetBlockOffset: 30,
   patchWordBudget: 4,
@@ -674,19 +674,19 @@ describe('CoreTexCoordinatorCore — production submit path', () => {
 
   test('state advance signer boundary enforces replay-tolerant threshold on dual-pack proof', async () => {
     const ev = buildEvent({ blockNumber: 500, blockHash: '0x' + '55'.repeat(32) });
-    const rewritten = rewritePatchScoreDelta(ev.compactPatchBytes, 2800);
+    const rewritten = rewritePatchScoreDelta(ev.compactPatchBytes, 800);
     const evalAdvance = {
       scorePatch: () => ({
         outcome: 'state_advance',
-        deterministicDeltaPpm: 2800,
+        deterministicDeltaPpm: 800,
         evalReportHash: '0x' + 'e2'.repeat(32),
         artifactHash: '0x' + 'a2'.repeat(32),
         scoreBeforePpm: 100,
-        scoreAfterPpm: 2900,
+        scoreAfterPpm: 900,
         rewrittenPatchBytesHex: rewritten,
         evaluationProof: dualProofFor(ev.compactPatchBytes, GENESIS_ROOT, {
-          gate: { domain: 'gate', seedCommit: '0x' + '91'.repeat(32), accepted: true, scorePpm: 2600 },
-          confirm: { domain: 'confirm', seedCommit: '0x' + '92'.repeat(32), accepted: true, scorePpm: 2600 },
+          gate: { domain: 'gate', seedCommit: '0x' + '91'.repeat(32), accepted: true, scorePpm: 600 },
+          confirm: { domain: 'confirm', seedCommit: '0x' + '92'.repeat(32), accepted: true, scorePpm: 600 },
         }),
       }),
     };
