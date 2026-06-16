@@ -1386,7 +1386,10 @@ async function buildValidatorScorerContext(
     biEncoderHash: biEncoderModelIdHash(corpus.biEncoderModelId, corpus.biEncoderRevision, 'dense'),
     retrievalKeyLayout: layout,
   });
-  const thresholdPpm = Math.min(computeAcceptanceThresholdPpm(profile), 355);
+  // Score replay must use the full bundle-pinned acceptance threshold rather
+  // than a launch-era screener cap, or a client can silently "verify" a patch
+  // that no longer clears the canonical production gate.
+  const thresholdPpm = computeAcceptanceThresholdPpm(profile);
   return { corpus, profile, scoringOpts, thresholdPpm, reranker: reranker as ValidatorScorerContext['reranker'] };
 }
 

@@ -570,7 +570,7 @@ async function main() {
     : undefined;
   const fixedPackRepeatabilityPpm = optionalNumberFlag('fixed-pack-repeatability-ppm', profile.fixedPackRepeatabilityPpm ?? profile.baselineVariancePpm);
   const recentNoiseFloorPpm = numberFlag('recent-noise-floor-ppm', 0);
-  const currentMinImprovementPpm = numberFlag('current-min-improvement-ppm', profile.patchAcceptanceFloors?.minImprovementPpm ?? bundle.scoring?.minImprovementPpm ?? 2500);
+  const currentMinImprovementPpm = numberFlag('current-min-improvement-ppm', profile.patchAcceptanceFloors?.minImprovementPpm ?? bundle.scoring?.minImprovementPpm ?? 500);
   const targetAdvances = numberFlag('target-advances', profile.epochFrontier?.targetAccepts ?? 3);
   const previousEvalHiddenCount = previousCorpus.events.filter((e) => e.split === 'eval_hidden').length;
   const nextEvalHiddenCount = nextCorpus.events.filter((e) => e.split === 'eval_hidden').length;

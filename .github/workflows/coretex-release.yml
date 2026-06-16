@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  release-coretex-client:
-    name: Build and publish CoreTex client artifacts
+  release-coretex-package:
+    name: Build and publish CoreTex package artifacts
     runs-on: ubuntu-latest
     env:
       NODE_VERSION: "22"
@@ -27,15 +27,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify package/runtime version sync
+        run: npm run version:check --workspace @botcoin/coretex
+
       - name: Build workspace
         run: npm run build
 
-      - name: Verify tag matches client version constant
+      - name: Verify tag matches package version
         run: |
-          CLIENT_VERSION=$(node -e "const fs=require('fs');const s=fs.readFileSync('packages/coretex/src/version.ts','utf8');const m=s.match(/CORTEX_CLIENT_VERSION\\s*=\\s*'([^']+)'/);if(!m)process.exit(1);process.stdout.write(m[1]);")
+          PACKAGE_VERSION=$(node -p "require('./packages/coretex/package.json').version")
           TAG_VERSION="${GITHUB_REF_NAME#coretex-v}"
-          if [ "${CLIENT_VERSION}" != "${TAG_VERSION}" ]; then
-            echo "tag/version mismatch: tag=${TAG_VERSION} client=${CLIENT_VERSION}"
+          if [ "${PACKAGE_VERSION}" != "${TAG_VERSION}" ]; then
+            echo "tag/version mismatch: tag=${TAG_VERSION} package=${PACKAGE_VERSION}"
             exit 1
           fi
 

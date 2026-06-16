@@ -117,7 +117,7 @@ const productionVariancePpm = baselineVarianceSource === 'rotating_pack' || base
   ? (profile.baselineVariancePpm ?? 0)
   : 0;
 const stateAdvanceThresholdPpm =
-  (profile.patchAcceptanceFloors?.minImprovementPpm ?? 2500)
+  (profile.patchAcceptanceFloors?.minImprovementPpm ?? 500)
   + (profile.replayTolerancePpm ?? 0)
   + productionVariancePpm;
 const floors = { ...profile.patchAcceptanceFloors, acceptanceThresholdPpm: stateAdvanceThresholdPpm };

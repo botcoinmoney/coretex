@@ -112,6 +112,7 @@ release/calibration/**
 !release/calibration/2026-06-04-memory-atom-v16/coretex-launch-v16-artifacts.json
 !release/calibration/2026-06-04-memory-atom-v16/bundle-manifest-v2-dgen1-policy-r5-atom-v16-300k-enabled.json
 !release/calibration/2026-06-04-memory-atom-v16/evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json
+!release/calibration/2026-06-04-memory-atom-v16/screener-threshold-v16-qwen-cpu-coldstart-repin-2026-06-16.json
 
 # Generated DACR corpus (regenerated from HF dataset by scripts/build-corpus-from-dacr.mjs)
 benchmark/fixtures/dacr/

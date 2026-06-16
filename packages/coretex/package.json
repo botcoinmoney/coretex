@@ -1,6 +1,6 @@
 {
   "name": "@botcoin/coretex",
-  "version": "0.1.0",
+  "version": "0.7.1",
   "private": false,
   "description": "Botcoin CoreTex decoder, evaluator, validator, and CLI.",
   "license": "Apache-2.0",
@@ -37,6 +37,7 @@
     "prebuild": "npm run clean",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "version:check": "node scripts/check-release-version.mjs",
     "test:unit": "node --test --test-concurrency=2 --test-reporter=spec ./test/unit/*.test.mjs"
   },
   "files": [
