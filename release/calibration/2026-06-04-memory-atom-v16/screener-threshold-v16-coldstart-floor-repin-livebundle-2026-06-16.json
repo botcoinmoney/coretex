@@ -1,0 +1,59 @@
+{
+  "schema": "coretex.screener-threshold-repin.v1",
+  "generatedAt": "2026-06-16T03:29:59.717Z",
+  "kind": "cold_start_floor_repin",
+  "liveBundleHash": "0x73172e2bc77e2f066a160bc94a48ae73c5221cf11591c3958c03aa5884793506",
+  "liveBundleSha256": "d61e3a2f6ee8a925d2f7421432c82b6832f3ba47e208fd9df15ae3d2c198233d",
+  "corpusRoot": "0xb692b4a133963399257979bc5f632a0900d2d5d73dbadf191d3cf9889188e57e",
+  "profilePath": "release/calibration/2026-06-04-memory-atom-v16/evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json",
+  "profileSha256": "c6e0fbd9b8a631f342e4c97a43d469078f05cbb44227cb27580baeb81688b6c6",
+  "priorCalibrationReport": "release/calibration/2026-06-04-memory-atom-v16/screener-threshold-v16-4090-statefloor-boundary-2026-06-12.json",
+  "priorCalibrationReportSha256": "3eaa7ffe2eb27bb079134c3e1dba91477a52b66a65248abe8fb4df1b9a19f6b8",
+  "priorThresholds": {
+    "minImprovementPpm": 2500,
+    "replayTolerancePpm": 250,
+    "stateAdvanceThresholdPpm": 2750,
+    "screenerThresholdPpm": 1375,
+    "priorScreenerThresholdPpm": 355
+  },
+  "repinnedThresholds": {
+    "minImprovementPpm": 500,
+    "replayTolerancePpm": 250,
+    "stateAdvanceThresholdPpm": 750,
+    "screenerThresholdPpm": 375,
+    "stateAdvanceScreenerFloorRatio": 0.5
+  },
+  "rationale": [
+    "Launch-mainnet CoreTex is still a sparse, cold-start substrate; isolated policy surfaces often remain scorer-inert until routing anchors already exist.",
+    "The prior 2500/1375/2750 floor was calibrated for a warmer substrate and made early routing/bootstrap work disproportionately hard in production.",
+    "This repin lowers only the canonical minimum-improvement floor. Dynamic difficulty and future evolve outputs still carry thresholds forward epoch to epoch."
+  ],
+  "dynamicCarryForward": {
+    "canonicalFloorSource": "packages/coretex/src/rewards/difficulty.ts",
+    "canonicalMinImprovementFloorPpm": 500,
+    "coordinatorCarryForward": "reloadEpochContext consumes evolveOut.evolve threshold fields and cutover threshold fallbacks now clamp at 500 instead of 2500",
+    "onchainRegistryChangeRequired": false
+  },
+  "publishedConsistency": {
+    "s3ProfileSha256": "c6e0fbd9b8a631f342e4c97a43d469078f05cbb44227cb27580baeb81688b6c6",
+    "s3ProfileVersionId": "aPhYvc0Fd1UN_.edeLGAja740kXjSs2_",
+    "s3ProfileLastModified": "2026-06-16T00:10:30+00:00",
+    "s3BundleVersionId": "CuWM6mI9ZTUJkVNnRIFAm.6jaFwW1hFn",
+    "s3BundleLastModified": "2026-06-12T08:55:02+00:00"
+  },
+  "pendingSanityChecks": {
+    "liveBundleQwenCpuMiniCalibration": {
+      "report": "release/calibration/2026-06-04-memory-atom-v16/screener-threshold-v16-qwen-cpu-coldstart-livebundle-2026-06-16.json",
+      "status": "in_progress",
+      "note": "Useful as a post-repin sanity check, but not required for the threshold carry-forward mechanics to work live."
+    },
+    "production4090FullRecalibration": {
+      "status": "optional_followup",
+      "note": "If rerun, use the same 4090 GPU path as production scoring. It is not required to make the lowered floor live."
+    }
+  },
+  "notes": [
+    "This report is a deliberate floor repin note for the live 0x73172e2b bundle line, not a claim that the old 4090 boundary-band samples were rerun at the new floor.",
+    "Validator/miner-facing manifest data must reflect the live profile bytes and live coordinator thresholds even while longer sanity runs are still in progress."
+  ]
+}

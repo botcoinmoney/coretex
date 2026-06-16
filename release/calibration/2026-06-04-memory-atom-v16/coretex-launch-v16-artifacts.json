@@ -20,7 +20,8 @@
     "2026-06-08 coordinator integration public-key status repin: retrieval-data-source exposes epoch signing public key id/fingerprint and validator sync import-boundary tests were added; enabled bundle manifest updated to 0x78336d1d11a0796047baff340f4f90f154d98d9de064678471cbdf50e974069b; profile/corpus/embeddings unchanged; S3 republish required before validator launch verification.",
     "2026-06-08 coordinator integration S3 publish: repinned bundle uploaded after public epoch signing status support; public bytes must match bundleHash 0x78336d1d11a0796047baff340f4f90f154d98d9de064678471cbdf50e974069b.",
     "2026-06-12 screener threshold state-floor repin: DEFAULT_CORETEX_WORK_POLICY v3 floors screenerThresholdPpm at 50% of real stateAdvanceThresholdPpm; enabled bundle manifest updated to 0xf77cfb0fc69aab59fabf439268fff990acd20d3c6998ad0953ead8283ad40361; 4090 Qwen calibration report screener-threshold-v16-4090-statefloor-2026-06-12.json measured threshold 1375ppm; S3 republish required before validator launch verification.",
-    "2026-06-12 screener hardening follow-up repin: policy v3 threshold floor now fails closed without stateAdvanceThresholdPpm, shared base-blockhash RPC client handles credentialed URLs, enabled bundle manifest updated to 0x73172e2bc77e2f066a160bc94a48ae73c5221cf11591c3958c03aa5884793506, workPolicyHash is 0x4defd562f027e350cc4537ef6b7e1baecdf9387ff19e10e5599325bedfe8b715, and 4090 Qwen calibration report screener-threshold-v16-4090-statefloor-boundary-2026-06-12.json adds boundary-band checks with cachePath=null. S3, chain config, on-chain epoch context, and coordinator integration workPolicyHash repin remain required before validator launch verification."
+    "2026-06-12 screener hardening follow-up repin: policy v3 threshold floor now fails closed without stateAdvanceThresholdPpm, shared base-blockhash RPC client handles credentialed URLs, enabled bundle manifest updated to 0x73172e2bc77e2f066a160bc94a48ae73c5221cf11591c3958c03aa5884793506, workPolicyHash is 0x4defd562f027e350cc4537ef6b7e1baecdf9387ff19e10e5599325bedfe8b715, and 4090 Qwen calibration report screener-threshold-v16-4090-statefloor-boundary-2026-06-12.json adds boundary-band checks with cachePath=null. S3, chain config, on-chain epoch context, and coordinator integration workPolicyHash repin remain required before validator launch verification.",
+    "2026-06-16 cold-start floor repin: keep the live 0x73172e2b bundle line, republish the enabled profile with minImprovementPpm 500, publish a manifest/report-only S3 update, and preserve dynamic difficulty carry-forward through future evolves/cutovers. No contract or bundle rewrite is required."
   ],
   "generation": {
     "corpusCommand": "node scripts/generate-dgen1-corpus.mjs --subjects 4200 --depth 30 --seed dgen1-r5-synth-300k-atom-v16-2026-06-04 --r5-synthesis --atom-v16-metadata --out release/calibration/2026-06-04-memory-atom-v16/dgen1-r5-synth-300k-atom-v16-corpus.json",
@@ -71,7 +72,7 @@
   "bundlePath": "release/calibration/2026-06-04-memory-atom-v16/bundle-manifest-v2-dgen1-policy-r5-atom-v16-300k-enabled.json",
   "bundleHash": "0x73172e2bc77e2f066a160bc94a48ae73c5221cf11591c3958c03aa5884793506",
   "profilePath": "release/calibration/2026-06-04-memory-atom-v16/evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json",
-  "profileSha256": "0e019ef4efd28ab3e475c81798ac0b5e204746f3540dc1c4766bb50b32724392",
+  "profileSha256": "c6e0fbd9b8a631f342e4c97a43d469078f05cbb44227cb27580baeb81688b6c6",
   "bundleSha256": "d61e3a2f6ee8a925d2f7421432c82b6832f3ba47e208fd9df15ae3d2c198233d",
   "s3": {
     "bucket": "coretex-launch-artifacts-429971482539-us-east-2-an",
@@ -90,9 +91,9 @@
     "evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json": {
       "key": "coretex/launch/v16/evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json",
       "url": "https://coretex-launch-artifacts-429971482539-us-east-2-an.s3.us-east-2.amazonaws.com/coretex/launch/v16/evaluator-profile-v2-dgen1-policy-r5-atom-v16-300k-enabled.json",
-      "versionId": "EtaWbjKYEfLMCtvbQp.F8anliAoDdKB4",
-      "eTag": "f75fad44b5fa6d27ea792914a1bc8dce",
-      "lastModified": "2026-06-08T21:16:32+00:00"
+      "versionId": "aPhYvc0Fd1UN_.edeLGAja740kXjSs2_",
+      "eTag": "5e2f90cbae78cf90b104612c3bd1d359",
+      "lastModified": "2026-06-16T00:10:30+00:00"
     }
   },
   "baselineRecalibration": {
@@ -107,65 +108,33 @@
   },
   "s3RepublishRequired": false,
   "s3ConsistencyCheck": {
-    "checkedAt": "2026-06-12T11:08:19Z",
-    "method": "manifest workPolicyHash disambiguation re-publish (added coordinatorWorkPolicyHash = on-chain 0xd15e9049); bundle 0x73172e2b unchanged; public GET-rehash verified",
+    "checkedAt": "2026-06-16T03:29:59Z",
+    "method": "cold-start floor repin manifest update: live bundle 0x73172e2b unchanged, public profile GET-rehash verified at 500ppm floor, manifest/report republish only",
     "localBundleHash": "0x73172e2bc77e2f066a160bc94a48ae73c5221cf11591c3958c03aa5884793506",
     "localBundleSha256": "d61e3a2f6ee8a925d2f7421432c82b6832f3ba47e208fd9df15ae3d2c198233d",
-    "localProfileSha256": "0e019ef4efd28ab3e475c81798ac0b5e204746f3540dc1c4766bb50b32724392",
+    "localProfileSha256": "c6e0fbd9b8a631f342e4c97a43d469078f05cbb44227cb27580baeb81688b6c6",
     "s3BundleVersionId": "CuWM6mI9ZTUJkVNnRIFAm.6jaFwW1hFn",
-    "s3ProfileVersionId": "EtaWbjKYEfLMCtvbQp.F8anliAoDdKB4",
+    "s3ProfileVersionId": "aPhYvc0Fd1UN_.edeLGAja740kXjSs2_",
     "consistent": true
   },
   "screenerThresholdCalibration": {
-    "report": "release/calibration/2026-06-04-memory-atom-v16/screener-threshold-v16-4090-statefloor-boundary-2026-06-12.json",
-    "reportSha256": "3eaa7ffe2eb27bb079134c3e1dba91477a52b66a65248abe8fb4df1b9a19f6b8",
+    "report": "release/calibration/2026-06-04-memory-atom-v16/screener-threshold-v16-coldstart-floor-repin-livebundle-2026-06-16.json",
+    "reportSha256": "1151c41a13b001497109e51b89ada8b1ca9968e30468b54a76d7bf3649234392",
     "bundleHash": "0x73172e2bc77e2f066a160bc94a48ae73c5221cf11591c3958c03aa5884793506",
     "workPolicyHash": "0x4defd562f027e350cc4537ef6b7e1baecdf9387ff19e10e5599325bedfe8b715",
+    "coordinatorWorkPolicyHash": "0xd15e904997bdb2bb13d932953a77c0ed3ef309076146a4416cfe5a4e0cdb3775",
     "baselineParentScorePpm": 288438,
-    "minImprovementPpm": 2500,
+    "minImprovementPpm": 500,
     "replayTolerancePpm": 250,
-    "stateAdvanceThresholdPpm": 2750,
+    "stateAdvanceThresholdPpm": 750,
     "priorScreenerThresholdPpm": 355,
-    "screenerThresholdPpm": 1375,
+    "screenerThresholdPpm": 375,
     "measuredRecentNoiseFloorPpm": 0,
-    "boundaryQualificationChecks": [
-      {
-        "class": "old_screener_pass_band_now_reject",
-        "band": "(priorScreenerThresholdPpm,currentScreenerThresholdPpm)",
-        "deltaPpm": 865,
-        "outcomes": {
-          "priorScreener": "SCREENER_PASS",
-          "currentScreener": "REJECT",
-          "currentStateAdvance": null
-        }
-      },
-      {
-        "class": "current_screener_only_not_state_advance",
-        "band": "[currentScreenerThresholdPpm,stateAdvanceThresholdPpm)",
-        "deltaPpm": 2062,
-        "outcomes": {
-          "priorScreener": null,
-          "currentScreener": "SCREENER_PASS",
-          "currentStateAdvance": "REJECT"
-        }
-      },
-      {
-        "class": "state_advance_exact_boundary",
-        "band": "[stateAdvanceThresholdPpm,stateAdvanceThresholdPpm]",
-        "deltaPpm": 2750,
-        "outcomes": {
-          "priorScreener": null,
-          "currentScreener": "SCREENER_PASS",
-          "currentStateAdvance": "STATE_ADVANCE"
-        }
-      }
-    ],
-    "rerankerBackendPairs": 4110,
-    "rerankerBackendCalls": 523,
-    "qwenCachePath": null,
-    "falseScreenerRateByRejectClass": 0,
-    "viableScreenerRecall": 1,
-    "stateAdvanceAcceptanceRate": 1
+    "recalibrationMode": "cold_start_floor_repin",
+    "notes": [
+      "This is a deliberate sparse-root production repin on the live 0x73172e2b bundle line.",
+      "Longer live-bundle sanity runs may continue separately, but the manifest and live coordinator thresholds must already reflect the lowered canonical floor."
+    ]
   },
   "workPolicyHash": "0x4defd562f027e350cc4537ef6b7e1baecdf9387ff19e10e5599325bedfe8b715",
   "launchRepinRequired": {
