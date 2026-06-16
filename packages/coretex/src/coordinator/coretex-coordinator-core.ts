@@ -182,6 +182,10 @@ export interface RealEvaluator {
      *  under the pinned blockhash; the secretless scorer injects them verbatim.
      *  Requires seedContext. The local CPU evaluator path omits it. */
     injectedSeeds?: { readonly gateSeed: string; readonly confirmSeed: string };
+    /** OPTIONAL coordinator-authoritative offset for the supplied seedContext.
+     *  Remote/keyless evaluators use it to stamp artifacts/proofs with the same
+     *  targetBlockOffset the coordinator used when drawing targetBlock. */
+    targetBlockOffset?: number;
   }): Promise<EvalResult> | EvalResult;
 }
 
