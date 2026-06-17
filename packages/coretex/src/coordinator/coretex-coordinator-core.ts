@@ -627,8 +627,12 @@ export class CoreTexCoordinatorCore {
         this.auditReceiptCacheAgainstCanonicalRoots();
         this.signingEnabled = true;
         this.unhealthyReason = null;
-        this.markChainReadHealthy();
       }
+      // Every chain read in this tick succeeded (we reached here without
+      // throwing), so clear any transient-failure streak even when parity is
+      // not yet available (e.g. AwaitingFinality) — the grace tracks read
+      // health, not parity, so it must not linger once reads recover.
+      this.markChainReadHealthy();
       this.gcPending(Math.floor(Date.now() / 1000));
     } catch (e) {
       this.metrics.watcherFaultCount += 1;
