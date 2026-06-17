@@ -460,6 +460,11 @@ export class CoreTexCoordinatorCore {
   private replayFromBlock = 0;
   private finalityLagBlocks = 0;
   private lastEpochMismatch: bigint | null = null;
+  // Transient RPC-blip dampening: a brief chain-read failure should not flip
+  // acceptingSubmissions (which would diverge health vs status). The first
+  // failure in a streak starts the clock; any successful read clears it.
+  private transientChainFailureSinceMs: number | null = null;
+  private static readonly TRANSIENT_CHAIN_FAILURE_GRACE_MS = 60_000;
   private currentBaselineVariancePpm: number | undefined;
 
   // §9 concurrency lane: FIFO submit queue + shared submit/tick mutex + freeze
@@ -622,15 +627,23 @@ export class CoreTexCoordinatorCore {
         this.auditReceiptCacheAgainstCanonicalRoots();
         this.signingEnabled = true;
         this.unhealthyReason = null;
+        this.markChainReadHealthy();
       }
       this.gcPending(Math.floor(Date.now() / 1000));
     } catch (e) {
+      this.metrics.watcherFaultCount += 1;
+      // Transient chain-read blip during a tick: within the grace window keep the
+      // prior healthy signing state instead of fail-closing on a momentary RPC
+      // fault (prevents health/status flapping during RPC fallback storms).
+      if (this.isTransientChainReadError(e) && this.signingEnabled && this.withinTransientChainGrace()) {
+        console.warn('[coretex-core] watcher transient chain read (within grace):', e);
+        return;
+      }
       this.signingEnabled = false;
       // Public surfaces (health/status `reason`) must not carry raw provider
       // errors — ethers messages can embed the credentialed RPC request URL.
       console.error('[coretex-core] watcher fault:', e);
       this.unhealthyReason = 'watcher-fault: chain read failed (see coordinator logs)';
-      this.metrics.watcherFaultCount += 1;
     }
   }
 
@@ -787,6 +800,34 @@ export class CoreTexCoordinatorCore {
     return true;
   }
 
+  /** Classify a chain-read rejection as a transient RPC blip (timeout / busy /
+   *  queue saturation) vs a hard fault. Public surfaces never see the raw error. */
+  private isTransientChainReadError(err: unknown): boolean {
+    const e = err as { code?: unknown; message?: unknown } | null;
+    const code = String(e?.code ?? '');
+    const message = String(e?.message ?? err ?? '');
+    return (
+      code === 'TIMEOUT' ||
+      code === 'RPC_BUSY' ||
+      message.includes('RPC timeout after') ||
+      message.includes('RPC queue wait exceeded') ||
+      message.includes('RPC queue full') ||
+      message.includes('request timeout')
+    );
+  }
+
+  /** True while a transient chain-read failure streak is still inside the grace
+   *  window. Records the first failure time; cleared by markChainReadHealthy(). */
+  private withinTransientChainGrace(): boolean {
+    const now = Date.now();
+    if (this.transientChainFailureSinceMs === null) this.transientChainFailureSinceMs = now;
+    return now - this.transientChainFailureSinceMs < CoreTexCoordinatorCore.TRANSIENT_CHAIN_FAILURE_GRACE_MS;
+  }
+
+  private markChainReadHealthy(): void {
+    this.transientChainFailureSinceMs = null;
+  }
+
   private async checkEpochStillCurrent(): Promise<boolean> {
     const v4Epoch = await this.chain.getV4CurrentEpoch();
     if (v4Epoch === this.config.epoch) {
@@ -868,7 +909,16 @@ export class CoreTexCoordinatorCore {
 
   // ── public-facing handlers ─────────────────────────────────────────────────
   async getStatus(query: Record<string, string | readonly string[] | undefined> = {}): Promise<unknown> {
-    await this.checkEpochStillCurrent();
+    // Status is a read, not a signing action. A transient chain-read blip in the
+    // epoch check must not flip acceptingSubmissions for readers or diverge status
+    // from health; within the grace window keep the watcher-maintained state.
+    // Submit/signing paths do NOT catch this and stay strict.
+    try {
+      await this.checkEpochStillCurrent();
+    } catch (e) {
+      if (!(this.isTransientChainReadError(e) && this.signingEnabled && this.withinTransientChainGrace())) throw e;
+      console.warn('[coretex-core] getStatus epoch check transient (within grace); reporting prior state:', e);
+    }
     const minerRaw = firstQueryValue(query.miner);
     const miner = typeof minerRaw === 'string' && isAddress(minerRaw) ? minerRaw.toLowerCase() : null;
     const qualified = await this.chain.getQualifiedScreenerPassesSinceLastStateAdvance(this.config.epoch);
