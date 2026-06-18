@@ -1925,7 +1925,15 @@ export async function scoreSubstrateAgainstQuery(
       // FULL IR: render the protocol header over the resolved IR + RAW event text (train==serve).
       const ir = (typeof opts.rerankerMemoryIRLookup === 'function' ? opts.rerankerMemoryIRLookup(query.id, c.record.eventId) : null)
         ?? ((atomMemoryIRActive || temporalMemoryIRActive) ? atomMemoryIR(c) : null);
-      return renderMemoryIRDoc(ir, c.record.text);
+      // Per-family mirFull gate: render memory-IR ONLY for candidates that actually
+      // resolve an IR for THIS query. When ir is null (e.g. relation / off-family queries
+      // while the substrate merely CONTAINS temporal records or policy atoms), fall through
+      // to the bundleDoc/mirF2 path so off-family candidates keep their category-lens
+      // evidence bundle and are not format-shifted. Removes the global-mirFull relation-lane
+      // regression (any temporal record previously re-rendered EVERY family's candidates and
+      // disabled the lens reorder); temporal/atom candidates still get full IR, so temporal
+      // remains mineable.
+      if (ir) return renderMemoryIRDoc(ir, c.record.text);
     }
     const base = bundleDoc(c);
     if (!mirF2) return base;
