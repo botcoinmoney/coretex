@@ -8,7 +8,7 @@
  * live next to the wire types they protect. The integration repo imports and
  * re-exports these; tests on both sides exercise the same function.
  */
-import type { ScorerJobRequest, ScorerJobResult } from '../scorer-server-cli.js';
+import type { ScorerCodeHealth, ScorerJobRequest, ScorerJobResult } from '../scorer-server-cli.js';
 import type { EvalResult } from './coretex-coordinator-core.js';
 import { bytesToHex, keccak256 } from '../index.js';
 import {
@@ -34,6 +34,7 @@ export interface RemoteScorerExpectedHealth {
   readonly modelId: string;
   readonly revision: string;
   readonly promptTemplateHash: string;
+  readonly code?: ScorerCodeHealth;
 }
 
 /** §8 the coordinator-drawn future-blockhash seed (pinned before dispatch). */
@@ -58,6 +59,21 @@ export type VerifyScorerResult =
 
 function hexEq(a: string | undefined, b: string | undefined): boolean {
   return typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+}
+
+function compareScorerCodeHealth(expected: ScorerCodeHealth | undefined, actual: ScorerCodeHealth | undefined): string | null {
+  if (!expected) return null;
+  if (!actual || typeof actual !== "object") return "missing";
+  for (const key of Object.keys(expected) as Array<keyof ScorerCodeHealth>) {
+    const want = expected[key];
+    const got = actual[key];
+    if (typeof want === "string") {
+      if (typeof got !== "string" || got.toLowerCase() !== want.toLowerCase()) return `${String(key)} ${String(got)} != ${want}`;
+    } else if (want !== got) {
+      return `${String(key)} ${String(got)} != ${String(want)}`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -187,6 +203,10 @@ export function verifyScorerResult(args: {
   if (h.dtype !== "fp32") return { ok: false, code: "SCORER_HEALTH_MISMATCH", reason: `dtype ${h.dtype} != fp32` };
   if (h.tf32 !== false) return { ok: false, code: "SCORER_HEALTH_MISMATCH", reason: `tf32 ${h.tf32} != false` };
   if (h.cuda !== true) return { ok: false, code: "SCORER_HEALTH_MISMATCH", reason: `cuda ${h.cuda} != true` };
+  const codeMismatch = compareScorerCodeHealth(expectedHealth.code, h.code);
+  if (codeMismatch) {
+    return { ok: false, code: "SCORER_CODE_HASH_MISMATCH", reason: `scorer code ${codeMismatch}` };
+  }
 
   // (6) the result's pins (corpusRoot / bundleHash / coreVersionHash) match
   //     active. The scorer echoes the pins it loaded via expectedScorerPins on

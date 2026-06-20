@@ -42,6 +42,7 @@ export {
   resolveJobSeedContext,
   resolveScorerAuth,
   scorerRequestAuthorized,
+  computeScorerCodeHealth,
   DEFAULT_SCORER_BODY_LIMIT_BYTES,
   type ScorerJobRequest,
   type ScorerJobResult,
@@ -49,6 +50,7 @@ export {
   type ScorerJobHandlerDeps,
   type ScorerJobResponse,
   type ScorerLoadedPins,
+  type ScorerCodeHealth,
   type ScorerHealth as ScorerServerHealth,
   type ScorerExpectedPins as ScorerServerExpectedPins,
 } from './scorer-server-cli.js';

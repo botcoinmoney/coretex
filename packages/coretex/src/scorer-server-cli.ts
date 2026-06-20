@@ -34,7 +34,7 @@
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 import {
   createProductionCoreTexEvaluator,
@@ -66,12 +66,27 @@ import type { CortexState } from './index.js';
 /** Pins the coordinator asserts the scorer must have loaded. The scorer
  *  REFUSES (no eval) on any mismatch — it never silently scores against a
  *  different model/bundle/corpus than the coordinator expects. */
+export interface ScorerCodeHealth {
+  readonly pipelineVersion: 'coretex-scorer-payload-v1';
+  readonly coretexPackageVersion: string;
+  /** SHA-256 over the launch-critical code file hash list below, not a tarball hash. */
+  readonly coretexPackageSha256: string;
+  readonly scorerServerSha256: string;
+  readonly retrievalBenchmarkSha256: string;
+  readonly bundleIndexSha256: string;
+  readonly productionEvaluatorSha256: string;
+  readonly retrievalCorpusSha256: string;
+  readonly memoryIrRenderSha256: string;
+  readonly rerankerRunnerSha256: string | null;
+}
+
 export interface ScorerExpectedPins {
   readonly modelId: string;
   readonly revision: string;
   readonly promptTemplateHash: string;
   readonly bundleHash: string;
   readonly corpusRoot: string;
+  readonly code?: ScorerCodeHealth;
 }
 
 export interface ScorerPublicEvalContext {
@@ -142,6 +157,7 @@ export interface ScorerHealth {
   readonly torch: string | null;
   readonly transformers: string | null;
   readonly python: string | null;
+  readonly code?: ScorerCodeHealth;
 }
 
 export interface ScorerJobResult {
@@ -197,6 +213,7 @@ export interface ScorerLoadedPins {
    *  is configured with the public commit, never the secret). When a job's
    *  publicEvalContext carries hiddenSeedCommit, it must match this. */
   readonly hiddenSeedCommit?: string;
+  readonly code?: ScorerCodeHealth;
 }
 
 function hexEq(a: string | undefined, b: string | undefined): boolean {
@@ -218,6 +235,8 @@ export function checkScorerJobPins(job: ScorerJobRequest, loaded: ScorerLoadedPi
   }
   if (!hexEq(p.bundleHash, loaded.bundleHash)) return `expectedScorerPins.bundleHash != loaded ${loaded.bundleHash}`;
   if (!hexEq(p.corpusRoot, loaded.corpusRoot)) return `expectedScorerPins.corpusRoot != loaded ${loaded.corpusRoot}`;
+  const codeMismatch = compareScorerCodeHealth(p.code, loaded.code);
+  if (codeMismatch) return `expectedScorerPins.code ${codeMismatch}`;
   // Job-level context pins must ALSO match what was loaded (the coordinator
   // sends them independently of expectedScorerPins; both must agree).
   if (!hexEq(job.corpusRoot, loaded.corpusRoot)) return `job.corpusRoot != loaded ${loaded.corpusRoot}`;
@@ -482,6 +501,73 @@ function gitCommit(): string {
   }
 }
 
+const SCORER_CODE_PIPELINE_VERSION = 'coretex-scorer-payload-v1' as const;
+
+function sha256Hex(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}
+
+function sha256FileFromModule(...relativeCandidates: string[]): string | null {
+  for (const rel of relativeCandidates) {
+    try {
+      return createHash('sha256').update(readFileSync(new URL(rel, import.meta.url))).digest('hex');
+    } catch {
+      // Try the next source/dist-relative candidate.
+    }
+  }
+  return null;
+}
+
+function readCoretexPackageVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: unknown };
+    return typeof pkg.version === 'string' && pkg.version ? pkg.version : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+function requiredCodeHash(label: string, ...relativeCandidates: string[]): string {
+  const hash = sha256FileFromModule(...relativeCandidates);
+  if (!hash) throw new Error(`coretex-scorer-server: unable to hash ${label} for scorer code attestation`);
+  return hash;
+}
+
+export function computeScorerCodeHealth(): ScorerCodeHealth {
+  const code = {
+    pipelineVersion: SCORER_CODE_PIPELINE_VERSION,
+    coretexPackageVersion: readCoretexPackageVersion(),
+    scorerServerSha256: requiredCodeHash('scorer-server-cli', './scorer-server-cli.js', './scorer-server-cli.ts'),
+    retrievalBenchmarkSha256: requiredCodeHash('retrieval-benchmark', './eval/retrieval-benchmark.js', './eval/retrieval-benchmark.ts'),
+    bundleIndexSha256: requiredCodeHash('bundle/index', './bundle/index.js', './bundle/index.ts'),
+    productionEvaluatorSha256: requiredCodeHash('coordinator/production-evaluator', './coordinator/production-evaluator.js', './coordinator/production-evaluator.ts'),
+    retrievalCorpusSha256: requiredCodeHash('eval/retrieval-corpus', './eval/retrieval-corpus.js', './eval/retrieval-corpus.ts'),
+    memoryIrRenderSha256: requiredCodeHash('eval/memory-ir-render', './eval/memory-ir-render.js', './eval/memory-ir-render.ts'),
+    rerankerRunnerSha256: sha256FileFromModule('../scripts/reranker_runner.py'),
+  };
+  const coretexPackageSha256 = sha256Hex(Object.entries(code)
+    .filter(([key]) => key !== 'coretexPackageSha256')
+    .map(([key, value]) => `${key}=${value ?? ''}`)
+    .sort()
+    .join('\n'));
+  return { ...code, coretexPackageSha256 };
+}
+
+export function compareScorerCodeHealth(expected: ScorerCodeHealth | undefined, actual: ScorerCodeHealth | undefined): string | null {
+  if (!expected) return null;
+  if (!actual || typeof actual !== 'object') return 'missing';
+  for (const key of Object.keys(expected) as Array<keyof ScorerCodeHealth>) {
+    const want = expected[key];
+    const got = actual[key];
+    if (typeof want === 'string') {
+      if (typeof got !== 'string' || got.toLowerCase() !== want.toLowerCase()) return `${String(key)} ${String(got)} != ${want}`;
+    } else if (want !== got) {
+      return `${String(key)} ${String(got)} != ${String(want)}`;
+    }
+  }
+  return null;
+}
+
 function probeRuntimeHealth(): Pick<ScorerHealth, 'cuda' | 'device' | 'torch' | 'transformers' | 'python'> {
   const pythonBin = process.env['CORETEX_RERANKER_PYTHON'] ?? 'python3';
   const script = resolveRerankerScriptPath();
@@ -604,6 +690,7 @@ async function bootScorer(env: NodeJS.ProcessEnv): Promise<BootedScorer> {
   if (!tracedReranker) throw new Error('coretex-scorer-server: reranker factory was not invoked');
 
   const att = evaluator.bootAttestation;
+  const code = computeScorerCodeHealth();
   const loadedPins: ScorerLoadedPins = {
     modelId: att.rerankerModelId,
     revision: att.rerankerRevision,
@@ -612,6 +699,7 @@ async function bootScorer(env: NodeJS.ProcessEnv): Promise<BootedScorer> {
     corpusRoot: corpusMeta.corpusRoot.toLowerCase(),
     coreVersionHash: bundle.bundleHash.toLowerCase(),
     hiddenSeedCommit,
+    code,
   };
   const runtime = probeRuntimeHealth();
   const scorerHealth: ScorerHealth = {
@@ -626,6 +714,7 @@ async function bootScorer(env: NodeJS.ProcessEnv): Promise<BootedScorer> {
     torch: runtime.torch,
     transformers: runtime.transformers,
     python: runtime.python,
+    code,
   };
   // Cross-check the resolved prompt-template hash against the canonical render.
   const instructionHash = qwenRerankerPromptTemplateHash(resolveQwenRerankerInstruction(env));
@@ -807,7 +896,8 @@ async function main(): Promise<void> {
     `[scorer] ready: model=${booted.loadedPins.modelId}@${booted.loadedPins.revision} ` +
     `bundle=${booted.loadedPins.bundleHash} corpus=${booted.loadedPins.corpusRoot} ` +
     `cuda=${booted.scorerHealth.cuda} device=${booted.scorerHealth.device} ` +
-    `torch=${booted.scorerHealth.torch} commit=${booted.scorerHealth.commit}\n`,
+    `torch=${booted.scorerHealth.torch} commit=${booted.scorerHealth.commit} ` +
+    `code=${booted.scorerHealth.code?.coretexPackageSha256 ?? 'unknown'}\n`,
   );
 
   const server = http.createServer((req, res) => {
