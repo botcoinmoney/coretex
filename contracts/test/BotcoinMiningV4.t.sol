@@ -236,13 +236,17 @@ contract BotcoinMiningV4Test is Test {
 
     function test_schedulePolicyFutureOnlyAndActivatesByEpoch() public {
         BotcoinMiningV4.CoreTexPolicyInput memory next = _defaultPolicy(0xC1, EPOCH + 1);
-        next.screenerWorkBps = 12_000;
-        next.stateAdvanceWorkBps[0] = 36_000;
+        next.screenerWorkBps = 20_000;
+        next.stateAdvanceThresholds = _arr4(0, 2, 5, 10);
+        next.stateAdvanceWorkBps = _arr4(100_000, 150_000, 200_000, 300_000);
 
         v4.scheduleCoreTexPolicy(next);
         assertEq(v4.computeCoreTexWorkUnitsBps(EPOCH, v4.OUTCOME_CORETEX_SCREENER_PASS(), 0), 10_000);
-        assertEq(v4.computeCoreTexWorkUnitsBps(EPOCH + 1, v4.OUTCOME_CORETEX_SCREENER_PASS(), 0), 12_000);
-        assertEq(v4.computeCoreTexWorkUnitsBps(EPOCH + 1, v4.OUTCOME_CORETEX_STATE_ADVANCE(), 0), 36_000);
+        assertEq(v4.computeCoreTexWorkUnitsBps(EPOCH + 1, v4.OUTCOME_CORETEX_SCREENER_PASS(), 0), 20_000);
+        assertEq(v4.computeCoreTexWorkUnitsBps(EPOCH + 1, v4.OUTCOME_CORETEX_STATE_ADVANCE(), 0), 100_000);
+        assertEq(v4.computeCoreTexWorkUnitsBps(EPOCH + 1, v4.OUTCOME_CORETEX_STATE_ADVANCE(), 2), 150_000);
+        assertEq(v4.computeCoreTexWorkUnitsBps(EPOCH + 1, v4.OUTCOME_CORETEX_STATE_ADVANCE(), 5), 200_000);
+        assertEq(v4.computeCoreTexWorkUnitsBps(EPOCH + 1, v4.OUTCOME_CORETEX_STATE_ADVANCE(), 10), 300_000);
     }
 
     function test_schedulePolicyCurrentEpochReverts() public {
@@ -991,6 +995,7 @@ contract BotcoinMiningV4Test is Test {
         _expectInvalidPolicy(_policyCustom(0xC1, EPOCH + 1, 10_000, _arr2(0, 25), _arr2(30_000, 20_000)));
         _expectInvalidPolicy(_policyCustom(0xC1, EPOCH + 1, 10_000, _arr(0), _arr(9_999)));
         _expectInvalidPolicy(_policyCustom(0xC1, EPOCH + 1, 10_000, _arr(0), _arr(300_001)));
+        _expectInvalidPolicy(_policyCustom(0xC1, EPOCH + 1, 20_000, _arr4(0, 2, 5, 10), _arr4(100_000, 150_000, 200_000, 500_000)));
 
         BotcoinMiningV4.CoreTexPolicyInput memory p = _defaultPolicy(0xC1, EPOCH + 1);
         v4.scheduleCoreTexPolicy(p);
@@ -1567,6 +1572,14 @@ contract BotcoinMiningV4Test is Test {
         out = new uint256[](2);
         out[0] = a;
         out[1] = b;
+    }
+
+    function _arr4(uint256 a, uint256 b, uint256 c, uint256 d) internal pure returns (uint256[] memory out) {
+        out = new uint256[](4);
+        out[0] = a;
+        out[1] = b;
+        out[2] = c;
+        out[3] = d;
     }
 
     function _policyCustom(

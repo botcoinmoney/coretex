@@ -443,11 +443,11 @@ describe('CoreTexCoordinatorCore §9 — FIFO signing queue', () => {
   });
 
   test('reject envelopes never carry deterministicDeltaPpm / requiredDeltaPpm', async () => {
-    const evaluator = { scorePatch: (input) => screenerResult(input.patchBytesHex, input.parentStateRoot, 320) };
+    const evaluator = { scorePatch: (input) => screenerResult(input.patchBytesHex, input.parentStateRoot, 120) };
     const coord = new CoreTexCoordinatorCore(baseConfig, new MockChain({ head: 1000 }), loadGenesis, evaluator, plainSigner);
     await coord.boot();
-    // baseline 288438 + state threshold 700 -> live threshold 355; delta
-    // 320 is below it.
+    // baseline 288438 + state threshold 700 -> live threshold 140; delta
+    // 120 is below it.
     const out = await coord.submit(submitBody(makePatchHex(GENESIS_ROOT, 40, 1)));
     assert.equal(out.status, 'rejected');
     assert.equal(out.code, 'W03_DETERMINISTIC_DELTA_TOO_LOW');
@@ -471,7 +471,7 @@ describe('CoreTexCoordinatorCore §7 — baseline runtime semantics', () => {
     const rewritten = rewritePatchScoreDelta(advancePatch, deltaPpm);
     const signedHash = computePatchHash(hexToBytes(rewritten)).toLowerCase();
     let mode = 'screener';
-    let screenerDelta = 320;
+    let screenerDelta = 120;
     const evaluator = {
       scorePatch: (input) => mode === 'screener'
         ? screenerResult(input.patchBytesHex, input.parentStateRoot, screenerDelta)
@@ -491,15 +491,15 @@ describe('CoreTexCoordinatorCore §7 — baseline runtime semantics', () => {
     await coord.boot();
 
     // Launch context: baseline 288438 with a 700ppm state threshold -> live
-    // screener threshold 355ppm.
+    // screener threshold 140ppm.
     const status0 = await coord.getStatus();
     assert.equal(status0.baselineState, 'ready');
     assert.equal(status0.baselineParentScorePpm, 288438);
     assert.equal(status0.stateAdvanceThresholdPpm, 700);
-    assert.equal(status0.screenerThresholdPpm, 355);
-    assert.equal(status0.thresholds.screenerThresholdPpm, 355);
+    assert.equal(status0.screenerThresholdPpm, 140);
+    assert.equal(status0.thresholds.screenerThresholdPpm, 140);
 
-    // A 320ppm screener is below the launch threshold.
+    // A 120ppm screener is below the launch threshold.
     const before = await coord.submit(submitBody(makePatchHex(GENESIS_ROOT, 40, 1)));
     assert.equal(before.code, 'W03_DETERMINISTIC_DELTA_TOO_LOW');
 
@@ -525,7 +525,7 @@ describe('CoreTexCoordinatorCore §7 — baseline runtime semantics', () => {
     const status1 = await coord.getStatus();
     assert.equal(status1.baselineState, 'ready');
     assert.equal(status1.baselineParentScorePpm, 400000);
-    assert.equal(status1.screenerThresholdPpm, 350, 'state-threshold floor dominates normal launch baselines');
+    assert.equal(status1.screenerThresholdPpm, 140, 'state-threshold floor dominates normal launch baselines');
     assert.equal(status1.thresholds.baselineParentScorePpm, 400000);
 
     // A 1400ppm screener clears the live gate.
@@ -569,7 +569,7 @@ describe('CoreTexCoordinatorCore §7 — baseline runtime semantics', () => {
     const ready = await coord.getStatus();
     assert.equal(ready.baselineState, 'ready');
     assert.equal(ready.baselineParentScorePpm, 300000);
-    assert.equal(ready.screenerThresholdPpm, 350);
+    assert.equal(ready.screenerThresholdPpm, 140);
     const accepted = await coord.submit(submitBody(makePatchHex(ev0.newRoot, 40, 1), MINER_A, ev0.newRoot));
     assert.equal(accepted.status, 'accepted', `expected accept, got ${JSON.stringify(accepted)}`);
 

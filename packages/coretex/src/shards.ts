@@ -3,7 +3,7 @@
  *
  * Mirrors deriveWorldSeedU128 from /root/botcoin-coordinator/packages/coordinator/src/epoch.ts:257
  * (the SWCP coordinator). The Cortex variant uses parentStateRoot in the
- * position of prevReceiptHash and rulesVersion = 0xC0 (§6 receipt mapping).
+ * position of prevReceiptHash and rulesVersion = 0xC1 (§6 receipt mapping).
  *
  * ABI packing order (matches ethers solidityPacked of these fields):
  *   bytes32  epochSecret      (32 bytes, big-endian)
@@ -28,8 +28,8 @@
 
 import { keccak256 } from './state/keccak256.js';
 
-/** rulesVersion = 0xC0 for all Cortex receipts (§6 receipt field mapping). */
-export const CORTEX_RULES_VERSION = 0xC0;
+/** rulesVersion = 0xC1 for all Cortex receipts (§6 receipt field mapping). */
+export const CORTEX_RULES_VERSION = 0xC1;
 
 export interface DeriveShardIdInput {
   /** 32-byte epoch secret (revealed at epoch end). */
@@ -42,7 +42,7 @@ export interface DeriveShardIdInput {
   readonly solveIndex: bigint;
   /** 32-byte parent state root. */
   readonly parentStateRoot: Uint8Array;
-  /** Defaults to CORTEX_RULES_VERSION (0xC0). */
+  /** Defaults to CORTEX_RULES_VERSION (0xC1). */
   readonly rulesVersion?: number;
 }
 

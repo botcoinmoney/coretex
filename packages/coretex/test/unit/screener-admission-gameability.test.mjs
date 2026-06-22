@@ -110,34 +110,30 @@ describe('d) qualified counter resets on each state advance', () => {
 });
 
 describe('e) ramp curve diminishing returns and cap', () => {
-  test('state-advance reward tiers saturate at 120000 bps', () => {
+  test('state-advance reward tiers saturate at 300000 bps', () => {
     const b0 = computeCoreTexWorkUnitsBps({
       outcome: OUTCOME_CORETEX_STATE_ADVANCE,
       qualifiedScreenerPassesSinceLastStateAdvance: 0,
     });
-    const b25 = computeCoreTexWorkUnitsBps({
+    const b2 = computeCoreTexWorkUnitsBps({
       outcome: OUTCOME_CORETEX_STATE_ADVANCE,
-      qualifiedScreenerPassesSinceLastStateAdvance: 25,
+      qualifiedScreenerPassesSinceLastStateAdvance: 2,
     });
-    const b100 = computeCoreTexWorkUnitsBps({
+    const b5 = computeCoreTexWorkUnitsBps({
       outcome: OUTCOME_CORETEX_STATE_ADVANCE,
-      qualifiedScreenerPassesSinceLastStateAdvance: 100,
+      qualifiedScreenerPassesSinceLastStateAdvance: 5,
     });
-    const b250 = computeCoreTexWorkUnitsBps({
+    const b10 = computeCoreTexWorkUnitsBps({
       outcome: OUTCOME_CORETEX_STATE_ADVANCE,
-      qualifiedScreenerPassesSinceLastStateAdvance: 250,
-    });
-    const b500 = computeCoreTexWorkUnitsBps({
-      outcome: OUTCOME_CORETEX_STATE_ADVANCE,
-      qualifiedScreenerPassesSinceLastStateAdvance: 500,
+      qualifiedScreenerPassesSinceLastStateAdvance: 10,
     });
     const b5000 = computeCoreTexWorkUnitsBps({
       outcome: OUTCOME_CORETEX_STATE_ADVANCE,
       qualifiedScreenerPassesSinceLastStateAdvance: 5000,
     });
 
-    assert.deepEqual([b0, b25, b100, b250, b500], [30_000n, 40_000n, 60_000n, 90_000n, 120_000n]);
-    assert.equal(b5000, 120_000n, 'reward curve must cap at the top tier');
+    assert.deepEqual([b0, b2, b5, b10], [100_000n, 150_000n, 200_000n, 300_000n]);
+    assert.equal(b5000, 300_000n, 'reward curve must cap at the top tier');
   });
 });
 
@@ -159,7 +155,7 @@ describe('f) economic extraction simulation', () => {
     const totalCredits = attackerCredits + blindMiners * blindMinerCredits;
 
     const attackerSharePct = Number((attackerCredits * 10_000n) / totalCredits) / 100;
-    assert.equal(attackerSharePct, 84.21);
+    assert.equal(attackerSharePct, 78.14);
     assert.ok(attackerSharePct > 50, 'saturated miner should extract a majority share in this scenario');
   });
 
@@ -182,8 +178,8 @@ describe('f) economic extraction simulation', () => {
     const cappedSharePct = Number((cappedAttacker * 10_000n) / (cappedAttacker + blindMiners * blindMinerCredits)) / 100;
     const uncappedSharePct = Number((uncappedAttacker * 10_000n) / (uncappedAttacker + blindMiners * blindMinerCredits)) / 100;
 
-    assert.equal(cappedSharePct, 84.21);
-    assert.equal(uncappedSharePct, 98.12);
+    assert.equal(cappedSharePct, 78.14);
+    assert.equal(uncappedSharePct, 97.2);
     assert.ok(
       uncappedSharePct - cappedSharePct > 10,
       'per-miner admission caps should significantly reduce attacker extraction',
