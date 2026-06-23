@@ -98,6 +98,20 @@ function optionalNumberFlag(name, fallback = undefined) {
   if (!Number.isFinite(n)) fail(`--${name} must be numeric`);
   return n;
 }
+function optionalNonNegativeIntegerFlag(name, fallback = undefined) {
+  const raw = flag(name, null);
+  if (raw === null && fallback === undefined) return undefined;
+  const n = raw === null ? Number(fallback) : Number(raw);
+  if (!Number.isSafeInteger(n) || n < 0) fail(`--${name} must be a non-negative integer`);
+  return n;
+}
+function optionalPositiveIntegerFlag(name, fallback = undefined) {
+  const raw = flag(name, null);
+  if (raw === null && fallback === undefined) return undefined;
+  const n = raw === null ? Number(fallback) : Number(raw);
+  if (!Number.isSafeInteger(n) || n <= 0) fail(`--${name} must be a positive integer`);
+  return n;
+}
 function normalizeS3Prefix(prefix) {
   return prefix?.replace(/\/+$/, '') ?? null;
 }
@@ -130,24 +144,36 @@ function deterministicEmbeddingBytes(text, layout) {
   return out;
 }
 
-async function realEmbeddingBytes(items, bundlePath, layout) {
+async function realEmbeddingBytes(items, bundlePath, layout, { maxWallMs = undefined } = {}) {
   const bundle = readJson(bundlePath);
   const be = bundle.model?.biEncoder;
   if (!be?.modelId || !be?.revision) fail(`bundle ${bundlePath} missing biEncoder pins`);
+  const device = (env.CORETEX_BIENCODER_DEVICE ?? 'cpu').trim().toLowerCase();
+  if (device !== 'cpu' && device !== 'cuda') fail('CORETEX_BIENCODER_DEVICE must be cpu or cuda');
+  if (device === 'cuda') {
+    if (env.CORETEX_BIENCODER_ALLOW_CUDA !== '1') {
+      fail('CORETEX_BIENCODER_DEVICE=cuda requires CORETEX_BIENCODER_ALLOW_CUDA=1');
+    }
+    if (env.CUDA_VISIBLE_DEVICES === '') {
+      fail('CORETEX_BIENCODER_DEVICE=cuda cannot run with CUDA_VISIBLE_DEVICES empty');
+    }
+  }
   const py = env.CORETEX_BIENCODER_PYTHON ?? resolve(repoRoot, '.venv/bin/python');
+  const childEnv = {
+    ...env,
+    HF_HUB_CACHE: env.CORTEX_LOCAL_MODEL_CACHE ?? env.HF_HUB_CACHE ?? '/var/lib/coretex/model-cache',
+    HF_HUB_OFFLINE: env.HF_HUB_OFFLINE ?? '1',
+    BIENCODER_NUM_THREADS: env.BIENCODER_NUM_THREADS ?? '8',
+    BIENCODER_INNER_BATCH: env.BIENCODER_INNER_BATCH ?? '64',
+    CORETEX_BIENCODER_DEVICE: device,
+    CORETEX_BIENCODER_STREAM_MODEL_ID: be.modelId,
+    CORETEX_BIENCODER_STREAM_REVISION: be.revision,
+    CORETEX_BIENCODER_STREAM_LAYOUT_JSON: JSON.stringify({ dim: layout.dim, quantization: layout.quantization }),
+  };
+  if (device === 'cpu') childEnv.CUDA_VISIBLE_DEVICES = '';
   const proc = spawn(py, [resolve(repoRoot, 'scripts/bi_encoder_runner.py'), '--stream'], {
     cwd: repoRoot,
-    env: {
-      ...env,
-      HF_HUB_CACHE: env.CORTEX_LOCAL_MODEL_CACHE ?? env.HF_HUB_CACHE ?? '/var/lib/coretex/model-cache',
-      HF_HUB_OFFLINE: env.HF_HUB_OFFLINE ?? '1',
-      CUDA_VISIBLE_DEVICES: '',
-      BIENCODER_NUM_THREADS: env.BIENCODER_NUM_THREADS ?? '8',
-      BIENCODER_INNER_BATCH: env.BIENCODER_INNER_BATCH ?? '64',
-      CORETEX_BIENCODER_STREAM_MODEL_ID: be.modelId,
-      CORETEX_BIENCODER_STREAM_REVISION: be.revision,
-      CORETEX_BIENCODER_STREAM_LAYOUT_JSON: JSON.stringify({ dim: layout.dim, quantization: layout.quantization }),
-    },
+    env: childEnv,
     stdio: ['pipe', 'pipe', 'inherit'],
   });
   const rl = createInterface({ input: proc.stdout, crlfDelay: Infinity });
@@ -167,13 +193,34 @@ async function realEmbeddingBytes(items, bundlePath, layout) {
     for (const [, p] of pending) p.reject(e);
   });
   const t0 = Date.now();
+  const deadline = maxWallMs !== undefined ? t0 + maxWallMs : undefined;
   while (!ready) {
     await new Promise((r) => setTimeout(r, 50));
+    if (deadline !== undefined && Date.now() > deadline) {
+      try { proc.kill('SIGKILL'); } catch {}
+      fail(`bi_encoder_runner exceeded --max-wall-ms=${maxWallMs} before ready`);
+    }
     if (Date.now() - t0 > 5 * 60_000) fail('bi_encoder_runner did not become ready within 5 minutes');
   }
   const corr = `epoch-delta-${Date.now()}`;
   const embeddings = await new Promise((resolveDone, rejectDone) => {
-    pending.set(corr, { resolve: resolveDone, reject: rejectDone });
+    const timeout = deadline === undefined
+      ? null
+      : setTimeout(() => {
+          pending.delete(corr);
+          try { proc.kill('SIGKILL'); } catch {}
+          rejectDone(new Error(`bi_encoder_runner exceeded --max-wall-ms=${maxWallMs}`));
+        }, Math.max(1, deadline - Date.now()));
+    pending.set(corr, {
+      resolve: (value) => {
+        if (timeout) clearTimeout(timeout);
+        resolveDone(value);
+      },
+      reject: (err) => {
+        if (timeout) clearTimeout(timeout);
+        rejectDone(err);
+      },
+    });
     proc.stdin.write(JSON.stringify({ id: corr, inputs: items.map((x) => ({ text: x.text })) }) + '\n');
   });
   try { proc.stdin.end(); } catch {}
@@ -183,7 +230,7 @@ async function realEmbeddingBytes(items, bundlePath, layout) {
   return new Map(items.map((item, i) => [item.id, new Uint8Array(Buffer.from(embeddings[i], 'hex'))]));
 }
 
-async function embedLogicalDelta(logicalDelta, bundlePath, layout, mock) {
+async function embedLogicalDelta(logicalDelta, bundlePath, layout, mock, opts = {}) {
   const docs = logicalDelta.addedDocs.map((d) => ({ id: d.id, text: d.text ?? '' }));
   const queries = logicalDelta.addedQueries.map((q) => ({ id: q.id, text: q.queryText ?? '' }));
   if (mock) {
@@ -193,12 +240,113 @@ async function embedLogicalDelta(logicalDelta, bundlePath, layout, mock) {
       embeddingMode: 'deterministic-mock',
     };
   }
-  const all = await realEmbeddingBytes([...docs, ...queries], bundlePath, layout);
+  const all = await realEmbeddingBytes([...docs, ...queries], bundlePath, layout, opts);
+  const device = (env.CORETEX_BIENCODER_DEVICE ?? 'cpu').trim().toLowerCase();
   return {
     addedDocEmbeddings: new Map(docs.map((d) => [d.id, all.get(d.id)])),
     addedQueryEmbeddings: new Map(queries.map((q) => [q.id, all.get(q.id)])),
-    embeddingMode: 'pinned-bge-m3',
+    embeddingMode: device === 'cuda' ? 'pinned-bge-m3-cuda' : 'pinned-bge-m3',
   };
+}
+
+function planLogicalDeltaRemovals({ logicalDelta, logical, previousCorpus, maxRootDeltaPerEpoch }) {
+  const logicalDocsById = new Map(logical.docs.map((d) => [d.id, d]));
+  const logicalQueriesById = new Map(logical.queries.map((q) => [q.id, q]));
+  const removedIds = [];
+  const removedIdSet = new Set();
+  const removedEvalHiddenIds = [];
+  const removedEvalHiddenSet = new Set();
+  const pushRemoved = (id) => {
+    if (removedIdSet.has(id)) return;
+    removedIdSet.add(id);
+    removedIds.push(id);
+  };
+  const pushRemovedEvalHidden = (id) => {
+    pushRemoved(id);
+    if (!removedEvalHiddenSet.has(id)) {
+      removedEvalHiddenSet.add(id);
+      removedEvalHiddenIds.push(id);
+    }
+  };
+  const retractedProdDocIds = new Set();
+  const retractedQrelDocIds = new Set(logicalDelta.retractedDocIds);
+  for (const docId of logicalDelta.retractedDocIds) {
+    const prodId = productionEventIdForLogicalDoc(previousCorpus, logicalDocsById.get(docId) ?? { id: docId });
+    if (!prodId) fail(`retracted doc ${docId} does not resolve to a production corpus event — logical/production state divergence`);
+    pushRemoved(prodId);
+    retractedProdDocIds.add(prodId);
+    const prodEvent = previousCorpus.byId.get(prodId);
+    for (const truth of prodEvent?.truthDocuments ?? []) {
+      if (truth?.id) retractedQrelDocIds.add(String(truth.id));
+    }
+  }
+  if (retractedProdDocIds.size > 0 || retractedQrelDocIds.size > 0) {
+    const retiredLogicalQuerySet = new Set(logicalDelta.retiredQueryIds);
+    for (const event of previousCorpus.events) {
+      if (event.split !== 'eval_hidden') continue;
+      const qrels = Array.isArray(event.qrels) ? event.qrels : [];
+      const broken = qrels.some((qrel) => {
+        if (Number(qrel?.relevance ?? 0) <= 0) return false;
+        const docId = String(qrel?.documentId ?? '');
+        return retractedProdDocIds.has(docId) || retractedQrelDocIds.has(docId);
+      });
+      if (!broken) continue;
+      pushRemovedEvalHidden(event.id);
+      retiredLogicalQuerySet.add(logicalQueryIdFromProductionEventId(event.id));
+    }
+    logicalDelta.retiredQueryIds = [...retiredLogicalQuerySet];
+  }
+  for (const queryId of logicalDelta.retiredQueryIds) {
+    const prodId = productionEventIdForLogicalQuery(previousCorpus, logicalQueriesById.get(queryId) ?? { id: queryId });
+    if (!prodId) fail(`retired hidden query ${queryId} does not resolve to a production corpus event — logical/production state divergence`);
+    pushRemovedEvalHidden(prodId);
+  }
+  return { removedIds, removedEvalHiddenIds, retractedProdDocIds, retractedQrelDocIds };
+}
+
+function buildEvolveEstimate({ epoch, seed, churnFraction, retractionFraction, logicalDelta, removalPlan, minFreshEvalHidden, hiddenRetireHorizon, maxRootDeltaPerEpoch }) {
+  const freshEvalHidden = Array.isArray(logicalDelta.freshEvalHiddenQueryIds)
+    ? logicalDelta.freshEvalHiddenQueryIds.length
+    : 0;
+  return {
+    schema: 'coretex.epoch-evolve-estimate.v1',
+    epoch,
+    seed,
+    churnFraction,
+    retractionFraction,
+    churnedSubjects: logicalDelta.churnedSubjects.length,
+    addedDocs: logicalDelta.addedDocs.length,
+    addedQueries: logicalDelta.addedQueries.length,
+    addedRelations: logicalDelta.addedRelations.length,
+    estimatedEmbeddings: logicalDelta.addedDocs.length + logicalDelta.addedQueries.length,
+    retractedDocs: logicalDelta.retractedDocIds.length,
+    retiredHiddenQueries: logicalDelta.retiredQueryIds.length,
+    removedIds: removalPlan.removedIds.length,
+    removedEvalHiddenIds: removalPlan.removedEvalHiddenIds.length,
+    freshEvalHidden,
+    minFreshEvalHidden,
+    hiddenRetireHorizon,
+    maxRootDeltaPerEpoch,
+    rootDeltaPressure: Math.max(freshEvalHidden, removalPlan.removedEvalHiddenIds.length),
+  };
+}
+
+function enforceEvolveBudgets(estimate, { maxEmbeddings, maxRemovals, targetFreshHidden, maxRootDeltaPerEpoch }) {
+  if (maxEmbeddings !== undefined && estimate.estimatedEmbeddings > maxEmbeddings) {
+    fail(`estimate requires ${estimate.estimatedEmbeddings} embeddings > --max-embeddings ${maxEmbeddings}`);
+  }
+  if (maxRemovals !== undefined && estimate.removedIds > maxRemovals) {
+    fail(`estimate removes ${estimate.removedIds} ids > --max-removals ${maxRemovals}`);
+  }
+  if (maxRootDeltaPerEpoch !== undefined && estimate.rootDeltaPressure > maxRootDeltaPerEpoch) {
+    fail(
+      `estimate root-delta pressure ${estimate.rootDeltaPressure} exceeds --max-root-delta-per-epoch ${maxRootDeltaPerEpoch} ` +
+      `(freshEvalHidden=${estimate.freshEvalHidden}, removedEvalHiddenIds=${estimate.removedEvalHiddenIds})`,
+    );
+  }
+  if (targetFreshHidden !== undefined && estimate.freshEvalHidden < targetFreshHidden) {
+    fail(`estimate mints ${estimate.freshEvalHidden} fresh eval_hidden queries < --target-fresh-hidden ${targetFreshHidden}`);
+  }
 }
 
 function readSigningKey(outDir) {
@@ -312,6 +460,17 @@ async function main() {
   const manifestPath = flag('manifest', DEFAULT_MANIFEST);
   const epoch = Number(flag('epoch'));
   if (!Number.isInteger(epoch) || epoch < 1) fail('--epoch must be a positive integer');
+  const maxWallMs = optionalPositiveIntegerFlag('max-wall-ms');
+  const wallStartedAtMs = Date.now();
+  const assertWallBudget = (stage) => {
+    if (maxWallMs === undefined) return;
+    const elapsed = Date.now() - wallStartedAtMs;
+    if (elapsed > maxWallMs) fail(`epoch evolve exceeded --max-wall-ms=${maxWallMs} at ${stage} (elapsed ${elapsed}ms)`);
+  };
+  const remainingWallMs = () => {
+    if (maxWallMs === undefined) return undefined;
+    return Math.max(1, maxWallMs - (Date.now() - wallStartedAtMs));
+  };
   const manifest = readJson(manifestPath);
   if (manifest.schema !== 'coretex.launch-artifacts.v1') fail(`unsupported launch manifest schema ${manifest.schema}`);
   const bundlePath = flag('bundle', manifest.bundlePath);
@@ -385,9 +544,13 @@ async function main() {
   const seed = flag('seed', profile.epochFrontier?.seed ?? 'coretex-launch-frontier');
   const churnFraction = Number(flag('churn', '0.1'));
   const retractionFraction = numberFlag('retraction-fraction', profile.evolve?.retractionFraction ?? 0.02);
-  const minFreshEvalHidden = numberFlag('min-fresh-eval-hidden', profile.evolve?.minFreshEvalHiddenPerEpoch ?? 8);
+  const configuredMinFreshEvalHidden = numberFlag('min-fresh-eval-hidden', profile.evolve?.minFreshEvalHiddenPerEpoch ?? 8);
+  const targetFreshHidden = optionalNonNegativeIntegerFlag('target-fresh-hidden');
+  const minFreshEvalHidden = Math.max(configuredMinFreshEvalHidden, targetFreshHidden ?? 0);
   const hiddenRetireHorizon = numberFlag('hidden-retire-horizon', profile.evolve?.evalHiddenRetireHorizonEpochs ?? 6);
   const maxRootDeltaPerEpoch = numberFlag('max-root-delta-per-epoch', profile.epochFrontier?.maxRootDeltaPerEpoch ?? 24);
+  const maxEmbeddings = optionalNonNegativeIntegerFlag('max-embeddings');
+  const maxRemovals = optionalNonNegativeIntegerFlag('max-removals');
   // Canonical split assignment over the PRODUCTION event id — injected so the generator stays pure.
   const splitOf = (logicalQueryId, liveUpdateEpoch) => splitForRecord(
     liveUpdateEpoch !== undefined && liveUpdateEpoch !== null ? liveTailQueryId(logicalQueryId, liveUpdateEpoch) : logicalQueryId,
@@ -415,13 +578,45 @@ async function main() {
   if (logicalDelta.addedDocs.length === 0 && logicalDelta.addedQueries.length === 0) {
     fail('evolve generated empty delta; refusing to publish empty epoch rotation');
   }
+  assertWallBudget('logical-delta');
+  const removalPlan = planLogicalDeltaRemovals({ logicalDelta, logical, previousCorpus, maxRootDeltaPerEpoch });
+  const estimate = buildEvolveEstimate({
+    epoch,
+    seed,
+    churnFraction,
+    retractionFraction,
+    logicalDelta,
+    removalPlan,
+    minFreshEvalHidden,
+    hiddenRetireHorizon,
+    maxRootDeltaPerEpoch,
+  });
+  const estimatePath = resolve(outDir, `epoch-evolve-estimate-${epoch}.json`);
+  writeFileAtomic(estimatePath, JSON.stringify(estimate, null, 2) + '\n');
+  assertWallBudget('estimate');
+  if (has('estimate-only') || has('estimate-report-only')) {
+    if (!has('estimate-report-only')) {
+      enforceEvolveBudgets(estimate, { maxEmbeddings, maxRemovals, targetFreshHidden, maxRootDeltaPerEpoch });
+    }
+    console.log(JSON.stringify({
+      ok: true,
+      command: 'coretex:epoch-evolve-estimate',
+      reportOnly: has('estimate-report-only'),
+      estimate,
+      estimatePath: estimatePath.replace(`${repoRoot}/`, ''),
+    }, null, 2));
+    return;
+  }
+  enforceEvolveBudgets(estimate, { maxEmbeddings, maxRemovals, targetFreshHidden, maxRootDeltaPerEpoch });
   const embeddingModeMock = has('mock-embeddings');
   const { addedDocEmbeddings, addedQueryEmbeddings, embeddingMode } = await embedLogicalDelta(
     logicalDelta,
     bundlePath,
     previousCorpus.biEncoderRetrievalKeyLayout,
     embeddingModeMock,
+    { maxWallMs: remainingWallMs() },
   );
+  assertWallBudget('embedding');
   const additions = bridgeLogicalDeltaToProductionEvents({
     previousCorpus,
     logicalDelta,
@@ -438,63 +633,7 @@ async function main() {
   if (freshEvalHiddenAdded.length < minFreshEvalHidden) {
     fail(`delta mints ${freshEvalHiddenAdded.length} fresh eval_hidden queries < pinned quota ${minFreshEvalHidden}; refusing to publish the epoch rotation`);
   }
-
-  // ── Retraction/retirement → CorpusDelta.removedIds ───────────────────────────
-  const logicalDocsById = new Map(logical.docs.map((d) => [d.id, d]));
-  const logicalQueriesById = new Map(logical.queries.map((q) => [q.id, q]));
-  const removedIds = [];
-  const removedIdSet = new Set();
-  const removedEvalHiddenIds = [];
-  const removedEvalHiddenSet = new Set();
-  const pushRemoved = (id) => {
-    if (removedIdSet.has(id)) return;
-    removedIdSet.add(id);
-    removedIds.push(id);
-  };
-  const pushRemovedEvalHidden = (id) => {
-    pushRemoved(id);
-    if (!removedEvalHiddenSet.has(id)) {
-      removedEvalHiddenSet.add(id);
-      removedEvalHiddenIds.push(id);
-    }
-  };
-  const retractedProdDocIds = new Set();
-  const retractedQrelDocIds = new Set(logicalDelta.retractedDocIds);
-  for (const docId of logicalDelta.retractedDocIds) {
-    const prodId = productionEventIdForLogicalDoc(previousCorpus, logicalDocsById.get(docId) ?? { id: docId });
-    if (!prodId) fail(`retracted doc ${docId} does not resolve to a production corpus event — logical/production state divergence`);
-    pushRemoved(prodId);
-    retractedProdDocIds.add(prodId);
-    const prodEvent = previousCorpus.byId.get(prodId);
-    for (const truth of prodEvent?.truthDocuments ?? []) {
-      if (truth?.id) retractedQrelDocIds.add(String(truth.id));
-    }
-  }
-  if (retractedProdDocIds.size > 0 || retractedQrelDocIds.size > 0) {
-    const retiredLogicalQuerySet = new Set(logicalDelta.retiredQueryIds);
-    for (const event of previousCorpus.events) {
-      if (event.split !== 'eval_hidden') continue;
-      const qrels = Array.isArray(event.qrels) ? event.qrels : [];
-      const broken = qrels.some((qrel) => {
-        if (Number(qrel?.relevance ?? 0) <= 0) return false;
-        const docId = String(qrel?.documentId ?? '');
-        return retractedProdDocIds.has(docId) || retractedQrelDocIds.has(docId);
-      });
-      if (!broken) continue;
-      pushRemovedEvalHidden(event.id);
-      retiredLogicalQuerySet.add(logicalQueryIdFromProductionEventId(event.id));
-    }
-    logicalDelta.retiredQueryIds = [...retiredLogicalQuerySet];
-  }
-  for (const queryId of logicalDelta.retiredQueryIds) {
-    const prodId = productionEventIdForLogicalQuery(previousCorpus, logicalQueriesById.get(queryId) ?? { id: queryId });
-    if (!prodId) fail(`retired hidden query ${queryId} does not resolve to a production corpus event — logical/production state divergence`);
-    pushRemovedEvalHidden(prodId);
-  }
-  // ── Root-delta cap: hidden-pool removals are forced frontier-root churn ───────
-  if (removedEvalHiddenIds.length > maxRootDeltaPerEpoch) {
-    fail(`hidden-row retirement count ${removedEvalHiddenIds.length} exceeds maxRootDeltaPerEpoch ${maxRootDeltaPerEpoch}; refusing to emit the delta`);
-  }
+  const { removedIds, removedEvalHiddenIds, retractedProdDocIds, retractedQrelDocIds } = removalPlan;
 
   const generatedAt = flag('generated-at', new Date().toISOString());
   const unsignedDelta = buildCorpusDelta({
@@ -518,6 +657,7 @@ async function main() {
     },
   });
   const delta = signCorpusDelta(unsignedDelta, privateKeyPem, keyId);
+  assertWallBudget('corpus-delta');
   const publicKeyPath = flag('public-key', null);
   if (!devPublicKeyPem && !publicKeyPath) fail('delta signature verification requires --public-key when not using --allow-dev-key');
   const publicKeyPem = devPublicKeyPem ?? readFileSync(resolve(repoRoot, publicKeyPath), 'utf8');
@@ -549,6 +689,7 @@ async function main() {
     launchGenesis,
     maxRootDeltaPerEpoch,
   });
+  assertWallBudget('frontier');
   const challengeBook = {
     schema: 'coretex.epoch-challenge-book.v1',
     epoch,
@@ -710,6 +851,7 @@ async function main() {
     artifacts: {
       corpusDelta: deltaPath.replace(`${repoRoot}/`, ''),
       rotationManifest: rotationPath.replace(`${repoRoot}/`, ''),
+      estimate: estimatePath.replace(`${repoRoot}/`, ''),
       logicalDelta: logicalDeltaPath.replace(`${repoRoot}/`, ''),
       logicalState: logicalStatePath.replace(`${repoRoot}/`, ''),
       checkpoint: checkpointPath.replace(`${repoRoot}/`, ''),
@@ -728,6 +870,7 @@ async function main() {
       launchGenesis,
       addedDocs: logicalDelta.addedDocs.length,
       addedQueries: logicalDelta.addedQueries.length,
+      estimatedEmbeddings: estimate.estimatedEmbeddings,
       churnedSubjects: logicalDelta.churnedSubjects.length,
       retractedDocs: logicalDelta.retractedDocIds.length,
       retiredHiddenQueries: logicalDelta.retiredQueryIds.length,

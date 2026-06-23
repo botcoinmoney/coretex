@@ -150,6 +150,27 @@ function asPpm(v, fallback = null) {
   if (!Number.isFinite(n) || n < 0) return fallback;
   return Math.max(0, Math.min(1_000_000, n));
 }
+function optionalNonNegativeIntegerFlag(name) {
+  const raw = flag(name, null);
+  if (raw === null) return undefined;
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n < 0) fail(`--${name} must be a non-negative integer`);
+  return n;
+}
+function optionalPositiveIntegerFlag(name, fallback = undefined) {
+  const raw = flag(name, null);
+  if (raw === null) return fallback;
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n <= 0) fail(`--${name} must be a positive integer`);
+  return n;
+}
+function optionalFractionFlag(name) {
+  const raw = flag(name, null);
+  if (raw === null) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || n > 1) fail(`--${name} must be a fraction in [0, 1]`);
+  return n;
+}
 function normalizeS3Prefix(prefix) {
   return prefix?.replace(/\/+$/, '') ?? null;
 }
@@ -294,7 +315,45 @@ function sanitizeDecisionMetrics(metrics) {
   return out;
 }
 
-function runEpochEvolve({ manifestPath, outDir, decision, s3Prefix, parentStateRoot }) {
+export function churnSearchCandidates(decision, steps = 3) {
+  const chosen = Number(decision.chosenChurnFraction);
+  const min = Number(decision.minChurnFraction ?? chosen);
+  if (!Number.isFinite(chosen) || !Number.isFinite(min) || chosen < 0 || min < 0 || chosen < min) {
+    throw new Error('invalid churn decision');
+  }
+  if (!Number.isSafeInteger(steps) || steps < 0) throw new Error('invalid churn search steps');
+  if (steps === 0) return [Number(chosen.toFixed(4))];
+  const out = new Set();
+  for (let i = steps; i >= 0; i--) {
+    const value = min + ((chosen - min) * i / steps);
+    out.add(Number(value.toFixed(4)));
+  }
+  return [...out].sort((a, b) => b - a);
+}
+
+export function estimateWithinBudgets(estimate, budgets = {}) {
+  if (budgets.maxEmbeddings !== undefined && Number(estimate.estimatedEmbeddings) > budgets.maxEmbeddings) return false;
+  if (budgets.maxRemovals !== undefined && Number(estimate.removedIds) > budgets.maxRemovals) return false;
+  if (budgets.maxRootDeltaPerEpoch !== undefined && Number(estimate.rootDeltaPressure) > budgets.maxRootDeltaPerEpoch) return false;
+  if (budgets.targetFreshHidden !== undefined && Number(estimate.freshEvalHidden) < budgets.targetFreshHidden) return false;
+  return true;
+}
+
+export function selectBudgetedChurn(plans, budgets = {}) {
+  const underBudget = plans.filter((plan) => estimateWithinBudgets(plan.estimate, budgets));
+  if (underBudget.length === 0) {
+    return { ok: false, reason: 'all_churn_candidates_exceed_budgets' };
+  }
+  const withFreshTarget = budgets.targetFreshHidden === undefined
+    ? underBudget
+    : underBudget.filter((plan) => Number(plan.estimate.freshEvalHidden) >= budgets.targetFreshHidden);
+  if (withFreshTarget.length === 0) {
+    return { ok: false, reason: 'fresh_hidden_target_unmet_under_budgets' };
+  }
+  return { ok: true, plan: withFreshTarget[0] };
+}
+
+function buildEpochEvolveCommand({ manifestPath, outDir, decision, s3Prefix, parentStateRoot, estimateOnly = false, estimateReportOnly = false, forwardBudgetFlags = true }) {
   const epoch = flag('epoch');
   if (!epoch) fail('--epoch is required');
   if (!parentStateRoot) fail('--parent-state-root is required (chain-derived or explicitly verified)');
@@ -306,7 +365,9 @@ function runEpochEvolve({ manifestPath, outDir, decision, s3Prefix, parentStateR
     '--churn', String(decision.chosenChurnFraction),
     '--parent-state-root', parentStateRoot,
   ];
-  for (const name of [
+  if (estimateReportOnly) cmd.push('--estimate-report-only');
+  else if (estimateOnly) cmd.push('--estimate-only');
+  const forwardedFlags = [
     'bundle',
     'profile',
     'source-corpus',
@@ -327,7 +388,16 @@ function runEpochEvolve({ manifestPath, outDir, decision, s3Prefix, parentStateR
     'min-fresh-eval-hidden',
     'hidden-retire-horizon',
     'max-root-delta-per-epoch',
-  ]) {
+  ];
+  if (forwardBudgetFlags) {
+    forwardedFlags.push(
+      'max-embeddings',
+      'max-removals',
+      'target-fresh-hidden',
+      'max-wall-ms',
+    );
+  }
+  for (const name of forwardedFlags) {
     const v = flag(name, null);
     if (v !== null) cmd.push(`--${name}`, v);
   }
@@ -366,13 +436,113 @@ function runEpochEvolve({ manifestPath, outDir, decision, s3Prefix, parentStateR
   // allowed CPU-gate mock embeddings.
   if (has('launch-genesis')) cmd.push('--launch-genesis');
   if (has('mock-embeddings')) cmd.push('--mock-embeddings');
-  const r = spawnSync(process.execPath, cmd, { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env });
+  return { epoch, cmd };
+}
+
+function runEpochEstimate({ manifestPath, outDir, decision, s3Prefix, parentStateRoot }) {
+  const { epoch, cmd } = buildEpochEvolveCommand({
+    manifestPath,
+    outDir,
+    decision,
+    s3Prefix,
+    parentStateRoot,
+    estimateReportOnly: true,
+    forwardBudgetFlags: false,
+  });
+  const r = spawnEvolveChild(cmd, { label: 'coretex:epoch-evolve estimate', maxWallMs: decision.maxWallMs });
+  return JSON.parse(readFileSync(resolve(outDir, `epoch-evolve-estimate-${epoch}.json`), 'utf8'));
+}
+
+function runEpochEvolve({ manifestPath, outDir, decision, s3Prefix, parentStateRoot }) {
+  const { epoch, cmd } = buildEpochEvolveCommand({ manifestPath, outDir, decision, s3Prefix, parentStateRoot });
+  const r = spawnEvolveChild(cmd, { label: 'coretex:epoch-evolve', maxWallMs: decision.maxWallMs });
+  return JSON.parse(readFileSync(resolve(outDir, `epoch-evolve-output-${epoch}.json`), 'utf8'));
+}
+
+function spawnEvolveChild(cmd, { label, maxWallMs }) {
+  const r = spawnSync(process.execPath, cmd, {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env,
+    ...(maxWallMs !== undefined ? { timeout: maxWallMs, killSignal: 'SIGKILL' } : {}),
+  });
+  if (r.error?.code === 'ETIMEDOUT') {
+    console.error(r.stdout);
+    console.error(r.stderr);
+    fail(`${label} exceeded --max-wall-ms=${maxWallMs}`);
+  }
+  if (r.error) fail(`${label} failed: ${r.error.message}`);
+  if (r.signal) {
+    console.error(r.stdout);
+    console.error(r.stderr);
+    fail(`${label} terminated by signal ${r.signal}`);
+  }
   if (r.status !== 0) {
     console.error(r.stdout);
     console.error(r.stderr);
-    fail(`coretex:epoch-evolve failed with exit ${r.status}`);
+    fail(`${label} failed with exit ${r.status}`);
   }
-  return JSON.parse(readFileSync(resolve(outDir, `epoch-evolve-output-${epoch}.json`), 'utf8'));
+  return r;
+}
+
+function readEvolveBudgets() {
+  const budgets = {
+    maxEmbeddings: optionalNonNegativeIntegerFlag('max-embeddings'),
+    maxRemovals: optionalNonNegativeIntegerFlag('max-removals'),
+    targetFreshHidden: optionalNonNegativeIntegerFlag('target-fresh-hidden'),
+    maxWallMs: optionalPositiveIntegerFlag('max-wall-ms'),
+    retractionFraction: optionalFractionFlag('retraction-fraction'),
+    hiddenRetireHorizon: optionalNonNegativeIntegerFlag('hidden-retire-horizon'),
+    maxRootDeltaPerEpoch: optionalNonNegativeIntegerFlag('max-root-delta-per-epoch'),
+    maxEstimateCandidates: optionalPositiveIntegerFlag('max-estimate-candidates', 4),
+    minChurnFraction: optionalFractionFlag('min-churn'),
+    baseChurnFraction: optionalFractionFlag('base-churn'),
+    maxChurnFraction: optionalFractionFlag('max-churn'),
+  };
+  const missing = [
+    ['--max-embeddings', budgets.maxEmbeddings],
+    ['--max-removals', budgets.maxRemovals],
+    ['--target-fresh-hidden', budgets.targetFreshHidden],
+    ['--max-wall-ms', budgets.maxWallMs],
+    ['--retraction-fraction', budgets.retractionFraction],
+    ['--hidden-retire-horizon', budgets.hiddenRetireHorizon],
+    ['--max-root-delta-per-epoch', budgets.maxRootDeltaPerEpoch],
+    ['--min-churn', budgets.minChurnFraction],
+    ['--base-churn', budgets.baseChurnFraction],
+    ['--max-churn', budgets.maxChurnFraction],
+  ].filter(([, value]) => value === undefined).map(([name]) => name);
+  if (missing.length > 0) fail(`production epoch runner requires explicit evolve budgets: ${missing.join(', ')}`);
+  return budgets;
+}
+
+function planBudgetedEvolve({ manifestPath, outDir, decision, s3Prefix, parentStateRoot, budgets }) {
+  const candidates = churnSearchCandidates(decision, budgets.maxEstimateCandidates - 1);
+  const plans = [];
+  for (const churn of candidates) {
+    const candidateDecision = { ...decision, chosenChurnFraction: churn, maxWallMs: budgets.maxWallMs };
+    const estimate = runEpochEstimate({ manifestPath, outDir, decision: candidateDecision, s3Prefix, parentStateRoot });
+    plans.push({ churnFraction: churn, estimate });
+    const selected = selectBudgetedChurn(plans, budgets);
+    if (selected.ok) {
+      const lowered = churn < decision.chosenChurnFraction;
+      return {
+        decision: {
+          ...candidateDecision,
+          reasons: [
+            ...decision.reasons,
+            'estimate_preflight',
+            ...(lowered ? ['churn_lowered_to_fit_budget'] : []),
+          ],
+          evolveEstimate: estimate,
+        },
+        estimate,
+        plans,
+      };
+    }
+  }
+  const selected = selectBudgetedChurn(plans, budgets);
+  fail(`no churn candidate satisfied evolve budgets: ${selected.reason}`);
 }
 
 function publicKeyMetadata({ outDir, evolveOut }) {
@@ -509,7 +679,8 @@ async function main() {
     if (problem) fail(`metrics file ${metricsPath} rejected: ${problem}`);
   }
   const metrics = mergeCoordinatorEpochMetrics(fileMetrics, args);
-  const decision = chooseChurn(metrics);
+  const initialDecision = chooseChurn(metrics);
+  const budgets = readEvolveBudgets();
 
   // ── Parent state root: derive from chain when reachable, else explicit ──
   const rpcUrl = flag('rpc-url', env.BASE_RPC_URL ?? null);
@@ -530,6 +701,14 @@ async function main() {
   if (!parentStateRoot) fail('--parent-state-root is required (or provide --rpc-url/--registry to derive it from chain)');
 
   const s3Prefix = flag('s3-prefix', env.CORETEX_EPOCH_S3_PREFIX ?? null);
+  const { decision } = planBudgetedEvolve({
+    manifestPath,
+    outDir,
+    decision: initialDecision,
+    s3Prefix,
+    parentStateRoot,
+    budgets,
+  });
   let awsIdentity = null;
   if (s3Prefix || flag('status-s3-prefix', env.CORETEX_COORDINATOR_STATUS_S3_PREFIX ?? null)) {
     awsIdentity = requireAwsIdentity();

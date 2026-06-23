@@ -6,10 +6,13 @@ import { resolve } from 'node:path';
 
 import {
   FORBIDDEN_PRODUCTION_RUNNER_FLAGS,
+  churnSearchCandidates,
+  estimateWithinBudgets,
   frontierCount,
   metricsRequiredForEpoch,
   mergeCoordinatorEpochMetrics,
   readinessCheckedItems,
+  selectBudgetedChurn,
   shouldDeriveParentStateRootFromChain,
   validateCoordinatorEpochMetrics,
 } from '../../../../scripts/coretex-coordinator-epoch-runner.mjs';
@@ -135,6 +138,85 @@ describe('coretex coordinator epoch runner readiness honesty', () => {
   });
 });
 
+describe('coretex coordinator epoch runner evolve budget planner', () => {
+  test('churn candidates descend from telemetry choice to minimum', () => {
+    assert.deepEqual(churnSearchCandidates({
+      chosenChurnFraction: 0.1,
+      minChurnFraction: 0.05,
+    }, 2), [0.1, 0.075, 0.05]);
+  });
+
+  test('default churn search is capped for hot cutover preflight', () => {
+    assert.deepEqual(churnSearchCandidates({
+      chosenChurnFraction: 0.1,
+      minChurnFraction: 0.04,
+    }), [0.1, 0.08, 0.06, 0.04]);
+  });
+
+  test('single-candidate churn search estimates only the chosen churn', () => {
+    assert.deepEqual(churnSearchCandidates({
+      chosenChurnFraction: 0.1,
+      minChurnFraction: 0.04,
+    }, 0), [0.1]);
+  });
+
+  test('planner lowers churn when the telemetry choice exceeds embedding budget', () => {
+    const plans = [
+      { churnFraction: 0.1, estimate: { estimatedEmbeddings: 420, removedIds: 2, freshEvalHidden: 8 } },
+      { churnFraction: 0.075, estimate: { estimatedEmbeddings: 280, removedIds: 2, freshEvalHidden: 8 } },
+      { churnFraction: 0.05, estimate: { estimatedEmbeddings: 180, removedIds: 1, freshEvalHidden: 8 } },
+    ];
+
+    assert.equal(estimateWithinBudgets(plans[0].estimate, { maxEmbeddings: 300, targetFreshHidden: 8 }), false);
+    const selected = selectBudgetedChurn(plans, { maxEmbeddings: 300, maxRemovals: 4, maxRootDeltaPerEpoch: 8, targetFreshHidden: 8 });
+
+    assert.equal(selected.ok, true);
+    assert.equal(selected.plan.churnFraction, 0.075);
+  });
+
+  test('planner rejects estimates that exceed hidden root-delta budget', () => {
+    assert.equal(estimateWithinBudgets(
+      { estimatedEmbeddings: 10, removedIds: 2, removedEvalHiddenIds: 25, freshEvalHidden: 8, rootDeltaPressure: 25 },
+      { maxEmbeddings: 100, maxRemovals: 10, maxRootDeltaPerEpoch: 24, targetFreshHidden: 8 },
+    ), false);
+  });
+
+  test('planner skips first root-delta overbudget candidate and selects the next candidate', () => {
+    const plans = [
+      {
+        churnFraction: 0.02,
+        estimate: {
+          estimatedEmbeddings: 220,
+          removedIds: 8,
+          removedEvalHiddenIds: 32,
+          freshEvalHidden: 8,
+          rootDeltaPressure: 32,
+        },
+      },
+      {
+        churnFraction: 0.002,
+        estimate: {
+          estimatedEmbeddings: 113,
+          removedIds: 0,
+          removedEvalHiddenIds: 0,
+          freshEvalHidden: 8,
+          rootDeltaPressure: 8,
+        },
+      },
+    ];
+
+    const selected = selectBudgetedChurn(plans, {
+      maxEmbeddings: 240,
+      maxRemovals: 12,
+      maxRootDeltaPerEpoch: 24,
+      targetFreshHidden: 8,
+    });
+
+    assert.equal(selected.ok, true);
+    assert.equal(selected.plan.churnFraction, 0.002);
+  });
+});
+
 describe('coretex coordinator epoch runner launch genesis guards', () => {
   test('prior-epoch metrics are required after genesis except for explicit launch genesis', () => {
     assert.equal(metricsRequiredForEpoch(1, false), false);
@@ -185,5 +267,32 @@ describe('coretex coordinator epoch runner production dev-flag rejection', () =>
     const r = spawnSync(process.execPath, [runnerPath, '--mock-embeddings', '--epoch', '2'], { encoding: 'utf8' });
     assert.equal(r.status, 1);
     assert.match(r.stderr, /--mock-embeddings requires --allow-mock-embeddings/);
+  });
+
+  test('production runner requires explicit evolve budgets', () => {
+    const r = spawnSync(process.execPath, [
+      runnerPath,
+      '--epoch', '1',
+      '--parent-state-root', '0x' + '11'.repeat(32),
+    ], { encoding: 'utf8' });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /requires explicit evolve budgets/);
+  });
+
+  test('production runner rejects zero wall-clock budget', () => {
+    const r = spawnSync(process.execPath, [
+      runnerPath,
+      '--epoch', '1',
+      '--parent-state-root', '0x' + '11'.repeat(32),
+      '--max-embeddings', '1',
+      '--max-removals', '0',
+      '--target-fresh-hidden', '0',
+      '--max-wall-ms', '0',
+      '--retraction-fraction', '0',
+      '--hidden-retire-horizon', '999999',
+      '--max-root-delta-per-epoch', '24',
+    ], { encoding: 'utf8' });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /--max-wall-ms must be a positive integer/);
   });
 });

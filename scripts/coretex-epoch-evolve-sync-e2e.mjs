@@ -178,6 +178,14 @@ run('coordinator:epoch-runner', [
   '--min-churn', '1',
   '--base-churn', '1',
   '--max-churn', '1',
+  '--max-embeddings', '1000',
+  '--max-removals', '1000',
+  '--target-fresh-hidden', '4',
+  '--max-wall-ms', '120000',
+  '--retraction-fraction', '0',
+  '--hidden-retire-horizon', '999999',
+  '--max-root-delta-per-epoch', '1000',
+  '--max-estimate-candidates', '1',
   '--seed', 'epoch-e2e',
 ]);
 const evolveOut = JSON.parse(readFileSync(resolve(epochDir, 'epoch-evolve-output-1.json'), 'utf8'));

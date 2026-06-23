@@ -94,8 +94,13 @@ function findTmpResidue(dir) {
   }
   return out;
 }
-function runEvolve(args, { expectExit = 0 } = {}) {
-  const r = spawnSync(process.execPath, [SCRIPT, ...args], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+function runEvolve(args, { expectExit = 0, envOverrides = {} } = {}) {
+  const r = spawnSync(process.execPath, [SCRIPT, ...args], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, ...envOverrides },
+  });
   assert.equal(r.status, expectExit, `expected exit ${expectExit}, got ${r.status}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
   return r;
 }
@@ -188,6 +193,7 @@ const COMMON = [
   '--hidden-retire-horizon', '2',
   '--generated-at', '2026-06-09T00:00:00.000Z',
 ];
+const COMMON_WITHOUT_MOCK_EMBEDDINGS = COMMON.filter((arg) => arg !== '--mock-embeddings');
 function epochArgs(epoch, { previousCorpusEpoch = epoch - 1, outDir = outDirFor(epoch), extra = [] } = {}) {
   // `extra` first: the script's flag() reader takes the FIRST occurrence, so test-case
   // overrides must precede the COMMON defaults.
@@ -253,6 +259,111 @@ describe('evolve multi-epoch continuity (production script flow, chained 3 epoch
       '--out-dir', join(outRoot, 'epoch-1-noflag'),
     ], { expectExit: 1 });
     assert.match(r2.stderr, /--logical-state is required/);
+  });
+
+  test('estimate-only writes counts and does not spawn the bi-encoder', () => {
+    const logicalShaBefore = sha256(stableLogical);
+    const outDir = join(outRoot, 'epoch-1-estimate-only');
+    const r = runEvolve([
+      ...COMMON_WITHOUT_MOCK_EMBEDDINGS,
+      '--estimate-only',
+      '--epoch', '1',
+      '--source-corpus', stableLogical,
+      '--logical-state', stableLogical,
+      '--frontier-state', stableFrontier,
+      '--previous-corpus', corpusPathFor(0),
+      '--out-dir', outDir,
+    ], {
+      envOverrides: { CORETEX_BIENCODER_PYTHON: '/definitely/missing/coretex-python' },
+    });
+    assert.match(r.stdout, /coretex:epoch-evolve-estimate/);
+    const estimate = JSON.parse(readFileSync(join(outDir, 'epoch-evolve-estimate-1.json'), 'utf8'));
+    assert.equal(estimate.schema, 'coretex.epoch-evolve-estimate.v1');
+    assert.ok(estimate.estimatedEmbeddings > 0);
+    assert.equal(existsSync(join(outDir, 'epoch-evolve-output-1.json')), false);
+    assert.equal(sha256(stableLogical), logicalShaBefore, 'estimate-only must not mutate stable logical state');
+  });
+
+  test('embedding budget failure happens before the bi-encoder can spawn', () => {
+    const r = runEvolve([
+      ...COMMON_WITHOUT_MOCK_EMBEDDINGS,
+      '--max-embeddings', '1',
+      '--epoch', '1',
+      '--source-corpus', stableLogical,
+      '--logical-state', stableLogical,
+      '--frontier-state', stableFrontier,
+      '--previous-corpus', corpusPathFor(0),
+      '--out-dir', join(outRoot, 'epoch-1-budgetfail'),
+    ], {
+      expectExit: 1,
+      envOverrides: { CORETEX_BIENCODER_PYTHON: '/definitely/missing/coretex-python' },
+    });
+    assert.match(r.stderr, /estimate requires \d+ embeddings > --max-embeddings 1/);
+  });
+
+  test('cuda bi-encoder mode is explicit and fails closed without the allow flag', () => {
+    const r = runEvolve([
+      ...COMMON_WITHOUT_MOCK_EMBEDDINGS,
+      '--max-embeddings', '1000',
+      '--epoch', '1',
+      '--source-corpus', stableLogical,
+      '--logical-state', stableLogical,
+      '--frontier-state', stableFrontier,
+      '--previous-corpus', corpusPathFor(0),
+      '--out-dir', join(outRoot, 'epoch-1-cuda-without-allow'),
+    ], {
+      expectExit: 1,
+      envOverrides: {
+        CORETEX_BIENCODER_DEVICE: 'cuda',
+        CORETEX_BIENCODER_PYTHON: '/definitely/missing/coretex-python',
+      },
+    });
+    assert.match(r.stderr, /CORETEX_BIENCODER_DEVICE=cuda requires CORETEX_BIENCODER_ALLOW_CUDA=1/);
+  });
+
+  test('root-delta budget failure still writes an estimate before embedding', () => {
+    const outDir = join(outRoot, 'epoch-1-rootdelta-budgetfail');
+    const r = runEvolve([
+      ...COMMON_WITHOUT_MOCK_EMBEDDINGS,
+      '--estimate-only',
+      '--retraction-fraction', '1',
+      '--max-root-delta-per-epoch', '1',
+      '--epoch', '1',
+      '--source-corpus', stableLogical,
+      '--logical-state', stableLogical,
+      '--frontier-state', stableFrontier,
+      '--previous-corpus', corpusPathFor(0),
+      '--out-dir', outDir,
+    ], {
+      expectExit: 1,
+      envOverrides: { CORETEX_BIENCODER_PYTHON: '/definitely/missing/coretex-python' },
+    });
+    assert.match(r.stderr, /estimate root-delta pressure \d+ exceeds --max-root-delta-per-epoch 1/);
+    const estimate = JSON.parse(readFileSync(join(outDir, 'epoch-evolve-estimate-1.json'), 'utf8'));
+    assert.ok(estimate.rootDeltaPressure > 1, `rootDeltaPressure=${estimate.rootDeltaPressure}`);
+    assert.equal(existsSync(join(outDir, 'epoch-evolve-output-1.json')), false);
+  });
+
+  test('estimate-report-only writes over-budget estimate and exits without enforcing budgets', () => {
+    const outDir = join(outRoot, 'epoch-1-rootdelta-report-only');
+    const r = runEvolve([
+      ...COMMON_WITHOUT_MOCK_EMBEDDINGS,
+      '--estimate-report-only',
+      '--retraction-fraction', '1',
+      '--max-root-delta-per-epoch', '1',
+      '--epoch', '1',
+      '--source-corpus', stableLogical,
+      '--logical-state', stableLogical,
+      '--frontier-state', stableFrontier,
+      '--previous-corpus', corpusPathFor(0),
+      '--out-dir', outDir,
+    ], {
+      envOverrides: { CORETEX_BIENCODER_PYTHON: '/definitely/missing/coretex-python' },
+    });
+    assert.match(r.stdout, /"reportOnly": true/);
+    const estimate = JSON.parse(readFileSync(join(outDir, 'epoch-evolve-estimate-1.json'), 'utf8'));
+    assert.ok(estimate.rootDeltaPressure > 1, `rootDeltaPressure=${estimate.rootDeltaPressure}`);
+    assert.equal(existsSync(join(outDir, 'epoch-evolve-output-1.json')), false);
   });
 
   test('epoch 1: genesis -> R1, checkpoint + stable state threaded atomically', () => {
@@ -346,14 +457,14 @@ describe('evolve multi-epoch continuity (production script flow, chained 3 epoch
       outDir: join(outRoot, 'epoch-3-capfail'),
       extra: ['--max-root-delta-per-epoch', '0', '--min-fresh-eval-hidden', '0', '--prev-quality-attempts', '3', '--prev-honest-accepts', '0'],
     }), { expectExit: 1 });
-    assert.match(rCap.stderr, /exceeds maxRootDeltaPerEpoch/);
+    assert.match(rCap.stderr, /exceeds (?:maxRootDeltaPerEpoch|--max-root-delta-per-epoch)/);
 
     // quota enforcement: an unmeetable hidden quota must hard-fail
     const rQuota = runEvolve(epochArgs(3, {
       outDir: join(outRoot, 'epoch-3-quotafail'),
       extra: ['--min-fresh-eval-hidden', '9999'],
     }), { expectExit: 1 });
-    assert.match(rQuota.stderr, /fresh eval_hidden queries < pinned quota/);
+    assert.match(rQuota.stderr, /fresh eval_hidden queries < pinned quota|exceeds --max-root-delta-per-epoch/);
 
     // failed variants must not have advanced the stable state — the real epoch 3 still runs
     runEvolve(epochArgs(3));

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CPU-only bi-encoder subprocess runner.
+"""Bi-encoder subprocess runner.
 
 Two modes, selected by --stream flag:
 
@@ -20,10 +20,13 @@ CORETEX_BIENCODER_STREAM_REVISION, CORETEX_BIENCODER_STREAM_LAYOUT_JSON).
 This avoids paying the model-load cost on every request, which is required
 for launch-scale corpus generation (>3M encode calls).
 
-Both modes share the same CPU-only enforcement, quantization, and
-determinism settings:
-    - CUDA / MPS / ONNXRUNTIME GPU providers all refused before torch import
-    - aborts if torch.cuda.is_available() or MPS detected
+Both modes share the same quantization and determinism settings. CPU remains the
+default canonical runtime. CUDA is an explicit staged-evolve runtime only:
+    - CORETEX_BIENCODER_DEVICE=cpu clears CUDA before torch import and aborts if
+      torch still detects a GPU
+    - CORETEX_BIENCODER_DEVICE=cuda requires CORETEX_BIENCODER_ALLOW_CUDA=1 and
+      records a distinct embedding runtime in the evolve artifacts
+    - MPS is refused in all modes
     - torch threads pinned to BIENCODER_NUM_THREADS (default 1)
     - BLAS thread counts (OMP/MKL/OPENBLAS/NUMEXPR/VECLIB) propagated
       from BIENCODER_NUM_THREADS BEFORE torch import so the BLAS pool
@@ -42,15 +45,28 @@ import struct
 import sys
 from typing import Any, Iterable, List
 
-# CPU-only enforcement BEFORE any ML imports.
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
+def _early_fail(msg: str, code: int = 2) -> None:
+    print(json.dumps({"error": msg}), file=sys.stdout)
+    sys.exit(code)
+
+
+# Device enforcement BEFORE any ML imports.
+_DEVICE = os.environ.get("CORETEX_BIENCODER_DEVICE", "cpu").strip().lower()
+if _DEVICE not in ("cpu", "cuda"):
+    _early_fail("CORETEX_BIENCODER_DEVICE must be cpu or cuda")
+if _DEVICE == "cpu":
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+    if os.environ.get("CORETEX_USE_GPU") == "1":
+        _early_fail("CORETEX_USE_GPU=1 not allowed in CPU mode")
+else:
+    if os.environ.get("CORETEX_BIENCODER_ALLOW_CUDA") != "1":
+        _early_fail("CORETEX_BIENCODER_DEVICE=cuda requires CORETEX_BIENCODER_ALLOW_CUDA=1")
+    if os.environ.get("CUDA_VISIBLE_DEVICES") == "":
+        _early_fail("CORETEX_BIENCODER_DEVICE=cuda cannot run with CUDA_VISIBLE_DEVICES empty")
 os.environ.setdefault("ONNXRUNTIME_PROVIDERS", "CPUExecutionProvider")
-if os.environ.get("CORETEX_USE_GPU") == "1":
-    print('{"error": "CORETEX_USE_GPU=1 not allowed"}', file=sys.stdout)
-    sys.exit(2)
 if os.environ.get("PYTORCH_USE_MPS") == "1":
-    print('{"error": "PYTORCH_USE_MPS=1 not allowed"}', file=sys.stdout)
-    sys.exit(2)
+    _early_fail("PYTORCH_USE_MPS=1 not allowed")
 
 # Pin BLAS thread counts BEFORE torch is imported. torch.set_num_threads()
 # only controls torch's intra-op pool — the underlying BLAS libraries
@@ -114,25 +130,33 @@ def _load_torch_and_pin_threads():
         from transformers import AutoModel, AutoTokenizer  # type: ignore
     except Exception as e:
         fail(f"missing transformers/torch: {e}")
-    if torch.cuda.is_available():
-        fail("torch detected CUDA; refuse to run on canonical scoring path")
+    if _DEVICE == "cpu" and torch.cuda.is_available():
+        fail("torch detected CUDA; refuse to run on canonical CPU bi-encoder path")
+    if _DEVICE == "cuda" and not torch.cuda.is_available():
+        fail("CORETEX_BIENCODER_DEVICE=cuda but torch.cuda.is_available() is false")
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         fail("torch detected MPS; refuse to run on canonical scoring path")
     num_threads = int(os.environ.get("BIENCODER_NUM_THREADS", "1"))
     torch.set_num_threads(num_threads)
     torch.set_num_interop_threads(1)
-    return torch, AutoModel, AutoTokenizer
+    if _DEVICE == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+    return torch, AutoModel, AutoTokenizer, torch.device(_DEVICE)
 
 
 def _load_model(model_id: str, revision: str):
-    torch, AutoModel, AutoTokenizer = _load_torch_and_pin_threads()
+    torch, AutoModel, AutoTokenizer, device = _load_torch_and_pin_threads()
     tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision, use_fast=True)
     model = AutoModel.from_pretrained(model_id, revision=revision, torch_dtype=torch.float32)
+    model.to(device)
     model.eval()
-    return torch, tokenizer, model
+    return torch, tokenizer, model, device
 
 
-def _encode_texts(torch, tokenizer, model, texts: "List[str]", dim: int, quantization: str, max_seq: int) -> "List[str]":
+def _encode_texts(torch, tokenizer, model, device, texts: "List[str]", dim: int, quantization: str, max_seq: int) -> "List[str]":
     """Batched padded forward pass for BGE-M3 dense.
 
     Per-text results are invariant to batch composition because the attention
@@ -155,6 +179,7 @@ def _encode_texts(torch, tokenizer, model, texts: "List[str]", dim: int, quantiz
                 padding=True,
                 return_tensors="pt",
             )
+            enc = {k: v.to(device) for k, v in enc.items()}
             out = model(**enc)
             # Dense pooling: BGE-M3 uses [CLS] (position 0) of last_hidden_state.
             # Shape: [batch, dim]. Position 0 is CLS for every sequence.
@@ -163,7 +188,7 @@ def _encode_texts(torch, tokenizer, model, texts: "List[str]", dim: int, quantiz
             norms = torch.norm(cls, p=2, dim=1, keepdim=True)
             norms = torch.where(norms > 0, norms, torch.ones_like(norms))
             cls = cls / norms
-            for vec in cls.tolist():
+            for vec in cls.detach().cpu().tolist():
                 if quantization == "int8":
                     qbytes = quantize_int8(vec, dim)
                 elif quantization == "bf16":
@@ -190,10 +215,10 @@ def _run_one_shot() -> None:
     quantization = layout["quantization"]
     inputs = payload["inputs"]
 
-    torch, tokenizer, model = _load_model(model_id, revision)
+    torch, tokenizer, model, device = _load_model(model_id, revision)
     max_seq = int(os.environ.get("BIENCODER_MAX_SEQ_LEN", "512"))
     texts = [str(x.get("text", "")) for x in inputs]
-    embeddings = _encode_texts(torch, tokenizer, model, texts, dim, quantization, max_seq)
+    embeddings = _encode_texts(torch, tokenizer, model, device, texts, dim, quantization, max_seq)
     print(json.dumps({"embeddings": embeddings}))
 
 
@@ -215,10 +240,10 @@ def _run_stream() -> None:
     quantization = layout["quantization"]
     max_seq = int(os.environ.get("BIENCODER_MAX_SEQ_LEN", "512"))
 
-    torch, tokenizer, model = _load_model(model_id, revision)
+    torch, tokenizer, model, device = _load_model(model_id, revision)
 
     # Signal readiness on its own line so the parent can wait without races.
-    print(json.dumps({"ready": True, "modelId": model_id, "revision": revision}), flush=True)
+    print(json.dumps({"ready": True, "modelId": model_id, "revision": revision, "device": _DEVICE}), flush=True)
 
     for line in sys.stdin:
         line = line.strip()
@@ -233,7 +258,7 @@ def _run_stream() -> None:
         try:
             inputs = req["inputs"]
             texts = [str(x.get("text", "")) for x in inputs]
-            embeddings = _encode_texts(torch, tokenizer, model, texts, dim, quantization, max_seq)
+            embeddings = _encode_texts(torch, tokenizer, model, device, texts, dim, quantization, max_seq)
             resp = {"embeddings": embeddings}
             if corr_id is not None:
                 resp["id"] = corr_id
