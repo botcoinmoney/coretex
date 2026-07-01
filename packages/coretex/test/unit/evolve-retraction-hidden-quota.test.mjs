@@ -131,9 +131,14 @@ describe('evolve fresh eval_hidden quota + hidden-row aging', () => {
       assert.equal(splitOf(id, 5), 'eval_hidden', `${id} lands in eval_hidden under the canonical split`);
       const q = byId.get(id);
       assert.ok(q, `${id} is a real added query`);
-      if (id.includes('_h')) {
-        assert.ok(q.qrels.length === 1 && q.qrels[0].relevance === 1.0, 'minted hidden query is answerable');
-        assert.ok(d.addedDocs.some((doc) => doc.id === q.qrels[0].docId), 'minted hidden query truth doc is added');
+      if (q.operationFamily === 'temporal_cluster') {
+        const current = q.qrels.find((r) => r.role === 'direct' && r.relevance === 1.0);
+        const stale = q.qrels.find((r) => r.role === 'stale' && r.relevance > 0 && r.relevance < 1);
+        assert.ok(current, 'minted cluster hidden query has a direct current answer');
+        assert.ok(stale, 'minted cluster hidden query has a stale contrast qrel');
+        assert.ok(d.addedDocs.some((doc) => doc.id === current.docId && doc.currentStaleFlag === true), 'current truth doc is added');
+        assert.ok(d.addedDocs.some((doc) => doc.id === stale.docId && doc.currentStaleFlag === false), 'stale contrast doc is added');
+        assert.ok(q.hardNegatives.some((n) => n.docId === stale.docId && n.category === 'temporal_stale_exact_terms'), 'stale doc is a hard negative');
       }
     }
   });

@@ -18,6 +18,7 @@ import {
   computeCorpusRoot,
   expectedSplitForRecord,
   isMemoryDocumentEventId,
+  liveTailQueryId,
   parseCorpusDelta,
   serializeCorpusDelta,
   signCorpusDelta,
@@ -172,6 +173,51 @@ describe('Fix B — evolveCorpusDelta (deterministic live-update churn)', () => 
     assert.match(wrongScopeDoc.text, /math project scope from last week/);
     assert.notEqual(scope.query.scope.projectId, wrongScopeDoc.scope.projectId);
   });
+
+  test('evalHiddenPolicy fallback mints clustered temporal hidden rows, not singleton probes', () => {
+    const splitOf = (logicalQueryId, liveUpdateEpoch) => splitForRecord(liveTailQueryId(logicalQueryId, liveUpdateEpoch), 0);
+    const d = evolveCorpusDelta({
+      baseLogical,
+      epoch: 9,
+      seed: 'clustered-hidden-surface',
+      churnFraction: 0,
+      retractionFraction: 0,
+      evalHiddenPolicy: {
+        splitOf,
+        minFreshPerEpoch: 5,
+        maxMintedPerEpoch: 8,
+        retireAfterEpochs: Infinity,
+      },
+    });
+
+    assert.equal(d.freshEvalHiddenQueryIds.length, 5);
+    assert.equal(d.addedDocs.some((doc) => doc.kind === 'temporal_hidden_probe'), false);
+    const fresh = d.addedQueries.filter((q) => d.freshEvalHiddenQueryIds.includes(q.id));
+    assert.equal(fresh.length, 5);
+    assert.ok(fresh.every((q) => splitOf(q.id, q.liveUpdateEpoch) === 'eval_hidden'));
+    assert.ok(fresh.every((q) => q.family === 'temporal_update'));
+    assert.ok(fresh.every((q) => q.operationFamily === 'temporal_cluster'));
+    assert.ok(fresh.every((q) => q.hardNegatives.some((n) => n.category === 'temporal_stale_exact_terms')));
+
+    const byPair = new Map();
+    for (const q of fresh) {
+      const current = q.qrels.find((r) => r.role === 'direct');
+      const stale = q.qrels.find((r) => r.role === 'stale');
+      assert.ok(current, 'cluster query must have a direct current qrel');
+      assert.ok(stale, 'cluster query must have a stale qrel');
+      const key = `${current.docId}->${stale.docId}`;
+      byPair.set(key, [...(byPair.get(key) ?? []), q]);
+    }
+    const cluster = [...byPair.entries()].find(([, rows]) => rows.length >= 3);
+    assert.ok(cluster, `expected at least three hidden paraphrases over one current/stale pair, got ${JSON.stringify([...byPair].map(([k, v]) => [k, v.length]))}`);
+    const [pair, rows] = cluster;
+    const [currentId, staleId] = pair.split('->');
+    const docs = new Map(d.addedDocs.map((doc) => [doc.id, doc]));
+    assert.equal(docs.get(currentId).currentStaleFlag, true);
+    assert.equal(docs.get(staleId).currentStaleFlag, false);
+    assert.ok(d.addedRelations.some((r) => r.src === currentId && r.dst === staleId && r.type === 'supersedes'));
+    assert.ok(new Set(rows.map((q) => q.queryText)).size >= 3, 'cluster rows must be paraphrases, not duplicate query text');
+  });
 });
 
 describe('Fix B — production delta/root path (mock embeddings): logical delta → buildCorpusDelta → applyCorpusDelta → replay same root', () => {
@@ -292,6 +338,71 @@ describe('Fix B — production delta/root path (mock embeddings): logical delta 
     assert.equal(verifyCorpusDeltaSignature({ ...parsed, signature: null }, publicKeyPem), false);
     const evolved = applyCorpusDelta(previousCorpus, parsed, { rootCache: previousCorpus.corpusRootCache, attachRootCache: true });
     assert.equal(evolved.corpusRoot, signed.nextRoot);
+  });
+
+  test('clustered evalHiddenPolicy rows bridge into production delta and replay root', () => {
+    const previousCorpus = prevCorpusWithBaseMemory(0);
+    const splitOf = (logicalQueryId, liveUpdateEpoch) => splitForRecord(
+      liveTailQueryId(logicalQueryId, liveUpdateEpoch),
+      previousCorpus.corpusEpoch,
+    );
+    const ld = evolveCorpusDelta({
+      baseLogical,
+      epoch: 9,
+      seed: 'clustered-hidden-surface',
+      churnFraction: 0,
+      retractionFraction: 0,
+      evalHiddenPolicy: {
+        splitOf,
+        minFreshPerEpoch: 5,
+        maxMintedPerEpoch: 8,
+        retireAfterEpochs: Infinity,
+      },
+    });
+    const additions = bridgeLogicalDeltaToProductionEvents({
+      previousCorpus,
+      logicalDelta: ld,
+      addedDocEmbeddings: new Map(ld.addedDocs.map((d) => [d.id, mockEmb()])),
+      addedQueryEmbeddings: new Map(ld.addedQueries.map((q) => [q.id, mockEmb()])),
+      biEncoder: { modelId: BI.modelId, revision: BI.revision, layout: LAYOUT },
+    });
+    const additionsById = new Map(additions.map((e) => [e.id, e]));
+    const freshEvents = ld.freshEvalHiddenQueryIds.map((id) => additionsById.get(liveTailQueryId(id, 9)));
+    assert.equal(freshEvents.length, 5);
+    assert.ok(freshEvents.every(Boolean), 'every fresh logical hidden query must bridge to a production event');
+    assert.ok(freshEvents.every((e) => e.split === 'eval_hidden'));
+    assert.ok(freshEvents.every((e) => e.id.startsWith('zz_e000000000009_q_')));
+
+    const byPair = new Map();
+    for (const e of freshEvents) {
+      assert.equal(e.logicalFamily, 'temporal_update');
+      assert.equal(e.band, 'very_hard');
+      const current = e.qrels.find((r) => r.relevance === 1);
+      const stale = e.hardNegatives.find((n) => n.category === 'temporal_stale_exact_terms');
+      assert.ok(current, 'bridged cluster query must keep direct qrel');
+      assert.ok(stale, 'bridged cluster query must keep stale exact-term hard negative');
+      assert.ok(e.truthDocuments.some((t) => t.id === current.documentId && t.isCurrent === true));
+      assert.ok(e.truthDocuments.some((t) => t.id === stale.id && t.isCurrent === false));
+      byPair.set(`${current.documentId}->${stale.id}`, [...(byPair.get(`${current.documentId}->${stale.id}`) ?? []), e]);
+    }
+    assert.ok([...byPair.values()].some((rows) => rows.length >= 3), 'production bridge keeps paraphrased cluster rows over one current/stale pair');
+
+    const memDocs = additions.filter((e) => isMemoryDocumentEventId(e.id));
+    const currentDocIds = new Set(freshEvents.flatMap((e) => e.qrels.filter((r) => r.relevance === 1).map((r) => r.documentId)));
+    const staleDocIds = new Set(freshEvents.flatMap((e) => e.hardNegatives.filter((n) => n.category === 'temporal_stale_exact_terms').map((n) => n.id)));
+    assert.ok(memDocs.some((e) => currentDocIds.has(e.truthDocuments[0].id) && e.split === 'train_visible'));
+    assert.ok(memDocs.some((e) => staleDocIds.has(e.truthDocuments[0].id) && e.truthDocuments[0].isCurrent === false));
+
+    const delta = buildCorpusDelta({
+      previousCorpus,
+      previousRootCache: previousCorpus.corpusRootCache,
+      additions,
+      removals: [],
+      epoch: 9,
+      labelingProvenance,
+    });
+    const evolved = applyCorpusDelta(previousCorpus, delta, { rootCache: previousCorpus.corpusRootCache, attachRootCache: true });
+    assert.equal(evolved.corpusRoot, delta.nextRoot);
   });
 
   test('package bridge emits tail-sortable live memory/query ids for incremental roots', () => {

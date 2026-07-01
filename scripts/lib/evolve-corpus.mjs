@@ -28,8 +28,18 @@ function prng(seedStr) { let st = h(seedStr).readUInt32BE(0); return () => { st 
 
 const CITIES = ['Oslo', 'Lagos', 'Quito', 'Hanoi', 'Cairo', 'Lima', 'Riga', 'Accra', 'Sofia', 'Tunis', 'Osaka', 'Perth'];
 const PKGS = ['pnpm', 'npm', 'yarn', 'bun', 'pip', 'poetry', 'cargo', 'maven'];
+const DIETS = ['vegetarian', 'vegan', 'pescatarian', 'gluten-free', 'low-sodium', 'kosher', 'halal', 'omnivore'];
+const LANGUAGES = ['TypeScript', 'Python', 'Rust', 'Go', 'Java', 'Kotlin', 'Elixir', 'Scala'];
+const RUNTIMES = ['node22', 'python3.11', 'jvm21', 'wasmtime', 'deno2', 'bun1'];
 const API_HOSTS = ['atlas', 'beacon', 'cedar', 'delta', 'ember', 'falcon', 'granite', 'harbor'];
 const VALIDITY_SHADOW_COLORS = ['amber', 'silver', 'copper', 'violet'];
+const TEMPORAL_CLUSTER_QUERY_TEMPLATES = [
+  (canonical, attr) => `As of now, what ${attr} is recorded for ${canonical}?`,
+  (canonical, attr) => `What ${attr} replaced the older records for ${canonical}?`,
+  (canonical, attr) => `Which ${attr} should override ${canonical}'s stale records now?`,
+  (canonical, attr) => `What is the latest recorded ${attr} for ${canonical} after prior entries changed?`,
+  (canonical, attr) => `Ignoring superseded records, what ${attr} is now valid for ${canonical}?`,
+];
 const V16_BRANCH_WEIGHTS = [
   ['temporal', 23],
   ['conflict', 21],
@@ -66,6 +76,16 @@ function pickWeightedBranch(seedKey, weights) {
     if (cursor < 0) return branch;
   }
   return weights[weights.length - 1]?.[0] ?? 'temporal';
+}
+
+function temporalAttrBank(isProject, attr) {
+  if (isProject && attr === 'package manager') return PKGS;
+  if (isProject && attr === 'deployment region') return CITIES;
+  if (isProject && attr === 'language') return LANGUAGES;
+  if (isProject && attr === 'runtime') return RUNTIMES;
+  if (!isProject && attr === 'diet') return DIETS;
+  if (!isProject && attr === 'city') return CITIES;
+  return CITIES;
 }
 
 /**
@@ -487,24 +507,64 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
     // guarantee fresh hidden supply is to mint ids until enough land in eval_hidden (~15%).
     // Minting is bounded by maxMintedPerEpoch (the caller's root-delta budget); when the quota
     // cannot be met inside the budget the caller's quota gate hard-fails.
-    const saltCap = Math.max(400, minFreshPerEpoch * 40);
+    const saltCap = Math.max(600, minFreshPerEpoch * 80);
     let minted = 0;
+    const clusterIds = new Set();
+    const ensureTemporalClusterDocs = ({ cluster, subj, canonical, attr, val, staleVal, prior }) => {
+      if (clusterIds.has(cluster)) return;
+      clusterIds.add(cluster);
+      const currentId = `d_e${epoch}_${subj.id}_hc${cluster}_cur`;
+      const staleId = `d_e${epoch}_${subj.id}_hc${cluster}_stale`;
+      addedDocs.push({ id: currentId, lane: 'deep', kind: `temporal_${attr}`, entityIds: [universe, subj.id],
+        text: `${canonical}'s supersession ledger records ${attr} ${val} as active after the prior ${attr} entry was replaced.`,
+        shape: 'temporal_update_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
+      addedDocs.push({ id: staleId, lane: 'deep', kind: `temporal_${attr}`, entityIds: [universe, subj.id],
+        text: `${canonical}'s older ${attr} record listed ${staleVal} before the supersession ledger replaced that value.`,
+        shape: 'temporal_update_record', timestamp: priorDate, currentStaleFlag: false, liveUpdateEpoch: epoch });
+      addedRelations.push({ src: currentId, dst: staleId, type: 'supersedes', label: 'supersedes' });
+      if (prior) addedRelations.push({ src: currentId, dst: prior, type: 'supersedes', label: 'supersedes' });
+      priorTemporalByAttr.set(`${subj.id}::${attr}`, currentId);
+    };
     for (let salt = 0; freshEvalHiddenQueryIds.length < minFreshPerEpoch && minted < maxMintedPerEpoch && salt < saltCap && subjects.length > 0; salt++) {
       const subj = subjects[salt % subjects.length];
-      const qid = `q_e${epoch}_${subj.id}_h${salt}`;
-      if (splitOf(qid, epoch) !== 'eval_hidden') continue;
-      const rnd = prng(`${seed}:hidden:${epoch}:${subj.id}:${salt}`);
+      const rnd = prng(`${seed}:hidden-cluster:${epoch}:${subj.id}:${salt}`);
       const canonical = subj.canonicalName;
-      const docId = `d_e${epoch}_${subj.id}_h${salt}`;
-      const val = `${CITIES[Math.floor(rnd() * CITIES.length)]} window ${1 + Math.floor(rnd() * 6)}`;
-      addedDocs.push({ id: docId, lane: 'deep', kind: 'temporal_hidden_probe', entityIds: [universe, subj.id],
-        text: `${canonical}'s supersession ledger sets hidden probe ${salt} value ${val}.`,
-        shape: 'temporal_update_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
-      addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
-        lane: 'deep', family: 'temporal_update', queryText: `What is ${canonical}'s hidden probe ${salt} value?`,
-        qrels: [{ docId, relevance: 1.0, role: 'direct' }], hardNegatives: [], band: 'very_hard', liveUpdateEpoch: epoch });
-      freshEvalHiddenQueryIds.push(qid);
-      minted++;
+      const isProject = /-svc-/.test(canonical);
+      const candidateAttrs = isProject ? ATTRS_FOR_PROJECT : ATTRS_FOR_PERSON;
+      let attr = candidateAttrs.find((a) => priorTemporalByAttr.has(`${subj.id}::${a}`));
+      if (!attr) attr = candidateAttrs[Math.floor(rnd() * candidateAttrs.length)];
+      const bank = temporalAttrBank(isProject, attr);
+      const val = bank[Math.floor(rnd() * bank.length)];
+      let staleVal = bank[Math.floor(rnd() * bank.length)];
+      if (staleVal === val) staleVal = bank[(bank.indexOf(val) + 1) % bank.length] ?? `${val}-prior`;
+      const prior = priorTemporalByAttr.get(`${subj.id}::${attr}`);
+      const cluster = `${salt}`;
+      const currentId = `d_e${epoch}_${subj.id}_hc${cluster}_cur`;
+      const staleId = `d_e${epoch}_${subj.id}_hc${cluster}_stale`;
+      for (let variant = 0; variant < TEMPORAL_CLUSTER_QUERY_TEMPLATES.length && freshEvalHiddenQueryIds.length < minFreshPerEpoch && minted < maxMintedPerEpoch; variant++) {
+        let qid = null;
+        for (let probe = 0; probe < 96; probe++) {
+          const candidate = `q_e${epoch}_${subj.id}_hc${cluster}_v${variant}_s${probe}`;
+          if (splitOf(candidate, epoch) === 'eval_hidden') {
+            qid = candidate;
+            break;
+          }
+        }
+        if (!qid) continue;
+        ensureTemporalClusterDocs({ cluster, subj, canonical, attr, val, staleVal, prior });
+        addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
+          lane: 'deep', family: 'temporal_update', queryText: TEMPORAL_CLUSTER_QUERY_TEMPLATES[variant](canonical, attr),
+          qrels: [
+            { docId: currentId, relevance: 1.0, role: 'direct' },
+            { docId: staleId, relevance: 0.2, role: 'stale' },
+            ...(prior ? [{ docId: prior, relevance: 0.2, role: 'stale_prior' }] : []),
+          ],
+          hardNegatives: [{ docId: staleId, category: 'temporal_stale_exact_terms' }, ...(prior ? [{ docId: prior, category: 'temporal_stale' }] : [])],
+          publicIntent: { atom: 'temporal_cluster', subjectEntityId: subj.id, attribute: attr, queryTime: tsDate, selector: `variant_${variant}` },
+          band: 'very_hard', operationFamily: 'temporal_cluster', liveUpdateEpoch: epoch });
+        freshEvalHiddenQueryIds.push(qid);
+        minted++;
+      }
     }
     // If a retracted doc was a positive qrel target, the hidden query is no
     // longer answerable and must leave the eval pool regardless of age.
