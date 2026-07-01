@@ -1,0 +1,235 @@
+{
+  "name": "coretex-evaluator-v2-dgen1-policy-r5-atom-v16-300k-enabled",
+  "version": "r5-atom-v16-300k-enabled-2026-06-04",
+  "scoreScale": "ppm",
+  "scorePpmEncoding": "uint32-0-to-1000000",
+  "patchScoreDeltaEncoding": "int64-ppm",
+  "primaryMetric": "ndcg@10",
+  "acceleratorPolicy": "cpu_only",
+  "runtimePin": {
+    "flavor": "torch-transformers",
+    "versions": {
+      "torch": "2.6.*",
+      "transformers": "4.55.*",
+      "huggingface_hub": "0.36.*",
+      "tokenizers": "0.21.*"
+    },
+    "buildFlags": [
+      "cpu-only"
+    ]
+  },
+  "replayTolerancePpm": 250,
+  "compositeWeights": {
+    "w_retrieval": 0.7,
+    "w_temporal": 0.13,
+    "w_relation_recall": 0.07,
+    "w_abstention": 0.05,
+    "w_structural_sanity": 0.05
+  },
+  "patchAcceptanceFloors": {
+    "minImprovementPpm": 500,
+    "structuralFloor": 0.95,
+    "protectedRegressionFloor": 0.05,
+    "familyCatastrophicFloor": 0.85
+  },
+  "splitRatios": {
+    "trainVisiblePct": 70,
+    "calibrationPct": 10,
+    "evalHiddenPct": 15,
+    "canaryPct": 5
+  },
+  "hiddenPack": {
+    "packSize": 64,
+    "quotas": [
+      {
+        "stratum": "family=near_collision",
+        "minCount": 12
+      },
+      {
+        "stratum": "family=temporal",
+        "minCount": 14
+      },
+      {
+        "stratum": "family=multi_hop_relation",
+        "minCount": 16
+      },
+      {
+        "stratum": "family=conflict_lifecycle",
+        "minCount": 10
+      }
+    ]
+  },
+  "relationHopBudget": 3,
+  "abstentionThreshold": 0.001,
+  "rerankerTopK": 10,
+  "retrievalKeyTopK": 50,
+  "relationEdgeTypes": [
+    "supports",
+    "supersedes",
+    "coreference_of",
+    "causes",
+    "derived_from",
+    "co_occurs_with"
+  ],
+  "revealGracePeriodSeconds": 21600,
+  "negCategoryRelevanceMap": {
+    "near_collision_attribute": 0.4,
+    "near_collision_entity": 0.2,
+    "temporal_stale": 0.4,
+    "trap": 0,
+    "lexical_distractor": 0.2,
+    "relation_neighbor": 0.4,
+    "unrelated": 0
+  },
+  "baseRpcConfig": {
+    "chainId": 8453,
+    "blockTimeSeconds": 2,
+    "targetBlockOffset": 30,
+    "replayBlockhashLookbackBlocks": 50000
+  },
+  "pipelineVersion": "coretex-retrieval-v2-policy-r5",
+  "firstStageTopK": 3200,
+  "rerankerInputTopK": 64,
+  "lensTopK": 36,
+  "lensWeight": 0.4,
+  "anchorWeight": 0.6,
+  "relationExpansionBudget": 50,
+  "categoryLensExpansionBudget": 50,
+  "temporalCurrentBoost": 0.1,
+  "temporalStaleSuppression": 0.1,
+  "lensDiversityFloor": 0.7,
+  "corpusDocDedupe": "canonical-doc-id",
+  "firstStageTopKSelection": {
+    "method": "worst-stratum-target",
+    "reason": "2026-06-01 v15 300k health gate: canonical hybrid dense+public-lexical first-stage clears randomness-corrected direct/anchor reach at K=3200; dense-only failed earlier artifacts.",
+    "calibrationReport": "release/calibration/2026-05-21-memory-corpus-v2/corpus-retrieval-health-v15-300k-hybrid.json"
+  },
+  "_reclaimedRegionsNote": "r5 PROTOCOL EPOCH: RetrievalKeys (384-671) + Codebook (896-991) WORDS are reclaimed for typed PolicyAtoms. Under r5 pin, 384-671 reads as evidence_bundle(384-511)/conflict_lifecycle(512-639)/abstention(640-671) atoms; 896-991 reserved.",
+  "ownerScopeMode": "restrict",
+  "categoryLensFinalBonusWeight": 0,
+  "categoryLensScoreInheritance": 0.3,
+  "categoryLensSeedTopK": 2,
+  "categoryLensHopBudget": 1,
+  "categoryLensEvidenceBundle": true,
+  "temporalStaleContrast": true,
+  "enableEvidenceBundleAtoms": true,
+  "enableConflictLifecycleAtoms": true,
+  "enableAbstentionAtoms": true,
+  "enableAspectConstraintAtoms": false,
+  "policyQueryConditionedAdmission": true,
+  "policyRelationTypedAdmission": true,
+  "policyConflictIntentAdmission": true,
+  "policyAspectIntentAdmission": false,
+  "policyAspectBoost": 0,
+  "policyMaxBudgetEvidence": 250,
+  "policyMaxBudgetConflict": 1000,
+  "policyAbstentionTop1Threshold": 0.9995,
+  "policyEmitTraces": true,
+  "policyQueryLocalTopK": 24,
+  "majorDeltaThreshold": 220,
+  "controllerParams": {
+    "rampUpMaxRatio": 1.1,
+    "decayRatio": 0.8,
+    "smallDriftRatio": 1.05,
+    "qualityHighThresholdMult": 1,
+    "underTargetRecoveryRatio": 0.9
+  },
+  "epochFrontier": {
+    "mode": "C3",
+    "activeWindow": 9639,
+    "minChurn": 2,
+    "maxChurn": 12,
+    "headroomLowWatermark": 1,
+    "headroomHighWatermark": 3,
+    "ewmaHalfLife": 3,
+    "targetAccepts": 2,
+    "expectedYieldPerUnit": 0.17,
+    "maxRootDeltaPerEpoch": 24,
+    "maxAge": null,
+    "seed": "coretex-launch-frontier",
+    "baselineRecompute": "activeRootChanged",
+    "majorDeltaPolicy": "corpusRootChanged",
+    "liveEvalPack": {
+      "limit": 8,
+      "familyPriority": [
+        "temporal_update"
+      ]
+    }
+  },
+  "baselineParentScorePpm": 288438,
+  "baselineVariancePpm": 0,
+  "baselineSamples": 3,
+  "baselineEvalSeedHex": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "firstStageMode": "hybrid",
+  "firstStageDenseWeight": 1,
+  "firstStageLexicalWeight": 1,
+  "enableRawRoutingAnchors": false,
+  "enableRelationAnchorEdges": false,
+  "policyEvidenceAllowedActions": [
+    "bundle",
+    "include",
+    "boost",
+    "suppress"
+  ],
+  "promotionTaxonomy": {
+    "core_reward_active": [
+      "temporal_update",
+      "conflict_lifecycle",
+      "relation_causal"
+    ],
+    "guardrail_active": [
+      "abstention_top1"
+    ],
+    "experimental_reward_active": [
+      "evidence_bundle",
+      "coreference",
+      "relation_lifecycle",
+      "noise_suppression"
+    ],
+    "sandbox_only": [
+      "phaseAEdges",
+      "combined_relation_routing",
+      "raw_anchors",
+      "aspect_constraint"
+    ]
+  },
+  "activeSubstrateSurfaces": [
+    "temporal_update",
+    "conflict_lifecycle",
+    "causal_decision_lensOnly",
+    "relation_category_routing",
+    "abstention_top1",
+    "evidence_bundle_bundleOnly",
+    "evidence_reach_only",
+    "coreference",
+    "relation_lifecycle_gated",
+    "noise_suppression"
+  ],
+  "disabledSubstrateSurfaces": [
+    "phaseAEdges",
+    "combined_relation_routing",
+    "raw_anchors",
+    "aspect_constraint"
+  ],
+  "_launchReducedProfileNote": "WIDENED launch profile derived 2026-06-03 from r5-launch-reduced-2026-06-02 per the operator's 'widen launch-active runway' directive. Adds 4 experimental_reward_active surfaces (evidence_bundle, coreference, relation_lifecycle, noise_suppression) to the 3 core_reward_active surfaces + 1 guardrail. Flag changes vs. r5-launch-reduced-2026-06-02: enableEvidenceBundleAtoms false\u2192true; policyEvidenceAllowedActions ['bundle']\u2192['bundle','include','boost','suppress']. Coreference + relation_lifecycle do not require additional flags \u2014 they ride on the existing policyRelationTypedAdmission + policyQueryConditionedAdmission pipeline once the parseQueryRelationIntent and categoryLensBFS gate fixes land (commits in the corresponding code change). Experimental promotion is justified by substrate-viability + bounded-safety: A100 widened confirmation produced 0 gold damage / 0 off-family worst across 30+ cells but ALSO 0 measured solo lift on hand-written candidates \u2014 the substrate is admitted, atoms decode, no damage, but Qwen does not rerank the admitted candidates higher because gold docs were already top-K via direct retrieval. Per orchestrator framing: 'CoreTex is meant to be experimental and malleable. The right bar is substrate viability + bounded safety, not maximum solo lift from our hand-written candidate.' Bundle hash changes vs the calibration-time 0x2d953b71; operator regenerates manifest at launch time. See release/calibration/2026-05-21-memory-corpus-v2/SURFACE_SEARCH_HARNESS_REPORT_V2_CORRECTION.md (widened-runway addendum) for the underlying evidence.",
+  "atomV16Gate": {
+    "schema": "coretex.atom-v16.profile-gate.v1",
+    "sourceTemplate": "release/bundle/evaluator-profile-v2-dgen1-policy-r5-300k-launch-reduced-widened.json",
+    "corpusScale": "300k",
+    "atomFlags": "enabled",
+    "salienceDeferred": true
+  },
+  "enableEntityResolutionAtoms": true,
+  "enableScopeAtoms": true,
+  "policyMaxBudgetEntity": 300,
+  "policyMaxBudgetScope": 300,
+  "policyEntityMaxDocs": 4,
+  "policyScopeMaxDocs": 8,
+  "policyScopeMaxSuppress": 4,
+  "rerankerMemoryIRMode": "full",
+  "temporalMotifAdmission": true,
+  "conflictMotifAdmission": true,
+  "evidenceMotifAdmission": false,
+  "motifAdmissionMaxDocs": 4,
+  "motifAdmissionTopK": 16
+}

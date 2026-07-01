@@ -32,6 +32,7 @@ import type { RetrievalKeyLayout } from '../eval/retrieval-corpus.js';
 import type { ScoringOptions } from '../eval/retrieval-benchmark.js';
 import type { BiEncoder } from '../eval/bi-encoder.js';
 import type { CrossEncoderReranker } from '../eval/reranker.js';
+import type { LiveEvalPackLaw } from '../eval/hidden-query-pack.js';
 import { canonicalJson } from '../canonical/json.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -537,6 +538,16 @@ export interface EpochFrontierPin {
   readonly seed: string;
   readonly baselineRecompute: 'activeRootChanged';
   readonly majorDeltaPolicy: 'corpusRootChanged';
+  /** SCORING-LAW pin: when present with limit > 0, every scored gate/confirm/baseline
+   *  pack admits up to `limit` newest ACTIVE live-eval (`zz_e*`) eval_hidden rows via
+   *  `admitActiveLiveEvalEvents` (`deriveScoredQueryPack`), with the active set verified
+   *  against the on-chain `activeFrontierRoot` before any scoring. This is what makes
+   *  evolve-minted clustered rows actually reachable by miners: without it a fresh
+   *  cluster's dual-pack sampling probability on the launch corpus is ~0 (measured
+   *  0/200 seed pairs), so the corpus-evolve runway lever cannot restore acceptance.
+   *  Hashed into bundleHash — arming/changing it is an attested scorer-law transition
+   *  (rebaseline + scorer sync + validator parity), never an env toggle. */
+  readonly liveEvalPack?: LiveEvalPackLaw;
 }
 
 /** difficulty.ts protocol defaults, expressed as a controller pin (the legacy pre-pin shape). */
@@ -1476,6 +1487,23 @@ function validateProfile(profile: EvaluatorProfile, errors?: string[]): void {
     if (f.baselineRecompute !== 'activeRootChanged') out.push("epochFrontier.baselineRecompute must be 'activeRootChanged'");
     if (f.majorDeltaPolicy !== 'corpusRootChanged') out.push("epochFrontier.majorDeltaPolicy must be 'corpusRootChanged'");
     if (f.maxRootDeltaPerEpoch !== undefined && (!Number.isInteger(f.maxRootDeltaPerEpoch) || f.maxRootDeltaPerEpoch < 1)) out.push('epochFrontier.maxRootDeltaPerEpoch must be a positive integer when present');
+    if (f.liveEvalPack !== undefined) {
+      const lp = f.liveEvalPack;
+      if (!Number.isInteger(lp.limit) || lp.limit < 1) out.push('epochFrontier.liveEvalPack.limit must be a positive integer');
+      // The overlay evicts only non-quota base rows; leave at least the quota
+      // reservation plus an equal share of broad rows so the dual broad packs
+      // keep their regression-safety function.
+      const quotaSum = profile.hiddenPack.quotas.reduce((acc, q) => acc + q.minCount, 0);
+      if (Number.isInteger(lp.limit) && lp.limit > profile.hiddenPack.packSize - quotaSum) {
+        out.push(`epochFrontier.liveEvalPack.limit must be <= packSize - quota reservation (${profile.hiddenPack.packSize - quotaSum})`);
+      }
+      if (lp.familyPriority !== undefined && (!Array.isArray(lp.familyPriority) || lp.familyPriority.some((s) => typeof s !== 'string' || s.length === 0))) {
+        out.push('epochFrontier.liveEvalPack.familyPriority must be an array of non-empty strings when present');
+      }
+      if (lp.dedupePublicIntent !== undefined && typeof lp.dedupePublicIntent !== 'boolean') {
+        out.push('epochFrontier.liveEvalPack.dedupePublicIntent must be a boolean when present');
+      }
+    }
   }
   if (profile.replayTolerancePpm > profile.patchAcceptanceFloors.minImprovementPpm)
     out.push('replayTolerancePpm must be <= patchAcceptanceFloors.minImprovementPpm');

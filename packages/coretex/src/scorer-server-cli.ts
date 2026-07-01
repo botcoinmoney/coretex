@@ -86,6 +86,10 @@ export interface ScorerExpectedPins {
   readonly promptTemplateHash: string;
   readonly bundleHash: string;
   readonly corpusRoot: string;
+  /** REQUIRED whenever the loaded bundle arms `epochFrontier.liveEvalPack` —
+   *  the on-chain active-frontier root the scorer's overlay id set was verified
+   *  against. A job omitting it under an overlay-law bundle is refused. */
+  readonly activeFrontierRoot?: string;
   readonly code?: ScorerCodeHealth;
 }
 
@@ -213,6 +217,9 @@ export interface ScorerLoadedPins {
    *  is configured with the public commit, never the secret). When a job's
    *  publicEvalContext carries hiddenSeedCommit, it must match this. */
   readonly hiddenSeedCommit?: string;
+  /** Present iff the loaded bundle arms `epochFrontier.liveEvalPack`: the
+   *  pinned active-frontier root the booted overlay id set hashed to. */
+  readonly activeFrontierRoot?: string;
   readonly code?: ScorerCodeHealth;
 }
 
@@ -245,6 +252,20 @@ export function checkScorerJobPins(job: ScorerJobRequest, loaded: ScorerLoadedPi
   const jobCommit = job.publicEvalContext?.hiddenSeedCommit;
   if (jobCommit !== undefined && loaded.hiddenSeedCommit !== undefined && !hexEq(jobCommit, loaded.hiddenSeedCommit)) {
     return `publicEvalContext.hiddenSeedCommit != loaded ${loaded.hiddenSeedCommit}`;
+  }
+  // Active-frontier overlay pin. FAIL-CLOSED both ways: an overlay-law scorer
+  // refuses jobs that don't pin the same active root (a coordinator unaware of
+  // the law must not get overlay-scored results), and a broad-law scorer refuses
+  // jobs pinning a root it never loaded.
+  if (loaded.activeFrontierRoot !== undefined) {
+    if (p.activeFrontierRoot === undefined) {
+      return `expectedScorerPins.activeFrontierRoot missing but scorer loaded overlay root ${loaded.activeFrontierRoot}`;
+    }
+    if (!hexEq(p.activeFrontierRoot, loaded.activeFrontierRoot)) {
+      return `expectedScorerPins.activeFrontierRoot ${p.activeFrontierRoot} != loaded ${loaded.activeFrontierRoot}`;
+    }
+  } else if (p.activeFrontierRoot !== undefined) {
+    return 'expectedScorerPins.activeFrontierRoot pinned but the scorer loaded no active-frontier overlay';
   }
   return null;
 }
@@ -640,6 +661,31 @@ async function bootScorer(env: NodeJS.ProcessEnv): Promise<BootedScorer> {
   const bundle = JSON.parse(readFileSync(bundleManifestPath, 'utf8')) as CoreTexBundleManifest;
   const corpusMeta = readProductionCorpusMetadata(corpusPath);
 
+  // Active-frontier live-eval overlay provisioning. FAIL-CLOSED pairing with the
+  // bundle law: an overlay-armed bundle refuses to boot without a root-verified
+  // active id set (CORETEX_ACTIVE_FRONTIER_IDS_PATH + CORETEX_ACTIVE_FRONTIER_ROOT),
+  // and a broad-law bundle refuses stray overlay env (silent-drift guard). The id
+  // set itself is verified against the pinned root inside the evaluator constructor.
+  const liveEvalPackArmed = (bundle.evaluator?.profile?.epochFrontier?.liveEvalPack?.limit ?? 0) > 0;
+  const activeFrontierIdsPath = env['CORETEX_ACTIVE_FRONTIER_IDS_PATH']?.trim() || undefined;
+  const activeFrontierRootEnv = env['CORETEX_ACTIVE_FRONTIER_ROOT']?.trim().toLowerCase() || undefined;
+  let activeFrontier: { readonly idsPath: string; readonly expectedRoot: string } | undefined;
+  if (liveEvalPackArmed) {
+    if (!activeFrontierIdsPath || !activeFrontierRootEnv) {
+      throw new Error(
+        'bundle arms epochFrontier.liveEvalPack: coretex-scorer-server requires CORETEX_ACTIVE_FRONTIER_IDS_PATH and CORETEX_ACTIVE_FRONTIER_ROOT',
+      );
+    }
+    if (!/^0x[0-9a-f]{64}$/.test(activeFrontierRootEnv)) {
+      throw new Error('CORETEX_ACTIVE_FRONTIER_ROOT must be bytes32 hex');
+    }
+    activeFrontier = { idsPath: activeFrontierIdsPath, expectedRoot: activeFrontierRootEnv };
+  } else if (activeFrontierIdsPath || activeFrontierRootEnv) {
+    throw new Error(
+      'CORETEX_ACTIVE_FRONTIER_IDS_PATH/CORETEX_ACTIVE_FRONTIER_ROOT set but the loaded bundle does not arm epochFrontier.liveEvalPack — refusing unattested overlay env',
+    );
+  }
+
   // The traced reranker is captured so /score-job can reset+snapshot per job;
   // the inner streaming reranker is captured for cache telemetry (getRerankerCacheStats
   // keys on the withRerankerCache-wrapped object, i.e. the streaming reranker).
@@ -686,6 +732,7 @@ async function bootScorer(env: NodeJS.ProcessEnv): Promise<BootedScorer> {
     perMinerCap,
     ...(env['CORETEX_SCREENER_THRESHOLD_PPM'] ? { screenerThresholdPpm: Number(env['CORETEX_SCREENER_THRESHOLD_PPM']) } : {}),
     rerankerFactory,
+    ...(activeFrontier !== undefined ? { activeFrontier } : {}),
   });
   if (!tracedReranker) throw new Error('coretex-scorer-server: reranker factory was not invoked');
 
@@ -699,6 +746,7 @@ async function bootScorer(env: NodeJS.ProcessEnv): Promise<BootedScorer> {
     corpusRoot: corpusMeta.corpusRoot.toLowerCase(),
     coreVersionHash: bundle.bundleHash.toLowerCase(),
     hiddenSeedCommit,
+    ...(activeFrontier !== undefined ? { activeFrontierRoot: activeFrontier.expectedRoot } : {}),
     code,
   };
   const runtime = probeRuntimeHealth();

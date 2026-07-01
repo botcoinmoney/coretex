@@ -25,14 +25,14 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { argv, exit } from 'node:process';
+import { argv, env, exit } from 'node:process';
 import { createHash } from 'node:crypto';
 
 import { distIndex, repoRoot } from './_repo-root.mjs';
 import { buildV2ProductionCorpus, inertBiEncoder } from './lib/build-v2-production-corpus.mjs';
 import { makeStreamReranker } from './lib/stream-reranker.mjs';
 
-const { evaluateBaseline, deriveQueryPack, scoringOptionsFromProfile, hiddenPackProfileFromEvaluatorProfile } = await import(distIndex);
+const { evaluateBaseline, deriveScoredQueryPack, loadActiveFrontierIds, scoringOptionsFromProfile, hiddenPackProfileFromEvaluatorProfile } = await import(distIndex);
 
 function flag(name, fb) { const i = argv.indexOf(`--${name}`); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fb; }
 
@@ -53,6 +53,25 @@ if (!corpusPath || !embPath || !profilePath || !bundlePath || !outPath) {
 
 const profile = JSON.parse(readFileSync(resolve(repoRoot, profilePath), 'utf8'));
 const hiddenPack = hiddenPackProfileFromEvaluatorProfile(profile);
+
+// Active-frontier live-eval overlay (bundle-armed scored-pack law). The baseline
+// MUST be computed under the SAME pack law production scoring uses: when the
+// profile arms epochFrontier.liveEvalPack, a root-verified active id set is
+// required; when it does not, stray overlay flags are refused (silent-drift guard).
+const liveEvalPackLaw = profile.epochFrontier?.liveEvalPack;
+const activeFrontierIdsPath = flag('active-frontier-ids', env.CORETEX_ACTIVE_FRONTIER_IDS_PATH ?? null);
+const activeFrontierRootFlag = flag('active-frontier-root', env.CORETEX_ACTIVE_FRONTIER_ROOT ?? null);
+let activeLiveEval;
+if (liveEvalPackLaw && liveEvalPackLaw.limit > 0) {
+  if (!activeFrontierIdsPath || !activeFrontierRootFlag) {
+    console.error('profile arms epochFrontier.liveEvalPack: --active-frontier-ids and --active-frontier-root (or CORETEX_ACTIVE_FRONTIER_IDS_PATH/CORETEX_ACTIVE_FRONTIER_ROOT) are required');
+    exit(1);
+  }
+  activeLiveEval = { activeIds: loadActiveFrontierIds(resolve(activeFrontierIdsPath), activeFrontierRootFlag), law: liveEvalPackLaw };
+} else if (activeFrontierIdsPath || activeFrontierRootFlag) {
+  console.error('--active-frontier-ids/--active-frontier-root given but the profile does not arm epochFrontier.liveEvalPack — refusing an unattested pack-law overlay');
+  exit(1);
+}
 console.error(`[pin-v2] loading ${corpusPath}`);
 const { corpus, LAYOUT, BE, RR, biEncoderHash } = buildV2ProductionCorpus({ corpusPath, embPath, bundlePath });
 console.error(`[pin-v2] corpus events=${corpus.events.length} corpusRoot=${corpus.corpusRoot}`);
@@ -69,7 +88,7 @@ const opts = scoringOptionsFromProfile(profile, {
 });
 
 console.error(`[pin-v2] deriving query pack (epoch=${epochId} seed=${evalSeedHex} packSize=${hiddenPack?.packSize ?? 'default'})`);
-const pack = deriveQueryPack(epochId, evalSeedHex, corpus, hiddenPack);
+const pack = deriveScoredQueryPack(epochId, evalSeedHex, corpus, hiddenPack, activeLiveEval);
 console.error(`[pin-v2] pack derived: ${pack.events.length} events`);
 
 const parent = { words: new Array(1024).fill(0n) };

@@ -12,10 +12,72 @@
 // is deterministically reproducible from (seed, evalHiddenIds, familyOf, mode, params, prevHonestAccepts).
 
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 const h12 = (s: string): number => parseInt(createHash('sha256').update(s).digest('hex').slice(0, 12), 16);
 // bytes32 root: full 32-byte sha256 (0x + 64 hex) — a short prefix would mis-encode on-chain and desync replay.
 const rootHash = (ids: Iterable<string>): string => '0x' + createHash('sha256').update([...ids].sort().join('|')).digest('hex');
+
+/** The canonical active-frontier root: sha256 over the sorted id set joined by '|'.
+ *  This is EXACTLY the on-chain `activeFrontierRoot` encoding — exported so scoring
+ *  surfaces can verify a provisioned active-id set against the pinned root. */
+export const activeFrontierRootOf = (ids: Iterable<string>): string => rootHash(ids);
+
+/** Published active-frontier id-set artifact (written at cutover next to the
+ *  frontier state; synced to the scorer host like corpus/bundle). Self-verifying:
+ *  consumers recompute `activeFrontierRootOf(activeIds)` and refuse a mismatch. */
+export interface ActiveFrontierIdsArtifact {
+  readonly schema: 'coretex.active-frontier-ids.v1';
+  readonly epochId: number;
+  readonly activeFrontierRoot: string;
+  readonly activeIds: readonly string[];
+}
+
+export function buildActiveFrontierIdsArtifact(epochId: number, activeIds: Iterable<string>): ActiveFrontierIdsArtifact {
+  const sorted = [...activeIds].sort();
+  return {
+    schema: 'coretex.active-frontier-ids.v1',
+    epochId,
+    activeFrontierRoot: rootHash(sorted),
+    activeIds: sorted,
+  };
+}
+
+/**
+ * Fail-closed loader for the active-frontier id set every scoring surface uses
+ * when the bundle arms `epochFrontier.liveEvalPack`. Accepts either the
+ * published `coretex.active-frontier-ids.v1` artifact or a persisted
+ * `coretex.epoch-frontier-state.v1` runtime state (its `active` tuples).
+ * ALWAYS verifies `activeFrontierRootOf(ids) === expectedRoot` (the on-chain
+ * pin) and throws on any mismatch — a scorer must never overlay an unattested
+ * (cherry-pickable) active set.
+ */
+export function loadActiveFrontierIds(filePath: string, expectedRoot: string): ReadonlySet<string> {
+  const raw = JSON.parse(readFileSync(filePath, 'utf8')) as
+    | ActiveFrontierIdsArtifact
+    | EpochFrontierRuntimeState
+    | { readonly activeIds?: readonly string[]; readonly active?: readonly (readonly [string, number])[] };
+  let ids: readonly string[];
+  if (Array.isArray((raw as ActiveFrontierIdsArtifact).activeIds)) {
+    ids = (raw as ActiveFrontierIdsArtifact).activeIds;
+  } else if (Array.isArray((raw as EpochFrontierRuntimeState).active)) {
+    ids = (raw as EpochFrontierRuntimeState).active.map((entry) => entry[0]);
+  } else {
+    throw new Error(`active frontier ids file ${filePath} has neither activeIds[] nor active[] — unsupported schema`);
+  }
+  if (ids.length === 0) throw new Error(`active frontier ids file ${filePath} contains an empty active set`);
+  if (ids.some((id) => typeof id !== 'string' || id.length === 0)) {
+    throw new Error(`active frontier ids file ${filePath} contains non-string/empty ids`);
+  }
+  const set = new Set(ids);
+  const got = rootHash(set);
+  const want = expectedRoot.toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/.test(want)) throw new Error(`expected activeFrontierRoot must be bytes32 hex (got ${expectedRoot})`);
+  if (got !== want) {
+    throw new Error(`active frontier ids file ${filePath} root mismatch: computed ${got} != pinned ${want} — refusing to score with an unattested active set`);
+  }
+  return set;
+}
 
 export type EpochFrontierMode = 'off' | 'C0' | 'C1' | 'C2' | 'C3' | 'C4';
 

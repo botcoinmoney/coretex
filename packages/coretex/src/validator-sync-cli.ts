@@ -77,7 +77,8 @@ import {
 } from './replay/launch-recovery-pin.js';
 import { DEFAULT_PROFILE, scoringOptionsFromProfile, type CoreTexBundleManifest } from './bundle/index.js';
 import { buildCorpusRootLeafCache, computeCorpusRoot, loadProductionCorpus, type ProductionCorpus } from './eval/retrieval-corpus.js';
-import { deriveQueryPack } from './eval/hidden-query-pack.js';
+import { deriveScoredQueryPack, type LiveEvalPackLaw } from './eval/hidden-query-pack.js';
+import { loadActiveFrontierIds } from './coordinator/epoch-frontier.js';
 import { computeAcceptanceThresholdPpm, evaluateRetrievalBenchmarkPatch } from './eval/retrieval-benchmark.js';
 import { biEncoderFromEnv } from './eval/bi-encoder.js';
 import {
@@ -1336,6 +1337,45 @@ interface ValidatorScorerContext {
   readonly scoringOpts: ReturnType<typeof scoringOptionsFromProfile>;
   readonly thresholdPpm: number;
   readonly reranker: { model: string; close?: () => Promise<void> };
+  /** Resolves a root-verified active-frontier id set for an artifact that pins
+   *  `context.activeFrontierRoot` (overlay-law epochs). Undefined when the
+   *  operator provided no id-set source — replaying an overlay artifact then
+   *  fails closed with a provisioning error, never a silent broad-only rescore. */
+  readonly activeFrontierIdsResolver?: (root: string) => ReadonlySet<string>;
+}
+
+/**
+ * Root-keyed, cached loader for published active-frontier id sets. Sources
+ * (either or both): CORETEX_ACTIVE_FRONTIER_IDS_PATH (a single file) and
+ * CORETEX_ACTIVE_FRONTIER_IDS_DIR (files named active-frontier-ids-<root>.json).
+ * Every load is verified via loadActiveFrontierIds (sha256 sorted-join must equal
+ * the requested root) — a wrong/tampered set can never be substituted.
+ */
+function makeActiveFrontierIdsResolver(): ((root: string) => ReadonlySet<string>) | undefined {
+  const file = process.env['CORETEX_ACTIVE_FRONTIER_IDS_PATH']?.trim();
+  const dir = process.env['CORETEX_ACTIVE_FRONTIER_IDS_DIR']?.trim();
+  if (!file && !dir) return undefined;
+  const cache = new Map<string, ReadonlySet<string>>();
+  return (root: string): ReadonlySet<string> => {
+    const key = root.toLowerCase();
+    const hit = cache.get(key);
+    if (hit) return hit;
+    const candidates = [
+      ...(file ? [file] : []),
+      ...(dir ? [join(dir, `active-frontier-ids-${key}.json`)] : []),
+    ];
+    const failures: string[] = [];
+    for (const candidate of candidates) {
+      try {
+        const ids = loadActiveFrontierIds(candidate, key);
+        cache.set(key, ids);
+        return ids;
+      } catch (err) {
+        failures.push(`${candidate}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    throw new Error(`no active-frontier id set resolves to root ${key} — ${failures.join('; ')}`);
+  };
 }
 
 /**
@@ -1387,7 +1427,15 @@ async function buildValidatorScorerContext(
     retrievalKeyLayout: layout,
   });
   const thresholdPpm = Math.min(computeAcceptanceThresholdPpm(profile), 355);
-  return { corpus, profile, scoringOpts, thresholdPpm, reranker: reranker as ValidatorScorerContext['reranker'] };
+  const activeFrontierIdsResolver = makeActiveFrontierIdsResolver();
+  return {
+    corpus,
+    profile,
+    scoringOpts,
+    thresholdPpm,
+    reranker: reranker as ValidatorScorerContext['reranker'],
+    ...(activeFrontierIdsResolver !== undefined ? { activeFrontierIdsResolver } : {}),
+  };
 }
 
 /**
@@ -1418,9 +1466,26 @@ function assertScorerRuntimePin(bundle: CoreTexBundleManifest): void {
   }
 }
 
-function scorerForParent(ctx: ValidatorScorerContext, parentState: CortexState, epochId: number) {
+function scorerForParent(ctx: ValidatorScorerContext, parentState: CortexState, epochId: number, activeFrontierRoot?: string) {
+  // Overlay-law parity, FAIL-CLOSED both ways: an artifact pinning an
+  // activeFrontierRoot must be rescored with the SAME root-verified overlay the
+  // production scorer used, and a broad-law artifact must never be rescored
+  // under an overlay-armed bundle (either mismatch would replay the wrong pack).
+  const law: LiveEvalPackLaw | undefined = ctx.profile.epochFrontier?.liveEvalPack;
+  let activeLiveEval: { readonly activeIds: ReadonlySet<string>; readonly law: LiveEvalPackLaw } | undefined;
+  if (activeFrontierRoot !== undefined) {
+    if (!law || law.limit <= 0) {
+      throw new Error(`artifact pins activeFrontierRoot ${activeFrontierRoot} but the loaded bundle profile does not arm epochFrontier.liveEvalPack — wrong bundle for this epoch`);
+    }
+    if (!ctx.activeFrontierIdsResolver) {
+      throw new Error('artifact pins activeFrontierRoot but no active-frontier id source is provisioned — set CORETEX_ACTIVE_FRONTIER_IDS_PATH or CORETEX_ACTIVE_FRONTIER_IDS_DIR');
+    }
+    activeLiveEval = { activeIds: ctx.activeFrontierIdsResolver(activeFrontierRoot), law };
+  } else if (law && law.limit > 0) {
+    throw new Error('loaded bundle arms epochFrontier.liveEvalPack but the artifact pins no activeFrontierRoot — refusing a broad-only rescore under an overlay-law bundle');
+  }
   return async ({ normalizedPatchBytes, evalSeed }: { normalizedPatchBytes: Uint8Array; evalSeed: string }) => {
-    const queryPack = deriveQueryPack(epochId, evalSeed, ctx.corpus, ctx.profile.hiddenPack);
+    const queryPack = deriveScoredQueryPack(epochId, evalSeed, ctx.corpus, ctx.profile.hiddenPack, activeLiveEval);
     const scored = await evaluateRetrievalBenchmarkPatch(parentState, decodePatch(normalizedPatchBytes), ctx.corpus, queryPack, ctx.scoringOpts, {
       ...ctx.profile.patchAcceptanceFloors,
       acceptanceThresholdPpm: ctx.thresholdPpm,
@@ -2133,7 +2198,7 @@ async function runSync({ stateDir, statePath, pinPath, savedState, setup, stagin
         biEncoderHash: biEncoderModelIdHash(epochCorpus.biEncoderModelId, epochCorpus.biEncoderRevision, 'dense'),
         retrievalKeyLayout: layout,
       });
-      const built: ValidatorScorerContext = { corpus: epochCorpus, profile: ctx.profile, scoringOpts, thresholdPpm: ctx.thresholdPpm, reranker: ctx.reranker };
+      const built: ValidatorScorerContext = { corpus: epochCorpus, profile: ctx.profile, scoringOpts, thresholdPpm: ctx.thresholdPpm, reranker: ctx.reranker, ...(ctx.activeFrontierIdsResolver !== undefined ? { activeFrontierIdsResolver: ctx.activeFrontierIdsResolver } : {}) };
       contextCache.set(cacheKey, built);
       return built;
     };
@@ -2228,7 +2293,7 @@ async function runSync({ stateDir, statePath, pinPath, savedState, setup, stagin
         const result = await verifyPostRevealEvalReportArtifact(artifact, {
           rpcClient,
           epochSecret: secret,
-          scorer: scorerForParent(entryCtx, parentState, artifact.epochId),
+          scorer: scorerForParent(entryCtx, parentState, artifact.epochId, artifact.context.activeFrontierRoot),
         });
         if (!result.ok) {
           throw new Error(`post-reveal eval verification FAILED for ${artifactUrl}: ${result.code} ${result.detail}`);
@@ -2435,7 +2500,7 @@ async function verifyPatchMain() {
     const result = await verifyPostRevealEvalReportArtifact(artifact, {
       rpcClient: createBaseRpcClient(rpcUrl),
       epochSecret,
-      scorer: scorerForParent(ctx, parent, artifact.epochId),
+      scorer: scorerForParent(ctx, parent, artifact.epochId, artifact.context.activeFrontierRoot),
     });
     process.stdout.write(JSON.stringify({
       command: 'coretex-validator-sync verify-patch',

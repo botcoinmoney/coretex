@@ -33,8 +33,9 @@ const {
   biEncoderModelIdHash,
   computeCoreTexScreenerThresholdPpm,
   createDeterministicReranker,
-  deriveQueryPack,
+  deriveScoredQueryPack,
   evaluateRetrievalBenchmarkState,
+  loadActiveFrontierIds,
   hiddenPackProfileFromEvaluatorProfile,
   scoringOptionsFromProfile,
 } = C;
@@ -143,6 +144,25 @@ const opts = scoringOptionsFromProfile(profile, {
 const hiddenPackBase = clearPackQuotas
   ? { packSize: Number(packSizeOverride ?? profile.hiddenPack.packSize), quotas: [] }
   : { ...hiddenPackProfileFromEvaluatorProfile(profile), ...(packSizeOverride ? { packSize: Number(packSizeOverride) } : {}) };
+
+// Active-frontier live-eval overlay (bundle-armed scored-pack law). The baseline
+// MUST be computed under the SAME pack law production scoring uses: when the
+// profile arms epochFrontier.liveEvalPack, a root-verified active id set is
+// required; when it does not, stray overlay flags are refused (silent-drift guard).
+const liveEvalPackLaw = profile.epochFrontier?.liveEvalPack;
+const activeFrontierIdsPath = flag('active-frontier-ids', env.CORETEX_ACTIVE_FRONTIER_IDS_PATH ?? null);
+const activeFrontierRootFlag = flag('active-frontier-root', env.CORETEX_ACTIVE_FRONTIER_ROOT ?? null);
+let activeLiveEval;
+if (liveEvalPackLaw && liveEvalPackLaw.limit > 0) {
+  if (!activeFrontierIdsPath || !activeFrontierRootFlag) {
+    console.error('profile arms epochFrontier.liveEvalPack: --active-frontier-ids and --active-frontier-root (or CORETEX_ACTIVE_FRONTIER_IDS_PATH/CORETEX_ACTIVE_FRONTIER_ROOT) are required');
+    exit(1);
+  }
+  activeLiveEval = { activeIds: loadActiveFrontierIds(resolve(activeFrontierIdsPath), activeFrontierRootFlag), law: liveEvalPackLaw };
+} else if (activeFrontierIdsPath || activeFrontierRootFlag) {
+  console.error('--active-frontier-ids/--active-frontier-root given but the profile does not arm epochFrontier.liveEvalPack — refusing an unattested pack-law overlay');
+  exit(1);
+}
 const empty = { words: new Array(RANGES.WORD_COUNT ?? 1024).fill(0n) };
 const composites = [];
 const sampleReports = [];
@@ -150,7 +170,7 @@ const started = Date.now();
 
 for (let i = 0; i < samples; i++) {
   const seed = deriveBaselineSampleSeed(evalSeedHex, i, sampleSeedMode);
-  const pack = deriveQueryPack(epochId, seed, corpus, hiddenPackBase);
+  const pack = deriveScoredQueryPack(epochId, seed, corpus, hiddenPackBase, activeLiveEval);
   const sampleStart = Date.now();
   const score = await evaluateRetrievalBenchmarkState(empty, corpus, pack, opts);
   const composite = score.compositeScore ?? score.composite ?? 0;

@@ -43,7 +43,8 @@ import { argv, env, exit } from 'node:process';
 
 import {
   loadProductionCorpus,
-  deriveQueryPack,
+  deriveScoredQueryPack,
+  loadActiveFrontierIds,
   evaluateBaseline,
   biEncoderFromEnv,
   rerankerFromEnv,
@@ -82,8 +83,27 @@ if (!profile) { console.error('pin-baseline: bundle has no evaluator.profile'); 
 console.log(`pin-baseline: loading corpus ${corpusPath}`);
 const corpus = loadProductionCorpus(resolve(corpusPath), { verifyCorpusRoot: false, verifySplits: false });
 
+
+// Active-frontier live-eval overlay (bundle-armed scored-pack law). The baseline
+// MUST be computed under the SAME pack law production scoring uses: when the
+// profile arms epochFrontier.liveEvalPack, a root-verified active id set is
+// required; when it does not, stray overlay flags are refused (silent-drift guard).
+const liveEvalPackLaw = profile.epochFrontier?.liveEvalPack;
+const activeFrontierIdsPath = flag('active-frontier-ids', env.CORETEX_ACTIVE_FRONTIER_IDS_PATH ?? null);
+const activeFrontierRootFlag = flag('active-frontier-root', env.CORETEX_ACTIVE_FRONTIER_ROOT ?? null);
+let activeLiveEval;
+if (liveEvalPackLaw && liveEvalPackLaw.limit > 0) {
+  if (!activeFrontierIdsPath || !activeFrontierRootFlag) {
+    console.error('profile arms epochFrontier.liveEvalPack: --active-frontier-ids and --active-frontier-root (or CORETEX_ACTIVE_FRONTIER_IDS_PATH/CORETEX_ACTIVE_FRONTIER_ROOT) are required');
+    exit(1);
+  }
+  activeLiveEval = { activeIds: loadActiveFrontierIds(resolve(activeFrontierIdsPath), activeFrontierRootFlag), law: liveEvalPackLaw };
+} else if (activeFrontierIdsPath || activeFrontierRootFlag) {
+  console.error('--active-frontier-ids/--active-frontier-root given but the profile does not arm epochFrontier.liveEvalPack — refusing an unattested pack-law overlay');
+  exit(1);
+}
 console.log(`pin-baseline: deriving query pack epoch=${epochId} packSize=${profile.hiddenPack.packSize}`);
-const pack = deriveQueryPack(epochId, evalSeedHex, corpus, hiddenPackProfileFromEvaluatorProfile(profile));
+const pack = deriveScoredQueryPack(epochId, evalSeedHex, corpus, hiddenPackProfileFromEvaluatorProfile(profile), activeLiveEval);
 console.log(`  pack derived: ${pack.events.length} events`);
 
 console.log(`pin-baseline: spawning streaming bi-encoder + reranker (this is real model work)`);

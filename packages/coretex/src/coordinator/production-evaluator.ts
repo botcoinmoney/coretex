@@ -41,7 +41,8 @@ import {
   loadProductionCorpus,
   type ProductionCorpus,
 } from '../eval/retrieval-corpus.js';
-import { deriveQueryPack } from '../eval/hidden-query-pack.js';
+import { deriveScoredQueryPack, type LiveEvalPackLaw } from '../eval/hidden-query-pack.js';
+import { loadActiveFrontierIds } from './epoch-frontier.js';
 import {
   computeAcceptanceThresholdPpm,
   evaluateRetrievalBenchmarkPatch,
@@ -418,6 +419,13 @@ export interface ProductionCoreTexEvaluatorOptions {
    *  (assertResolvedRerankerMatchesPin enforces this). The integration sidecar
    *  passes nothing, so the default CPU path is unchanged. */
   readonly rerankerFactory?: (plan: ProductionRerankerPlan) => Promise<CrossEncoderReranker> | CrossEncoderReranker;
+  /** REQUIRED iff the bundle profile arms `epochFrontier.liveEvalPack` (scored packs
+   *  then include the active live-eval overlay): path to the active-frontier id set
+   *  (`coretex.active-frontier-ids.v1` artifact or persisted frontier runtime state)
+   *  plus the on-chain pinned `activeFrontierRoot` it must hash to. Construction
+   *  fails closed on: armed-profile-without-input, input-without-armed-profile,
+   *  and any id-set/root mismatch. */
+  readonly activeFrontier?: { readonly idsPath: string; readonly expectedRoot: string };
 }
 
 // ─── Core orchestration (scorer-injectable; production + tests share it) ─────
@@ -432,6 +440,10 @@ export interface ProductionCoreTexEvaluatorCoreDeps {
   readonly hiddenSeedCommit?: string; // bytes32 hex
   readonly corpusRoot: string;        // bytes32 hex
   readonly bundleHash: string;        // bytes32 hex
+  /** Present iff the bundle armed `epochFrontier.liveEvalPack`: the pinned
+   *  active-frontier root the seedScorer's overlay set was verified against.
+   *  Echoed into the eval-report artifact context and the dual-pack proof. */
+  readonly activeFrontierRoot?: string;
   readonly stateThresholdPpm: number;
   readonly screenerThresholdPpm: number;
   readonly replayTolerancePpm: number;
@@ -665,6 +677,7 @@ export function createCoreTexEvaluatorCore(deps: ProductionCoreTexEvaluatorCoreD
           coreVersionHash: deps.bundleHash.toLowerCase(),
           hiddenSeedCommit,
           replayTolerancePpm: deps.replayTolerancePpm,
+          ...(deps.activeFrontierRoot !== undefined ? { activeFrontierRoot: deps.activeFrontierRoot.toLowerCase() } : {}),
         },
       });
       if (deps.publishArtifact) await deps.publishArtifact(artifact);
@@ -673,6 +686,7 @@ export function createCoreTexEvaluatorCore(deps: ProductionCoreTexEvaluatorCoreD
         coreVersionHash: deps.bundleHash,
         hiddenSeedCommit,
         targetBlockOffset: effectiveTargetBlockOffset,
+        ...(deps.activeFrontierRoot !== undefined ? { activeFrontierRoot: deps.activeFrontierRoot } : {}),
       });
 
       if (stateAdvance) {
@@ -729,6 +743,28 @@ export async function createProductionCoreTexEvaluator(
     throw new Error('production CoreTex evaluator requires a CoreTexEvalDedupStore (fail-closed: no in-memory default)');
   }
 
+  // Active live-eval overlay (frontier-aware scored packs). FAIL-CLOSED pairing:
+  // an armed profile without a root-verified active set must never score broad-only
+  // (silent law drift), and a provisioned active set under an unarmed profile must
+  // never silently overlay (unattested law).
+  const liveEvalPackLaw: LiveEvalPackLaw | undefined = profile.epochFrontier?.liveEvalPack;
+  let activeLiveEval: { readonly activeIds: ReadonlySet<string>; readonly law: LiveEvalPackLaw } | undefined;
+  if (liveEvalPackLaw && liveEvalPackLaw.limit > 0) {
+    if (!options.activeFrontier) {
+      throw new Error(
+        'bundle profile arms epochFrontier.liveEvalPack but no activeFrontier {idsPath, expectedRoot} was provided — refusing to score broad-only under an overlay-law bundle',
+      );
+    }
+    activeLiveEval = {
+      activeIds: loadActiveFrontierIds(options.activeFrontier.idsPath, options.activeFrontier.expectedRoot),
+      law: liveEvalPackLaw,
+    };
+  } else if (options.activeFrontier) {
+    throw new Error(
+      'activeFrontier input provided but the bundle profile does not arm epochFrontier.liveEvalPack — refusing an unattested pack-law overlay',
+    );
+  }
+
   const corpus = loadProductionCorpus(options.corpusPath, {
     verifyCorpusRoot: true,
     verifySplits: true,
@@ -773,6 +809,7 @@ export async function createProductionCoreTexEvaluator(
     ...(options.hiddenSeedCommit ? { hiddenSeedCommit: options.hiddenSeedCommit } : {}),
     corpusRoot: corpus.corpusRoot,
     bundleHash: bundle.bundleHash,
+    ...(options.activeFrontier !== undefined ? { activeFrontierRoot: options.activeFrontier.expectedRoot } : {}),
     stateThresholdPpm,
     screenerThresholdPpm,
     replayTolerancePpm: profile.replayTolerancePpm,
@@ -793,6 +830,7 @@ export async function createProductionCoreTexEvaluator(
         evalSeed,
         scoringOpts,
         thresholdPpm,
+        ...(activeLiveEval !== undefined ? { activeLiveEval } : {}),
       });
     },
     ...(options.publishArtifact ? { publishArtifact: options.publishArtifact } : {}),
@@ -843,8 +881,9 @@ async function scoreAgainstSeed(args: {
   readonly evalSeed: string;
   readonly scoringOpts: ReturnType<typeof scoringOptionsFromProfile>;
   readonly thresholdPpm: number;
+  readonly activeLiveEval?: { readonly activeIds: ReadonlySet<string>; readonly law: LiveEvalPackLaw };
 }): Promise<PatchEvalResult> {
-  const pack = deriveQueryPack(args.epochId, args.evalSeed, args.corpus, args.profile.hiddenPack);
+  const pack = deriveScoredQueryPack(args.epochId, args.evalSeed, args.corpus, args.profile.hiddenPack, args.activeLiveEval);
   return evaluateRetrievalBenchmarkPatch(args.parent, args.patch, args.corpus, pack, args.scoringOpts, {
     ...args.profile.patchAcceptanceFloors,
     acceptanceThresholdPpm: args.thresholdPpm,

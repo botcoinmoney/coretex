@@ -55,6 +55,12 @@ export interface CoreTexPostRevealEvalReportArtifact {
     readonly coreVersionHash: string;
     readonly hiddenSeedCommit: string;
     readonly replayTolerancePpm: number;
+    /** Present iff the bundle armed `epochFrontier.liveEvalPack`: the on-chain
+     *  active-frontier root the scored packs' live-eval overlay was verified
+     *  against. A replaying validator must reconstruct the same overlay from a
+     *  set hashing to this root. Absent for broad-only-law epochs (artifact
+     *  bytes/hash unchanged). */
+    readonly activeFrontierRoot?: string;
   };
 }
 
@@ -179,6 +185,9 @@ function validateArtifactShape(artifact: CoreTexPostRevealEvalReportArtifact): s
   if (!artifact.context || typeof artifact.context !== 'object') return 'context missing';
   for (const key of ['parentStateRoot', 'corpusRoot', 'coreVersionHash', 'hiddenSeedCommit'] as const) {
     if (!isBytes32(artifact.context[key])) return `context.${key} must be bytes32`;
+  }
+  if (artifact.context.activeFrontierRoot !== undefined && !isBytes32(artifact.context.activeFrontierRoot)) {
+    return 'context.activeFrontierRoot must be bytes32 when present';
   }
   if (!Number.isSafeInteger(artifact.context.replayTolerancePpm) || artifact.context.replayTolerancePpm < 0) {
     return 'context.replayTolerancePpm invalid';

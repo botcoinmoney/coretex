@@ -44,6 +44,45 @@ export interface ActiveLiveEvalPackOptions {
   readonly disabledFamilies?: readonly string[];
 }
 
+/**
+ * Bundle-attested live-eval overlay law (EpochFrontierPin.liveEvalPack).
+ * Structurally shared with the bundle pin so eval code never imports bundle
+ * types. When armed, every scored pack admits up to `limit` newest ACTIVE
+ * live-eval (`zz_e*`) hidden rows via `admitActiveLiveEvalEvents`.
+ */
+export interface LiveEvalPackLaw {
+  readonly limit: number;
+  readonly familyPriority?: readonly string[];
+  readonly dedupePublicIntent?: boolean;
+}
+
+/**
+ * The canonical SCORED-pack law — the single composition every scoring
+ * surface must use (production evaluator, keyless scorer server, validator
+ * replay, baseline pinning): the deterministic broad hidden pack, plus —
+ * when the bundle arms `epochFrontier.liveEvalPack` and a root-verified
+ * active frontier set is provided — the deterministic active live-eval
+ * overlay. `activeLiveEval` absent ⇒ byte-identical to `deriveQueryPack`
+ * (replay-safe for every epoch scored under the broad-only law).
+ */
+export function deriveScoredQueryPack(
+  epochId: number,
+  evalSeedHex: string,
+  corpus: ProductionCorpus,
+  profile: HiddenPackProfile,
+  activeLiveEval?: { readonly activeIds: ReadonlySet<string>; readonly law: LiveEvalPackLaw },
+): QueryPack {
+  const base = deriveQueryPack(epochId, evalSeedHex, corpus, profile);
+  if (!activeLiveEval || activeLiveEval.law.limit <= 0) return base;
+  return admitActiveLiveEvalEvents(base, corpus, {
+    activeIds: activeLiveEval.activeIds,
+    limit: activeLiveEval.law.limit,
+    ...(activeLiveEval.law.familyPriority !== undefined ? { familyPriority: activeLiveEval.law.familyPriority } : {}),
+    ...(activeLiveEval.law.dedupePublicIntent !== undefined ? { dedupePublicIntent: activeLiveEval.law.dedupePublicIntent } : {}),
+    profile,
+  }).pack;
+}
+
 export function disabledHiddenEvalFamiliesFromProfile(profile: {
   readonly enableAspectConstraintAtoms?: boolean;
   readonly policyAspectIntentAdmission?: boolean;

@@ -191,6 +191,10 @@ export interface PerPatchDualPackEvaluationProof {
   readonly coreVersionHash: string;
   readonly hiddenSeedCommit: string;
   readonly epochSecretCommit: string;
+  /** Present iff the bundle armed `epochFrontier.liveEvalPack`: the on-chain
+   *  active-frontier root the scored packs' live-eval overlay was verified
+   *  against. Absent for broad-only-law epochs (proof bytes unchanged). */
+  readonly activeFrontierRoot?: string;
   readonly gate: {
     readonly domain: 'gate';
     readonly seedCommit: string;
@@ -212,6 +216,7 @@ export function dualPackProofFromPerPatchReceipt(
     readonly coreVersionHash: string;
     readonly hiddenSeedCommit: string;
     readonly targetBlockOffset: number;
+    readonly activeFrontierRoot?: string;
   },
 ): PerPatchDualPackEvaluationProof {
   if (!receipt.accepted) {
@@ -231,6 +236,7 @@ export function dualPackProofFromPerPatchReceipt(
     coreVersionHash: context.coreVersionHash.toLowerCase(),
     hiddenSeedCommit: context.hiddenSeedCommit.toLowerCase(),
     epochSecretCommit: context.hiddenSeedCommit.toLowerCase(),
+    ...(context.activeFrontierRoot !== undefined ? { activeFrontierRoot: context.activeFrontierRoot.toLowerCase() } : {}),
     gate: {
       domain: 'gate',
       seedCommit: seedCommit(receipt.gateSeed),

@@ -28,6 +28,11 @@ export interface RemoteScorerActiveContext {
   /** Live screener threshold (ppm) — min(gate, confirm) must clear this for an
    *  accepted result. The coordinator owns this number, NOT the scorer. */
   readonly thresholdPpm: number;
+  /** Present iff the active bundle arms `epochFrontier.liveEvalPack`: the
+   *  on-chain pinned active-frontier root. Jobs and accepted proofs must pin
+   *  the SAME root; results scored under a different (or absent) overlay are
+   *  refused as stale/pin-mismatched. */
+  readonly activeFrontierRoot?: string;
 }
 
 export interface RemoteScorerExpectedHealth {
@@ -187,6 +192,17 @@ export function verifyScorerResult(args: {
   if (!hexEq(job.policyHash, active.workPolicyHash)) {
     return { ok: false, code: "SCORER_STALE_CONTEXT", reason: `job policyHash != active ${active.workPolicyHash}` };
   }
+  // Active-frontier overlay pin (armed bundles only). Both directions refuse:
+  // an overlay-law epoch never accepts a result from a job that didn't pin the
+  // root, and a broad-law epoch never accepts a job that pinned one.
+  const jobActiveFrontierRoot = job.expectedScorerPins?.activeFrontierRoot;
+  if (active.activeFrontierRoot !== undefined) {
+    if (!hexEq(jobActiveFrontierRoot, active.activeFrontierRoot)) {
+      return { ok: false, code: "SCORER_STALE_CONTEXT", reason: `job activeFrontierRoot ${jobActiveFrontierRoot ?? "absent"} != active ${active.activeFrontierRoot}` };
+    }
+  } else if (jobActiveFrontierRoot !== undefined) {
+    return { ok: false, code: "SCORER_STALE_CONTEXT", reason: "job pins activeFrontierRoot but the active context has no live-eval overlay armed" };
+  }
 
   // (5) scorerHealth reports the expected model/revision/promptTemplateHash and
   //     dtype=fp32 / tf32=false / cuda=true.
@@ -221,6 +237,13 @@ export function verifyScorerResult(args: {
     }
     if (!hexEq(p.parentStateRoot, active.parentStateRoot)) {
       return { ok: false, code: "SCORER_PIN_MISMATCH", reason: `proof parentStateRoot != active ${active.parentStateRoot}` };
+    }
+    if (active.activeFrontierRoot !== undefined) {
+      if (!hexEq(p.activeFrontierRoot, active.activeFrontierRoot)) {
+        return { ok: false, code: "SCORER_PIN_MISMATCH", reason: `proof activeFrontierRoot ${p.activeFrontierRoot ?? "absent"} != active ${active.activeFrontierRoot}` };
+      }
+    } else if (p.activeFrontierRoot !== undefined) {
+      return { ok: false, code: "SCORER_PIN_MISMATCH", reason: "proof pins activeFrontierRoot but the active context has no live-eval overlay armed" };
     }
     const expectedGateSeedCommit = seedCommit(job.publicEvalContext?.gateSeed);
     const expectedConfirmSeedCommit = seedCommit(job.publicEvalContext?.confirmSeed);
@@ -311,6 +334,13 @@ export function verifyScorerResult(args: {
   }
   if (!hexEq(ctx.coreVersionHash, active.coreVersionHash)) {
     return { ok: false, code: "SCORER_ARTIFACT_CONTEXT_MISMATCH", reason: `artifact coreVersionHash != active ${active.coreVersionHash}` };
+  }
+  if (active.activeFrontierRoot !== undefined) {
+    if (!hexEq(ctx.activeFrontierRoot, active.activeFrontierRoot)) {
+      return { ok: false, code: "SCORER_ARTIFACT_CONTEXT_MISMATCH", reason: `artifact activeFrontierRoot ${ctx.activeFrontierRoot ?? "absent"} != active ${active.activeFrontierRoot}` };
+    }
+  } else if (ctx.activeFrontierRoot !== undefined) {
+    return { ok: false, code: "SCORER_ARTIFACT_CONTEXT_MISMATCH", reason: "artifact pins activeFrontierRoot but the active context has no live-eval overlay armed" };
   }
 
   // Reconstruct the EvalResult the coordinator core consumes. The core then

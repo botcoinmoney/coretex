@@ -10,3 +10,6 @@ const m = await import(distIndex);
 export const makeEpochFrontier = m.makeEpochFrontier;
 export const makeLaunchFrontier = m.makeLaunchFrontier;
 export const DEFAULT_EPOCH_FRONTIER_PROFILE = m.DEFAULT_EPOCH_FRONTIER_PROFILE;
+export const activeFrontierRootOf = m.activeFrontierRootOf;
+export const buildActiveFrontierIdsArtifact = m.buildActiveFrontierIdsArtifact;
+export const loadActiveFrontierIds = m.loadActiveFrontierIds;

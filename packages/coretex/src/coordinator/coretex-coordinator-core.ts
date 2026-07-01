@@ -218,6 +218,10 @@ export interface CoreTexDualPackEvaluationProof {
   readonly coreVersionHash: string;
   readonly hiddenSeedCommit: string;
   readonly epochSecretCommit: string;
+  /** Present iff the bundle armed `epochFrontier.liveEvalPack`: the on-chain
+   *  active-frontier root the scored packs' live-eval overlay was verified
+   *  against. Absent for broad-only-law epochs (proof bytes unchanged). */
+  readonly activeFrontierRoot?: string;
   readonly gate: {
     readonly domain: 'gate';
     readonly seedCommit: string;

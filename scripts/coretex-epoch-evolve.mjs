@@ -445,10 +445,26 @@ function makeFrontier(profile, previousCorpus, nextCorpus, additions, outDir, { 
   const nextStateJson = JSON.stringify(nextState, null, 2) + '\n';
   const outStatePath = statePath ? resolve(repoRoot, statePath) : resolve(outDir, 'frontier-state.json');
   writeFileAtomic(outStatePath, nextStateJson);
+  // Publish the ACTIVE id set as a self-verifying artifact (sorted ids; consumers
+  // recompute sha256 sorted-join and refuse a root mismatch). This is what the
+  // coordinator syncs to the scorer host / validators when the bundle arms
+  // epochFrontier.liveEvalPack — the scored-pack overlay must never depend on a
+  // set that cannot be re-verified against the on-chain activeFrontierRoot.
+  const activeIdsArtifact = C.buildActiveFrontierIdsArtifact(snapshot.epochId, snapshot.activeIds);
+  if (activeIdsArtifact.activeFrontierRoot !== snapshot.activeRoot) {
+    fail(`active-frontier ids artifact root ${activeIdsArtifact.activeFrontierRoot} != frontier snapshot activeRoot ${snapshot.activeRoot}`);
+  }
+  const activeIdsJson = JSON.stringify(activeIdsArtifact, null, 2) + '\n';
+  const activeIdsPath = resolve(outDir, `active-frontier-ids-epoch-${snapshot.epochId}.json`);
+  writeFileAtomic(activeIdsPath, activeIdsJson);
+  const stableActiveIdsPath = resolve(outStatePath, '..', 'active-frontier-ids.json');
+  writeFileAtomic(stableActiveIdsPath, activeIdsJson);
   return {
     snapshot,
     statePath: outStatePath.replace(`${repoRoot}/`, ''),
     stateJson: nextStateJson,
+    activeIdsPath: activeIdsPath.replace(`${repoRoot}/`, ''),
+    stableActiveIdsPath: stableActiveIdsPath.replace(`${repoRoot}/`, ''),
     injected,
     addedEvalIds,
     prunedActiveIds: pruned?.prunedActiveIds ?? [],
@@ -860,6 +876,8 @@ async function main() {
         stableCheckpoint: checkpointPathFor(stableLogicalStatePath).replace(`${repoRoot}/`, ''),
       } : {}),
       frontierState: frontier.statePath,
+      activeFrontierIds: frontier.activeIdsPath,
+      stableActiveFrontierIds: frontier.stableActiveIdsPath,
       ...(devPublicKeyPem ? { devPublicKey: resolve(outDir, 'dev-epoch-public-key.pem').replace(`${repoRoot}/`, '') } : {}),
       ...published,
     },
