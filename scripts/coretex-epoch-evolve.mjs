@@ -907,6 +907,10 @@ async function main() {
       minImprovementPpm,
       recentNoiseFloorPpm,
       controller: controllerForManifest,
+      // N2 anti-coverage-indexing telemetry: which memory-IR capability + difficulty this
+      // epoch's hidden clusters minted. "Same capability + same escalation for many epochs"
+      // is the coverage-indexing failure mode; consumers can alarm on it from here.
+      hiddenClusterTelemetry: logicalDelta.hiddenClusterTelemetry ?? null,
     },
     frontier: {
       activeFrontierRoot: frontier.snapshot.activeRoot,

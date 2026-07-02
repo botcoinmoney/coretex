@@ -33,13 +33,186 @@ const LANGUAGES = ['TypeScript', 'Python', 'Rust', 'Go', 'Java', 'Kotlin', 'Elix
 const RUNTIMES = ['node22', 'python3.11', 'jvm21', 'wasmtime', 'deno2', 'bun1'];
 const API_HOSTS = ['atlas', 'beacon', 'cedar', 'delta', 'ember', 'falcon', 'granite', 'harbor'];
 const VALIDITY_SHADOW_COLORS = ['amber', 'silver', 'copper', 'violet'];
-const TEMPORAL_CLUSTER_QUERY_TEMPLATES = [
-  (canonical, attr) => `As of now, what ${attr} is recorded for ${canonical}?`,
-  (canonical, attr) => `What ${attr} replaced the older records for ${canonical}?`,
-  (canonical, attr) => `Which ${attr} should override ${canonical}'s stale records now?`,
-  (canonical, attr) => `What is the latest recorded ${attr} for ${canonical} after prior entries changed?`,
-  (canonical, attr) => `Ignoring superseded records, what ${attr} is now valid for ${canonical}?`,
+/**
+ * Per-epoch temporal ATTRIBUTE rotation — required for headroom, and the N2 breadth axis.
+ *
+ * Scorer law (temporalMotifAdmission, live profile): once ANY substrate temporal record
+ * references docs with validity.attribute = A, EVERY temporal query on attribute A is
+ * corpus-oracle modulated (traps suppressed, currents boosted) — pool-wide, cross-subject,
+ * and PERSISTENTLY (the substrate outlives the advance and the rebaseline absorbs the lift).
+ * Consequences, both verified live 2026-07-02:
+ *   - an attribute is ONE-SHOT headroom: the first accepted record covering A captures every
+ *     present-and-future cluster on A (bare `city`, `diet`, `package manager` are already
+ *     burned by live substrate records — never mint hidden clusters on them);
+ *   - fresh headroom therefore requires a FRESH attribute string per epoch. Rotation makes
+ *     the benchmark broaden over the attribute space (N2) instead of re-indexing one motif.
+ * Composition: qualifier × base grid (fully deterministic in epoch). Two attributes per
+ * epoch (cluster parity) so each epoch offers two independent mineable memory operations.
+ * Past one full grid cycle, a " (series N)" suffix keeps attribute strings fresh forever —
+ * the runway does not exhaust.
+ */
+const TEMPORAL_ROTATION_QUALIFIERS = [
+  'commute', 'billing', 'travel', 'clinic', 'delivery', 'records',
+  'appointment', 'insurance', 'weekday', 'weekend', 'training', 'emergency',
 ];
+const TEMPORAL_ROTATION_BASES_PERSON = [
+  ['city', CITIES],
+  ['diet', DIETS],
+  ['language', LANGUAGES],
+];
+const TEMPORAL_ROTATION_BASES_PROJECT = [
+  ['region', CITIES],
+  ['runtime', RUNTIMES],
+  ['language', LANGUAGES],
+];
+
+export const TYPED_CLUSTER_ROTATION_BASE_EPOCH = 133;
+
+export function temporalAttributeForEpochSlot(epoch, slot, { isProject = false, baseEpoch = TYPED_CLUSTER_ROTATION_BASE_EPOCH } = {}) {
+  const bases = isProject ? TEMPORAL_ROTATION_BASES_PROJECT : TEMPORAL_ROTATION_BASES_PERSON;
+  const grid = [];
+  for (const qualifier of TEMPORAL_ROTATION_QUALIFIERS) {
+    for (const [base, bank] of bases) grid.push([`${qualifier} ${base}`, bank]);
+  }
+  const index = (epoch - baseEpoch) * 2 + (slot % 2);
+  const cycle = Math.floor(index / grid.length);
+  const [attr, bank] = grid[((index % grid.length) + grid.length) % grid.length];
+  return { attr: cycle > 0 ? `${attr} (series ${cycle + 1})` : attr, bank };
+}
+
+/**
+ * Typed cluster question set — the anti-coverage-indexing core of hidden-eval minting.
+ *
+ * A cluster is ONE supersession memory structure (subject, attribute, staleVal→val at tsDate)
+ * rendered as three public docs (current record, stale trap, change-provenance record) plus
+ * escalation shadows, and FIVE hidden queries spanning FOUR DISTINCT QUESTION TYPES — not
+ * paraphrases. One meaningful ≤4-cell miner patch (anchor stale revoked + anchor current +
+ * temporal record) must lift multiple TYPES: the trap sinks (temporalStaleSuppression), the
+ * current-event docs float (temporalCurrentBoost), and each type's gold/grading is wired so
+ * that this single memory operation — not per-doc indexing — is what clears them. Scorer-law
+ * facts this design is built against (retrieval-benchmark, live profile):
+ *   - stale truth docs are relevance-ZEROED on temporal queries (temporalStaleContrast), so a
+ *     type whose gold is the stale doc is unliftable by construction — none is minted;
+ *   - the temporal record reaches only the anchored events' own docs, subject+attribute-scoped
+ *     via doc `validity` (temporalRecordAppliesToQuery), so every doc carries validity;
+ *   - raw routing anchors are disabled, so an anchor-only (indexing) patch is inert — the
+ *     indexing-only control in the G1 harness must measure Δ0.
+ */
+export const TEMPORAL_CLUSTER_QUESTION_TYPES = [
+  'current_value',
+  'change_provenance',
+  'downstream_application',
+  'stale_verification',
+];
+
+/**
+ * Pure typed-cluster spec: docs/relations/query stubs for one supersession structure.
+ * Shared by the eval-hidden minter, the unit tests, and the offline G1 mineability harness
+ * (.ops/coretex-stage3-typed-cluster-g1.mjs in the coordinator repo) so what is validated
+ * offline is byte-for-byte what production mints.
+ */
+export function buildTypedTemporalClusterSpec({ canonical, subjectId, attr, val, staleVal, tsDate, priorDate, currentId, staleId, changeId, shadowIds = [], decoyVals = [] }) {
+  const docs = [
+    { id: currentId, kind: `temporal_${attr}`, role: 'current',
+      text: `${canonical}'s supersession ledger records ${attr} ${val} as active after the prior ${attr} entry was replaced (entry ${tsDate}).`,
+      timestamp: tsDate, currentStaleFlag: true,
+      validity: { subjectEntityId: subjectId, attribute: attr, validFrom: tsDate, observedAt: tsDate } },
+    { id: staleId, kind: `temporal_${attr}`, role: 'stale_trap',
+      text: `What is ${canonical}'s current ${attr}? The current ${attr} is ${staleVal}, still listed as valid in the ${priorDate} record, and new sessions should keep relying on ${staleVal}.`,
+      timestamp: priorDate, currentStaleFlag: false,
+      validity: { subjectEntityId: subjectId, attribute: attr, validFrom: '2025-01-01', validUntil: priorDate, observedAt: priorDate, supersededBy: currentId } },
+    { id: changeId, kind: `temporal_${attr}_provenance`, role: 'change_provenance',
+      text: `Change ledger ${tsDate}: ${canonical}'s ${attr} entry ${staleVal} was superseded and replaced by ${val}; the older ${attr} record no longer applies.`,
+      timestamp: tsDate, currentStaleFlag: true,
+      validity: { subjectEntityId: subjectId, attribute: attr, validFrom: tsDate, observedAt: tsDate } },
+    ...shadowIds.map((shadowId, i) => ({ id: shadowId, kind: `temporal_${attr}`, role: 'escalation_shadow',
+      text: `What is ${canonical}'s current ${attr}? The current ${attr} is ${decoyVals[i] ?? `${staleVal}-alt${i}`}, still listed as valid in an earlier note.`,
+      timestamp: priorDate, currentStaleFlag: false,
+      validity: { subjectEntityId: subjectId, attribute: attr, validFrom: '2025-01-01', validUntil: priorDate, observedAt: priorDate, supersededBy: currentId } })),
+  ];
+  const relations = [
+    { src: currentId, dst: staleId, type: 'supersedes', label: 'supersedes' },
+    { src: changeId, dst: staleId, type: 'derived_from', label: 'records_supersession_of' },
+    ...shadowIds.map((shadowId) => ({ src: currentId, dst: shadowId, type: 'supersedes', label: 'supersedes' })),
+  ];
+  const shadowQrels = shadowIds.map((docId) => ({ docId, relevance: 0.0, role: 'stale_shadow' }));
+  const shadowNegs = shadowIds.map((docId) => ({ docId, category: 'temporal_stale' }));
+  const trapNeg = { docId: staleId, category: 'temporal_stale_exact_terms' };
+  const queryStubs = [
+    { questionType: 'current_value', variant: 0,
+      queryText: `As of now, what ${attr} is recorded for ${canonical}?`,
+      qrels: [
+        { docId: currentId, relevance: 1.0, role: 'direct' },
+        { docId: changeId, relevance: 0.4, role: 'provenance_bridge' },
+        { docId: staleId, relevance: 0.0, role: 'stale_trap' },
+        ...shadowQrels,
+      ],
+      hardNegatives: [trapNeg, ...shadowNegs] },
+    { questionType: 'stale_verification', variant: 0,
+      queryText: `Is ${staleVal} still the valid ${attr} for ${canonical}?`,
+      qrels: [
+        { docId: changeId, relevance: 1.0, role: 'direct' },
+        { docId: currentId, relevance: 0.6, role: 'current_support' },
+        { docId: staleId, relevance: 0.0, role: 'stale_trap' },
+        ...shadowQrels,
+      ],
+      hardNegatives: [trapNeg, ...shadowNegs] },
+    { questionType: 'downstream_application', variant: 0,
+      queryText: `Which ${attr} should ${canonical}'s new sessions rely on?`,
+      qrels: [
+        { docId: currentId, relevance: 1.0, role: 'direct' },
+        { docId: changeId, relevance: 0.4, role: 'provenance_bridge' },
+        { docId: staleId, relevance: 0.0, role: 'stale_trap' },
+        ...shadowQrels,
+      ],
+      hardNegatives: [trapNeg, ...shadowNegs] },
+    { questionType: 'current_value', variant: 1,
+      queryText: `Which ${attr} is on record for ${canonical} right now?`,
+      qrels: [
+        { docId: currentId, relevance: 1.0, role: 'direct' },
+        { docId: changeId, relevance: 0.4, role: 'provenance_bridge' },
+        { docId: staleId, relevance: 0.0, role: 'stale_trap' },
+        ...shadowQrels,
+      ],
+      hardNegatives: [trapNeg, ...shadowNegs] },
+    { questionType: 'change_provenance', variant: 0,
+      queryText: `What happened to the ${attr} entry ${staleVal} recorded for ${canonical}?`,
+      qrels: [
+        { docId: changeId, relevance: 1.0, role: 'direct' },
+        { docId: currentId, relevance: 0.4, role: 'current_bridge' },
+        { docId: staleId, relevance: 0.0, role: 'stale_trap' },
+        ...shadowQrels,
+      ],
+      hardNegatives: [trapNeg, ...shadowNegs] },
+  ];
+  return { docs, relations, queryStubs };
+}
+
+/**
+ * Capability rotation schedule (N2 ever-improvement): which memory-IR capability the
+ * hidden-eval minter targets at a given epoch. Deterministic in epoch — replay-safe.
+ * A capability may enter this schedule ONLY behind its own offline real-Qwen G1 gate
+ * (mineable under the live profile, controls clean). conflict_resolution /
+ * provenance_evidence / relation_traversal are designed next in line; they stay out
+ * until their G1 evidence exists.
+ */
+export const TYPED_CLUSTER_CAPABILITY_SCHEDULE = ['temporal_supersession'];
+
+export function capabilityForEpoch(epoch, schedule = TYPED_CLUSTER_CAPABILITY_SCHEDULE) {
+  if (!Array.isArray(schedule) || schedule.length === 0) return 'temporal_supersession';
+  return schedule[((epoch % schedule.length) + schedule.length) % schedule.length];
+}
+
+/**
+ * Difficulty escalation (N2): number of extra stale-shadow decoys minted per cluster grows
+ * with epoch, hardening the trap without changing the question types. Deterministic in epoch.
+ */
+export const TYPED_CLUSTER_ESCALATION_BASE_EPOCH = 133;
+
+export function escalationLevelForEpoch(epoch, { baseEpoch = TYPED_CLUSTER_ESCALATION_BASE_EPOCH, epochsPerLevel = 4, maxLevel = 4 } = {}) {
+  if (!Number.isInteger(epoch) || epoch <= baseEpoch) return 0;
+  return Math.min(maxLevel, Math.floor((epoch - baseEpoch) / epochsPerLevel));
+}
 const V16_BRANCH_WEIGHTS = [
   ['temporal', 23],
   ['conflict', 21],
@@ -114,8 +287,13 @@ function temporalAttrBank(isProject, attr) {
  *     `minFreshPerEpoch` added queries land in eval_hidden, and existing hidden queries older
  *     than `retireAfterEpochs` (mint epoch = liveUpdateEpoch ?? 0) are retired oldest-first into
  *     `retiredQueryIds` (capped at `maxRetiredPerEpoch`, skipping `excludeRetireIds`).
+ *     Optional `capabilitySchedule` (string[]) overrides TYPED_CLUSTER_CAPABILITY_SCHEDULE and
+ *     `escalation` ({baseEpoch, epochsPerLevel, maxLevel}) overrides the difficulty-escalation
+ *     defaults; both stay pure functions of `epoch`.
  * @returns {{ epoch, seed, churnFraction, retractionFraction, addedDocs, addedRelations, addedQueries,
- *   churnedSubjects, retractedDocIds, retiredQueryIds, freshEvalHiddenQueryIds, liveChurnRate }}
+ *   churnedSubjects, retractedDocIds, retiredQueryIds, freshEvalHiddenQueryIds,
+ *   hiddenClusterTelemetry: { capability, escalationLevel, clusterCount, questionTypeHistogram,
+ *     bandHistogram, clusters }, liveChurnRate }}
  */
 export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.1, retractionFraction = 0, evalHiddenPolicy = null }) {
   if (!baseLogical || !Array.isArray(baseLogical.entities)) throw new Error('evolveCorpusDelta: baseLogical.entities required');
@@ -493,6 +671,7 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
   // Hidden-eval pool turnover (public-qrels memorization decay): mint fresh eval_hidden queries
   // up to the pinned per-epoch quota, and retire hidden rows past the horizon oldest-first.
   const freshEvalHiddenQueryIds = [];
+  const hiddenClusterTelemetry = { capability: null, escalationLevel: 0, clusters: [] };
   const retiredQueryIds = [];
   const retiredQuerySet = new Set();
   const retireQuery = (id) => {
@@ -509,61 +688,85 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
     // cannot be met inside the budget the caller's quota gate hard-fails.
     const saltCap = Math.max(600, minFreshPerEpoch * 80);
     let minted = 0;
-    const clusterIds = new Set();
-    const ensureTemporalClusterDocs = ({ cluster, subj, canonical, attr, val, staleVal, prior }) => {
-      if (clusterIds.has(cluster)) return;
-      clusterIds.add(cluster);
-      const currentId = `d_e${epoch}_${subj.id}_hc${cluster}_cur`;
-      const staleId = `d_e${epoch}_${subj.id}_hc${cluster}_stale`;
-      addedDocs.push({ id: currentId, lane: 'deep', kind: `temporal_${attr}`, entityIds: [universe, subj.id],
-        text: `${canonical}'s supersession ledger records ${attr} ${val} as active after the prior ${attr} entry was replaced.`,
-        shape: 'temporal_update_record', timestamp: tsDate, currentStaleFlag: true, liveUpdateEpoch: epoch });
-      addedDocs.push({ id: staleId, lane: 'deep', kind: `temporal_${attr}`, entityIds: [universe, subj.id],
-        text: `${canonical}'s older ${attr} record listed ${staleVal} before the supersession ledger replaced that value.`,
-        shape: 'temporal_update_record', timestamp: priorDate, currentStaleFlag: false, liveUpdateEpoch: epoch });
-      addedRelations.push({ src: currentId, dst: staleId, type: 'supersedes', label: 'supersedes' });
-      if (prior) addedRelations.push({ src: currentId, dst: prior, type: 'supersedes', label: 'supersedes' });
-      priorTemporalByAttr.set(`${subj.id}::${attr}`, currentId);
-    };
+    const mintedClusters = hiddenClusterTelemetry.clusters;
+    const capability = capabilityForEpoch(epoch, evalHiddenPolicy.capabilitySchedule ?? TYPED_CLUSTER_CAPABILITY_SCHEDULE);
+    const escalationLevel = escalationLevelForEpoch(epoch, evalHiddenPolicy.escalation ?? {});
+    hiddenClusterTelemetry.capability = capability;
+    hiddenClusterTelemetry.escalationLevel = escalationLevel;
+    const clusterDocsAdded = new Set();
     for (let salt = 0; freshEvalHiddenQueryIds.length < minFreshPerEpoch && minted < maxMintedPerEpoch && salt < saltCap && subjects.length > 0; salt++) {
       const subj = subjects[salt % subjects.length];
       const rnd = prng(`${seed}:hidden-cluster:${epoch}:${subj.id}:${salt}`);
       const canonical = subj.canonicalName;
       const isProject = /-svc-/.test(canonical);
-      const candidateAttrs = isProject ? ATTRS_FOR_PROJECT : ATTRS_FOR_PERSON;
-      let attr = candidateAttrs.find((a) => priorTemporalByAttr.has(`${subj.id}::${a}`));
-      if (!attr) attr = candidateAttrs[Math.floor(rnd() * candidateAttrs.length)];
-      const bank = temporalAttrBank(isProject, attr);
+      // Rotated attribute (NOT the burned bare city/diet/package-manager space): two fresh
+      // attributes per epoch, alternating by cluster parity — two independent memory
+      // operations' worth of headroom every evolve.
+      const { attr, bank } = temporalAttributeForEpochSlot(epoch, mintedClusters.length, { isProject });
       const val = bank[Math.floor(rnd() * bank.length)];
       let staleVal = bank[Math.floor(rnd() * bank.length)];
       if (staleVal === val) staleVal = bank[(bank.indexOf(val) + 1) % bank.length] ?? `${val}-prior`;
       const prior = priorTemporalByAttr.get(`${subj.id}::${attr}`);
       const cluster = `${salt}`;
-      const currentId = `d_e${epoch}_${subj.id}_hc${cluster}_cur`;
-      const staleId = `d_e${epoch}_${subj.id}_hc${cluster}_stale`;
-      for (let variant = 0; variant < TEMPORAL_CLUSTER_QUERY_TEMPLATES.length && freshEvalHiddenQueryIds.length < minFreshPerEpoch && minted < maxMintedPerEpoch; variant++) {
+      const idBase = `e${epoch}_${subj.id}_hc${cluster}`;
+      const decoyVals = [];
+      for (let i = 0; decoyVals.length < escalationLevel && i < bank.length; i++) {
+        const decoy = bank[(bank.indexOf(staleVal) + 1 + i) % bank.length];
+        if (decoy !== val && decoy !== staleVal) decoyVals.push(decoy);
+      }
+      const spec = buildTypedTemporalClusterSpec({
+        canonical, subjectId: subj.id, attr, val, staleVal, tsDate, priorDate,
+        currentId: `d_${idBase}_cur`, staleId: `d_${idBase}_stale`, changeId: `d_${idBase}_chg`,
+        shadowIds: decoyVals.map((_, i) => `d_${idBase}_sh${i}`), decoyVals,
+      });
+      const mintedRows = [];
+      // Clusters are ATOMIC: once started, all five typed stubs mint even if the fresh-hidden
+      // quota is crossed mid-cluster (churn-branch queries that happen to land in eval_hidden
+      // count toward the quota and would otherwise truncate the cluster to a partial type set).
+      // Bounded overshoot: quota + 4 rows ≪ maxRootDeltaPerEpoch; maxMintedPerEpoch still binds.
+      for (let stub = 0; stub < spec.queryStubs.length && minted < maxMintedPerEpoch; stub++) {
+        const q = spec.queryStubs[stub];
         let qid = null;
         for (let probe = 0; probe < 96; probe++) {
-          const candidate = `q_e${epoch}_${subj.id}_hc${cluster}_v${variant}_s${probe}`;
+          const candidate = `q_${idBase}_v${stub}_s${probe}`;
           if (splitOf(candidate, epoch) === 'eval_hidden') {
             qid = candidate;
             break;
           }
         }
         if (!qid) continue;
-        ensureTemporalClusterDocs({ cluster, subj, canonical, attr, val, staleVal, prior });
+        if (!clusterDocsAdded.has(idBase)) {
+          clusterDocsAdded.add(idBase);
+          for (const doc of spec.docs) {
+            addedDocs.push({ id: doc.id, lane: 'deep', kind: doc.kind, entityIds: [universe, subj.id],
+              text: doc.text, shape: 'temporal_update_record', timestamp: doc.timestamp,
+              currentStaleFlag: doc.currentStaleFlag, validity: doc.validity, liveUpdateEpoch: epoch });
+          }
+          for (const rel of spec.relations) addedRelations.push(rel);
+          if (prior) addedRelations.push({ src: `d_${idBase}_cur`, dst: prior, type: 'supersedes', label: 'supersedes' });
+          priorTemporalByAttr.set(`${subj.id}::${attr}`, `d_${idBase}_cur`);
+        }
         addedQueries.push({ id: qid, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
-          lane: 'deep', family: 'temporal_update', queryText: TEMPORAL_CLUSTER_QUERY_TEMPLATES[variant](canonical, attr),
+          lane: 'deep', family: 'temporal_update', queryText: q.queryText,
           qrels: [
-            { docId: currentId, relevance: 1.0, role: 'direct' },
-            { docId: staleId, relevance: 0.2, role: 'stale' },
-            ...(prior ? [{ docId: prior, relevance: 0.2, role: 'stale_prior' }] : []),
+            ...q.qrels,
+            ...(prior ? [{ docId: prior, relevance: 0.0, role: 'stale_prior' }] : []),
           ],
-          hardNegatives: [{ docId: staleId, category: 'temporal_stale_exact_terms' }, ...(prior ? [{ docId: prior, category: 'temporal_stale' }] : [])],
-          publicIntent: { atom: 'temporal_cluster', subjectEntityId: subj.id, attribute: attr, queryTime: tsDate, selector: `variant_${variant}` },
-          band: 'very_hard', operationFamily: 'temporal_cluster', liveUpdateEpoch: epoch });
+          hardNegatives: [...q.hardNegatives, ...(prior ? [{ docId: prior, category: 'temporal_stale' }] : [])],
+          publicIntent: { atom: 'temporal_cluster', subjectEntityId: subj.id, attribute: attr, queryTime: tsDate,
+            selector: `qtype_${q.questionType}_v${q.variant}` },
+          questionType: q.questionType, capability,
+          band: escalationLevel > 0 ? 'very_hard' : 'hard', operationFamily: 'temporal_cluster_typed', liveUpdateEpoch: epoch });
         freshEvalHiddenQueryIds.push(qid);
+        mintedRows.push({ id: qid, questionType: q.questionType });
         minted++;
+      }
+      if (mintedRows.length > 0) {
+        mintedClusters.push({
+          clusterKey: idBase, capability, escalationLevel, subjectEntityId: subj.id, attribute: attr,
+          rowCount: mintedRows.length, questionTypes: [...new Set(mintedRows.map((r) => r.questionType))],
+          shadowCount: decoyVals.length,
+        });
       }
     }
     // If a retracted doc was a positive qrel target, the hidden query is no
@@ -592,7 +795,28 @@ export function evolveCorpusDelta({ baseLogical, epoch, seed, churnFraction = 0.
     }
   }
 
+  // Per-epoch capability/difficulty telemetry (N2 anti-coverage-indexing signal): consumers
+  // (epoch-evolve artifact, cutover accounting) can detect "same capability + same difficulty
+  // for N consecutive epochs" — the coverage-indexing failure mode — from these fields alone.
+  const questionTypeHistogram = {};
+  const clusterBandHistogram = {};
+  for (const c of hiddenClusterTelemetry.clusters) {
+    for (const qt of c.questionTypes) questionTypeHistogram[qt] = (questionTypeHistogram[qt] ?? 0) + 1;
+  }
+  for (const q of addedQueries) {
+    if (q.operationFamily !== 'temporal_cluster_typed') continue;
+    clusterBandHistogram[q.band] = (clusterBandHistogram[q.band] ?? 0) + 1;
+  }
+
   return { epoch, seed, churnFraction, retractionFraction, addedDocs, addedRelations, addedQueries, churnedSubjects,
     retractedDocIds, retiredQueryIds, freshEvalHiddenQueryIds,
+    hiddenClusterTelemetry: {
+      capability: hiddenClusterTelemetry.capability,
+      escalationLevel: hiddenClusterTelemetry.escalationLevel,
+      clusterCount: hiddenClusterTelemetry.clusters.length,
+      questionTypeHistogram,
+      bandHistogram: clusterBandHistogram,
+      clusters: hiddenClusterTelemetry.clusters,
+    },
     liveChurnRate: subjects.length ? churnedSubjects.length / subjects.length : 0 };
 }

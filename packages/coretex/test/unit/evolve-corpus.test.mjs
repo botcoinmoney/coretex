@@ -196,27 +196,111 @@ describe('Fix B — evolveCorpusDelta (deterministic live-update churn)', () => 
     assert.equal(fresh.length, 5);
     assert.ok(fresh.every((q) => splitOf(q.id, q.liveUpdateEpoch) === 'eval_hidden'));
     assert.ok(fresh.every((q) => q.family === 'temporal_update'));
-    assert.ok(fresh.every((q) => q.operationFamily === 'temporal_cluster'));
+    assert.ok(fresh.every((q) => q.operationFamily === 'temporal_cluster_typed'));
     assert.ok(fresh.every((q) => q.hardNegatives.some((n) => n.category === 'temporal_stale_exact_terms')));
+    assert.ok(fresh.every((q) => typeof q.questionType === 'string' && q.questionType.length > 0));
+    assert.ok(fresh.every((q) => q.publicIntent?.selector === `qtype_${q.questionType}_v${q.publicIntent.selector.match(/_v(\d+)$/)[1]}`));
 
-    const byPair = new Map();
+    // Cross-question-TYPE clustering (N1): one memory structure, DISTINCT question types —
+    // not paraphrases of one question. Group rows by their cluster doc structure via the
+    // stale-trap doc every row shares.
+    const byTrap = new Map();
     for (const q of fresh) {
-      const current = q.qrels.find((r) => r.role === 'direct');
-      const stale = q.qrels.find((r) => r.role === 'stale');
-      assert.ok(current, 'cluster query must have a direct current qrel');
-      assert.ok(stale, 'cluster query must have a stale qrel');
-      const key = `${current.docId}->${stale.docId}`;
-      byPair.set(key, [...(byPair.get(key) ?? []), q]);
+      const trap = q.qrels.find((r) => r.role === 'stale_trap');
+      assert.ok(trap, 'typed cluster query must carry the stale-trap qrel');
+      byTrap.set(trap.docId, [...(byTrap.get(trap.docId) ?? []), q]);
     }
-    const cluster = [...byPair.entries()].find(([, rows]) => rows.length >= 3);
-    assert.ok(cluster, `expected at least three hidden paraphrases over one current/stale pair, got ${JSON.stringify([...byPair].map(([k, v]) => [k, v.length]))}`);
-    const [pair, rows] = cluster;
-    const [currentId, staleId] = pair.split('->');
+    const cluster = [...byTrap.entries()].find(([, rows]) => rows.length >= 4);
+    assert.ok(cluster, `expected >=4 typed rows over one supersession structure, got ${JSON.stringify([...byTrap].map(([k, v]) => [k, v.length]))}`);
+    const [staleId, rows] = cluster;
+    const types = new Set(rows.map((q) => q.questionType));
+    assert.ok(types.size >= 3, `cluster rows must span >=3 distinct question types, got ${[...types].join(',')}`);
+    assert.ok(types.has('current_value'), 'cluster must include the current_value type');
+    assert.ok(new Set(rows.map((q) => q.queryText)).size === rows.length, 'every cluster row must have distinct query text');
+
+    // Typed golds differ by question type: change_provenance / stale_verification rows are
+    // answered by the change-provenance record, not the current-value record.
     const docs = new Map(d.addedDocs.map((doc) => [doc.id, doc]));
-    assert.equal(docs.get(currentId).currentStaleFlag, true);
+    const goldOf = (q) => q.qrels.find((r) => r.role === 'direct').docId;
+    const currentGold = goldOf(rows.find((q) => q.questionType === 'current_value'));
+    const verifyRow = rows.find((q) => q.questionType === 'stale_verification');
+    assert.ok(verifyRow, 'cluster must include the stale_verification type');
+    const provenanceGold = goldOf(verifyRow);
+    assert.notEqual(provenanceGold, currentGold, 'stale_verification gold must be the provenance record, not the current record');
+    assert.match(docs.get(provenanceGold).text, /superseded and replaced/);
+    assert.equal(docs.get(currentGold).currentStaleFlag, true);
     assert.equal(docs.get(staleId).currentStaleFlag, false);
-    assert.ok(d.addedRelations.some((r) => r.src === currentId && r.dst === staleId && r.type === 'supersedes'));
-    assert.ok(new Set(rows.map((q) => q.queryText)).size >= 3, 'cluster rows must be paraphrases, not duplicate query text');
+    // validity metadata (subject+attribute) is what scopes temporalRecordAppliesToQuery.
+    for (const docId of [currentGold, provenanceGold, staleId]) {
+      assert.ok(docs.get(docId).validity?.subjectEntityId, `${docId} must carry validity.subjectEntityId`);
+      assert.ok(docs.get(docId).validity?.attribute, `${docId} must carry validity.attribute`);
+    }
+    assert.ok(d.addedRelations.some((r) => r.src === currentGold && r.dst === staleId && r.type === 'supersedes'));
+
+    // Telemetry (N2 anti-coverage-indexing signal).
+    assert.equal(d.hiddenClusterTelemetry.capability, 'temporal_supersession');
+    assert.equal(d.hiddenClusterTelemetry.escalationLevel, 0);
+    assert.ok(d.hiddenClusterTelemetry.clusterCount >= 1);
+    assert.ok(d.hiddenClusterTelemetry.questionTypeHistogram.current_value >= 1);
+    // Epoch 9 is below the escalation base: no shadow decoys, band 'hard'.
+    assert.ok(fresh.every((q) => q.band === 'hard'));
+    assert.equal(d.addedDocs.some((doc) => /_sh\d+$/.test(doc.id)), false);
+  });
+
+  test('temporal attribute rotation avoids burned attributes and stays fresh per epoch', async () => {
+    const { temporalAttributeForEpochSlot } = await import('../../../../scripts/lib/evolve-corpus.mjs');
+    const burned = new Set(['city', 'diet', 'package manager', 'language', 'runtime', 'region']);
+    const seen = new Set();
+    for (let epoch = 133; epoch < 133 + 18; epoch += 1) {
+      for (const slot of [0, 1]) {
+        const { attr, bank } = temporalAttributeForEpochSlot(epoch, slot, {});
+        assert.ok(!burned.has(attr), `rotated attribute must never be a bare substrate-burned attribute: ${attr}`);
+        assert.ok(!seen.has(attr), `attribute must be fresh within a rotation cycle: ${attr}`);
+        assert.ok(Array.isArray(bank) && bank.length >= 4, 'attribute needs a value bank');
+        seen.add(attr);
+      }
+    }
+    // Next cycle stays fresh via the series suffix.
+    const next = temporalAttributeForEpochSlot(133 + 18, 0, {});
+    assert.ok(!seen.has(next.attr), `post-cycle attribute must remain fresh: ${next.attr}`);
+    assert.match(next.attr, /\(series 2\)$/);
+    // Deterministic.
+    assert.deepEqual(temporalAttributeForEpochSlot(140, 1, {}), temporalAttributeForEpochSlot(140, 1, {}));
+    // Minted clusters actually carry rotated attributes.
+    const splitOf = (logicalQueryId, liveUpdateEpoch) => splitForRecord(liveTailQueryId(logicalQueryId, liveUpdateEpoch), 0);
+    const d = evolveCorpusDelta({
+      baseLogical, epoch: 140, seed: 'rotation-surface', churnFraction: 0, retractionFraction: 0,
+      evalHiddenPolicy: { splitOf, minFreshPerEpoch: 10, maxMintedPerEpoch: 12, retireAfterEpochs: Infinity },
+    });
+    const attrs = new Set(d.hiddenClusterTelemetry.clusters.map((c) => c.attribute));
+    assert.ok([...attrs].every((a) => !burned.has(a)), `minted attrs must be rotated: ${[...attrs].join(',')}`);
+    assert.ok(attrs.size >= 2, 'an epoch minting 2+ clusters must span 2 rotated attributes');
+  });
+
+  test('typed hidden clusters escalate difficulty deterministically past the base epoch', () => {
+    const splitOf = (logicalQueryId, liveUpdateEpoch) => splitForRecord(liveTailQueryId(logicalQueryId, liveUpdateEpoch), 0);
+    const mint = (epoch) => evolveCorpusDelta({
+      baseLogical,
+      epoch,
+      seed: 'escalation-surface',
+      churnFraction: 0,
+      retractionFraction: 0,
+      evalHiddenPolicy: { splitOf, minFreshPerEpoch: 5, maxMintedPerEpoch: 8, retireAfterEpochs: Infinity },
+    });
+    const early = mint(9);
+    const late = mint(150);
+    assert.equal(early.hiddenClusterTelemetry.escalationLevel, 0);
+    assert.ok(late.hiddenClusterTelemetry.escalationLevel >= 1, 'epoch 150 must escalate past level 0');
+    const lateShadows = late.addedDocs.filter((doc) => /_sh\d+$/.test(doc.id));
+    assert.ok(lateShadows.length >= 1, 'escalated clusters must mint stale-shadow decoys');
+    assert.ok(lateShadows.every((doc) => doc.currentStaleFlag === false && doc.validity?.supersededBy));
+    const lateFresh = late.addedQueries.filter((q) => late.freshEvalHiddenQueryIds.includes(q.id));
+    assert.ok(lateFresh.every((q) => q.band === 'very_hard'), 'escalated cluster rows are very_hard band');
+    assert.ok(lateFresh.every((q) => q.qrels.some((r) => r.role === 'stale_shadow')), 'escalated rows must expose shadow qrels');
+    // Determinism at both epochs.
+    assert.deepEqual(JSON.parse(JSON.stringify(mint(150))), JSON.parse(JSON.stringify(late)));
+    // Capability schedule is pure in epoch.
+    assert.equal(late.hiddenClusterTelemetry.capability, 'temporal_supersession');
   });
 });
 
@@ -373,19 +457,29 @@ describe('Fix B — production delta/root path (mock embeddings): logical delta 
     assert.ok(freshEvents.every((e) => e.split === 'eval_hidden'));
     assert.ok(freshEvents.every((e) => e.id.startsWith('zz_e000000000009_q_')));
 
-    const byPair = new Map();
+    const byTrap = new Map();
     for (const e of freshEvents) {
       assert.equal(e.logicalFamily, 'temporal_update');
-      assert.equal(e.band, 'very_hard');
+      assert.equal(e.band, 'hard'); // epoch 9 < escalation base ⇒ unescalated band
       const current = e.qrels.find((r) => r.relevance === 1);
       const stale = e.hardNegatives.find((n) => n.category === 'temporal_stale_exact_terms');
       assert.ok(current, 'bridged cluster query must keep direct qrel');
       assert.ok(stale, 'bridged cluster query must keep stale exact-term hard negative');
       assert.ok(e.truthDocuments.some((t) => t.id === current.documentId && t.isCurrent === true));
-      assert.ok(e.truthDocuments.some((t) => t.id === stale.id && t.isCurrent === false));
-      byPair.set(`${current.documentId}->${stale.id}`, [...(byPair.get(`${current.documentId}->${stale.id}`) ?? []), e]);
+      // The stale trap is a relevance-0 qrel: the bridge carries it as a hard negative
+      // (with embedding), NOT as a truth document. Suppression still reaches it pool-wide
+      // (temporalOracleScopePerQuery is unset in the live profile).
+      assert.ok(!e.truthDocuments.some((t) => t.id === stale.id), 'relevance-0 trap must not be a truth document');
+      assert.ok(e.qrels.some((r) => r.documentId === stale.id && r.relevance === 0), 'trap qrel must bridge at relevance 0');
+      assert.match(e.publicIntent?.selector ?? '', /^qtype_/, 'bridged cluster query must carry the question-type selector');
+      byTrap.set(stale.id, [...(byTrap.get(stale.id) ?? []), e]);
     }
-    assert.ok([...byPair.values()].some((rows) => rows.length >= 3), 'production bridge keeps paraphrased cluster rows over one current/stale pair');
+    const bridgedCluster = [...byTrap.values()].find((rows) => rows.length >= 4);
+    assert.ok(bridgedCluster, 'production bridge keeps typed cluster rows over one supersession structure');
+    const bridgedTypes = new Set(bridgedCluster.map((e) => e.publicIntent.selector.replace(/^qtype_/, '').replace(/_v\d+$/, '')));
+    assert.ok(bridgedTypes.size >= 3, `bridged cluster must span >=3 distinct question types, got ${[...bridgedTypes].join(',')}`);
+    const bridgedGolds = new Set(bridgedCluster.map((e) => e.qrels.find((r) => r.relevance === 1).documentId));
+    assert.ok(bridgedGolds.size >= 2, 'bridged cluster question types must not all share one gold doc');
 
     const memDocs = additions.filter((e) => isMemoryDocumentEventId(e.id));
     const currentDocIds = new Set(freshEvents.flatMap((e) => e.qrels.filter((r) => r.relevance === 1).map((r) => r.documentId)));
