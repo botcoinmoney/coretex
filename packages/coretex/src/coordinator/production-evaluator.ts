@@ -64,6 +64,7 @@ import {
 } from '../replay/eval-report-artifact.js';
 import { rpcFetchTarget } from '../replay/v4.js';
 import { computeCoreTexScreenerThresholdPpm } from '../rewards/work-units.js';
+import { evaluateBaseline, type BaselineScores } from '../rewards/baseline.js';
 import {
   runPerPatchEvaluation,
   dualPackProofFromPerPatchReceipt,
@@ -373,11 +374,34 @@ export type ProductionCoreTexEvaluator = RealEvaluator & {
      *  omits it and uses the construction-time bundle/default offset. */
     targetBlockOffset?: number;
   }): Promise<ProductionEvalResult>;
+  /** Keyless baseline re-scoring (cutover baseline recompute): score a BARE
+   *  substrate on the pack derived from a CALLER-PROVIDED deterministic
+   *  bytes32 seed under this evaluator's loaded corpus + overlay law
+   *  (`deriveScoredQueryPack` — byte-identical to `deriveQueryPack` when no
+   *  overlay is armed). PATCHLESS + DEDUP-FREE + ADMISSION-FREE by
+   *  construction: never consults the dedup store, per-miner caps, or the
+   *  future-blockhash seed machinery. The seed is caller-authoritative and
+   *  deterministic — NEVER a future blockhash. */
+  scoreState(input: {
+    parentState: CortexState;
+    baselineSeedHex: string;
+    samples?: number;
+  }): Promise<BaselineScores>;
   /** Hash-bound boot attestation (§2): resolved model id + revision +
    *  reranker mode + instruction + prompt-template hash + Memory-IR mode. */
   readonly bootAttestation: AttestedCoordinatorBootAttestation;
   close?: () => Promise<void>;
 };
+
+/** Hard cap on `scoreState` baseline samples per job (each sample is a full
+ *  hidden-pack evaluation on the GPU). */
+export const MAX_SCORE_STATE_SAMPLES = 32;
+
+/** The evaluator surface the shared core can build WITHOUT the factory-scoped
+ *  corpus/profile/scoring options. `scoreState` needs those, so only
+ *  `createProductionCoreTexEvaluator` attaches it (the core alone never
+ *  exposes it — tests driving the core directly get no baseline lane). */
+export type CoreTexEvaluatorCore = Omit<ProductionCoreTexEvaluator, 'scoreState'>;
 
 export interface ProductionCoreTexEvaluatorOptions {
   readonly epochId: number;
@@ -469,7 +493,7 @@ export interface ProductionCoreTexEvaluatorCoreDeps {
   readonly close?: () => Promise<void>;
 }
 
-export function createCoreTexEvaluatorCore(deps: ProductionCoreTexEvaluatorCoreDeps): ProductionCoreTexEvaluator {
+export function createCoreTexEvaluatorCore(deps: ProductionCoreTexEvaluatorCoreDeps): CoreTexEvaluatorCore {
   validatePerMinerCap(deps.perMinerCap);
   if (!deps.dedupStore) {
     throw new Error('production CoreTex evaluator requires a CoreTexEvalDedupStore (fail-closed: no in-memory default)');
@@ -488,7 +512,7 @@ export function createCoreTexEvaluatorCore(deps: ProductionCoreTexEvaluatorCoreD
     return deps.hiddenSeedCommit.toLowerCase();
   })();
 
-  const evaluator: ProductionCoreTexEvaluator = {
+  const evaluator: CoreTexEvaluatorCore = {
     bootAttestation: deps.bootAttestation,
     async scorePatch(input) {
       const patchBytes = parseHex(input.patchBytesHex, 'patchBytesHex');
@@ -803,7 +827,7 @@ export async function createProductionCoreTexEvaluator(
   }));
 
   const closable = reranker as CrossEncoderReranker & { close?: () => Promise<void> };
-  return createCoreTexEvaluatorCore({
+  const evaluator = createCoreTexEvaluatorCore({
     epochId: options.epochId,
     ...(options.epochSecret ? { epochSecret: options.epochSecret } : {}),
     ...(options.hiddenSeedCommit ? { hiddenSeedCommit: options.hiddenSeedCommit } : {}),
@@ -835,7 +859,26 @@ export async function createProductionCoreTexEvaluator(
     },
     ...(options.publishArtifact ? { publishArtifact: options.publishArtifact } : {}),
     ...(typeof closable.close === 'function' ? { close: () => closable.close!() } : {}),
-  });
+  }) as ProductionCoreTexEvaluator;
+  // Keyless baseline re-scoring: implemented HERE (not in the core) because it
+  // needs the factory-scoped corpus/profile/scoringOpts/activeLiveEval. Attached
+  // by property assignment on the core's returned object so every core-built
+  // member (bootAttestation, close, scorePatch closure state) is preserved.
+  // deriveScoredQueryPack is the SAME composition the live screener's
+  // seedScorer uses, so the overlay law applies to baselines exactly as it
+  // applies to scored patches (and degrades to the broad pack when unarmed).
+  evaluator.scoreState = async (input) => {
+    if (typeof input.baselineSeedHex !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(input.baselineSeedHex)) {
+      throw new Error('scoreState: baselineSeedHex must be bytes32 hex (a caller-derived deterministic seed — never a future blockhash)');
+    }
+    const samples = input.samples ?? 1;
+    if (!Number.isSafeInteger(samples) || samples < 1 || samples > MAX_SCORE_STATE_SAMPLES) {
+      throw new Error(`scoreState: samples must be an integer in [1, ${MAX_SCORE_STATE_SAMPLES}] (got ${String(input.samples)})`);
+    }
+    const statePack = deriveScoredQueryPack(options.epochId, input.baselineSeedHex, corpus, profile.hiddenPack, activeLiveEval);
+    return evaluateBaseline(input.parentState, corpus, statePack, scoringOpts, { samples });
+  };
+  return evaluator;
 }
 
 async function createPinnedQwen3Reranker(plan: ProductionRerankerPlan): Promise<CrossEncoderReranker> {

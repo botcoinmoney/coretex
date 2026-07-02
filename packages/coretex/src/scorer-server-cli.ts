@@ -24,6 +24,11 @@
  * CORETEX_SCORER_AUTH_TOKEN for any non-loopback bind.
  *
  * POST /score-job — see ScorerJobRequest / ScorerJobResult below.
+ * POST /score-state — keyless baseline re-scoring of a BARE substrate on the
+ *   pack derived from a CALLER-PROVIDED deterministic bytes32 seed (the epoch
+ *   cutover's parent-baseline recompute under a NEW corpus + overlay law).
+ *   Patchless, dedup-free, admission-free; see ScorerStateJobRequest /
+ *   ScorerStateJobResult below.
  * GET  /healthz   — liveness + the loaded pins + scorerHealth.
  *
  * The pair-trace (pairTraceHash / scoreArrayHash) reuses the SAME ordered
@@ -39,10 +44,12 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import {
   createProductionCoreTexEvaluator,
   createInMemoryDedupStore,
+  MAX_SCORE_STATE_SAMPLES,
   type CoreTexEvalSeedContext,
   type ProductionCoreTexEvaluator,
   type ProductionRerankerPlan,
 } from './coordinator/production-evaluator.js';
+import type { BaselineScores } from './rewards/baseline.js';
 import { wrapRerankerWithPairTrace, type TracedReranker } from './coordinator/scorer-pair-trace.js';
 import type { CoreTexDualPackEvaluationProof } from './coordinator/coretex-coordinator-core.js';
 import type { CoreTexPostRevealEvalReportArtifact } from './replay/eval-report-artifact.js';
@@ -147,6 +154,30 @@ export interface ScorerJobRequest {
   readonly expectedScorerPins: ScorerExpectedPins;
 }
 
+/** POST /score-state — keyless baseline re-scoring of a BARE substrate (the
+ *  epoch cutover's parent-baseline recompute). NO patch, NO miner, NO
+ *  publicEvalContext: the state lane never touches dedup, admission, or the
+ *  future-blockhash seed machinery. `baselineSeedHex` is a CALLER-PROVIDED
+ *  deterministic bytes32 (the coordinator derives it reproducibly — NEVER a
+ *  future blockhash), so a retry scores the SAME pack. The overlay pin rides
+ *  in `expectedScorerPins.activeFrontierRoot` exactly as on /score-job. */
+export interface ScorerStateJobRequest {
+  readonly jobId: string;
+  readonly epochId: number;
+  readonly parentStateRoot: string;
+  /** The substrate to score, packed via the canonical state codec — verified
+   *  against `parentStateRoot` exactly as on /score-job (refused otherwise). */
+  readonly packedParentStateHex: string;
+  readonly corpusRoot: string;
+  readonly bundleHash: string;
+  readonly coreVersionHash: string;
+  /** Caller-derived deterministic bytes32 baseline seed. */
+  readonly baselineSeedHex: string;
+  /** Baseline samples (default 1, max MAX_SCORE_STATE_SAMPLES). */
+  readonly samples?: number;
+  readonly expectedScorerPins: ScorerExpectedPins;
+}
+
 /** Runtime fingerprint the coordinator checks before signing (model/dtype/cuda
  *  must match the attested expectation). Carries NO signing material. */
 export interface ScorerHealth {
@@ -204,6 +235,24 @@ export interface ScorerJobResult {
   readonly scorerHealth: ScorerHealth;
 }
 
+/** /score-state result. `epochId` is the EVALUATOR's pack epochId (the epoch
+ *  the scorer's loaded law derived the pack for), not a blind job echo — the
+ *  coordinator must verify it matches the epoch it intended to baseline.
+ *  corpusRoot/bundleHash/coreVersionHash echo the job's pins (which the pin
+ *  check already proved equal to the loaded pins). */
+export interface ScorerStateJobResult {
+  readonly jobId: string;
+  readonly epochId: number;
+  readonly parentScorePpm: number;
+  readonly variancePpm: number;
+  readonly samples: number;
+  readonly corpusRoot: string;
+  readonly bundleHash: string;
+  readonly coreVersionHash: string;
+  readonly wallMs: number;
+  readonly scorerHealth: ScorerHealth;
+}
+
 // ─── Loaded-pins computation (shared with the coordinator's expectation) ─────
 
 export interface ScorerLoadedPins {
@@ -227,12 +276,23 @@ function hexEq(a: string | undefined, b: string | undefined): boolean {
   return typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 }
 
+/** The structural subset of a job `checkScorerJobPins` actually reads — both
+ *  ScorerJobRequest and ScorerStateJobRequest satisfy it (the state job simply
+ *  never carries a publicEvalContext), so the pin logic exists exactly once. */
+export interface ScorerPinCheckedJob {
+  readonly corpusRoot: string;
+  readonly bundleHash: string;
+  readonly coreVersionHash: string;
+  readonly publicEvalContext?: ScorerPublicEvalContext;
+  readonly expectedScorerPins: ScorerExpectedPins;
+}
+
 /**
  * Validate a job's pins against what the scorer actually loaded. Returns a
  * refusal reason string, or null when the job may proceed. Pure — unit-tested
  * directly with a fake set of loaded pins.
  */
-export function checkScorerJobPins(job: ScorerJobRequest, loaded: ScorerLoadedPins): string | null {
+export function checkScorerJobPins(job: ScorerPinCheckedJob, loaded: ScorerLoadedPins): string | null {
   const p = job.expectedScorerPins;
   if (!p || typeof p !== 'object') return 'expectedScorerPins missing';
   if (p.modelId !== loaded.modelId) return `expectedScorerPins.modelId ${p.modelId} != loaded ${loaded.modelId}`;
@@ -380,6 +440,27 @@ function validateJobShape(job: unknown): string | null {
   return null;
 }
 
+function validateStateJobShape(job: unknown): string | null {
+  if (!job || typeof job !== 'object') return 'job must be an object';
+  const j = job as Record<string, unknown>;
+  if (typeof j.jobId !== 'string' || !j.jobId) return 'jobId required';
+  if (!Number.isSafeInteger(j.epochId) || (j.epochId as number) <= 0) return 'epochId must be a positive integer';
+  for (const key of ['parentStateRoot', 'corpusRoot', 'bundleHash', 'coreVersionHash', 'baselineSeedHex'] as const) {
+    if (typeof j[key] !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(j[key] as string)) return `${key} must be bytes32`;
+  }
+  if (typeof j.packedParentStateHex !== 'string' || !/^0x[0-9a-fA-F]*$/.test(j.packedParentStateHex)) {
+    return 'packedParentStateHex must be hex';
+  }
+  if ((j.packedParentStateHex.length - 2) / 2 !== PACKED_SIZE) {
+    return `packedParentStateHex must be ${PACKED_SIZE} bytes (got ${(j.packedParentStateHex.length - 2) / 2})`;
+  }
+  if (j.samples !== undefined && (!Number.isSafeInteger(j.samples) || (j.samples as number) < 1 || (j.samples as number) > MAX_SCORE_STATE_SAMPLES)) {
+    return `samples must be an integer in [1, ${MAX_SCORE_STATE_SAMPLES}]`;
+  }
+  if (!j.expectedScorerPins || typeof j.expectedScorerPins !== 'object') return 'expectedScorerPins required';
+  return null;
+}
+
 // ─── Job handler (pure, evaluator-injectable; CLI + tests share it) ──────────
 
 export interface ScorerJobHandlerDeps {
@@ -392,9 +473,12 @@ export interface ScorerJobHandlerDeps {
   readonly now?: () => number;
 }
 
-export type ScorerJobResponse =
-  | { readonly status: 200; readonly body: ScorerJobResult }
+export type ScorerHttpResponse<TBody> =
+  | { readonly status: 200; readonly body: TBody }
   | { readonly status: number; readonly body: { readonly error: string; readonly reason: string } };
+
+export type ScorerJobResponse = ScorerHttpResponse<ScorerJobResult>;
+export type ScorerStateJobResponse = ScorerHttpResponse<ScorerStateJobResult>;
 
 /**
  * Run one scored job. REFUSES (4xx, no eval) on a malformed job or any pin
@@ -508,6 +592,65 @@ export async function handleScoreJob(
       ...(result.artifact ? { artifact: result.artifact } : {}),
       ...(proof ? { evaluationProof: proof } : {}),
       ...(result.outcome === 'state_advance' ? { rewrittenPatchBytesHex: result.rewrittenPatchBytesHex } : {}),
+    },
+  };
+}
+
+export interface ScorerStateJobHandlerDeps {
+  readonly evaluator: Pick<ProductionCoreTexEvaluator, 'scoreState'>;
+  readonly loadedPins: ScorerLoadedPins;
+  readonly scorerHealth: ScorerHealth;
+  readonly now?: () => number;
+}
+
+/**
+ * Run one baseline state-scoring job. Same refusal ladder as /score-job
+ * (shape → pins → parent-state merkle), then a single evaluator.scoreState on
+ * the VERIFIED substrate. KEYLESS + PATCHLESS: no dedup, no admission, no
+ * seed machinery, no pair-trace reset (state jobs run on their own bounded
+ * concurrency-1 queue so they never interleave-flood the GPU).
+ */
+export async function handleScoreStateJob(
+  job: ScorerStateJobRequest,
+  deps: ScorerStateJobHandlerDeps,
+): Promise<ScorerStateJobResponse> {
+  const shape = validateStateJobShape(job);
+  if (shape) return { status: 400, body: { error: 'invalid-job', reason: shape } };
+  const pinMismatch = checkScorerJobPins(job, deps.loadedPins);
+  if (pinMismatch) return { status: 409, body: { error: 'pin-mismatch', reason: pinMismatch } };
+  const parent = verifyJobParentState(job);
+  if (!parent.ok) {
+    return { status: 422, body: { error: 'SCORER_PARENT_STATE_MISMATCH', reason: parent.reason } };
+  }
+
+  const now = deps.now ?? (() => Date.now());
+  const start = now();
+  let scores: BaselineScores;
+  try {
+    scores = await deps.evaluator.scoreState({
+      parentState: parent.state,
+      baselineSeedHex: job.baselineSeedHex,
+      ...(job.samples !== undefined ? { samples: job.samples } : {}),
+    });
+  } catch (e) {
+    return { status: 500, body: { error: 'eval-failure', reason: (e as Error)?.message ?? 'scoreState threw' } };
+  }
+  const wallMs = now() - start;
+  return {
+    status: 200,
+    body: {
+      jobId: job.jobId,
+      // The EVALUATOR's pack epochId (from the loaded law), not a job echo —
+      // the coordinator verifies it against the epoch it meant to baseline.
+      epochId: scores.epochId,
+      parentScorePpm: scores.parentScorePpm,
+      variancePpm: scores.variancePpm,
+      samples: scores.samples,
+      corpusRoot: job.corpusRoot.toLowerCase(),
+      bundleHash: job.bundleHash.toLowerCase(),
+      coreVersionHash: job.coreVersionHash.toLowerCase(),
+      wallMs,
+      scorerHealth: deps.scorerHealth,
     },
   };
 }
@@ -804,8 +947,8 @@ export interface ScorerJobQueueSnapshot {
   readonly concurrency: number;
 }
 
-export interface ScorerJobQueue {
-  enqueue(job: ScorerJobRequest): Promise<ScorerJobResponse>;
+export interface ScorerJobQueue<TJob = ScorerJobRequest, TBody = ScorerJobResult> {
+  enqueue(job: TJob): Promise<ScorerHttpResponse<TBody>>;
   snapshot(): ScorerJobQueueSnapshot;
 }
 
@@ -815,16 +958,16 @@ export interface ScorerJobQueue {
  * boundary: direct probes, future coordinator replicas, or retry storms must
  * not create concurrent full-model jobs against one shared traced reranker.
  */
-export function createScorerJobQueue(opts: {
-  readonly run: (job: ScorerJobRequest) => Promise<ScorerJobResponse>;
+export function createScorerJobQueue<TJob = ScorerJobRequest, TBody = ScorerJobResult>(opts: {
+  readonly run: (job: TJob) => Promise<ScorerHttpResponse<TBody>>;
   readonly maxQueueDepth?: number;
   readonly concurrency?: number;
-}): ScorerJobQueue {
+}): ScorerJobQueue<TJob, TBody> {
   const maxQueueDepth = Math.max(0, Math.floor(opts.maxQueueDepth ?? 8));
   const concurrency = Math.max(1, Math.floor(opts.concurrency ?? 1));
   const queue: Array<{
-    readonly job: ScorerJobRequest;
-    readonly resolve: (response: ScorerJobResponse) => void;
+    readonly job: TJob;
+    readonly resolve: (response: ScorerHttpResponse<TBody>) => void;
     readonly reject: (err: unknown) => void;
   }> = [];
   let active = 0;
@@ -843,7 +986,7 @@ export function createScorerJobQueue(opts: {
   };
 
   return {
-    enqueue(job: ScorerJobRequest): Promise<ScorerJobResponse> {
+    enqueue(job: TJob): Promise<ScorerHttpResponse<TBody>> {
       if (queue.length >= maxQueueDepth) {
         return Promise.resolve({
           status: 503,
@@ -940,6 +1083,14 @@ async function main(): Promise<void> {
     maxQueueDepth: scorerMaxQueueDepth,
     run: (job) => handleScoreJob(job, booted),
   });
+  // Separate bounded lane for /score-state so cutover baseline recomputes can
+  // never interleave-flood the GPU behind (or ahead of) live score jobs:
+  // concurrency 1, tiny depth — a baseline recompute is a rare operator flow.
+  const stateQueue = createScorerJobQueue<ScorerStateJobRequest, ScorerStateJobResult>({
+    concurrency: 1,
+    maxQueueDepth: 2,
+    run: (job) => handleScoreStateJob(job, booted),
+  });
   process.stdout.write(
     `[scorer] ready: model=${booted.loadedPins.modelId}@${booted.loadedPins.revision} ` +
     `bundle=${booted.loadedPins.bundleHash} corpus=${booted.loadedPins.corpusRoot} ` +
@@ -960,7 +1111,7 @@ async function main(): Promise<void> {
         return;
       }
       if (req.method === 'GET' && req.url === '/healthz') {
-        send(200, { ok: true, loadedPins: booted.loadedPins, scorerHealth: booted.scorerHealth, queue: scoreQueue.snapshot() });
+        send(200, { ok: true, loadedPins: booted.loadedPins, scorerHealth: booted.scorerHealth, queue: scoreQueue.snapshot(), stateQueue: stateQueue.snapshot() });
         return;
       }
       if (req.method === 'POST' && (req.url === '/score-job' || req.url?.startsWith('/score-job?'))) {
@@ -972,6 +1123,18 @@ async function main(): Promise<void> {
           return;
         }
         const response = await scoreQueue.enqueue(job as ScorerJobRequest);
+        send(response.status, response.body);
+        return;
+      }
+      if (req.method === 'POST' && (req.url === '/score-state' || req.url?.startsWith('/score-state?'))) {
+        let job: unknown;
+        try {
+          job = await readJsonBody(req, bodyLimit);
+        } catch (e) {
+          send((e as Error).message.includes('too large') ? 413 : 400, { error: 'bad-body', reason: (e as Error).message });
+          return;
+        }
+        const response = await stateQueue.enqueue(job as ScorerStateJobRequest);
         send(response.status, response.body);
         return;
       }
