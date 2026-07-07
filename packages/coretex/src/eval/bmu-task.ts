@@ -82,6 +82,11 @@ export const BMU_DEFAULT_BUDGET_B: Readonly<Record<BmuFamily, number>> = {
  *  so the budget is a strict tightening of the existing scored-rank cap. */
 export const BMU_TASK_MAX_BUDGET = 8;
 
+/** §6.4: default fresh-cohort window (epochs) when the bundle does not pin
+ *  `liveEvalPack.freshWindow`. Lives in this leaf module because both the
+ *  pack law (overlay slot draw) and the arm-gate census consume it. */
+export const BMU_FRESH_WINDOW_DEFAULT = 2;
+
 // ─── Task shape (§4.1) ────────────────────────────────────────────────────────
 
 export interface BmuTaskAnswer {

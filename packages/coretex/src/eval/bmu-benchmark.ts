@@ -44,6 +44,7 @@ import type { QueryPack } from './hidden-query-pack.js';
 import {
   BMU_FAMILIES,
   BMU_COMPOSITION_TARGETS,
+  BMU_FRESH_WINDOW_DEFAULT,
   type BmuFamily,
   type BmuTask,
   bmuFamilyForLogicalFamily,
@@ -89,8 +90,9 @@ export const BMU_ARM_GATE_N_MIN = 380;
 /** §6.7b: fresh overlay cohort of ≥ 2 clusters per family within freshWindow. */
 export const BMU_ARM_GATE_FRESH_CLUSTERS_MIN = 2;
 
-/** §6.4: default fresh-cohort window (epochs) when the bundle does not pin one. */
-export const BMU_FRESH_WINDOW_DEFAULT = 2;
+// §6.4 default fresh-cohort window lives in bmu-task.ts (leaf) so the pack
+// law can consume it without a module cycle; re-exported here for law users.
+export { BMU_FRESH_WINDOW_DEFAULT } from './bmu-task.js';
 
 /** §6.7b variance certification (rev3.1): K runs per state, spread < q/2. */
 export const BMU_ARM_VARIANCE_RUNS = 5;
