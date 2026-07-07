@@ -285,19 +285,21 @@ function ids(prefix, fam, indices) {
 }
 
 describe('P4 dual-pack controls over the BMU acceptance law', () => {
-  test('known-good generalized patch clears gate and confirm by at least 3x the advance threshold', async () => {
-    const gateTargets = ids('gate', 'multi_hop_relation', [0, 1, 2, 3]);
-    const confirmTargets = ids('confirm', 'multi_hop_relation', [0, 1, 2, 3]);
-    const result = await evalDualControl({
-      gateBeforeTrapRows: gateTargets,
-      confirmBeforeTrapRows: confirmTargets,
+  for (const fam of FAMILIES) {
+    test(`known-good generalized patch clears gate and confirm by at least 3x the advance threshold: ${fam.bmu}`, async () => {
+      const gateTargets = ids('gate', fam.bmu, [0, 1, 2, 3]);
+      const confirmTargets = ids('confirm', fam.bmu, [0, 1, 2, 3]);
+      const result = await evalDualControl({
+        gateBeforeTrapRows: gateTargets,
+        confirmBeforeTrapRows: confirmTargets,
+      });
+      assert.equal(result.accepted, true);
+      assert.ok(result.gate.deltaPpm >= 3 * FLOORS.acceptanceThresholdPpm, `gate delta ${result.gate.deltaPpm}`);
+      assert.ok(result.confirm.deltaPpm >= 3 * FLOORS.acceptanceThresholdPpm, `confirm delta ${result.confirm.deltaPpm}`);
+      assert.equal(result.gate.after.bmu.utilitySum - result.gate.before.bmu.utilitySum, 4);
+      assert.equal(result.confirm.after.bmu.utilitySum - result.confirm.before.bmu.utilitySum, 4);
     });
-    assert.equal(result.accepted, true);
-    assert.ok(result.gate.deltaPpm >= 3 * FLOORS.acceptanceThresholdPpm, `gate delta ${result.gate.deltaPpm}`);
-    assert.ok(result.confirm.deltaPpm >= 3 * FLOORS.acceptanceThresholdPpm, `confirm delta ${result.confirm.deltaPpm}`);
-    assert.equal(result.gate.after.bmu.utilitySum - result.gate.before.bmu.utilitySum, 4);
-    assert.equal(result.confirm.after.bmu.utilitySum - result.confirm.before.bmu.utilitySum, 4);
-  });
+  }
 
   test('exact hidden-row anchoring passes gate but dies on held-out confirm', async () => {
     const gateTargets = ids('gate', 'temporal', [4, 5, 6, 7]);
