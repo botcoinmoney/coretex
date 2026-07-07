@@ -104,6 +104,31 @@ describe('epoch frontier: bounded age-based retirement (A2)', () => {
       'oldest cohort fully drained before any younger row is age-retired');
   });
 
+  test('forced active prunes get headroom: evolve with 1 pruned id + full aged backlog still fits the runner root-delta check', () => {
+    // Mirrors scripts/coretex-epoch-evolve.mjs makeFrontier defense-in-depth:
+    // rootDelta = max(activated, retired + prunedActive) must be <= maxRootDeltaPerEpoch,
+    // or the rotation is REFUSED. During a saturated aged drain the step must
+    // therefore leave prunes headroom instead of spending the whole budget.
+    const maxRootDeltaPerEpoch = 4;
+    const f = frontierWith({ maxAge: 5, maxRootDeltaPerEpoch, n: 40, activeWindow: 30 });
+    f.stepEpoch(0, null, null); // 30 rows active at epoch 0 => full aged backlog at epoch 100
+    // Injected reserve work so churn ALSO wants budget in the same evolve.
+    assert.equal(f.addReserveIds(['fresh:a', 'fresh:b'], familyOf), 2);
+    const prunedActive = 1;
+    const s = f.stepEpoch(100, 0, 0, prunedActive);
+    const runnerRootDelta = Math.max(s.activated, s.retired + prunedActive);
+    assert.ok(s.retired <= maxRootDeltaPerEpoch - prunedActive,
+      `retired ${s.retired} must leave headroom for ${prunedActive} pruned active id(s)`);
+    assert.ok(runnerRootDelta <= maxRootDeltaPerEpoch,
+      `runner check max(activated=${s.activated}, retired=${s.retired}+pruned=${prunedActive}) = ${runnerRootDelta} must pass`);
+    // Drain still progresses (bounded, not stalled).
+    assert.ok(s.retired > 0, 'aged drain must still progress under prune headroom');
+    // prunedActive >= budget degrades gracefully to a no-retirement step, never negative.
+    const s2 = f.stepEpoch(101, 0, 0, maxRootDeltaPerEpoch + 3);
+    assert.equal(s2.retired, 0);
+    assert.equal(s2.activated, 0);
+  });
+
   test('maxAge Infinity (historical law) never age-retires', () => {
     const f = frontierWith({ maxAge: Infinity, maxRootDeltaPerEpoch: 4, n: 20, activeWindow: 10 });
     f.stepEpoch(0, null, null);

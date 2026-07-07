@@ -205,15 +205,27 @@ export function makeEpochFrontier({
     activeRoot: rootHash(active.keys()), reserveRoot: rootHash(order.slice(reservePtr)), retiredRoot: rootHash(retired),
   });
 
-  function stepEpoch(epoch: number, prevHonestAccepts: number | null, prevQualityAttempts: number | null = null): EpochFrontierSnapshot {
+  /**
+   * `prunedActive` = ACTIVE ids force-removed OUTSIDE this step (corpus
+   * removals pruned via `pruneEpochFrontierState` before re-hydration). The
+   * epoch runner's defense-in-depth check charges those prunes against the
+   * same per-step root-delta budget
+   * (`max(activated, retired + prunedActive) <= maxRootDeltaPerEpoch`), so the
+   * step MUST leave them headroom: aged drain + churn retire at most
+   * `maxRootDeltaPerEpoch - prunedActive` rows. Without this, any evolve that
+   * removes even one active eval_hidden id while the aged drain saturates the
+   * budget would hard-fail the rotation for the entire drain.
+   */
+  function stepEpoch(epoch: number, prevHonestAccepts: number | null, prevQualityAttempts: number | null = null, prunedActive = 0): EpochFrontierSnapshot {
     if (!initialized) { initialized = true; const a = activateNext(K, epoch); injectedSinceLastStep = 0; return snapshot(epoch, a, 0, 0); }
+    const rootDeltaBudget = Math.max(0, maxRootDeltaPerEpoch - Math.max(0, prunedActive));
     let ret = 0;
     if (Number.isFinite(maxAge)) {
       // Age-based retirement is a BOUNDED drain, never a spike: retire at most
-      // maxRootDeltaPerEpoch aged rows per epoch, oldest activation first (same
+      // rootDeltaBudget aged rows per step, oldest activation first (same
       // deterministic tiebreak as retireOldest). Unbounded aged retirement on a
       // shared-activation-epoch cohort (e.g. the genesis window, all activated at
-      // epoch 0) would flush the ENTIRE active set the first epoch a finite maxAge
+      // epoch 0) would flush the ENTIRE active set the first evolve a finite maxAge
       // bites — measured 9300/9319 rows in one step on the live epoch-136 frontier
       // state — obliterating the root-delta bound and the overlay's active set.
       // Behavior is unchanged for every historical bundle: no armed profile has
@@ -221,7 +233,7 @@ export function makeEpochFrontier({
       const aged = [...active.entries()]
         .filter(([, ae]) => epoch - ae >= maxAge)
         .sort((x, y) => (x[1] - y[1]) || (orderIdx.get(x[0])! - orderIdx.get(y[0])!))
-        .slice(0, Math.max(0, maxRootDeltaPerEpoch))
+        .slice(0, rootDeltaBudget)
         .map(([id]) => id);
       for (const id of aged) { active.delete(id); retired.add(id); cumulativeRetired++; ret++; }
     }
@@ -254,9 +266,10 @@ export function makeEpochFrontier({
     if (mode === 'C3' && injectedSinceLastStep > 0) {
       rate = Math.max(rate, Math.min(maxChurn, Math.max(minChurn, injectedSinceLastStep)));
     }
-    // Aged retirement above shares the per-epoch root-delta budget with churn:
-    // total retirements this epoch (aged + churn) never exceed maxRootDeltaPerEpoch.
-    rate = Math.min(rate, Math.max(0, maxRootDeltaPerEpoch - ret));
+    // Aged retirement and external active prunes share the per-step root-delta
+    // budget with churn: aged + churn + prunedActive never exceed
+    // maxRootDeltaPerEpoch.
+    rate = Math.min(rate, Math.max(0, rootDeltaBudget - ret));
     rate = Math.min(rate, Math.max(0, order.length - reservePtr));
     ret += retireOldest(rate);
     const a = activateNext(ret, epoch);

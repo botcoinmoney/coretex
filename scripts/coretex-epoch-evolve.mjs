@@ -430,12 +430,16 @@ function makeFrontier(profile, previousCorpus, nextCorpus, additions, outDir, { 
   const injected = frontier.addReserveIds(addedEvalIds, familyOf);
   const prevHonestAccepts = Number(flag('prev-honest-accepts', '0'));
   const prevQualityAttempts = Number(flag('prev-quality-attempts', '0'));
-  const snapshot = frontier.stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts);
+  // Forced active prunes are charged against maxRootDeltaPerEpoch by the
+  // defense-in-depth check below; thread the count into the step so aged
+  // drain + churn leave the prunes headroom instead of tripping the check.
+  const prunedActiveCount = pruned?.prunedActiveIds.length ?? 0;
+  const snapshot = frontier.stepEpoch(epoch, prevHonestAccepts, prevQualityAttempts, prunedActiveCount);
   // Root-delta cap enforcement (defense in depth over the frontier's internal clamp): the
   // per-epoch activeFrontierRoot churn — activations, retirements, and forced prunes — must
   // not exceed maxRootDeltaPerEpoch. The genesis bootstrap activation (window fill) is exempt.
   if (initialState) {
-    const prunedActive = pruned?.prunedActiveIds.length ?? 0;
+    const prunedActive = prunedActiveCount;
     const rootDelta = Math.max(snapshot.activated, snapshot.retired + prunedActive);
     if (rootDelta > maxRootDeltaPerEpoch) {
       fail(`active frontier root delta ${rootDelta} (activated=${snapshot.activated} retired=${snapshot.retired} prunedActive=${prunedActive}) exceeds maxRootDeltaPerEpoch ${maxRootDeltaPerEpoch}; refusing to emit the epoch rotation`);
