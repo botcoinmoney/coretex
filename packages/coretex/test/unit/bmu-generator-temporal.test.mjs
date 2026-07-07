@@ -314,6 +314,21 @@ test('fail-closed: a splitOf that never yields eval_hidden throws (no partial cl
   );
 });
 
+// ── sample-bank builder (certification input) ────────────────────────────────
+
+test('sample bank: deterministic, certification-sized (≥16 clusters / ≥80 rows / ≥3 epochs), m=1 clean', async () => {
+  const { buildTemporalSampleBank, SAMPLE_BANK_PARAMS } = await import(
+    '../../../../scripts/lib/bmu-generators/emit-temporal-sample-bank.mjs'
+  );
+  const a = buildTemporalSampleBank(SAMPLE_BANK_PARAMS);
+  const b = buildTemporalSampleBank(SAMPLE_BANK_PARAMS);
+  assert.equal(JSON.stringify(a.clusters), JSON.stringify(b.clusters), 'bank replays byte-identically');
+  assert.ok(new Set(a.clusters.map((c) => c.epoch)).size >= 3);
+  assert.ok(a.clusters.length >= 16);
+  assert.ok(a.clusters.reduce((n, c) => n + c.rows.length, 0) >= 80);
+  assert.deepEqual(a.census, []);
+});
+
 // ── attribute rotation inheritance ───────────────────────────────────────────
 
 test('attribute rotation: same-epoch clusters alternate attributes; epochs move the attribute pair', () => {
