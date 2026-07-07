@@ -443,6 +443,23 @@ if (isMain) {
   if (args['real-lane']) report.realLaneResultsSha256 = createHash('sha256').update(readFileSync(args['real-lane'])).digest('hex');
   const json = JSON.stringify(report, null, 1);
   writeFileSync(args.out, json);
+  // Certified-subset pointer on the bank manifest (generator handshake).
+  if (args['update-manifest']) {
+    const manifest = JSON.parse(readFileSync(args['update-manifest'], 'utf8'));
+    if (manifest.sampleBankSha256 !== report.bankSha256) {
+      throw new Error(`manifest/bank sha mismatch: manifest pins ${manifest.sampleBankSha256}, certified bank is ${report.bankSha256}`);
+    }
+    manifest.certification = {
+      path: args.out,
+      certificationSha256: createHash('sha256').update(json).digest('hex'),
+      certifiedSubsetSize: report.certifiedSubset.length,
+      rowsTotal: report.totals.rows,
+      certifiedSubset: report.certifiedSubset,
+      rejectedTasks: report.rejectedTasks,
+    };
+    writeFileSync(args['update-manifest'], JSON.stringify(manifest, null, 1));
+    console.log(`manifest updated with certified-subset pointer: ${args['update-manifest']}`);
+  }
   console.log(`certification written: ${args.out}`);
   console.log(JSON.stringify({ totals: report.totals, baselineRates: report.baselineRates, realLaneCoverage: report.realLaneCoverage.cap, rejectedReasonHistogram: report.rejectedReasonHistogram }, null, 1));
 }
