@@ -209,7 +209,20 @@ export function makeEpochFrontier({
     if (!initialized) { initialized = true; const a = activateNext(K, epoch); injectedSinceLastStep = 0; return snapshot(epoch, a, 0, 0); }
     let ret = 0;
     if (Number.isFinite(maxAge)) {
-      const aged = [...active.entries()].filter(([, ae]) => epoch - ae >= maxAge).map(([id]) => id);
+      // Age-based retirement is a BOUNDED drain, never a spike: retire at most
+      // maxRootDeltaPerEpoch aged rows per epoch, oldest activation first (same
+      // deterministic tiebreak as retireOldest). Unbounded aged retirement on a
+      // shared-activation-epoch cohort (e.g. the genesis window, all activated at
+      // epoch 0) would flush the ENTIRE active set the first epoch a finite maxAge
+      // bites — measured 9300/9319 rows in one step on the live epoch-136 frontier
+      // state — obliterating the root-delta bound and the overlay's active set.
+      // Behavior is unchanged for every historical bundle: no armed profile has
+      // ever pinned a finite maxAge (default Infinity, live pins null).
+      const aged = [...active.entries()]
+        .filter(([, ae]) => epoch - ae >= maxAge)
+        .sort((x, y) => (x[1] - y[1]) || (orderIdx.get(x[0])! - orderIdx.get(y[0])!))
+        .slice(0, Math.max(0, maxRootDeltaPerEpoch))
+        .map(([id]) => id);
       for (const id of aged) { active.delete(id); retired.add(id); cumulativeRetired++; ret++; }
     }
     if (mode === 'off' || mode === 'C0') {
@@ -241,7 +254,9 @@ export function makeEpochFrontier({
     if (mode === 'C3' && injectedSinceLastStep > 0) {
       rate = Math.max(rate, Math.min(maxChurn, Math.max(minChurn, injectedSinceLastStep)));
     }
-    rate = Math.min(rate, maxRootDeltaPerEpoch);
+    // Aged retirement above shares the per-epoch root-delta budget with churn:
+    // total retirements this epoch (aged + churn) never exceed maxRootDeltaPerEpoch.
+    rate = Math.min(rate, Math.max(0, maxRootDeltaPerEpoch - ret));
     rate = Math.min(rate, Math.max(0, order.length - reservePtr));
     ret += retireOldest(rate);
     const a = activateNext(ret, epoch);

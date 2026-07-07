@@ -1487,6 +1487,9 @@ function validateProfile(profile: EvaluatorProfile, errors?: string[]): void {
     if (f.baselineRecompute !== 'activeRootChanged') out.push("epochFrontier.baselineRecompute must be 'activeRootChanged'");
     if (f.majorDeltaPolicy !== 'corpusRootChanged') out.push("epochFrontier.majorDeltaPolicy must be 'corpusRootChanged'");
     if (f.maxRootDeltaPerEpoch !== undefined && (!Number.isInteger(f.maxRootDeltaPerEpoch) || f.maxRootDeltaPerEpoch < 1)) out.push('epochFrontier.maxRootDeltaPerEpoch must be a positive integer when present');
+    // maxAge: null = retirement-by-age disabled (JSON has no Infinity); finite values
+    // must be positive integers — maxAge < 1 would age out every row every epoch.
+    if (f.maxAge !== undefined && f.maxAge !== null && (!Number.isInteger(f.maxAge) || f.maxAge < 1)) out.push('epochFrontier.maxAge must be null or a positive integer when present');
     if (f.liveEvalPack !== undefined) {
       const lp = f.liveEvalPack;
       if (!Number.isInteger(lp.limit) || lp.limit < 1) out.push('epochFrontier.liveEvalPack.limit must be a positive integer');

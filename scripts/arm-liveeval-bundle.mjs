@@ -13,7 +13,13 @@
  *
  * Usage:
  *   node scripts/arm-liveeval-bundle.mjs --bundle <src.json> --out <dst.json> \
- *     [--limit 16] [--family-priority temporal_update[,fam2…]]
+ *     [--limit 16] [--family-priority temporal_update[,fam2…]] [--max-age N]
+ *
+ * --max-age N additionally pins epochFrontier.maxAge = N (finite retirement by
+ * age; omit to leave the source bundle's maxAge untouched). familyPriority
+ * entries must be the corpus events' logicalFamily names (what
+ * admitActiveLiveEvalEvents' familyOf compares) — quota stratum names like
+ * `near_collision` never match rows that carry a logicalFamily.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -32,12 +38,18 @@ const srcPath = flag('bundle');
 const outPath = flag('out');
 const limit = Number(flag('limit', '16'));
 const familyPriority = flag('family-priority', 'temporal_update').split(',').map((s) => s.trim()).filter(Boolean);
+const maxAgeRaw = flag('max-age');
+const maxAge = maxAgeRaw === undefined ? undefined : Number(maxAgeRaw);
 if (!srcPath || !outPath) {
-  console.error('usage: --bundle <src manifest> --out <dst manifest> [--limit 16] [--family-priority temporal_update]');
+  console.error('usage: --bundle <src manifest> --out <dst manifest> [--limit 16] [--family-priority temporal_update] [--max-age N]');
   exit(2);
 }
 if (!Number.isInteger(limit) || limit < 1) {
   console.error(`--limit must be a positive integer (got ${limit})`);
+  exit(2);
+}
+if (maxAge !== undefined && (!Number.isInteger(maxAge) || maxAge < 1)) {
+  console.error(`--max-age must be a positive integer (got ${maxAgeRaw})`);
   exit(2);
 }
 
@@ -61,6 +73,7 @@ const armed = {
       ...profile,
       epochFrontier: {
         ...profile.epochFrontier,
+        ...(maxAge !== undefined ? { maxAge } : {}),
         liveEvalPack: { limit, familyPriority },
       },
     },
@@ -78,5 +91,6 @@ console.log(JSON.stringify({
   sourceBundleHash: src.bundleHash,
   armedBundleHash: rehashed.bundleHash,
   liveEvalPack: { limit, familyPriority },
+  ...(maxAge !== undefined ? { maxAge } : {}),
   note: 'rebaseline under the new pack law (pin-baseline-into-bundle with --active-frontier-ids/--active-frontier-root) before pinning at a cutover',
 }, null, 2));
