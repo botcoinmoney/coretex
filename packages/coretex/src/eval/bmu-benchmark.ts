@@ -122,6 +122,7 @@ export function bmuJudgeOrder(
   entries: readonly BmuJudgeRankingEntry[],
   grid: number,
 ): readonly BmuJudgeRankingEntry[] {
+  if (!(grid > 0) || !Number.isFinite(grid)) throw new Error(`bmuJudgeOrder: grid must be a positive finite number (got ${grid})`);
   return [...entries].sort((a, b) => {
     const qa = bmuQuantize(a.finalReorderingScore, grid);
     const qb = bmuQuantize(b.finalReorderingScore, grid);
@@ -139,6 +140,7 @@ export function bmuJudgeTopB(
   budgetB: number,
   grid: number,
 ): readonly string[] {
+  if (!(grid > 0) || !Number.isFinite(grid)) throw new Error(`bmuJudgeTopB: grid must be a positive finite number (got ${grid})`);
   return bmuJudgeOrder(entries, grid).slice(0, budgetB).map((e) => e.docId);
 }
 
