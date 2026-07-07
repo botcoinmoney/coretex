@@ -63,6 +63,11 @@ export interface BaselineScores {
    * MUST tolerate absence.
    */
   readonly familyUtilitiesPpm?: Readonly<Record<string, number>>;
+  /** Integrity binding for `familyUtilitiesPpm` (P3-R1 MINOR): keccak256 over
+   *  the canonical decomposition + its scoring context
+   *  (`computeBmuFamilyUtilitiesDigest`). Consumers MUST recompute + compare
+   *  before trusting the decomposition. BMU lane only. */
+  readonly familyUtilitiesDigest?: string;
 }
 
 export interface EvaluateBaselineOptions {

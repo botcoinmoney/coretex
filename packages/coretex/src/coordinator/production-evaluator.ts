@@ -853,14 +853,19 @@ export async function createProductionCoreTexEvaluator(
     if (!activeLiveEval || !liveEvalPackLaw?.familySlots) {
       throw new Error('BMU bundles require an armed epochFrontier.liveEvalPack with familySlots + a root-verified active frontier (§6.2/§6.5) — refusing to construct');
     }
+    // BOOT posture (P3-R1 BLOCKER-1 ruling): STRUCTURAL census only —
+    // per-family minima + global m=1 over the ACTIVE set. Freshness binds at
+    // the ARM posture only (bulk-activate tooling); a post-arm steady-state
+    // reboot whose newest mint is older than freshWindow must stay live.
     const armGate = evaluateBmuArmGate({
       corpus,
       poolIds: activeLiveEval.activeIds,
       epochId: options.epochId,
       ...(liveEvalPackLaw.freshWindow !== undefined ? { freshWindow: liveEvalPackLaw.freshWindow } : {}),
+      posture: 'boot',
     });
     if (!armGate.ok) {
-      throw new Error(`BMU ARM-GATE refused (§6.7b): ${armGate.reasons.join('; ')}`);
+      throw new Error(`BMU boot census refused (§6.7b, structural): ${armGate.reasons.join('; ')}`);
     }
   }
   const layout = corpus.biEncoderRetrievalKeyLayout;
@@ -1066,7 +1071,7 @@ async function scoreAgainstSeed(args: {
  * Pack derivation is pure + deterministic, so the confirm-side gate-pack
  * re-derivation costs no scoring work and replays byte-identically (§6.6).
  */
-async function scoreBmuAgainstSeed(args: {
+export async function scoreBmuAgainstSeed(args: {
   readonly epochId: number;
   readonly parent: CortexState;
   readonly patch: Patch;

@@ -161,14 +161,16 @@ describe('BMU bundle validation (§9 site 17)', () => {
     })), /baselineVarianceSource = 'unavailable'/);
   });
 
-  test('§13.2: judge grid bounds; Rmax refuses unpinned caps and oversized budgets', () => {
+  test('§13.2 (rev3.3): judge grid domain (0, 0.1]; Rmax = 1 + B + 2·P_cap refuses oversized betas', () => {
     assert.doesNotThrow(() => buildWith(bmuProfileFields({ judgeScoreGrid: 1e-3 })));
+    assert.doesNotThrow(() => buildWith(bmuProfileFields({ judgeScoreGrid: 0.1 })));
     assert.throws(() => buildWith(bmuProfileFields({ judgeScoreGrid: 0 })), /judgeScoreGrid/);
     assert.throws(() => buildWith(bmuProfileFields({ judgeScoreGrid: 0.5 })), /judgeScoreGrid/);
-    // enabled policy family without a pinned budget cap → Rmax unbounded → refused
-    assert.throws(() => buildWith(bmuProfileFields({ policyMaxBudgetEvidence: undefined })), /Rmax|policyMaxBudgetEvidence/);
-    // oversized caps push Rmax past 4
-    assert.throws(() => buildWith(bmuProfileFields({ policyMaxBudgetEvidence: 2000, policyMaxBudgetConflict: 2000 })), /Rmax/);
+    // rev3.3: policy budget caps no longer drive Rmax (the per-doc ±1·UNIT
+    // clamp bounds stacking); huge caps validate (still r5-range-checked).
+    assert.doesNotThrow(() => buildWith(bmuProfileFields({ policyMaxBudgetEvidence: 65535, policyMaxBudgetConflict: 65535 })));
+    // oversized FINAL-BONUS betas push Rmax = 1 + B + 2 past 4 → refused.
+    assert.throws(() => buildWith(bmuProfileFields({ lensWeight: 0.9 })), /Rmax/);
   });
 
   test('judgeScoreGrid on a NON-BMU profile is refused', () => {

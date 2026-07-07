@@ -193,6 +193,14 @@ export function validateBmuTaskOnEvent(
   if (!strArray(t.forbiddenEvidence)) err('bmuTask.forbiddenEvidence must be an array of non-empty doc-id strings');
   if (typeof t.motifGroupId !== 'string' || t.motifGroupId.length === 0) err('bmuTask.motifGroupId must be non-empty');
   if (typeof t.templateId !== 'string' || t.templateId.length === 0) err('bmuTask.templateId must be non-empty');
+  // Control characters (incl. '\n') in the §6.3 exclusion-key fields would let
+  // a crafted id smuggle bytes into the sorted-join exclusion-set DIGEST
+  // (§8.3 uses '\n' as the join separator) — refuse them at load, all three
+  // key fields (motifGroupId / templateId / event subjectEntityId).
+  const CONTROL = /[\u0000-\u001f\u007f]/;
+  if (typeof t.motifGroupId === 'string' && CONTROL.test(t.motifGroupId)) err('bmuTask.motifGroupId must not contain control characters');
+  if (typeof t.templateId === 'string' && CONTROL.test(t.templateId)) err('bmuTask.templateId must not contain control characters');
+  if (event.subjectEntityId !== undefined && CONTROL.test(event.subjectEntityId)) err('subjectEntityId must not contain control characters on a bmuTask row');
   if (t.abstain !== undefined && typeof t.abstain !== 'boolean') err('bmuTask.abstain must be boolean when present');
   if (errors.length > 0) return errors;
 
@@ -224,6 +232,22 @@ export function validateBmuTaskOnEvent(
     if (!docIdExists(docId)) err(`referenced doc id '${docId}' does not exist in the corpus`);
   }
   return errors;
+}
+
+/**
+ * MINT-TIME lint for a stamped row (§6.7a). Validation is LIVE FROM THE FIRST
+ * STAMPED MINT: the corpus loader fail-closes on an invalid bmuTask, so an
+ * invalid stamped mint that reaches the corpus would brick the NEXT LOAD of
+ * the live r5 corpus. Generators and the logical-delta bridge MUST run this
+ * lint at mint time and refuse the delta instead. `docIdExists` should answer
+ * over the post-delta doc universe (added docs + previous corpus).
+ */
+export function lintBmuTaskForMint(
+  event: BmuTaskEventShape,
+  docIdExists: (docId: string) => boolean,
+): string[] {
+  if (!hasBmuTask(event)) return [];
+  return validateBmuTaskOnEvent(event, docIdExists);
 }
 
 /**

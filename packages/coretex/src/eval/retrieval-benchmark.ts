@@ -521,6 +521,15 @@ export interface ScoringOptions {
   readonly rerankerMemoryIRLookup?: (queryId: string, eventId: string) => import('./memory-ir-render.js').MemoryIR | null;
   /** Diagnostic-only: surface rendered candidate text in PerQueryBreakdown. Default off. */
   readonly exposeRenderedCandidates?: boolean;
+  /**
+   * BMU §13.2 per-doc atom-contribution cap (rev3.3): when true, the SUMMED
+   * policyBonus for each doc is clamped to ±1·UNIT before it enters the
+   * composite `finalReorderingScore` (P_cap = 1 — what makes the judge's
+   * Rmax = 1 + B + 2·P_cap ≤ 4 honest against multi-atom same-doc stacking).
+   * Set ONLY by the BMU law module (`evaluateBmuBenchmarkState`); absent ⇒
+   * byte-identical r5 behavior (raw summed bonuses).
+   */
+  readonly bmuPolicyBonusClamp?: boolean;
   /** Diagnostic-only scoring telemetry sink. Default off and no reward-path effect. */
   readonly scoringTelemetry?: (event: RetrievalQueryScoringTelemetry) => void;
 }
@@ -2172,9 +2181,13 @@ export async function scoreSubstrateAgainstQuery(
   const policyBonusByDocId = new Map<string, number>();
   const policyTraces: PolicyAtomTrace[] = [];
   let policyAbstain = false;
+  // Query-local policy nudge UNIT (max−min rerankerScore); hoisted so the BMU
+  // per-doc clamp below can read it. 0 unless policyAtomsMode computes it.
+  let policyUnit = 0;
   if (opts.policyAtomsMode === true) {
     const rsVals = rerankerCandidates.map((c) => rerankerScoreByDocId.get(c.record.docId) ?? 0);
     const UNIT = rsVals.length ? Math.max(...rsVals) - Math.min(...rsVals) : 0;
+    policyUnit = UNIT;
     const docsByEventLocal = new Map<string, string[]>();
     for (const c of candidates) {
       const a = docsByEventLocal.get(c.record.eventId);
@@ -2347,6 +2360,16 @@ export async function scoreSubstrateAgainstQuery(
   }
 
   // ─── Pinned final ranking formula ────────────────────────────────────────
+  // BMU §13.2 (rev3.3): under the BMU law the SUMMED per-doc policyBonus is
+  // clamped to ±1·UNIT (P_cap = 1) before entering the composite — multi-atom
+  // same-doc stacking cannot exceed one UNIT of nudge. Flag absent ⇒ returns
+  // the raw sum, byte-identical to the r5 formula (57a29ea-pinned).
+  const policyBonusFor = (docId: string): number => {
+    const raw = policyBonusByDocId.get(docId) ?? 0;
+    if (opts.bmuPolicyBonusClamp !== true) return raw;
+    const cap = policyUnit;
+    return raw > cap ? cap : raw < -cap ? -cap : raw;
+  };
   const qrelById = new Map(query.qrels.map((q) => [q.documentId, q.relevance]));
   const rankedScored = candidates
     .map((c) => {
@@ -2355,7 +2378,7 @@ export async function scoreSubstrateAgainstQuery(
         documentId: c.record.docId,
         memorySlot: c.record.memorySlot,
         rerankerScore: r,
-        finalReorderingScore: effRerank(c.record.docId, r) + c.finalBonus + (policyBonusByDocId.get(c.record.docId) ?? 0),
+        finalReorderingScore: effRerank(c.record.docId, r) + c.finalBonus + policyBonusFor(c.record.docId),
         relevance: qrelById.get(c.record.docId) ?? 0,
       };
     })
@@ -2394,7 +2417,7 @@ export async function scoreSubstrateAgainstQuery(
   const finalRankingTop20 = ranked.slice(0, 20).map((r, idx) => {
     const c = componentsByDocId.get(r.documentId);
     const cs = c?.record.sources;
-    const finalReorderingScore = effRerank(r.documentId, r.rerankerScore ?? 0) + (c?.finalBonus ?? 0) + (policyBonusByDocId.get(r.documentId) ?? 0);
+    const finalReorderingScore = effRerank(r.documentId, r.rerankerScore ?? 0) + (c?.finalBonus ?? 0) + policyBonusFor(r.documentId);
     return {
       docId: r.documentId,
       rank: idx + 1,

@@ -32,17 +32,27 @@
  *     prerequisite 2, §8.5 item 6)
  *     One-time arm-time BULK-ACTIVATION: activate reserve rows in PRECOMMITTED
  *     RESERVE ORDER (order[] from reservePtr, exactly `activateNext`'s walk)
- *     until at least --count (default 380 = BMU N_min) STAMPED rows (ids listed
- *     in the REQUIRED --stamped-ids file: a JSON array of ids, or an object
- *     with an `activeIds`/`ids` array — e.g. a generator-produced bmuTask-row
- *     id list) are active. Required because the in-code frontier pipe is
+ *     until at least --count (default 380 = BMU N_min) STAMPED rows are
+ *     active. Stamped-row eligibility is RECOMPUTED FROM THE CORPUS (REQUIRED
+ *     --corpus <production-corpus.json>: eval_hidden rows carrying a
+ *     load-validated bmuTask — P3-R1 executable pre-arm census; the tool
+ *     never trusts a hand-supplied id list). An OPTIONAL --stamped-ids file
+ *     (JSON array, or object with activeIds/ids) is CROSS-CHECKED against the
+ *     corpus-derived set and any divergence refuses the run. The full §6.7b
+ *     ARM-posture census (per-family minima {80,110,110,80} + N_min 380 +
+ *     GLOBAL m=1 + fresh-cohort ≥2 clusters/family) runs over the
+ *     reserve∪active stamped pool BEFORE any activation and refuses on any
+ *     unmet condition. Required because the in-code frontier pipe is
  *     REPLACEMENT-ONLY (activations strictly replace retirements; the active
  *     set never grows), so minted BMU rows only QUEUE in the reserve and the
  *     BMU arm-gate could never open without this operation. Unstamped reserve
  *     rows encountered in the walked prefix are activated too (the reserve
  *     pointer is a scalar — skipping rows would corrupt the precommitted-order
  *     invariant); counts of both are reported. All newly activated rows get
- *     activationEpoch = --arm-epoch (age 0 at arm — fresh-cohort eligible).
+ *     activationEpoch = --arm-epoch — frontier BOOKKEEPING only: fresh-cohort
+ *     AGE reads a row's MINT epoch from its id (zz_eN_… prefix), NEVER
+ *     activationEpoch, so bulk-activation does not manufacture freshness —
+ *     the arm census above is what requires the mint ramp to be RECENT.
  *     MUST be applied as part of the atomic arming transition: the new
  *     activeFrontierRoot is repinned with the BMU bundle transition +
  *     rebaseline (variance certification runs AFTER this, over the
@@ -82,7 +92,7 @@ import { argv, exit } from 'node:process';
 
 import { distIndex, repoRoot } from './_repo-root.mjs';
 
-const { activeFrontierRootOf } = await import(distIndex);
+const { activeFrontierRootOf, loadProductionCorpus, evaluateBmuArmGate } = await import(distIndex);
 
 function flag(name, fb) {
   const i = argv.indexOf(`--${name}`);
@@ -98,7 +108,7 @@ const inPath = flag('in');
 const outPath = flag('out');
 const mode = flag('mode');
 if (!inPath || !outPath || !['retire-genesis', 'stagger', 'bulk-activate'].includes(mode)) {
-  console.error('usage: --in <state.json> --out <state.json> --mode retire-genesis|stagger|bulk-activate --arm-epoch N --max-age N [--cadence 8] [--mint-per-evolve 12] [--prune-headroom 2] [--max-root-delta 24] [--genesis-epoch 0] [--count 380 --stamped-ids <ids.json>  (bulk-activate)]');
+  console.error('usage: --in <state.json> --out <state.json> --mode retire-genesis|stagger|bulk-activate --arm-epoch N --max-age N [--cadence 8] [--mint-per-evolve 12] [--prune-headroom 2] [--max-root-delta 24] [--genesis-epoch 0] [--count 380 --corpus <corpus.json> [--stamped-ids <ids.json>] [--fresh-window 2]  (bulk-activate)]');
   exit(2);
 }
 for (const p of [inPath, outPath]) {
@@ -153,18 +163,45 @@ if (mode === 'bulk-activate') {
   // contiguously (unstamped rows in the prefix activate too; reported).
   const count = intFlag('count', '380');
   if (count < 1) { console.error('--count must be >= 1'); exit(2); }
-  const stampedPath = flag('stamped-ids');
-  if (!stampedPath) {
-    console.error('--mode bulk-activate requires --stamped-ids <ids.json> (JSON array of bmuTask-stamped eval_hidden row ids, or an object with an activeIds/ids array) — fail-closed: without it stamped-row coverage cannot be verified');
+  // P3-R1 MINOR: stamped-row eligibility is derived from the CORPUS (the
+  // loader fail-closes on invalid bmuTask rows, so this set is validated by
+  // construction), never trusted from a hand-supplied list.
+  const corpusPath = flag('corpus');
+  if (!corpusPath) {
+    console.error('--mode bulk-activate requires --corpus <production-corpus.json>: stamped-row eligibility is recomputed from the load-validated corpus (a hand-supplied id list is only accepted as a cross-check via --stamped-ids)');
     exit(2);
   }
-  const stampedRaw = JSON.parse(readFileSync(stampedPath, 'utf8'));
-  const stampedList = Array.isArray(stampedRaw) ? stampedRaw : (stampedRaw.activeIds ?? stampedRaw.ids);
-  if (!Array.isArray(stampedList) || stampedList.length === 0 || stampedList.some((id) => typeof id !== 'string' || id.length === 0)) {
-    console.error(`--stamped-ids ${stampedPath}: expected a non-empty JSON string array (or {activeIds|ids: [...]})`);
+  const armCorpus = loadProductionCorpus(corpusPath, { verifyCorpusRoot: true, verifySplits: true });
+  const stamped = new Set(armCorpus.events.filter((e) => e.split === 'eval_hidden' && e.bmuTask !== undefined).map((e) => e.id));
+  if (stamped.size === 0) {
+    console.error(`--corpus ${corpusPath}: no eval_hidden rows carry a bmuTask — nothing to bulk-activate`);
     exit(1);
   }
-  const stamped = new Set(stampedList);
+  const stampedPath = flag('stamped-ids');
+  if (stampedPath) {
+    const stampedRaw = JSON.parse(readFileSync(stampedPath, 'utf8'));
+    const stampedList = Array.isArray(stampedRaw) ? stampedRaw : (stampedRaw.activeIds ?? stampedRaw.ids);
+    if (!Array.isArray(stampedList) || stampedList.some((id) => typeof id !== 'string' || id.length === 0)) {
+      console.error(`--stamped-ids ${stampedPath}: expected a JSON string array (or {activeIds|ids: [...]})`);
+      exit(1);
+    }
+    const supplied = new Set(stampedList);
+    const missing = [...supplied].filter((id) => !stamped.has(id));
+    const extra = [...stamped].filter((id) => !supplied.has(id));
+    if (missing.length > 0 || extra.length > 0) {
+      console.error(`--stamped-ids diverges from the corpus-derived stamped set (refusing): ${missing.length} supplied-but-not-stamped (${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ', …' : ''}), ${extra.length} stamped-but-not-supplied (${extra.slice(0, 5).join(', ')}${extra.length > 5 ? ', …' : ''})`);
+      exit(1);
+    }
+  }
+  // §6.7b executable PRE-ARM census (ordering: BEFORE any activation): full
+  // ARM-posture gate over the reserve∪active stamped pool.
+  const freshWindow = intFlag('fresh-window', '2');
+  const poolIds = new Set([...state.active.map(([id]) => id), ...state.order.slice(state.reservePtr)]);
+  const armCensus = evaluateBmuArmGate({ corpus: armCorpus, poolIds, epochId: armEpoch, freshWindow, posture: 'arm' });
+  if (!armCensus.ok) {
+    console.error(`§6.7b ARM census REFUSED (run before any activation; per-family counts below): ${JSON.stringify(armCensus.perFamily)} reasons: ${armCensus.reasons.join('; ')}`);
+    exit(1);
+  }
   const activeMap = new Map(state.active);
   const retired = new Set(state.retired);
   let stampedActive = 0;
@@ -204,7 +241,9 @@ if (mode === 'bulk-activate') {
     reservePtrAfter: ptr,
     activeAfter: activeMap.size,
     activationEpoch: armEpoch,
-    note: 'Repin the new activeFrontierRoot atomically with the BMU bundle transition + rebaseline (variance certification runs AFTER this rewrite) — BEFORE the first post-arm evolve.',
+    stampedSource: { corpusPath, corpusRoot: armCorpus.corpusRoot, stampedRows: stamped.size, crossCheckedStampedIds: stampedPath ?? null },
+    armCensus: { ok: armCensus.ok, posture: armCensus.posture, freshWindow, stampedPoolTotal: armCensus.stampedPoolTotal, perFamily: armCensus.perFamily },
+    note: 'activationEpoch is frontier bookkeeping only — fresh-cohort AGE reads MINT epochs (row id zz_eN_ prefix), never activationEpoch. Repin the new activeFrontierRoot atomically with the BMU bundle transition + rebaseline (variance certification runs AFTER this rewrite) — BEFORE the first post-arm evolve.',
   };
 } else if (mode === 'retire-genesis') {
   const genesisIds = new Set(genesis.map(([id]) => id));

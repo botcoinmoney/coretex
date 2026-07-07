@@ -216,47 +216,32 @@ describe('§2.3 composition validator', () => {
   });
 });
 
-describe('§13.2 Rmax bundle validation', () => {
+describe('§13.2 Rmax bundle validation (rev3.3: per-doc clamp, P_cap = 1)', () => {
   const LIVE_LIKE = {
     lensWeight: 0.1, anchorWeight: 0.15, temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1,
     categoryLensFinalBonusWeight: 0,
-    enableEvidenceBundleAtoms: true, policyMaxBudgetEvidence: 300,
-    enableConflictLifecycleAtoms: true, policyMaxBudgetConflict: 300,
-    enableEntityResolutionAtoms: true, policyMaxBudgetEntity: 300,
-    enableScopeAtoms: true, policyMaxBudgetScope: 300,
   };
 
-  test('live-like betas + 300-cap budgets pass (Rmax ≈ 3.75 ≤ 4)', () => {
+  test('Rmax = 1 + B + 2·P_cap; live-like betas give 3.35 ≤ 4', () => {
     const rmax = computeBmuJudgeRmax(LIVE_LIKE);
-    assert.ok(Math.abs(rmax - (1 + 0.35 + 2 * 1.2)) < 1e-9, `rmax ${rmax}`);
+    assert.ok(Math.abs(rmax - (1 + 0.35 + 2)) < 1e-9, `rmax ${rmax}`);
     assert.doesNotThrow(() => assertBmuJudgeRmax(LIVE_LIKE));
   });
 
-  test('an enabled policy family without a pinned budget cap fails closed', () => {
-    assert.throws(
-      () => computeBmuJudgeRmax({ ...LIVE_LIKE, policyMaxBudgetEvidence: undefined }),
-      /policyMaxBudgetEvidence must be pinned/,
-    );
+  test('policy budget caps no longer enter Rmax (the per-doc clamp bounds stacking, not budgets)', () => {
+    const withHugeBudgets = { ...LIVE_LIKE, policyMaxBudgetEvidence: 65535, policyMaxBudgetConflict: 65535 };
+    assert.equal(computeBmuJudgeRmax(withHugeBudgets), computeBmuJudgeRmax(LIVE_LIKE));
   });
 
-  test('oversized budgets push Rmax past 4 and are refused', () => {
-    assert.throws(
-      () => assertBmuJudgeRmax({ ...LIVE_LIKE, policyMaxBudgetEvidence: 900 }),
-      /Rmax/,
-    );
+  test('oversized bonus betas push Rmax past 4 and are refused', () => {
+    assert.throws(() => assertBmuJudgeRmax({ ...LIVE_LIKE, lensWeight: 0.9 }), /Rmax/);
   });
 
-  test('disabled policy families contribute zero (no cap required)', () => {
-    const rmax = computeBmuJudgeRmax({
-      ...LIVE_LIKE,
-      enableEvidenceBundleAtoms: false,
-      enableConflictLifecycleAtoms: false,
-      enableEntityResolutionAtoms: false,
-      enableScopeAtoms: false,
-      policyMaxBudgetEvidence: undefined, policyMaxBudgetConflict: undefined,
-      policyMaxBudgetEntity: undefined, policyMaxBudgetScope: undefined,
-    });
-    assert.ok(Math.abs(rmax - 1.35) < 1e-9, `rmax ${rmax}`);
+  test('aspect beta counts only when the aspect family is enabled', () => {
+    const withAspect = { ...LIVE_LIKE, enableAspectConstraintAtoms: true, policyAspectBoost: 0.4 };
+    assert.ok(Math.abs(computeBmuJudgeRmax(withAspect) - (3.35 + 0.4)) < 1e-9);
+    const disabled = { ...LIVE_LIKE, enableAspectConstraintAtoms: false, policyAspectBoost: 0.4 };
+    assert.equal(computeBmuJudgeRmax(disabled), computeBmuJudgeRmax(LIVE_LIKE));
   });
 });
 
@@ -349,7 +334,7 @@ describe('§6.7b ARM-GATE census (rev3.2 reserve∪active pool)', () => {
   test('opens at the pinned minima with fresh cohorts and a clean census', () => {
     const events = armPool();
     const poolIds = new Set(events.map((e) => e.id));
-    const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137, freshWindow: 2 });
+    const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137, freshWindow: 2, posture: 'arm' });
     assert.equal(report.ok, true, report.reasons.join('; '));
     assert.equal(report.stampedPoolTotal, BMU_ARM_GATE_N_MIN);
     for (const [fam, min] of Object.entries(BMU_ARM_GATE_FAMILY_MINIMA)) {
@@ -361,7 +346,7 @@ describe('§6.7b ARM-GATE census (rev3.2 reserve∪active pool)', () => {
   test('REFUSES below a per-family minimum, reporting per-family counts', () => {
     const events = armPool({ counts: { temporal: 80, conflict_lifecycle: 109, multi_hop_relation: 110, near_collision_abstention: 80 } });
     const poolIds = new Set(events.map((e) => e.id));
-    const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137 });
+    const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137, posture: 'arm' });
     assert.equal(report.ok, false);
     assert.ok(report.reasons.some((r) => r.includes('conflict_lifecycle') && r.includes('109 < required 110')), report.reasons.join('; '));
     assert.ok(report.reasons.some((r) => r.includes(`N_min ${BMU_ARM_GATE_N_MIN}`)));
@@ -370,17 +355,49 @@ describe('§6.7b ARM-GATE census (rev3.2 reserve∪active pool)', () => {
   test('rows outside the pool (unstamped/retired) do not count', () => {
     const events = armPool();
     const poolIds = new Set(events.slice(0, 100).map((e) => e.id));
-    const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137 });
+    const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137, posture: 'arm' });
     assert.equal(report.ok, false);
     assert.equal(report.stampedPoolTotal, 100);
   });
 
-  test('stale cohorts (age > freshWindow) fail the fresh-cluster requirement', () => {
+  test('ARM posture: stale cohorts (age > freshWindow) fail the fresh-cluster requirement', () => {
     const events = armPool({ epoch: 130 }); // age 7 at epoch 137
     const poolIds = new Set(events.map((e) => e.id));
-    const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137, freshWindow: 2 });
+    const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137, freshWindow: 2, posture: 'arm' });
     assert.equal(report.ok, false);
     assert.ok(report.reasons.some((r) => r.includes('fresh clusters')), report.reasons.join('; '));
+  });
+
+  test('BOOT posture (P3-R1 BLOCKER-1): structural census only — stale mints stay LIVE', () => {
+    // Same stale pool the arm posture refuses: boot must accept it (post-arm
+    // steady state has no fresh mints ~6 of 8 epochs at cadence 8).
+    const events = armPool({ epoch: 130 });
+    const poolIds = new Set(events.map((e) => e.id));
+    const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137, freshWindow: 2, posture: 'boot' });
+    assert.equal(report.ok, true, report.reasons.join('; '));
+    assert.equal(report.posture, 'boot');
+    // Boot still refuses STRUCTURAL failures: counts below minima…
+    const short = events.filter((e) => e.bmuTask.motifGroupId !== 'mg_temporal_0');
+    const r2 = evaluateBmuArmGate({ corpus: { events: short }, poolIds: new Set(short.map((e) => e.id)), epochId: 137, posture: 'boot' });
+    assert.equal(r2.ok, false);
+    // …and global m=1 violations.
+    const dup = [...events];
+    const idx = dup.findIndex((e) => e.bmuTask.family === 'conflict_lifecycle');
+    dup[idx] = { ...dup[idx], subjectEntityId: 'ent_temporal_0' };
+    const r3 = evaluateBmuArmGate({ corpus: { events: dup }, poolIds: new Set(dup.map((e) => e.id)), epochId: 137, posture: 'boot' });
+    assert.equal(r3.ok, false);
+    assert.ok(r3.multiplicityViolations.length > 0);
+  });
+
+  test('GLOBAL m=1 census: a TEMPLATE shared ACROSS FAMILIES is a violation (P3-R1 MINOR)', () => {
+    const events = armPool();
+    const a = events.findIndex((e) => e.bmuTask.family === 'temporal');
+    const b = events.findIndex((e) => e.bmuTask.family === 'multi_hop_relation');
+    events[b] = { ...events[b], bmuTask: { ...events[b].bmuTask, templateId: events[a].bmuTask.templateId } };
+    const poolIds = new Set(events.map((e) => e.id));
+    const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137, posture: 'arm' });
+    assert.equal(report.ok, false);
+    assert.ok(report.multiplicityViolations.some((v) => v.includes('templateId')), report.multiplicityViolations.join('; '));
   });
 
   test('GLOBAL m=1 census: a subject shared ACROSS FAMILIES is a violation (rev3.2)', () => {
@@ -390,7 +407,7 @@ describe('§6.7b ARM-GATE census (rev3.2 reserve∪active pool)', () => {
     const idx = events.findIndex((e) => e.bmuTask.family === 'conflict_lifecycle');
     events[idx] = { ...events[idx], subjectEntityId: 'ent_temporal_0' };
     const poolIds = new Set(events.map((e) => e.id));
-    const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137 });
+    const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137, posture: 'arm' });
     assert.equal(report.ok, false);
     assert.ok(report.multiplicityViolations.some((v) => v.includes('ent_temporal_0')), report.multiplicityViolations.join('; '));
   });
@@ -401,7 +418,7 @@ describe('§6.7b ARM-GATE census (rev3.2 reserve∪active pool)', () => {
     const b = events.findIndex((e) => e.bmuTask.motifGroupId === 'mg_temporal_1');
     events[b] = { ...events[b], bmuTask: { ...events[b].bmuTask, templateId: events[a].bmuTask.templateId } };
     const poolIds = new Set(events.map((e) => e.id));
-    const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137 });
+    const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137, posture: 'arm' });
     assert.equal(report.ok, false);
     assert.ok(report.multiplicityViolations.some((v) => v.includes('templateId')), report.multiplicityViolations.join('; '));
   });

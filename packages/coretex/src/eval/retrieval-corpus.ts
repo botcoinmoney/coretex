@@ -298,9 +298,10 @@ export interface ProductionCorpusEvent {
    * family, cluster identity (motifGroupId) and surface-form template id.
    * Optional-and-absent on every pre-BMU row (absent keys do not change
    * canonical event hashes — the same back-compat convention as `entityIds`),
-   * so pre-flip inert minting (§6.7a) is replay-safe. When PRESENT it is
-   * validated fail-closed at corpus load (`validateBmuTaskOnEvent`); the r5
-   * scorer never reads it (structurally inert under the r5 law).
+   * so pre-flip stamped minting (§6.7a) is hash/replay-safe. NOTE: while the
+   * r5 SCORER never reads it, VALIDATION IS LIVE FROM THE FIRST STAMPED MINT
+   * — a present-but-invalid bmuTask fail-closes `loadProductionCorpus`, which
+   * is why generators/the bridge run `lintBmuTaskForMint` at mint time.
    */
   readonly bmuTask?: BmuTask;
 }
@@ -928,7 +929,8 @@ export function loadProductionCorpus(path: string, options: LoadProductionCorpus
     }
   }
   // BMU task validation (BMU_SPEC.md §4.1 — fail-closed, unconditional).
-  // Inert on every pre-BMU corpus (no row carries bmuTask); when present the
+  // No-op on every pre-BMU corpus (no row carries bmuTask), but LIVE from the
+  // first stamped mint even under the r5 law; when present the
   // task must be internally consistent, reference only real doc ids, and match
   // the §5.6 family namespaces — the corpus REFUSES to load otherwise. The doc
   // id universe is built lazily on the first bmuTask row so pre-BMU loads pay

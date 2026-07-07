@@ -264,7 +264,10 @@ export async function evaluateBmuBenchmarkState(
   if (!(grid > 0) || !Number.isFinite(grid)) {
     throw new Error(`evaluateBmuBenchmarkState: judgeScoreGrid must be a positive finite number (got ${String(grid)})`);
   }
-  const r5 = await evaluateRetrievalBenchmarkState(state, corpus, pack, { ...opts, exposeFullRanking: true });
+  // exposeFullRanking feeds the judge; bmuPolicyBonusClamp arms the §13.2
+  // rev3.3 per-doc atom-contribution cap (P_cap = 1) — part of the BMU LAW,
+  // never a bundle knob.
+  const r5 = await evaluateRetrievalBenchmarkState(state, corpus, pack, { ...opts, exposeFullRanking: true, bmuPolicyBonusClamp: true });
 
   const perTask: BmuPerTaskResult[] = [];
   const famSum: Record<BmuFamily, number> = { temporal: 0, conflict_lifecycle: 0, multi_hop_relation: 0, near_collision_abstention: 0 };
@@ -506,29 +509,25 @@ export interface BmuRmaxProfileShape {
   readonly categoryLensFinalBonusWeight?: number;
   readonly enableAspectConstraintAtoms?: boolean;
   readonly policyAspectBoost?: number;
-  readonly enableEvidenceBundleAtoms?: boolean;
-  readonly enableConflictLifecycleAtoms?: boolean;
-  readonly conflictMotifAdmission?: boolean;
-  readonly enableEntityResolutionAtoms?: boolean;
-  readonly enableScopeAtoms?: boolean;
-  readonly policyMaxBudgetEvidence?: number;
-  readonly policyMaxBudgetConflict?: number;
-  readonly policyMaxBudgetEntity?: number;
-  readonly policyMaxBudgetScope?: number;
 }
 
+/** §13.2 rev3.3: the per-doc atom-contribution cap P_cap — the BMU judge
+ *  clamps the summed per-doc policyBonus to ±P_cap·UNIT before quantization
+ *  (`bmuPolicyBonusClamp`, armed unconditionally by the BMU law module). */
+export const BMU_JUDGE_POLICY_CAP = 1;
+
 /**
- * §13.2 range analysis: composite ∈ [−P, 1 + B + P]; Rmax = 1 + B + 2P.
- *
- * B = Σ enabled final-bonus betas (lens + anchor + temporal + categoryLens
- * final + aspect). P = the max total policy nudge, computed as ONE firing
- * per enabled policy mechanism at its pinned per-family budget cap (the
- * spec's "bounded query-local nudge" framing). CONSERVATISM NOTE: multiple
- * decoded atoms of one family can stack on a single doc; the budget caps
- * bound each atom, not the stack — this validator therefore REQUIRES every
- * enabled policy family's budget cap to be pinned (an unpinned cap makes P
- * unbounded at the 0xffff atom budget) and treats the per-mechanism cap as
- * the nudge bound, matching the §13.2 arithmetic.
+ * §13.2 range analysis (rev3.3 pinned arithmetic): with the per-doc
+ * atom-contribution cap (P_cap = 1 — the summed policyBonus per doc is
+ * clamped to ±1·UNIT before quantization, `bmuPolicyBonusClamp`), the
+ * composite lies in [−P_cap, 1 + B + P_cap] and
+ *   Rmax = 1 + B + 2·P_cap
+ * where B = Σ enabled final-bonus betas (lens + anchor + temporal +
+ * categoryLens final + aspect). The rev3-era per-mechanism "P" arithmetic
+ * (and its pinned-budget-cap requirement) is superseded: multi-atom same-doc
+ * stacking is bounded by the CLAMP in the law itself, not by budget-cap
+ * bookkeeping (uncapped worst case was ≈ 77 composite units at 128
+ * atoms/region — the clamp is what makes Rmax ≤ 4 honest).
  */
 export function computeBmuJudgeRmax(profile: BmuRmaxProfileShape): number {
   const lensW = profile.lensWeight ?? 0.1;
@@ -537,23 +536,7 @@ export function computeBmuJudgeRmax(profile: BmuRmaxProfileShape): number {
   const catLensFinalW = profile.categoryLensFinalBonusWeight ?? lensW;
   const aspectW = profile.enableAspectConstraintAtoms === true ? (profile.policyAspectBoost ?? 0) : 0;
   const B = lensW + anchorW + temporalW + catLensFinalW + aspectW;
-
-  const requireCap = (name: string, value: number | undefined, enabled: boolean): number => {
-    if (!enabled) return 0;
-    if (value === undefined || !Number.isInteger(value) || value < 0) {
-      throw new Error(`computeBmuJudgeRmax: ${name} must be pinned (non-negative integer) when its policy family is enabled — an unpinned cap makes the composite range unbounded`);
-    }
-    return value / 1000;
-  };
-  // Defaults mirror the scorer: evidence/conflict atoms are enabled unless
-  // explicitly false; entity/scope/motif require explicit true.
-  const P =
-    requireCap('policyMaxBudgetEvidence', profile.policyMaxBudgetEvidence, profile.enableEvidenceBundleAtoms !== false)
-    + requireCap('policyMaxBudgetConflict', profile.policyMaxBudgetConflict, profile.enableConflictLifecycleAtoms !== false || profile.conflictMotifAdmission === true)
-    + requireCap('policyMaxBudgetEntity', profile.policyMaxBudgetEntity, profile.enableEntityResolutionAtoms === true)
-    + requireCap('policyMaxBudgetScope', profile.policyMaxBudgetScope, profile.enableScopeAtoms === true);
-
-  return 1 + B + 2 * P;
+  return 1 + B + 2 * BMU_JUDGE_POLICY_CAP;
 }
 
 export function assertBmuJudgeRmax(profile: BmuRmaxProfileShape): void {
@@ -679,6 +662,7 @@ export interface BmuArmGateFamilyReport {
 
 export interface BmuArmGateReport {
   readonly ok: boolean;
+  readonly posture: 'arm' | 'boot';
   readonly epochId: number;
   readonly freshWindow: number;
   readonly stampedPoolTotal: number;
@@ -712,11 +696,23 @@ export interface BmuArmGateReport {
  */
 export function evaluateBmuArmGate(input: {
   readonly corpus: { readonly events: readonly ProductionCorpusEvent[] };
-  /** The stamped-pool membership: RESERVE ∪ ACTIVE frontier ids (rev3.2).
-   *  Post-arm (boot posture) the active set alone is the correct pool. */
+  /** The stamped-pool membership: RESERVE ∪ ACTIVE frontier ids at the ARM
+   *  posture (rev3.2); the ACTIVE set alone at the BOOT posture. */
   readonly poolIds: ReadonlySet<string>;
   readonly epochId: number;
   readonly freshWindow?: number;
+  /**
+   * Census POSTURE (P3-R1 BLOCKER-1 orchestrator ruling; rev3.3 pins it):
+   *  - 'arm'  — the one-time transition arm / bulk-activate moment: the FULL
+   *    census (per-family minima + global m=1 + fresh-cohort ≥2 clusters per
+   *    family within freshWindow, freshness read from MINT epochs — the arm
+   *    gate requires the mint ramp to be RECENT).
+   *  - 'boot' — evaluator/scorer construction re-checks: STRUCTURAL only
+   *    (per-family minima + global m=1). NEVER freshness: post-arm steady
+   *    state legitimately has its newest mint older than freshWindow, and a
+   *    reboot must not fail-close on it (liveness).
+   */
+  readonly posture: 'arm' | 'boot';
 }): BmuArmGateReport {
   const freshWindow = input.freshWindow ?? BMU_FRESH_WINDOW_DEFAULT;
   const perFamilyCount: Record<BmuFamily, number> = { temporal: 0, conflict_lifecycle: 0, multi_hop_relation: 0, near_collision_abstention: 0 };
@@ -760,8 +756,10 @@ export function evaluateBmuArmGate(input: {
     if (perFamilyCount[f] < required) {
       reasons.push(`family ${f}: stamped pool rows ${perFamilyCount[f]} < required ${required}`);
     }
-    if (freshClusters[f].size < BMU_ARM_GATE_FRESH_CLUSTERS_MIN) {
-      reasons.push(`family ${f}: fresh clusters ${freshClusters[f].size} < required ${BMU_ARM_GATE_FRESH_CLUSTERS_MIN} within freshWindow ${freshWindow}`);
+    // Fresh-cohort liveness check binds at the ARM posture ONLY (BLOCKER-1
+    // ruling): boot re-checks are structural, never freshness.
+    if (input.posture === 'arm' && freshClusters[f].size < BMU_ARM_GATE_FRESH_CLUSTERS_MIN) {
+      reasons.push(`family ${f}: fresh clusters ${freshClusters[f].size} < required ${BMU_ARM_GATE_FRESH_CLUSTERS_MIN} within freshWindow ${freshWindow} (arm posture)`);
     }
   }
   if (total < BMU_ARM_GATE_N_MIN) {
@@ -780,6 +778,7 @@ export function evaluateBmuArmGate(input: {
 
   return {
     ok: reasons.length === 0,
+    posture: input.posture,
     epochId: input.epochId,
     freshWindow,
     stampedPoolTotal: total,
@@ -905,15 +904,53 @@ export async function evaluateBmuBaseline(
   const variance = samples > 1
     ? Math.sqrt(ppmSamples.reduce((a, v) => a + (v - mean) ** 2, 0) / samples)
     : 0;
+  const familyUtilitiesPpm = scores[0]!.bmu.familyUtilitiesPpm;
+  const parentScorePpm = Math.round(mean);
   return {
-    parentScorePpm: Math.round(mean),
+    parentScorePpm,
     variancePpm: Math.round(variance),
     samples,
     corpusRoot: pack.corpusRoot,
     epochId: pack.epochId,
     compositeScore: scores[0]!,
-    familyUtilitiesPpm: scores[0]!.bmu.familyUtilitiesPpm,
+    familyUtilitiesPpm,
+    familyUtilitiesDigest: computeBmuFamilyUtilitiesDigest({
+      epochId: pack.epochId,
+      corpusRoot: pack.corpusRoot,
+      baselineSeedHex: pack.evalSeedHex,
+      parentScorePpm,
+      familyUtilitiesPpm,
+    }),
   };
+}
+
+/**
+ * Integrity binding for the §8.4 per-family baseline decomposition (P3-R1
+ * MINOR): keccak256 over the canonical JSON of the decomposition TOGETHER
+ * with the identifiers that make it re-derivable (epochId, corpusRoot, the
+ * deterministic baseline seed, and the scalar it decomposes). The rebaseline
+ * consumer MUST recompute this digest from the fields it received and refuse
+ * a mismatch, and — the actual integrity backstop — MAY re-derive the whole
+ * decomposition independently, since the baseline seed is deterministic and
+ * caller-derived (never a future blockhash). This binds the decomposition to
+ * its scoring context; it is NOT a signature (the scorer host is untrusted
+ * for authority, trusted for compute, same as the scalar itself).
+ */
+export function computeBmuFamilyUtilitiesDigest(input: {
+  readonly epochId: number;
+  readonly corpusRoot: string;
+  readonly baselineSeedHex: string;
+  readonly parentScorePpm: number;
+  readonly familyUtilitiesPpm: Readonly<Record<string, number>>;
+}): string {
+  const canonical = JSON.stringify({
+    baselineSeedHex: input.baselineSeedHex.toLowerCase(),
+    corpusRoot: input.corpusRoot.toLowerCase(),
+    epochId: input.epochId,
+    familyUtilitiesPpm: Object.fromEntries(Object.entries(input.familyUtilitiesPpm).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))),
+    parentScorePpm: input.parentScorePpm,
+  });
+  return bytesToHex(keccak256(utf8.encode(canonical))).toLowerCase();
 }
 
 // ─── §6.3/§8.3 exclusion-set digest (published-artifact telemetry) ────────────

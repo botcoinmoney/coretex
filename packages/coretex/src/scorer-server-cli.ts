@@ -251,6 +251,11 @@ export interface ScorerStateJobResult {
    *  collapse alarm consume. Present only under the BMU law; absent on every
    *  r5-law response — coordinators MUST tolerate absence. */
   readonly familyUtilitiesPpm?: Readonly<Record<string, number>>;
+  /** Integrity binding for familyUtilitiesPpm (computeBmuFamilyUtilitiesDigest
+   *  over {baselineSeedHex, corpusRoot, epochId, familyUtilitiesPpm,
+   *  parentScorePpm}) — the coordinator MUST recompute + refuse a mismatch
+   *  before the rebaseline consumes the decomposition. */
+  readonly familyUtilitiesDigest?: string;
   readonly corpusRoot: string;
   readonly bundleHash: string;
   readonly coreVersionHash: string;
@@ -652,6 +657,7 @@ export async function handleScoreStateJob(
       variancePpm: scores.variancePpm,
       samples: scores.samples,
       ...(scores.familyUtilitiesPpm !== undefined ? { familyUtilitiesPpm: scores.familyUtilitiesPpm } : {}),
+      ...(scores.familyUtilitiesDigest !== undefined ? { familyUtilitiesDigest: scores.familyUtilitiesDigest } : {}),
       corpusRoot: job.corpusRoot.toLowerCase(),
       bundleHash: job.bundleHash.toLowerCase(),
       coreVersionHash: job.coreVersionHash.toLowerCase(),
