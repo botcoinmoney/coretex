@@ -417,8 +417,8 @@ export function generateMultiHopClusters({
         id: b1Id, kind: 'bridge_link_record', role: 'chain_hop1',
         entityIds: [universe, subj.id], currentStaleFlag: true,
         text: corefFramed
-          ? `${alias} filed delegation memo ${ticket} on ${tsDate} covering ${canonical}'s ${topic}, and the memo governs it going forward.`
-          : `Delegation memo ${ticket}, filed ${tsDate}, covers ${canonical}'s ${topic} and governs it going forward.`,
+          ? `${alias} filed delegation memo ${ticket} on ${tsDate} taking charge of ${canonical}'s ${topic}, and the memo governs it going forward.`
+          : `Delegation memo ${ticket}, filed ${tsDate}, takes charge of ${canonical}'s ${topic} and governs it going forward.`,
       });
       pushDoc({
         id: b2Id, kind: 'bridge_hop_record', role: 'chain_hop2', grounding: 'distant',
