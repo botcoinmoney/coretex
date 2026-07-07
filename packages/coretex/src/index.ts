@@ -33,6 +33,7 @@ export * from './coordinator/retrieval-data-source.js';
 export {
   CoreTexCoordinatorCore,
   createInProcessCoreTexSubmitQueue,
+  expectedDualPackProofKind,
 } from './coordinator/coretex-coordinator-core.js';
 export type {
   ChainClient as CoreTexCoordinatorChainClient,

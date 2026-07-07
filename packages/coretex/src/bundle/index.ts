@@ -33,6 +33,8 @@ import type { ScoringOptions } from '../eval/retrieval-benchmark.js';
 import type { BiEncoder } from '../eval/bi-encoder.js';
 import type { CrossEncoderReranker } from '../eval/reranker.js';
 import type { LiveEvalPackLaw } from '../eval/hidden-query-pack.js';
+import { CORETEX_PIPELINE_VERSION_BMU_V1, isR5StateLaw, isBmuScoringLaw } from '../pipeline-versions.js';
+import { assertValidBmuWeights, computeBmuJudgeRmax, BMU_JUDGE_RMAX_LIMIT, BMU_ROW_QUANTUM_PPM } from '../eval/bmu-benchmark.js';
 import { canonicalJson } from '../canonical/json.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -184,7 +186,7 @@ export interface EvaluatorProfile {
   /** Pinned scorer pipeline. v2-lens is the two-stage corpus-retrieval + substrate-bias pipeline.
    *  `coretex-retrieval-v2-policy-r5` = the PolicyAtom epoch (reclaimed RetrievalKeys+Codebook
    *  words read as typed PolicyAtoms; r4 stays replayable). */
-  readonly pipelineVersion?: 'coretex-retrieval-v2-lens' | 'coretex-retrieval-v2-lens-r2' | 'coretex-retrieval-v2-lens-r3' | 'coretex-retrieval-v2-lens-r4' | 'coretex-retrieval-v2-policy-r5';
+  readonly pipelineVersion?: 'coretex-retrieval-v2-lens' | 'coretex-retrieval-v2-lens-r2' | 'coretex-retrieval-v2-lens-r3' | 'coretex-retrieval-v2-lens-r4' | 'coretex-retrieval-v2-policy-r5' | 'coretex-bmu-v1-r5state';
   /** Calibration-blessed list of reward-active substrate surfaces (named for
    *  the miner API). The reward-active set is this list UNION the surfaces
    *  derived from the per-family enable flags — see rewardActiveSubstrateSurfaces. */
@@ -273,6 +275,13 @@ export interface EvaluatorProfile {
    * launch value: 128 (32× speedup over full-pool reranking).
    */
   readonly rerankerInputTopK?: number;
+  /**
+   * BMU §13.2 judge quantization grid g in composite finalReorderingScore
+   * space (default 1e-3). Only meaningful under
+   * pipelineVersion = 'coretex-bmu-v1-r5state'; validated positive and
+   * ≤ 0.1 so the grid can never coarsen away real ordering.
+   */
+  readonly judgeScoreGrid?: number;
   /** Stage-2 lens-bonus contributing vectors per query. Capped by RetrievalKey slot count. */
   readonly lensTopK?: number;
   /** Stage-2 lens bonus scale (Run 0). */
@@ -1010,8 +1019,10 @@ export function scoringOptionsFromProfile(
     ...(profile.categoryLensEvidenceBundle !== undefined ? { categoryLensEvidenceBundle: profile.categoryLensEvidenceBundle } : {}),
     ...(profile.temporalStaleContrast !== undefined ? { temporalStaleContrast: profile.temporalStaleContrast } : {}),
     pipelineVersion: profile.pipelineVersion,
-    // ─── r5 PolicyAtoms: policyAtomsMode is driven HARD by the pinned pipelineVersion ───
-    ...(profile.pipelineVersion === 'coretex-retrieval-v2-policy-r5' ? { policyAtomsMode: true } : {}),
+    // ─── r5 PolicyAtoms: policyAtomsMode is driven HARD by the pinned pipelineVersion.
+    //     SET-MEMBERSHIP (spec §9 site 3): the BMU v1 STATE law IS the r5
+    //     policy-atoms law (I2) — 'coretex-bmu-v1-r5state' derives true too. ───
+    ...(isR5StateLaw(profile.pipelineVersion) ? { policyAtomsMode: true } : {}),
     ...(profile.enableEvidenceBundleAtoms !== undefined ? { enableEvidenceBundleAtoms: profile.enableEvidenceBundleAtoms } : {}),
     ...(profile.enableConflictLifecycleAtoms !== undefined ? { enableConflictLifecycleAtoms: profile.enableConflictLifecycleAtoms } : {}),
     ...(profile.enableAbstentionAtoms !== undefined ? { enableAbstentionAtoms: profile.enableAbstentionAtoms } : {}),
@@ -1454,8 +1465,9 @@ function validateProfile(profile: EvaluatorProfile, errors?: string[]): void {
   // r5 enables only meaningful under the policy-r5 pipeline pin (warn-as-error: prevents
   // accidentally shipping r5 atoms under an r4 profile, where they would be ignored).
   const r5Enabled = profile.enableEvidenceBundleAtoms || profile.enableConflictLifecycleAtoms || profile.enableAbstentionAtoms || profile.enableAspectConstraintAtoms || profile.enableValidityAtoms || profile.enableEntityResolutionAtoms || profile.enableScopeAtoms;
-  if (r5Enabled && profile.pipelineVersion !== 'coretex-retrieval-v2-policy-r5') {
-    out.push('r5 PolicyAtom enables require pipelineVersion = coretex-retrieval-v2-policy-r5');
+  // SET-MEMBERSHIP (spec §9 site 4): BMU v1 rides the r5 policy state law.
+  if (r5Enabled && !isR5StateLaw(profile.pipelineVersion)) {
+    out.push('r5 PolicyAtom enables require an r5-state-law pipelineVersion (coretex-retrieval-v2-policy-r5 or coretex-bmu-v1-r5state)');
   }
   // aspect_constraint is an A100 CANDIDATE, not a launch surface: its boost hook is not wired (r5.1).
   // Fail closed so it cannot be silently shipped or half-enabled. Admission requires the enable; the
@@ -1506,7 +1518,86 @@ function validateProfile(profile: EvaluatorProfile, errors?: string[]): void {
       if (lp.dedupePublicIntent !== undefined && typeof lp.dedupePublicIntent !== 'boolean') {
         out.push('epochFrontier.liveEvalPack.dedupePublicIntent must be a boolean when present');
       }
+      // BMU §6.2 slot law (familySlots may only appear under the BMU pipeline).
+      if (lp.familySlots !== undefined) {
+        if (!isBmuScoringLaw(profile.pipelineVersion)) {
+          out.push('epochFrontier.liveEvalPack.familySlots requires pipelineVersion = coretex-bmu-v1-r5state');
+        }
+        const slotFamilies = ['temporal', 'conflict_lifecycle', 'multi_hop_relation', 'near_collision_abstention'];
+        let slotSum = 0;
+        for (const [k, v] of Object.entries(lp.familySlots)) {
+          if (!slotFamilies.includes(k)) out.push(`epochFrontier.liveEvalPack.familySlots key '${k}' is not a BMU family enum name`);
+          else if (!Number.isInteger(v) || (v as number) < 0) out.push(`epochFrontier.liveEvalPack.familySlots.${k} must be a non-negative integer`);
+          else slotSum += v as number;
+        }
+        if (Number.isInteger(lp.limit) && slotSum !== lp.limit) {
+          out.push(`epochFrontier.liveEvalPack.familySlots must sum to limit (${slotSum} != ${lp.limit})`);
+        }
+      }
+      if (lp.freshWindow !== undefined && (!Number.isInteger(lp.freshWindow) || lp.freshWindow < 1)) {
+        out.push('epochFrontier.liveEvalPack.freshWindow must be a positive integer when present');
+      }
     }
+  }
+
+  // ─── BMU v1 bundle validation (spec §9 site 17 additions; all fail-closed) ───
+  if (isBmuScoringLaw(profile.pipelineVersion)) {
+    const f = profile.epochFrontier;
+    if (!f) {
+      out.push('BMU bundles require epochFrontier (the frontier is mandatory under the BMU law, §6.5)');
+    } else {
+      // §6.2: finite maxAge REQUIRED — maxAge: null (the liveeval8
+      // counterexample) is illegal under coretex-bmu-v1-r5state.
+      if (f.maxAge === undefined || f.maxAge === null) {
+        out.push('BMU bundles require a FINITE epochFrontier.maxAge (retirement-by-age is mandatory; null/absent is illegal, §6.2)');
+      }
+      const lp = f.liveEvalPack;
+      if (!lp || !(lp.limit > 0)) {
+        out.push('BMU bundles require an armed epochFrontier.liveEvalPack (limit ≥ 1, §6.2)');
+      } else {
+        if (lp.familySlots === undefined) {
+          out.push('BMU bundles require epochFrontier.liveEvalPack.familySlots (the §6.2 slot law)');
+        } else {
+          // §2.3 composition validator: |(Q_f + O_f)/packSize − w_f| ≤ 0.03.
+          try {
+            assertValidBmuWeights({
+              packSize: profile.hiddenPack.packSize,
+              quotas: profile.hiddenPack.quotas,
+              familySlots: lp.familySlots,
+            });
+          } catch (err) {
+            out.push(`BMU composition validation failed: ${(err as Error).message}`);
+          }
+        }
+      }
+    }
+    // §2.4 variance law (F5): cross-pack parent variance MUST NOT enter the
+    // acceptance threshold — the source must resolve to 'unavailable'.
+    const source = profile.baselineVarianceSource ?? 'unavailable';
+    if (source !== 'unavailable') {
+      out.push(`BMU bundles pin baselineVarianceSource = 'unavailable' (variance term ≡ 0, §2.4; got '${source}')`);
+    }
+    // §2.4 threshold law: minImprovementPpm within [q+1, 2q] preserves the
+    // one-flip-rejecting / two-flip-advancing staircase (q = 15,625).
+    const minImp = profile.patchAcceptanceFloors?.minImprovementPpm;
+    if (!Number.isInteger(minImp) || minImp < BMU_ROW_QUANTUM_PPM + 1 || minImp > 2 * BMU_ROW_QUANTUM_PPM) {
+      out.push(`BMU bundles require patchAcceptanceFloors.minImprovementPpm in [${BMU_ROW_QUANTUM_PPM + 1}, ${2 * BMU_ROW_QUANTUM_PPM}] (one flip can never advance, §2.4; got ${String(minImp)})`);
+    }
+    // §13.2 judge grid + Rmax range validation.
+    if (profile.judgeScoreGrid !== undefined
+        && (typeof profile.judgeScoreGrid !== 'number' || !(profile.judgeScoreGrid > 0) || profile.judgeScoreGrid > 0.1 || !Number.isFinite(profile.judgeScoreGrid))) {
+      out.push('judgeScoreGrid must be a finite number in (0, 0.1] when present');
+    }
+    try {
+      const rmax = computeBmuJudgeRmax(profile);
+      if (rmax > BMU_JUDGE_RMAX_LIMIT + 1e-9) {
+        out.push(`BMU judge Rmax ${rmax.toFixed(3)} exceeds ${BMU_JUDGE_RMAX_LIMIT} (§13.2) — re-pin bonus betas / policy budget caps`);
+      }
+    } catch (err) {
+      out.push(`BMU judge Rmax validation failed: ${(err as Error).message}`);
+    }
+  } else if (profile.judgeScoreGrid !== undefined) {
+    out.push('judgeScoreGrid is only meaningful under pipelineVersion = coretex-bmu-v1-r5state');
   }
   if (profile.replayTolerancePpm > profile.patchAcceptanceFloors.minImprovementPpm)
     out.push('replayTolerancePpm must be <= patchAcceptanceFloors.minImprovementPpm');

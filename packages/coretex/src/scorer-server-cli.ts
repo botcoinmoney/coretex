@@ -246,6 +246,11 @@ export interface ScorerStateJobResult {
   readonly parentScorePpm: number;
   readonly variancePpm: number;
   readonly samples: number;
+  /** BMU §8.4: ONE additive optional field — the per-family baseline utility
+   *  decomposition (U_f in ppm) the two-pass rebaseline and the coverage-
+   *  collapse alarm consume. Present only under the BMU law; absent on every
+   *  r5-law response — coordinators MUST tolerate absence. */
+  readonly familyUtilitiesPpm?: Readonly<Record<string, number>>;
   readonly corpusRoot: string;
   readonly bundleHash: string;
   readonly coreVersionHash: string;
@@ -646,6 +651,7 @@ export async function handleScoreStateJob(
       parentScorePpm: scores.parentScorePpm,
       variancePpm: scores.variancePpm,
       samples: scores.samples,
+      ...(scores.familyUtilitiesPpm !== undefined ? { familyUtilitiesPpm: scores.familyUtilitiesPpm } : {}),
       corpusRoot: job.corpusRoot.toLowerCase(),
       bundleHash: job.bundleHash.toLowerCase(),
       coreVersionHash: job.coreVersionHash.toLowerCase(),

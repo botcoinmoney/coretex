@@ -138,15 +138,19 @@ if (MODE === 'deep') {
   for (const c of _cov) check(`hidden-pack quota satisfied: ${c.stratum} (${c.count}/${c.minCount})`, c.satisfied);
   check(`hidden-pack is exactly packSize (${_pack.events.length}/${profile.hiddenPack.packSize})`, _pack.events.length === profile.hiddenPack.packSize);
 
-  // 6. r5 grammar + patch-hash domain present in the runtime.
-  check('pipelineVersion pins r5 (policyAtomsMode derives true)', profile.pipelineVersion === 'coretex-retrieval-v2-policy-r5', profile.pipelineVersion);
+  // 6. r5-STATE-LAW grammar + patch-hash domain present in the runtime.
+  // SET-MEMBERSHIP (BMU_SPEC §9 site 16): 'coretex-bmu-v1-r5state' pins the
+  // same r5 state law (policyAtomsMode derives true for both).
+  check('pipelineVersion pins the r5 state law (policyAtomsMode derives true)',
+    profile.pipelineVersion === 'coretex-retrieval-v2-policy-r5' || profile.pipelineVersion === 'coretex-bmu-v1-r5state', profile.pipelineVersion);
   check('computePatchHash exported (domain-prefixed identity in runtime)', typeof computePatchHash === 'function');
 } else {
   // parity mode: trust the bundle's attested corpusRoot + sha256 sidecars (verified above by
   // verifyBundleManifest). No materialization. activeFrontierRoot is NOT recomputed — the fingerprint
   // file-walk + bundleHash match is the parity contract.
   console.log('parity mode — skipping corpus materialization + frontier derivation (bundle attestation trusted)');
-  check('pipelineVersion pins r5 (policyAtomsMode derives true)', profile.pipelineVersion === 'coretex-retrieval-v2-policy-r5', profile.pipelineVersion);
+  check('pipelineVersion pins the r5 state law (policyAtomsMode derives true)',
+    profile.pipelineVersion === 'coretex-retrieval-v2-policy-r5' || profile.pipelineVersion === 'coretex-bmu-v1-r5state', profile.pipelineVersion);
 }
 
 // 7. candidate-surface RECORD (posture-agnostic). The launch-path code is the candidate under test;

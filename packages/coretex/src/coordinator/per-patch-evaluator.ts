@@ -74,6 +74,11 @@ export type PerPatchScorer = (args: {
   readonly parentRoot: string;
   readonly evalSeed: string;          // bytes32 hex
   readonly which: 'gate' | 'confirm'; // tag so the scorer can log / inspect
+  /** The GATE seed of this dual-pack evaluation (equal to `evalSeed` on the
+   *  gate call). BMU scorers need it on the CONFIRM call to re-derive the
+   *  gate pack's §6.3 exclusion set X; r5 scorers ignore it (additive,
+   *  optional — existing fakes/wiring unchanged). */
+  readonly gateSeed?: string;
 }) => Promise<PerPatchScoreResult>;
 
 /**
@@ -178,7 +183,11 @@ export interface PerPatchReceipt {
 }
 
 export interface PerPatchDualPackEvaluationProof {
-  readonly kind: 'coretex-dual-pack-v1';
+  /** 'coretex-bmu-dual-pack-v1' (§8.3): same shape, BMU scoring law — paired
+   *  fail-closed BOTH directions with the active bundle's pipelineVersion by
+   *  verifyScorerResult (an r5 bundle never accepts a BMU proof and vice
+   *  versa, mirroring the overlay-pairing precedent). */
+  readonly kind: 'coretex-dual-pack-v1' | 'coretex-bmu-dual-pack-v1';
   readonly mode: 'future_blockhash_dual_pack';
   readonly epochId: number;
   readonly receivedAtBlock: number;
@@ -217,13 +226,15 @@ export function dualPackProofFromPerPatchReceipt(
     readonly hiddenSeedCommit: string;
     readonly targetBlockOffset: number;
     readonly activeFrontierRoot?: string;
+    /** BMU (§8.3): emit 'coretex-bmu-dual-pack-v1'. Default unchanged. */
+    readonly proofKind?: PerPatchDualPackEvaluationProof['kind'];
   },
 ): PerPatchDualPackEvaluationProof {
   if (!receipt.accepted) {
     throw new Error('dualPackProofFromPerPatchReceipt: receipt was not accepted');
   }
   return {
-    kind: 'coretex-dual-pack-v1',
+    kind: context.proofKind ?? 'coretex-dual-pack-v1',
     mode: 'future_blockhash_dual_pack',
     epochId: receipt.epochId,
     receivedAtBlock: receipt.receivedAtBlock,
@@ -394,6 +405,7 @@ export async function runPerPatchEvaluation(
     parentRoot: request.parentRoot,
     evalSeed: gateSeed,
     which: 'gate',
+    gateSeed,
   });
   const gateScorePpm = gate.scorePpm;
   // A pack passes ONLY if it clears the dual-pack threshold AND the canonical acceptance floors
@@ -418,6 +430,7 @@ export async function runPerPatchEvaluation(
     parentRoot: request.parentRoot,
     evalSeed: confirmSeed,
     which: 'confirm',
+    gateSeed,
   });
   const confirmScorePpm = confirm.scorePpm;
   const confirmPass = confirmScorePpm >= deps.thresholdPpm && confirm.accepted;

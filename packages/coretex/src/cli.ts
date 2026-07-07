@@ -89,9 +89,11 @@ if (!cmd) {
 switch (cmd) {
   // ── decode ────────────────────────────────────────────────────────────────
   case 'decode': {
-    // Usage: botcoin-coretex decode [state.bin] [--policy-atoms-mode|--r5]
+    // Usage: botcoin-coretex decode [state.bin] [--policy-atoms-mode|--r5|--bmu]
     // Reads 32768-byte packed state; outputs JSON typed-slot decode.
-    const policyAtomsMode = args.includes('--policy-atoms-mode') || args.includes('--r5');
+    // --bmu is an operator-clarity alias: the BMU v1 state law IS the r5
+    // policy-atoms decode law (BMU_SPEC §3.2/§9 site 13).
+    const policyAtomsMode = args.includes('--policy-atoms-mode') || args.includes('--r5') || args.includes('--bmu');
     const statePath = args.find((arg) => !arg.startsWith('--'));
     const stateBytes = readFileOrStdin(statePath);
     if (stateBytes.length !== 32768) {
@@ -195,7 +197,7 @@ switch (cmd) {
     const patchesJson = JSON.parse(fs.readFileSync(patchesFile, 'utf8'), bigIntReviver) as unknown[];
     const state = unpack(new Uint8Array(stateBytes));
     const parentRoot = bytesToHex(merkleizeState(state));
-    const policyAtomsMode = args.includes('--policy-atoms-mode') || args.includes('--r5');
+    const policyAtomsMode = args.includes('--policy-atoms-mode') || args.includes('--r5') || args.includes('--bmu');
 
     type PatchRecord = {
       compactPatchBytesHex: string;
@@ -276,8 +278,8 @@ switch (cmd) {
       patchEvents: eventsData.patchEvents,
       snapshotEvent: eventsData.snapshotEvent,
       ...(genesisState ? { genesisState } : {}),
-      // r5 epochs: enforce reserved-region / PolicyAtom grammar in canonical reconstruction (same as scoring).
-      ...(args.includes('--policy-atoms-mode') ? { policyAtomsMode: true } : {}),
+      // r5/BMU epochs: enforce reserved-region / PolicyAtom grammar in canonical reconstruction (same as scoring).
+      ...(args.includes('--policy-atoms-mode') || args.includes('--bmu') ? { policyAtomsMode: true } : {}),
     });
     process.stdout.write(toJsonOutput(result) + '\n');
     if (result.ok && !result.match) process.exit(3);

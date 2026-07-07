@@ -869,6 +869,53 @@ export function buildBmuArmVarianceCertification(input: {
   return { states, K: BMU_ARM_VARIANCE_RUNS, seeds, scoresPpm: { parent: [...input.scoresPpm.parent], blank: [...input.scoresPpm.blank] }, spreadPpm };
 }
 
+// ─── §10/§8.4 baseline lanes (blank-state AND parent-baseline) ───────────────
+
+/**
+ * BMU baseline scoring — the `scoreState` lane under the BMU law (§8.4/§10).
+ * Same contract as `evaluateBaseline` (rewards/baseline.ts): score the given
+ * substrate `samples` times on ONE caller-derived deterministic pack and
+ * report mean/std-dev ppm — but the scalar is the BMU utility and the result
+ * additionally carries the per-family U_f decomposition the two-pass
+ * rebaseline and the coverage-collapse alarm need (`familyUtilitiesPpm`).
+ *
+ * Drives BOTH lanes: the blank-state lane (anti-cheat floor; blank ≠ parent
+ * trap) and the parent-baseline lane (the number acceptance thresholds are
+ * derived from) — the caller supplies the substrate. The measured variance
+ * does NOT feed the acceptance threshold (§2.4 pins the variance term to 0);
+ * it is the §6.7b ARM-GATE flip-stability certification input.
+ */
+export async function evaluateBmuBaseline(
+  parentSubstrate: CortexState,
+  corpus: ProductionCorpus,
+  pack: QueryPack,
+  scoringOpts: ScoringOptions,
+  bmu: BmuScoringContext = {},
+  opts: { readonly samples?: number } = {},
+): Promise<import('../rewards/baseline.js').BaselineScores> {
+  const samples = Math.max(1, Math.floor(opts.samples ?? 1));
+  const scores: BmuScore[] = [];
+  const ppmSamples: number[] = [];
+  for (let i = 0; i < samples; i++) {
+    const s = await evaluateBmuBenchmarkState(parentSubstrate, corpus, pack, scoringOpts, bmu);
+    scores.push(s);
+    ppmSamples.push(s.bmu.scalarPpm);
+  }
+  const mean = ppmSamples.reduce((a, v) => a + v, 0) / samples;
+  const variance = samples > 1
+    ? Math.sqrt(ppmSamples.reduce((a, v) => a + (v - mean) ** 2, 0) / samples)
+    : 0;
+  return {
+    parentScorePpm: Math.round(mean),
+    variancePpm: Math.round(variance),
+    samples,
+    corpusRoot: pack.corpusRoot,
+    epochId: pack.epochId,
+    compositeScore: scores[0]!,
+    familyUtilitiesPpm: scores[0]!.bmu.familyUtilitiesPpm,
+  };
+}
+
 // ─── §6.3/§8.3 exclusion-set digest (published-artifact telemetry) ────────────
 
 /**

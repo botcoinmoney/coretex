@@ -56,6 +56,13 @@ export interface BaselineScores {
   readonly epochId: number;
   /** The exact CompositeScore object from the first sample (full breakdown). */
   readonly compositeScore: CompositeScore;
+  /**
+   * BMU §8.4: per-family baseline utility decomposition (U_f in ppm) from the
+   * first sample. Present ONLY when the baseline was scored under the BMU law
+   * (`evaluateBmuBaseline`); absent on every r5-law response — coordinators
+   * MUST tolerate absence.
+   */
+  readonly familyUtilitiesPpm?: Readonly<Record<string, number>>;
 }
 
 export interface EvaluateBaselineOptions {

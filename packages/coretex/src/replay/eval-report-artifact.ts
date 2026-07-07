@@ -37,7 +37,11 @@ export interface CoreTexEvalSeedDerivationInputs {
 }
 
 export interface CoreTexPostRevealEvalReportArtifact {
-  readonly version: 'coretex-post-reveal-eval-report-v1';
+  /** 'coretex-bmu-post-reveal-eval-report-v1' under the BMU scoring law
+   *  (§8.3): same canonical hasher, same spool-before-sign rule; paired with
+   *  the active bundle's pipelineVersion fail-closed BOTH directions by
+   *  verifyScorerResult. */
+  readonly version: 'coretex-post-reveal-eval-report-v1' | 'coretex-bmu-post-reveal-eval-report-v1';
   /** == artifactHash. The on-chain receipt's evalReportHash IS the artifact hash. */
   readonly evalReportHash: string;
   readonly artifactHash: string;
@@ -61,6 +65,27 @@ export interface CoreTexPostRevealEvalReportArtifact {
      *  set hashing to this root. Absent for broad-only-law epochs (artifact
      *  bytes/hash unchanged). */
     readonly activeFrontierRoot?: string;
+  };
+  /**
+   * BMU §8.3: the ONLY per-row-adjacent detail a PUBLISHED artifact may add —
+   * per-family aggregates (U_f for gate/confirm on parent and candidate,
+   * per-family regressed-row counts) plus the §6.3 exclusion-set digest.
+   * Per-row u(t) detail is NEVER published (it lives in the coordinator's
+   * private spool lane — §6.5 part 3 redaction). Present ONLY on
+   * 'coretex-bmu-post-reveal-eval-report-v1' artifacts.
+   */
+  readonly bmuFamilySummary?: {
+    readonly gate: {
+      readonly parentFamilyUtilitiesPpm: Readonly<Record<string, number>>;
+      readonly candidateFamilyUtilitiesPpm: Readonly<Record<string, number>>;
+      readonly regressedRowsByFamily: Readonly<Record<string, number>>;
+    };
+    readonly confirm: {
+      readonly parentFamilyUtilitiesPpm: Readonly<Record<string, number>>;
+      readonly candidateFamilyUtilitiesPpm: Readonly<Record<string, number>>;
+      readonly regressedRowsByFamily: Readonly<Record<string, number>>;
+    };
+    readonly exclusionSetDigest: string;
   };
 }
 
@@ -161,7 +186,10 @@ export async function verifyPostRevealEvalReportArtifact(
 
 function validateArtifactShape(artifact: CoreTexPostRevealEvalReportArtifact): string | null {
   if (!artifact || typeof artifact !== 'object') return 'artifact must be an object';
-  if (artifact.version !== 'coretex-post-reveal-eval-report-v1') return 'version mismatch';
+  if (artifact.version !== 'coretex-post-reveal-eval-report-v1' && artifact.version !== 'coretex-bmu-post-reveal-eval-report-v1') return 'version mismatch';
+  if (artifact.bmuFamilySummary !== undefined && artifact.version !== 'coretex-bmu-post-reveal-eval-report-v1') {
+    return 'bmuFamilySummary is only legal on coretex-bmu-post-reveal-eval-report-v1 artifacts';
+  }
   if (!isBytes32(artifact.evalReportHash)) return 'evalReportHash must be bytes32';
   if (!isBytes32(artifact.artifactHash)) return 'artifactHash must be bytes32';
   if (!Number.isSafeInteger(artifact.epochId) || artifact.epochId < 0) return 'epochId invalid';

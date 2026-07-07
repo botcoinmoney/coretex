@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
+import { isR5StateLaw } from './pipeline-versions.js';
 
 import {
   loadPackedState,
@@ -147,7 +148,10 @@ function derivePolicyAtomsMode(args: readonly string[], manifestPath: string | u
     die('cannot derive policyAtomsMode: pass --bundle-manifest (pinned to the on-chain coreVersionHash) or an explicit --policy-atoms-mode on|off — refusing to silently default');
   }
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as CoreTexBundleManifest;
-  return manifest?.evaluator?.profile?.pipelineVersion === 'coretex-retrieval-v2-policy-r5';
+  // SET-MEMBERSHIP (BMU_SPEC §9 site 5): the BMU pipeline pins the r5 state
+  // law, so canonical replay applies the same reserved-region/PolicyAtom
+  // grammar. The refuse-to-default posture above is unchanged.
+  return isR5StateLaw(manifest?.evaluator?.profile?.pipelineVersion);
 }
 
 function expectedReplayPins(args: readonly string[]): {

@@ -10,6 +10,7 @@
  */
 import type { ScorerCodeHealth, ScorerJobRequest, ScorerJobResult } from '../scorer-server-cli.js';
 import type { EvalResult } from './coretex-coordinator-core.js';
+import { isBmuScoringLaw } from '../pipeline-versions.js';
 import { bytesToHex, keccak256 } from '../index.js';
 import {
   hashPostRevealEvalReportArtifact,
@@ -33,6 +34,12 @@ export interface RemoteScorerActiveContext {
    *  the SAME root; results scored under a different (or absent) overlay are
    *  refused as stale/pin-mismatched. */
   readonly activeFrontierRoot?: string;
+  /** The active bundle's pinned pipelineVersion — drives the §8.3 proof-kind
+   *  + artifact-version pairing (check 3): a BMU-law epoch REFUSES an r5
+   *  proof/artifact and vice versa, BOTH directions fail-closed (mirroring
+   *  the overlay-pairing precedent). Absent ⇒ the r5 kinds are required (a
+   *  BMU result can never slip past a coordinator that has not armed BMU). */
+  readonly pipelineVersion?: string;
 }
 
 export interface RemoteScorerExpectedHealth {
@@ -166,8 +173,10 @@ export function verifyScorerResult(args: {
     return { ok: false, code: "SCORER_JOB_NOT_OUTSTANDING", reason: `jobId ${job.jobId} is not an outstanding queued job` };
   }
 
-  // (3) result schema valid.
-  const schema = validateResultSchema(result);
+  // (3) result schema valid — incl. the §8.3 proof-kind pairing against the
+  //     active bundle's scoring law (BOTH directions fail-closed).
+  const expectedProofKind = isBmuScoringLaw(active.pipelineVersion) ? "coretex-bmu-dual-pack-v1" : "coretex-dual-pack-v1";
+  const schema = validateResultSchema(result, expectedProofKind);
   if (schema) return { ok: false, code: "SCORER_RESULT_MALFORMED", reason: schema };
 
   // (2) parent/state-root/epoch/bundle/corpus context STILL matches active
@@ -322,6 +331,16 @@ export function verifyScorerResult(args: {
       reason: `recomputed artifact hash ${recomputed} != artifactHash ${result.artifactHash} / evalReportHash ${result.evalReportHash}`,
     };
   }
+  const expectedArtifactVersion = isBmuScoringLaw(active.pipelineVersion)
+    ? "coretex-bmu-post-reveal-eval-report-v1"
+    : "coretex-post-reveal-eval-report-v1";
+  if (result.artifact.version !== expectedArtifactVersion) {
+    return {
+      ok: false,
+      code: "SCORER_ARTIFACT_CONTEXT_MISMATCH",
+      reason: `artifact version '${result.artifact.version}' does not pair with the active scoring law (expected '${expectedArtifactVersion}')`,
+    };
+  }
   const ctx = result.artifact.context;
   if (!ctx || typeof ctx !== "object") {
     return { ok: false, code: "SCORER_ARTIFACT_CONTEXT_MISMATCH", reason: "artifact context missing" };
@@ -380,7 +399,7 @@ export function verifyScorerResult(args: {
   };
 }
 
-function validateResultSchema(result: ScorerJobResult): string | null {
+function validateResultSchema(result: ScorerJobResult, expectedProofKind: "coretex-dual-pack-v1" | "coretex-bmu-dual-pack-v1"): string | null {
   if (typeof result.accepted !== "boolean") return "accepted must be boolean";
   if (typeof result.deltaPpm !== "number" || !Number.isFinite(result.deltaPpm)) return "deltaPpm invalid";
   if (!Number.isSafeInteger(result.gateScorePpm) || !Number.isSafeInteger(result.confirmScorePpm)) {
@@ -395,7 +414,9 @@ function validateResultSchema(result: ScorerJobResult): string | null {
   if (result.accepted) {
     if (!isBytes32(result.evalReportHash)) return "accepted result missing evalReportHash";
     if (!isBytes32(result.artifactHash)) return "accepted result missing artifactHash";
-    if (result.evaluationProof && result.evaluationProof.kind !== "coretex-dual-pack-v1") return "evaluationProof kind invalid";
+    if (result.evaluationProof && result.evaluationProof.kind !== expectedProofKind) {
+      return `evaluationProof kind '${result.evaluationProof.kind}' does not pair with the active scoring law (expected '${expectedProofKind}')`;
+    }
   }
   return null;
 }

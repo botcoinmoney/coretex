@@ -71,6 +71,7 @@
  */
 
 import { merkleizeState, bytesToHex } from '../state/merkle.js';
+import { isBmuScoringLaw } from '../pipeline-versions.js';
 import { decodePatch, encodePatch, applyPatch } from '../state/patch.js';
 import { keccak256 } from '../state/keccak256.js';
 import { computePatchHash } from '../eval/seed-derivation.js';
@@ -205,7 +206,9 @@ export type EvalResult =
       readonly evaluationProof?: CoreTexDualPackEvaluationProof };
 
 export interface CoreTexDualPackEvaluationProof {
-  readonly kind: 'coretex-dual-pack-v1';
+  /** 'coretex-bmu-dual-pack-v1' under the BMU law (§8.3) — validated against
+   *  the active bundle's pipelineVersion BOTH directions (fail-closed). */
+  readonly kind: 'coretex-dual-pack-v1' | 'coretex-bmu-dual-pack-v1';
   readonly mode: 'future_blockhash_dual_pack';
   readonly epochId: number;
   readonly receivedAtBlock: number;
@@ -1198,6 +1201,7 @@ export class CoreTexCoordinatorCore {
       hiddenSeedCommit: this.config.expectedEpochPins.hiddenSeedCommit,
       minDualPackScorePpm: prepared.screenerThresholdPpm,
       ...(this.config.targetBlockOffset !== undefined ? { targetBlockOffset: this.config.targetBlockOffset } : {}),
+      proofKind: expectedDualPackProofKind(this.config.pipelineVersion),
     });
     if (proofInvalid) {
       return this.rejectSubmission('DUAL_PACK_PROOF_INVALID', proofInvalid);
@@ -1309,6 +1313,7 @@ export class CoreTexCoordinatorCore {
         hiddenSeedCommit: this.config.expectedEpochPins.hiddenSeedCommit,
         minDualPackScorePpm: minStateAdvanceDelta,
         ...(this.config.targetBlockOffset !== undefined ? { targetBlockOffset: this.config.targetBlockOffset } : {}),
+        proofKind: expectedDualPackProofKind(this.config.pipelineVersion),
       });
       if (proofInvalidForStateAdvance) {
         return this.rejectSubmission('DUAL_PACK_PROOF_INVALID', proofInvalidForStateAdvance);
@@ -1847,6 +1852,11 @@ function validateAcceptedEvalResult(result: EvalResult): { code: string; reason:
   return null;
 }
 
+/** §8.3 pairing: the proof kind the active bundle's scoring law REQUIRES. */
+export function expectedDualPackProofKind(pipelineVersion: string | undefined): CoreTexDualPackEvaluationProof['kind'] {
+  return isBmuScoringLaw(pipelineVersion) ? 'coretex-bmu-dual-pack-v1' : 'coretex-dual-pack-v1';
+}
+
 function validateDualPackProof(
   result: Exclude<EvalResult, { readonly outcome: 'reject' }>,
   expected: {
@@ -1860,11 +1870,14 @@ function validateDualPackProof(
     readonly minDualPackScorePpm?: number;
     readonly gateSeedCommit?: string;
     readonly confirmSeedCommit?: string;
+    /** Expected proof kind for the active scoring law (§8.3 pairing: an r5
+     *  bundle never accepts a BMU proof and vice versa). Default r5 kind. */
+    readonly proofKind?: CoreTexDualPackEvaluationProof['kind'];
   },
 ): string | null {
   const proof = result.evaluationProof;
   if (!proof || typeof proof !== 'object') return 'accepted evaluation missing dual-pack proof';
-  if (proof.kind !== 'coretex-dual-pack-v1') return 'dual-pack proof kind mismatch';
+  if (proof.kind !== (expected.proofKind ?? 'coretex-dual-pack-v1')) return 'dual-pack proof kind mismatch';
   if (proof.mode !== 'future_blockhash_dual_pack') return 'dual-pack proof mode mismatch';
   if (proof.epochId !== expected.epoch) return 'dual-pack proof epoch mismatch';
   if (!Number.isSafeInteger(proof.receivedAtBlock) || proof.receivedAtBlock < 0) return 'dual-pack proof receivedAtBlock invalid';

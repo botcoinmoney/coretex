@@ -40,6 +40,7 @@
  *   entrypoint) with the same fail-closed scorer gate.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, realpathSync } from 'node:fs';
+import { isR5StateLaw } from './pipeline-versions.js';
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -425,9 +426,12 @@ export function deriveEpochSecretRevealStatus(hiddenSeedCommit: string, epochSec
   return { evalReplayStatus: 'epoch_secret_revealed', epochSecretRevealed: true };
 }
 
-/** Mode flags derive HARD from the chain-pinned bundle manifest — never a silent default. */
+/** Mode flags derive HARD from the chain-pinned bundle manifest — never a
+ *  silent default. SET-MEMBERSHIP (BMU_SPEC §9 site 6): the BMU pipeline
+ *  ('coretex-bmu-v1-r5state') pins the r5 state law, so validator replay
+ *  applies patches under the same policy-atoms grammar. */
 export function policyAtomsModeFromManifest(manifest: { evaluator?: { profile?: { pipelineVersion?: string } } }): boolean {
-  return manifest.evaluator?.profile?.pipelineVersion === 'coretex-retrieval-v2-policy-r5';
+  return isR5StateLaw(manifest.evaluator?.profile?.pipelineVersion);
 }
 
 // ── one-command defaults (unit-tested directly) ───────────────────────────────
