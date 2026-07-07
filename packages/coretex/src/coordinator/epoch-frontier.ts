@@ -219,6 +219,14 @@ export function makeEpochFrontier({
   function stepEpoch(epoch: number, prevHonestAccepts: number | null, prevQualityAttempts: number | null = null, prunedActive = 0): EpochFrontierSnapshot {
     if (!initialized) { initialized = true; const a = activateNext(K, epoch); injectedSinceLastStep = 0; return snapshot(epoch, a, 0, 0); }
     const rootDeltaBudget = Math.max(0, maxRootDeltaPerEpoch - Math.max(0, prunedActive));
+    // Pruned ACTIVE rows vanished without a paired activation (pruning happens
+    // outside stepEpoch), so backfill them from the reserve like retirements —
+    // otherwise aggressive pruning shrinks the active set permanently even with
+    // a full reserve (observed: prune-to-EMPTY in the evolve continuity fixture,
+    // which every production loader would fail closed on). Capped at the full
+    // per-step budget: the runner's check max(activated, retired + prunedActive)
+    // already fails a prune count that busts the budget on its own.
+    const pruneBackfill = Math.min(Math.max(0, prunedActive), maxRootDeltaPerEpoch);
     let ret = 0;
     if (Number.isFinite(maxAge)) {
       // Age-based retirement is a BOUNDED drain, never a spike: retire at most
@@ -238,7 +246,7 @@ export function makeEpochFrontier({
       for (const id of aged) { active.delete(id); retired.add(id); cumulativeRetired++; ret++; }
     }
     if (mode === 'off' || mode === 'C0') {
-      const a = activateNext(ret, epoch);
+      const a = activateNext(ret + pruneBackfill, epoch);
       injectedSinceLastStep = 0;
       return snapshot(epoch, a, ret, 0);
     }
@@ -272,7 +280,7 @@ export function makeEpochFrontier({
     rate = Math.min(rate, Math.max(0, rootDeltaBudget - ret));
     rate = Math.min(rate, Math.max(0, order.length - reservePtr));
     ret += retireOldest(rate);
-    const a = activateNext(ret, epoch);
+    const a = activateNext(ret + pruneBackfill, epoch);
     injectedSinceLastStep = 0;
     return snapshot(epoch, a, ret, rate);
   }

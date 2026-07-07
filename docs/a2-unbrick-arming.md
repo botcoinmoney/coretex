@@ -23,15 +23,26 @@ below states its cadence assumption.
    mass-retires at the FIRST post-arm evolve (measured: active 9319 → 19, delta 387×
    the bound). Evidence: coordinator repo
    `.ops/bmu-evidence/track-a2/g-a4-retirement-sim-unpatched-code-live-state-maxage32.json`.
-2. **Prune headroom** (`epoch-frontier.ts` + `scripts/coretex-epoch-evolve.mjs`): the
-   runner's defense-in-depth check refuses a rotation when
+2. **Prune headroom + prune backfill** (`epoch-frontier.ts` + `scripts/coretex-epoch-evolve.mjs`):
+   the runner's defense-in-depth check refuses a rotation when
    `max(activated, retired + prunedActive) > maxRootDeltaPerEpoch`. A saturated aged
    drain used to spend the whole budget, so ANY evolve that force-prunes even one
    active eval_hidden id (corpus removals; `evolveMaxRemovals` is wired) would
    hard-fail the cutover for the entire drain. `stepEpoch` now accepts the pruned
-   count and leaves it headroom. Evidence:
+   count, leaves it headroom, AND backfills pruned actives from the reserve —
+   closing a pre-existing prune-to-empty hole where pruning the whole active window
+   left the frontier permanently empty despite a full reserve. Evidence:
    `g-a4-retirement-sim-rework-v2-prune-headroom-live.json` (12 evolves, 1 prune each:
    retired 23, runner delta exactly 24, all pass).
+3. **Empty-active-frontier guards** (two layers, closing the G-A4 empty-set condition):
+   (a) `scripts/coretex-epoch-evolve.mjs` `makeFrontier` REFUSES to publish any rotation
+   whose post-step active eval_hidden count is 0 — defense-in-depth against an explicit
+   `--min-fresh-eval-hidden 0` operator override (the default mint-floor quota of 8
+   already makes this unreachable otherwise); the refused rotation leaves stable state
+   untouched. (b) `scripts/arm-liveeval-bundle.mjs` REFUSES to generate a bundle pinning
+   finite `maxAge` when the profile pins `evolve.minFreshEvalHiddenPerEpoch < 1`
+   (finite maxAge + a zero fresh-mint floor = guaranteed eventually-empty active set;
+   loaders fail closed).
 
 ## REQUIRED at arm: genesis frontier-state rewrite
 
@@ -56,8 +67,13 @@ node scripts/coretex-stagger-frontier-activation.mjs \
   --mode retire-genesis --arm-epoch <armEpoch> --max-age 32
 ```
 
-Moves the 9300 epoch-0 rows into the retired set (deterministic, order[]-position
+Moves the epoch-0 rows into the retired set (deterministic, order[]-position
 ordered; prints old/new `activeFrontierRoot` + writes a `.meta.json` sibling).
+**The rewrite MUST be re-run at arm time on the THEN-CURRENT live frontier state,
+and the fresh `.meta.json` roots used for the repin.** Any roots quoted in this
+program's evidence (e.g. old `0xd00a3f32…` -> new `0x2edb5d12…`) are valid ONLY for
+the epoch-136 snapshot they were computed from — the live state advances with every
+evolve, so a stale rewrite output would fail the root-verified loaders at arm.
 Genesis rows are non-`zz_e` and can never enter scored packs via the liveEvalPack
 overlay anyway; base broad packs sample ALL eval_hidden rows regardless of active
 status — the rewrite changes only overlay bookkeeping and the pinned root. Apply as
@@ -83,8 +99,11 @@ drain is explicitly wanted.
 
 - **Empty-set edge:** maxAge + a stalled mint lane can empty the active set (measured
   at evolve 5 with zero mints post-rewrite); `loadActiveFrontierIds` fail-closes on an
-  empty set. A1's forced evolves mint on every real evolve, but confirm additions are
-  nonzero before arming and monitor `activeEvalHiddenCount` after.
+  empty set. The runner now REFUSES to publish such a rotation at the source (guard 3a
+  above), so the failure surfaces at the evolve, not downstream at loaders — but the
+  evolve still stalls until fresh rows mint. A1's forced evolves mint on every real
+  evolve; confirm additions are nonzero before arming and monitor
+  `activeEvalHiddenCount` after.
 - **Rebaseline cadence:** `baselineRecompute: activeRootChanged` fires the two-pass GPU
   rebaseline at every EVOLVE whose root moves (post-rewrite: every evolve with churn or
   aged retirement — i.e., effectively every forced evolve), not every epoch.

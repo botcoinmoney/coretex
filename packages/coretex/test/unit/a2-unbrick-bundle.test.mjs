@@ -14,10 +14,12 @@
  *    maxAge null->32) plus the recomputed bundleHash; limit sits exactly at the
  *    validated ceiling packSize - quota reservation.
  */
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -123,10 +125,51 @@ describe('epoch frontier: bounded age-based retirement (A2)', () => {
       `runner check max(activated=${s.activated}, retired=${s.retired}+pruned=${prunedActive}) = ${runnerRootDelta} must pass`);
     // Drain still progresses (bounded, not stalled).
     assert.ok(s.retired > 0, 'aged drain must still progress under prune headroom');
-    // prunedActive >= budget degrades gracefully to a no-retirement step, never negative.
+    // prunedActive >= budget: no further retirement (never negative); prune
+    // backfill is capped at the budget — the runner check refuses such a
+    // rotation anyway (the prune count alone exceeds maxRootDeltaPerEpoch).
     const s2 = f.stepEpoch(101, 0, 0, maxRootDeltaPerEpoch + 3);
     assert.equal(s2.retired, 0);
-    assert.equal(s2.activated, 0);
+    assert.equal(s2.activated, maxRootDeltaPerEpoch);
+  });
+
+  test('pruned active rows are backfilled from the reserve (prune-to-empty hole closed)', () => {
+    // Pruning happens OUTSIDE stepEpoch (pruneEpochFrontierState), so pruned
+    // actives used to vanish without a paired activation: prune away the whole
+    // active window and the frontier stayed permanently EMPTY despite a full
+    // reserve (observed in the evolve continuity fixture at epoch 2). The step
+    // now backfills the pruned count from the reserve.
+    const ids = [];
+    for (let i = 0; i < 10; i += 1) ids.push(`fam${i % 4}:${String(i).padStart(3, '0')}`);
+    const prunedState = {
+      schemaVersion: 'coretex.epoch-frontier-state.v1',
+      order: ids,
+      reservePtr: 0,
+      active: [], // both previously-active rows were pruned out of the state
+      retired: [],
+      cumulativeActivated: 2,
+      cumulativeRetired: 0,
+      initialized: true,
+      injectedSinceLastStep: 0,
+      ewmaAccepts: null,
+    };
+    const f = makeEpochFrontier({
+      evalHiddenIds: ids,
+      familyOf,
+      mode: 'C3',
+      activeWindow: 2,
+      minChurn: 2,
+      maxChurn: 12,
+      maxRootDeltaPerEpoch: 4,
+      maxAge: Infinity,
+      seed: 'a2-test',
+      initialState: prunedState,
+    });
+    const prunedActive = 2;
+    const s = f.stepEpoch(1, 0, 0, prunedActive);
+    assert.equal(s.activated, prunedActive, 'pruned actives are backfilled from the reserve');
+    assert.equal(s.activeEvalHiddenCount, 2, 'active window restored after the prune');
+    assert.ok(Math.max(s.activated, s.retired + prunedActive) <= 4, 'runner root-delta check still passes');
   });
 
   test('maxAge Infinity (historical law) never age-retires', () => {
@@ -208,5 +251,56 @@ describe('A2 unbrick candidate bundle — identical except the three sanctioned 
     assert.deepEqual(norm(a2), norm(src));
     assert.equal(a2.evaluator.profile.epochFrontier.maxAge, 32);
     assert.equal(src.evaluator.profile.epochFrontier.maxAge, null);
+  });
+});
+
+describe('arm-liveeval-bundle guard: finite maxAge requires a nonzero fresh-mint floor', () => {
+  const ARM = resolve(REPO_ROOT, 'scripts/arm-liveeval-bundle.mjs');
+  const A2_FAMILY_PRIORITY = 'temporal_update,conflict_lifecycle,multi_session_bridge,abstention_missing,causal_memory_chain,entity_resolution_atom,decision_provenance,scope_atom,validity_atom';
+  let dir;
+  before(() => { dir = mkdtempSync(join(tmpdir(), 'a2-arm-guard-')); });
+  after(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  const runArm = (args) => spawnSync(process.execPath, [ARM, ...args], { cwd: REPO_ROOT, encoding: 'utf8' });
+  const doctored = (name, mutate) => {
+    const m = JSON.parse(readFileSync(SRC_BUNDLE, 'utf8'));
+    mutate(m.evaluator.profile);
+    const p = join(dir, name);
+    writeFileSync(p, JSON.stringify(m, null, 2) + '\n');
+    return p;
+  };
+
+  test('refuses --max-age when the source profile pins minFreshEvalHiddenPerEpoch = 0', () => {
+    const src = doctored('zero-floor.json', (p) => { p.evolve = { minFreshEvalHiddenPerEpoch: 0 }; });
+    const r = runArm(['--bundle', src, '--out', join(dir, 'zero-floor-armed.json'), '--limit', '12', '--family-priority', 'temporal_update', '--max-age', '32']);
+    assert.equal(r.status, 1, `expected refusal, got ${r.status}\n${r.stderr}`);
+    assert.match(r.stderr, /zero fresh-mint floor|minFreshEvalHiddenPerEpoch=0/);
+  });
+
+  test('refuses a source bundle that ALREADY pins finite maxAge + zero mint floor, even without --max-age', () => {
+    const src = doctored('inherited-finite-maxage-zero-floor.json', (p) => {
+      p.epochFrontier = { ...p.epochFrontier, maxAge: 32 };
+      p.evolve = { minFreshEvalHiddenPerEpoch: 0 };
+    });
+    const r = runArm(['--bundle', src, '--out', join(dir, 'inherited-armed.json'), '--limit', '12', '--family-priority', 'temporal_update']);
+    assert.equal(r.status, 1, `expected refusal, got ${r.status}\n${r.stderr}`);
+    assert.match(r.stderr, /zero fresh-mint floor|minFreshEvalHiddenPerEpoch=0/);
+  });
+
+  test('finite maxAge + an explicit mint floor >= 1 is allowed', () => {
+    const src = doctored('floor-8.json', (p) => { p.evolve = { minFreshEvalHiddenPerEpoch: 8 }; });
+    const out = join(dir, 'floor-8-armed.json');
+    const r = runArm(['--bundle', src, '--out', out, '--limit', '12', '--family-priority', 'temporal_update', '--max-age', '32']);
+    assert.equal(r.status, 0, `expected success, got ${r.status}\n${r.stderr}`);
+    assert.equal(JSON.parse(readFileSync(out, 'utf8')).evaluator.profile.epochFrontier.maxAge, 32);
+  });
+
+  test('normal path unaffected: regenerating from the pristine source reproduces the committed A2 bundleHash', () => {
+    const out = join(dir, 'regen-a2.json');
+    const r = runArm(['--bundle', SRC_BUNDLE, '--out', out, '--limit', '12', '--family-priority', A2_FAMILY_PRIORITY, '--max-age', '32']);
+    assert.equal(r.status, 0, `expected success, got ${r.status}\n${r.stderr}`);
+    const committed = JSON.parse(readFileSync(A2_BUNDLE, 'utf8'));
+    assert.equal(JSON.parse(readFileSync(out, 'utf8')).bundleHash, committed.bundleHash,
+      'deterministic regeneration must reproduce the committed bundleHash');
   });
 });

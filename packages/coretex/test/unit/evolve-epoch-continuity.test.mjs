@@ -498,4 +498,50 @@ describe('evolve multi-epoch continuity (production script flow, chained 3 epoch
 
     assert.deepEqual(findTmpResidue(outRoot), [], 'no tmp residue across the whole chain');
   });
+
+  test('epoch 4 variant: an empty post-step active frontier HARD-FAILS (finite maxAge + zero mint floor + exhausted reserve)', () => {
+    // Defense-in-depth for the explicit --min-fresh-eval-hidden 0 override:
+    // finite maxAge ages out the whole tail, zero fresh additions + an
+    // exhausted reserve leave nothing to activate, and the rotation would
+    // publish an EMPTY active set (which loadActiveFrontierIds fail-closes on).
+    // Craft the exhausted-reserve state from the real epoch-3 output.
+    const stableState = JSON.parse(readFileSync(stableFrontier, 'utf8'));
+    const activeIds = new Set(stableState.active.map(([id]) => id));
+    const drained = {
+      ...stableState,
+      reservePtr: stableState.order.length,
+      retired: stableState.order.filter((id) => !activeIds.has(id)),
+    };
+    const drainedPath = join(outRoot, 'frontier-state-drained.json');
+    writeFileSync(drainedPath, JSON.stringify(drained, null, 2) + '\n');
+    // checkpoint continuity pins the frontier-state sha: thread a checkpoint
+    // variant that blesses the drained state (same epoch/logical lineage).
+    const checkpoint = JSON.parse(readFileSync(stableCheckpoint, 'utf8'));
+    const drainedCheckpointPath = join(outRoot, 'checkpoint-drained.json');
+    writeFileSync(drainedCheckpointPath, JSON.stringify({
+      ...checkpoint,
+      frontierStateSha256: sha256(drainedPath),
+    }, null, 2) + '\n');
+    const agedProfilePath = join(outRoot, 'profile-tiny-frontier-maxage1.json');
+    writeFileSync(agedProfilePath, JSON.stringify({
+      ...launchProfile,
+      epochFrontier: { ...launchProfile.epochFrontier, activeWindow: 2, maxAge: 1 },
+    }, null, 2) + '\n');
+    const rEmpty = runEvolve(epochArgs(4, {
+      outDir: join(outRoot, 'epoch-4-emptyactive'),
+      extra: [
+        '--profile', agedProfilePath,
+        '--frontier-state', drainedPath,
+        '--checkpoint', drainedCheckpointPath,
+        '--min-fresh-eval-hidden', '0',
+        // churn 0 => zero fresh eval_hidden mints; retractions keep the delta
+        // nonempty (tombstone docs) so the empty-delta guard does not mask the
+        // empty-ACTIVE-frontier guard under test.
+        '--churn', '0',
+      ],
+    }), { expectExit: 1 });
+    assert.match(rEmpty.stderr, /active frontier is EMPTY after the epoch 4 step/);
+    // the failed variant must not touch the stable frontier state
+    assert.deepEqual(JSON.parse(readFileSync(stableFrontier, 'utf8')), stableState, 'stable frontier state untouched by the refused rotation');
+  });
 });

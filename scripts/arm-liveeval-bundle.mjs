@@ -64,6 +64,21 @@ if (limit > profile.hiddenPack.packSize - quotaSum) {
   console.error(`--limit ${limit} exceeds packSize - quota reservation (${profile.hiddenPack.packSize - quotaSum})`);
   exit(1);
 }
+// Finite maxAge + a zero fresh-mint floor = guaranteed eventually-EMPTY active
+// frontier: aged retirement keeps draining the tail while evolves are allowed
+// to mint nothing, the reserve exhausts, and every loader fail-closes on an
+// empty active set (loadActiveFrontierIds) — a frozen lane by construction.
+// The epoch runner defaults minFreshEvalHidden to 8 when the profile does not
+// pin it, so only an EXPLICIT pin < 1 is refused here (the runner-side
+// --min-fresh-eval-hidden 0 override is separately guarded in
+// coretex-epoch-evolve.mjs, which refuses to publish an empty-active rotation).
+const effectiveMaxAge = maxAge ?? profile.epochFrontier.maxAge ?? null;
+const pinnedMintFloor = profile.evolve?.minFreshEvalHiddenPerEpoch;
+if (typeof effectiveMaxAge === 'number' && Number.isFinite(effectiveMaxAge)
+  && pinnedMintFloor !== undefined && pinnedMintFloor !== null && pinnedMintFloor < 1) {
+  console.error(`refusing to arm finite epochFrontier.maxAge=${effectiveMaxAge} with profile.evolve.minFreshEvalHiddenPerEpoch=${pinnedMintFloor}: finite maxAge + a zero fresh-mint floor guarantees an eventually EMPTY active frontier (loaders fail closed). Pin a fresh-mint floor >= 1 or keep maxAge null.`);
+  exit(1);
+}
 
 const armed = {
   ...src,

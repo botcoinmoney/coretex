@@ -445,6 +445,14 @@ function makeFrontier(profile, previousCorpus, nextCorpus, additions, outDir, { 
       fail(`active frontier root delta ${rootDelta} (activated=${snapshot.activated} retired=${snapshot.retired} prunedActive=${prunedActive}) exceeds maxRootDeltaPerEpoch ${maxRootDeltaPerEpoch}; refusing to emit the epoch rotation`);
     }
   }
+  // Defense-in-depth against an explicitly overridden mint floor
+  // (--min-fresh-eval-hidden 0): a finite maxAge can age out the whole tail,
+  // and with an exhausted reserve + zero fresh additions the rotation would
+  // publish an EMPTY active set, which every loader fail-closes on
+  // (loadActiveFrontierIds refuses empty sets) — freezing the lane.
+  if (snapshot.activeEvalHiddenCount === 0) {
+    fail(`active frontier is EMPTY after the epoch ${epoch} step (aged retirement + zero fresh eval_hidden additions with an exhausted reserve); loaders fail closed on an empty active set; refusing to publish the epoch rotation — mint fresh eval_hidden rows (min-fresh-eval-hidden >= 1) before retiring the tail`);
+  }
   const nextState = frontier.exportState();
   const nextStateJson = JSON.stringify(nextState, null, 2) + '\n';
   const outStatePath = statePath ? resolve(repoRoot, statePath) : resolve(outDir, 'frontier-state.json');
