@@ -1,183 +1,189 @@
 /**
- * BMU P2 — hardness-certification harness unit suite (certify.mjs).
- * Frozen spec: specs/BMU_SPEC.md rev3.2 (ad7e523) §2.2 (judge), §13.2
- * (quantized ordering + margins), gates G-B1..G-B3.
- *
- * Covers: judge u(t) component logic (required/forbidden/answer conjuncts);
- * deterministic quantized ranking + docId tiebreak; BM25 sanity; seeded
- * random-K determinism; temporal oracle structural derivation (label-free);
- * leak-screen detections; end-to-end certifyBank on a real (small) generator
- * bank — oracle 100%, baselines 0, all rows certified; real-lane merge with
- * synthetic cosine/rerank scores incl. no-substrate-solves rejection and
- * blank-state margin fields; fail-closed on duplicate doc ids / unknown
- * family.
+ * BMU P2 — hardness-certification harness gates (BMU_SPEC.md rev3.2 ad7e523
+ * §13.2 / I8 / G-B1..G-B3) over an in-memory conflict_lifecycle bank:
+ *   - judge law: required ⊆ top-B ∧ zero forbidden, at the row's budget;
+ *   - baseline determinism (BM25 ordering, seeded random-K) — re-run stable;
+ *   - structural oracle: solves every generated row from RELATIONS + doc
+ *     metadata only (a qrels-blind adapter), and fails closed (null) when
+ *     the structure is amputated;
+ *   - certifyBank end-to-end on a small bank: everything certified, gates
+ *     G-B2/G-B3 green; a poisoned bank (answer text leaked into the query)
+ *     is REJECTED with reasons, never silently dropped;
+ *   - §13.2 boundary margins: quantized grid-cell distances on both sides
+ *     of a rank boundary, cap-vs-pool degenerate case logged.
  */
-import { strict as assert } from 'node:assert';
-import { test } from 'node:test';
-
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import { splitForRecord, liveTailQueryId } from '../../dist/index.js';
 import {
-  quantize,
-  rankDocs,
-  judgeTopB,
+  generateConflictLifecycleClusters,
+} from '../../../../scripts/lib/bmu-generators/conflict_lifecycle.mjs';
+import {
+  createM1Registry,
+  makeCanonicalSplitOf,
+} from '../../../../scripts/lib/bmu-generators/common.mjs';
+import {
+  boundaryMargins,
   buildBm25Index,
-  bm25Score,
-  randomKLane,
-  ORACLE_LANES,
-  LEAK_SCREENS,
+  bm25Rank,
+  buildRealLaneJob,
   certifyBank,
+  conflictLifecycleOracleRank,
+  judgeTopB,
+  randomKRank,
+  selectRealLaneClusters,
 } from '../../../../scripts/lib/bmu-generators/certify.mjs';
-import { buildTemporalSampleBank, SAMPLE_BANK_PARAMS } from '../../../../scripts/lib/bmu-generators/emit-temporal-sample-bank.mjs';
 
-/** Small real bank: one epoch, two clusters — fast but end-to-end honest. */
-function smallBank() {
-  const params = { ...SAMPLE_BANK_PARAMS, epochs: [150], clustersPerEpoch: 2 };
-  const { clusters } = buildTemporalSampleBank(params);
-  return { kind: 'bmu-p2-sample-bank', family: 'temporal', clusters };
+const CORPUS_EPOCH = 136;
+const splitOf = makeCanonicalSplitOf({ splitForRecord, liveTailQueryId, corpusEpoch: CORPUS_EPOCH });
+
+function makeBank({ epochs = [137, 138], clustersPerEpoch = 3 } = {}) {
+  const subjects = Array.from({ length: 40 }, (_, i) => ({
+    id: `e_cert_s${i}`,
+    canonicalName: i % 3 === 2 ? `atlas-svc-${i}` : `Subject Persona${i}`,
+  }));
+  const registry = createM1Registry();
+  const rows = []; const docs = []; const relations = []; const clusters = [];
+  for (const epoch of epochs) {
+    const out = generateConflictLifecycleClusters({
+      epoch, seed: 'bmu-certify-test', subjects, registry, splitOf,
+      clusterCount: clustersPerEpoch, escalationLevel: epoch - epochs[0],
+    });
+    rows.push(...out.addedQueries); docs.push(...out.addedDocs);
+    relations.push(...out.addedRelations); clusters.push(...out.clusters);
+  }
+  return {
+    schema: 'coretex.bmu-p2-sample-bank.v1',
+    family: 'conflict_lifecycle',
+    params: { family: 'conflict_lifecycle', seed: 'bmu-certify-test', corpusEpoch: CORPUS_EPOCH },
+    counts: { clusters: clusters.length, rows: rows.length, publicDocs: docs.length, relations: relations.length },
+    clusters, publicDocs: docs, relations, rows,
+  };
 }
 
-test('rankDocs: quantized desc order with docId asc tiebreak (§13.2)', () => {
-  const ranked = rankDocs([
-    { docId: 'b', primary: 0.5004 },
-    { docId: 'a', primary: 0.5001 },   // same 1e-3 cell as b -> docId tiebreak
-    { docId: 'c', primary: 0.9 },
-    { docId: 'd', primary: 0.1 },
-  ]);
-  assert.deepEqual(ranked, ['c', 'a', 'b', 'd']);
-  assert.equal(quantize(0.5004, 1e-3), quantize(0.5001, 1e-3));
+describe('judge law (§13.2)', () => {
+  const task = { budgetB: 4, requiredEvidence: ['b', 'r'], forbiddenEvidence: ['a', 'd0'], answer: { id: 'b', value: 'x' } };
+  const ranked = (ids) => ids.map((docId, i) => ({ docId, score: -i }));
+  test('u=1 iff required ⊆ top-B and zero forbidden admitted', () => {
+    assert.equal(judgeTopB(ranked(['b', 'r', 'n1', 'n2', 'a']), task).judgeSuccess, true);
+    assert.equal(judgeTopB(ranked(['b', 'r', 'n1', 'a', 'n2']), task).judgeSuccess, false); // forbidden in-B
+    assert.equal(judgeTopB(ranked(['b', 'n1', 'n2', 'n3', 'r']), task).judgeSuccess, false); // required out
+  });
+  test('answer recovery is tracked separately from judge success', () => {
+    const j = judgeTopB(ranked(['b', 'n1', 'n2', 'n3', 'r']), task);
+    assert.equal(j.answerNoForbidden, true);
+    assert.equal(j.judgeSuccess, false);
+  });
 });
 
-test('judgeTopB: u=1 requires ALL of R⊆topB, F∩topB=∅, answer∈topB (§2.2)', () => {
-  const task = {
-    budgetB: 3,
-    requiredEvidence: ['r1', 'r2'],
-    forbiddenEvidence: ['f1'],
-    answer: { id: 'r1', value: 'x' },
+describe('baseline determinism', () => {
+  const bank = makeBank();
+  test('BM25 ordering is re-run stable', () => {
+    const idx = buildBm25Index(bank.publicDocs);
+    const q = bank.rows[0].queryText;
+    assert.deepEqual(bm25Rank(idx, q), bm25Rank(buildBm25Index(bank.publicDocs), q));
+  });
+  test('random-K is seeded (same seed → same order; different seed → different)', () => {
+    const a = randomKRank(bank.publicDocs, 'seed:1');
+    assert.deepEqual(a, randomKRank(bank.publicDocs, 'seed:1'));
+    assert.notDeepEqual(a, randomKRank(bank.publicDocs, 'seed:2'));
+  });
+});
+
+describe('structural oracle (G-B2, qrels-blind)', () => {
+  const bank = makeBank();
+  const ctx = {
+    docs: bank.publicDocs,
+    docById: new Map(bank.publicDocs.map((d) => [d.id, d])),
+    relations: bank.relations,
   };
-  assert.equal(judgeTopB(['r1', 'r2', 'z'], task).u, 1);
-  // forbidden admitted -> 0
-  const f = judgeTopB(['r1', 'r2', 'f1'], task);
-  assert.equal(f.u, 0);
-  assert.deepEqual(f.forbiddenAdmitted, ['f1']);
-  // required not covered -> 0
-  assert.equal(judgeTopB(['r1', 'z', 'y'], task).u, 0);
-  // answer outside topB (r1 at rank 4) -> 0
-  assert.equal(judgeTopB(['r2', 'z', 'y', 'r1'], task, 3).u, 0);
-  // budget override tightens: at B=1 r2 no longer fits
-  assert.equal(judgeTopB(['r1', 'r2', 'z'], task, 1).u, 0);
-  // ... while B=2 still admits the full required set
-  assert.equal(judgeTopB(['r1', 'r2', 'z'], task, 2).u, 1);
-});
-
-test('bm25: exact-vocabulary doc outranks unrelated doc', () => {
-  const docs = [
-    { id: 'gold', text: 'the launch window for orion is march' },
-    { id: 'noise', text: 'unrelated text about gardening and soil' },
-  ];
-  const idx = buildBm25Index(docs);
-  const q = 'what is the launch window for orion?';
-  assert.ok(bm25Score(idx, q, 'gold') > bm25Score(idx, q, 'noise'));
-});
-
-test('randomKLane: deterministic per (seed,row), varies across rows', () => {
-  const docs = Array.from({ length: 20 }, (_, i) => ({ id: `d${String(i).padStart(2, '0')}` }));
-  const a = randomKLane({ id: 'row1' }, docs, 's');
-  const b = randomKLane({ id: 'row1' }, docs, 's');
-  const c = randomKLane({ id: 'row2' }, docs, 's');
-  assert.deepEqual(a, b);
-  assert.notDeepEqual(a, c);
-  assert.deepEqual([...a].sort(), docs.map((d) => d.id));
-});
-
-test('temporal oracle derives evidence from STRUCTURE and matches generator labels', () => {
-  const bank = smallBank();
-  const docs = bank.clusters.flatMap((c) => c.docs);
-  for (const cluster of bank.clusters) {
-    for (const row of cluster.rows) {
-      const o = ORACLE_LANES.temporal(row, cluster, docs, row.bmuTask.budgetB);
-      // label agreement (mint-consistency): structure-derived == stamped
-      assert.deepEqual([...o.evidence].sort(), [...row.bmuTask.requiredEvidence].sort(), row.id);
-      assert.equal(o.answerId, row.bmuTask.answer.id, row.id);
-      // never admits a forbidden doc
-      for (const f of row.bmuTask.forbiddenEvidence) assert.ok(!o.ranked.includes(f), row.id);
-      assert.equal(judgeTopB(o.ranked, row.bmuTask).u, 1, row.id);
+  test('solves every generated row from relations + doc metadata', () => {
+    for (const row of bank.rows) {
+      const ranked = conflictLifecycleOracleRank(row, ctx);
+      assert.ok(ranked, `oracle returned null for ${row.id}`);
+      const j = judgeTopB(ranked, row.bmuTask);
+      assert.equal(j.judgeSuccess, true, `oracle judge failed on ${row.id}: ${JSON.stringify(j)}`);
     }
-  }
+  });
+  test('fails closed (null) when the contradicts edge is amputated', () => {
+    const row = bank.rows[0];
+    const amputated = { ...ctx, relations: ctx.relations.filter((r) => r.label !== 'contradicts') };
+    assert.equal(conflictLifecycleOracleRank(row, amputated), null);
+  });
 });
 
-test('leak screen: detects answer-value leak, gold-only vocab, shared skeleton', () => {
-  const bank = smallBank();
-  const cluster = bank.clusters[0];
-  const docs = bank.clusters.flatMap((c) => c.docs);
-  const idx = buildBm25Index(docs);
-  const row = cluster.rows.find((r) => r.questionType === 'current_value');
-  // clean generator row passes
-  assert.equal(LEAK_SCREENS.temporal(row, cluster, idx).pass, true);
-  // answer value injected -> fail
-  const leaky = { ...row, queryText: `${row.queryText} maybe ${cluster.currentValue}?` };
-  const r1 = LEAK_SCREENS.temporal(leaky, cluster, idx);
-  assert.equal(r1.pass, false);
-  assert.ok(r1.reasons.some((x) => x.startsWith('answer_value_in_question')));
-  // gold-only vocab injected -> fail
-  const vocab = { ...row, queryText: `${row.queryText} was it superseded?` };
-  const r2 = LEAK_SCREENS.temporal(vocab, cluster, idx);
-  assert.ok(r2.reasons.some((x) => x.startsWith('gold_only_vocab_in_question')));
-  // gold doc text pasted into question -> shared-skeleton fail
-  const goldDoc = cluster.docs.find((d) => d.id === row.bmuTask.requiredEvidence[0]);
-  const skel = { ...row, queryText: goldDoc.text };
-  const r3 = LEAK_SCREENS.temporal(skel, cluster, idx);
-  assert.ok(r3.reasons.some((x) => x.startsWith('shared_4gram_skeleton_with_gold')));
+describe('certifyBank end-to-end', () => {
+  test('clean bank: all certified, G-B2/G-B3 gates green, real lane logged as capacity gap', () => {
+    const bank = makeBank();
+    const report = certifyBank(bank, { realClusters: 2 });
+    assert.equal(report.counts.rejected, 0, JSON.stringify(report.rejectionReasonHistogram));
+    assert.equal(report.counts.certified, bank.rows.length);
+    assert.equal(report.gates['G-B2_oracle'].pass, true);
+    assert.equal(report.gates['G-B3_bm25'].pass, true);
+    assert.equal(report.gates['G-B3_firstK'].pass, true);
+    assert.equal(report.gates['G-B3_randomK'].pass, true);
+    assert.equal(report.gates.leakScreen.pass, true);
+    // no real-lane scores supplied → the gate must NOT silently pass
+    assert.equal(report.gates['G-B1_realLane_noSubstrate'].pass, false);
+    assert.equal(report.realLane.rowsCertified, 0);
+    assert.ok(report.realLane.caps.length >= 2);
+  });
+
+  test('poisoned bank (answer value leaked into a query) → rejected WITH reasons', () => {
+    const bank = makeBank();
+    const victim = bank.rows.find((r) => r.questionType === 'current_for_scope');
+    victim.queryText = `${victim.queryText} (${victim.bmuTask.answer.value})`;
+    const report = certifyBank(bank, { realClusters: 2 });
+    const rej = report.rejected.find((r) => r.rowId === victim.id);
+    assert.ok(rej, 'leaky row must be rejected');
+    assert.ok(rej.reasons.includes('answer_leak'), JSON.stringify(rej));
+    assert.ok(report.rejectionReasonHistogram.answer_leak >= 1);
+    // nothing silently dropped: certified + rejected == total
+    assert.equal(report.counts.certified + report.counts.rejected, bank.rows.length);
+  });
+
+  test('a task whose oracle structure is broken is rejected, not dropped', () => {
+    const bank = makeBank();
+    const victimCluster = bank.clusters[0];
+    bank.relations = bank.relations.filter((r) => !(r.label === 'contradicts' && victimCluster.docIds.includes(r.src)));
+    const report = certifyBank(bank, { realClusters: 2 });
+    for (const rowId of victimCluster.rowIds) {
+      const rej = report.rejected.find((r) => r.rowId === rowId);
+      assert.ok(rej && rej.reasons.includes('oracle_no_structural_solution'), `row ${rowId}: ${JSON.stringify(rej)}`);
+    }
+    assert.equal(report.gates['G-B2_oracle'].rate < 1, true);
+  });
 });
 
-test('certifyBank end-to-end on a real generator bank: oracle 1.0, trivial baselines 0, all certified', () => {
-  const bank = smallBank();
-  const report = certifyBank(bank, { seed: 'unit-test-seed' });
-  assert.equal(report.totals.rows, 10);
-  assert.equal(report.totals.oracleRate, 1);
-  assert.equal(report.baselineRates.bm25.uRate, 0);
-  assert.equal(report.baselineRates.firstK.uRate, 0);
-  assert.equal(report.baselineRates.randomK.uRate, 0);
-  assert.equal(report.totals.certificationRate, 1);
-  assert.deepEqual(report.rejectedTasks, []);
-  assert.equal(report.certifiedSubset.length, 10);
-  // no-silent-caps: real lane not run must be stated
-  assert.match(report.realLaneCoverage.cap, /NOT RUN/);
-});
-
-test('certifyBank real-lane merge: no-substrate solve rejects; margins reported for blank state', () => {
-  const bank = smallBank();
-  const cluster = bank.clusters[0];
-  const row = cluster.rows.find((r) => r.questionType === 'current_value');
-  const allDocs = bank.clusters.flatMap((c) => c.docs);
-  // Synthetic "real" scores where the no-substrate lane SOLVES the task:
-  // required docs + answer on top, forbidden buried.
-  const cosine = {}; const rerank = {};
-  allDocs.forEach((d, i) => { cosine[d.id] = 0.2 - i * 1e-4; });
-  for (const rid of row.bmuTask.requiredEvidence) { cosine[rid] = 0.99; rerank[rid] = 0.99; }
-  // benign out-of-cluster docs fill the rest of top-B; the trap reranks low
-  const benign = allDocs.filter((d) => !cluster.docs.includes(d)).slice(0, 2);
-  rerank[benign[0].id] = 0.9;
-  rerank[benign[1].id] = 0.8;
-  rerank[cluster.docs.find((d) => d.role === 'stale_trap').id] = 0.01;
-  const realLane = { params: { rerankCandidates: 16, rerankerInputTopK: 64 }, rows: { [row.id]: { cosine, rerank } } };
-  const report = certifyBank(bank, { seed: 'unit-test-seed', realLane });
-  const t = report.perTask.find((x) => x.rowId === row.id);
-  assert.equal(t.realLane.bgeQwen.u, 1);
-  assert.equal(t.certified, false);
-  assert.ok(t.reasons.includes('real_lane_no_substrate_solves:bge+qwen'));
-  assert.equal(t.realLane.margins.state, 'blank');
-  assert.ok(Array.isArray(t.realLane.margins.finalOrder));
-  const reqMargin = t.realLane.margins.finalOrder.find((m) => m.docId === row.bmuTask.requiredEvidence[0]);
-  assert.equal(reqMargin.inTopB, true);
-  assert.ok(reqMargin.marginOk); // 0.99 vs 0.5 boundary ≈ 490 cells
-  // coverage cap logged with exact counts
-  assert.match(report.realLaneCoverage.cap, /1\/10 rows/);
-  // other rows untouched by the real lane stay certified
-  assert.equal(report.totals.certified, 9);
-});
-
-test('fail-closed: duplicate doc ids and unregistered family throw', () => {
-  const bank = smallBank();
-  assert.throws(() => certifyBank({ ...bank, family: 'no_such_family' }), /no oracle lane/);
-  const dup = { ...bank, clusters: [bank.clusters[0], bank.clusters[0]] };
-  assert.throws(() => certifyBank(dup), /duplicate doc id/);
+describe('real-lane plumbing', () => {
+  const bank = makeBank();
+  test('subsample selection is deterministic and epoch-spread', () => {
+    const a = selectRealLaneClusters(bank, 2);
+    const b = selectRealLaneClusters(bank, 2);
+    assert.deepEqual(a.map((c) => c.motifGroupId), b.map((c) => c.motifGroupId));
+    assert.equal(new Set(a.map((c) => c.epoch)).size, 2, 'must spread across epochs (escalation coverage)');
+  });
+  test('job carries the full doc pool + exactly the subsample queries', () => {
+    const job = buildRealLaneJob(bank, { realClusters: 2 });
+    assert.equal(job.docs.length, bank.publicDocs.length);
+    assert.equal(job.queries.length, 10);
+    assert.equal(job.pins.rerankerInputTopK, 64);
+  });
+  test('margins: quantized grid-cell distance on both sides of a boundary', () => {
+    const ranked = [
+      { docId: 'x1', score: 0.9 }, { docId: 'x2', score: 0.8 },
+      { docId: 'x3', score: 0.5 }, { docId: 'x4', score: 0.499 },
+    ];
+    const m = boundaryMargins(ranked, 2, 1e-3, ['x1', 'x3', 'x4']);
+    const by = Object.fromEntries(m.perDoc.map((d) => [d.docId, d]));
+    assert.equal(by.x1.side, 'in');
+    assert.equal(by.x1.cells, 400); // 0.9 vs first-out 0.5
+    assert.equal(by.x3.side, 'out');
+    assert.equal(by.x3.cells, 300); // last-in 0.8 vs 0.5
+    assert.equal(by.x4.cells, 301);
+    // degenerate: pool smaller than the cap → logged, no margins invented
+    const deg = boundaryMargins(ranked, 64, 1e-3, ['x1']);
+    assert.equal(deg.boundary, null);
+    assert.match(deg.note, /in-cap/);
+  });
 });
