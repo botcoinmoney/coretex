@@ -1,6 +1,6 @@
 # BMU v1 — Budgeted Memory Utility: the permanent CoreTex scoring law
 
-**Revision:** rev2 (adversarial-review response; changelog in §17).
+**Revision:** rev3 (second adversarial-review response; changelog in §17).
 **Status:** SPEC FREEZE candidate (Track B, phase P1 B-lane). No production code
 accompanies this document. Nothing here arms, pins, or deploys anything.
 
@@ -63,15 +63,18 @@ BMU v1 KEEPS, unmodified in mechanism:
 
 **Named deltas to inherited pack machinery (amending rev1's "verbatim"
 claim):** BMU modifies exactly TWO pack-law mechanisms, both specified in §6:
-(1) the live-eval overlay admission becomes seed-dependent with confirm-side
-exclusion (rev1 kept `admitActiveLiveEvalEvents` verbatim, which is
-seed-INDEPENDENT — newest-epoch-first per family,
-`src/eval/hidden-query-pack.ts:392-399` — and would have injected the SAME
-fresh rows into gate and confirm, defeating I6 on exactly the fresh-headroom
-rows); (2) broad-pack eligibility becomes active-frontier-aware (the
-designed-but-never-armed Stage-4 §A5 mechanism), which is what makes
-retirement real for scored packs (§6.5). Everything else listed above is
-inherited byte-for-byte.
+(1) the live-eval overlay admission becomes seed-dependent, per-BMU-family
+slot-allocated, with confirm-side exclusion (rev1 kept
+`admitActiveLiveEvalEvents` verbatim, which is seed-INDEPENDENT —
+newest-epoch-first per family, `src/eval/hidden-query-pack.ts:392-399` — and
+would have injected the SAME fresh rows into gate and confirm, defeating I6
+on exactly the fresh-headroom rows); (2) broad-pack eligibility becomes
+active-frontier-aware (the designed-but-never-armed Stage-4 §A5 mechanism),
+which is what makes retirement real for scored packs (§6.5). One
+generator-side prerequisite (not a pack-law change): the logical-delta
+bridge passes `bmuTask` through its field allowlist (§6.7a). Everything else
+listed above is inherited byte-for-byte. The full mechanism-delta list is
+§8.5.
 
 r5 survives as a replay-only law for historical artifacts: profile pins keep
 old receipts replayable forever (`CORETEX_PIPELINE_VERSIONS_SUPPORTED`,
@@ -192,10 +195,15 @@ minority mass on the two anti-gaming descendants — the Phase-0 shape
 (`specs/research_brief.md:318-334`).
 
 **Validation:** `assertValidBmuWeights` becomes a COMPOSITION validator: with
-the pinned quotas Q_f, overlay share O_f, and free fill (§6.2), it asserts
-`| (Q_f + O_f) / packSize − w_f | ≤ 0.03` for every family, and exactly the
-four v1 families present. r5's `assertValidWeights`
-(`retrieval-benchmark.ts:84-93`) is untouched for r5 replay.
+the pinned quotas Q_f and the pinned per-BMU-family overlay SLOT ALLOCATION
+O_f (§6.4 slot law — O_f is a pinned integer per family, not an emergent
+round-robin outcome), it asserts `| (Q_f + O_f) / packSize − w_f | ≤ 0.03`
+for every family, and exactly the four v1 families present. The 2 free-fill
+rows are EXCLUDED from the validator: they are seeded, family-unbiased
+sampling noise, bounding per-pack REALIZED deviation at ±2/64 ≈ ±0.031 in
+the worst case — the ±0.03 bound governs the pinned expectation, not each
+realized pack. r5's `assertValidWeights` (`retrieval-benchmark.ts:84-93`) is
+untouched for r5 replay.
 
 **Per-family utility** `U_f = mean of u(t) over family-f rows in the pack` is
 still computed — it drives the floors (§2.5), the G-B8 family-collapse alarm,
@@ -209,10 +217,25 @@ BMU bundle pins:
 - `patchAcceptanceFloors.minImprovementPpm = 20_000`
 - `replayTolerancePpm = 250` (unchanged; satisfies the bundle validation
   `replayTolerancePpm ≤ minImprovementPpm`, `src/bundle/index.ts:1508-1509`)
-- `baselineVarianceSource = 'rotating_pack'`, `baselineVariancePpm` measured
-  at rebaseline (§10)
+- **`baselineVarianceSource = 'unavailable'` ⇒ the variance term is ZERO by
+  the existing source rule (`computeAcceptanceThresholdPpm` counts variance
+  only for `rotating_pack`/`broad_sampling`,
+  `retrieval-benchmark.ts:114-117`).** The BMU variance law: cross-pack
+  parent variance MUST NOT enter the acceptance threshold. Justification:
+  the accept comparison is SAME-PACK (`scoreAgainstSeed` computes
+  before/after on one pack, `production-evaluator.ts:846-858`), so parent
+  variance across rotated packs never touches Δ; r5's variance term
+  compensated continuous-composite sampling noise, which the §13.2 quantized
+  judge eliminates. Under quantization a rotating-pack variance measurement
+  would read ≥ 1 flip = 15,625+ ppm and silently rewrite the flip law to
+  3–4 flips — exactly the failure this pin forbids. The protection variance
+  used to provide moves to an ARM-GATE certification (§6.7): measured
+  `scoreState` variance across the certified pack rotation MUST be
+  < q/2 = 7,812 ppm (parent utility flip-stable), else certification failed
+  and the bundle MUST NOT arm.
 
-Acceptance threshold ≈ 20_250+ ppm. In row-flip units (q = 15_625):
+Acceptance threshold = 20_000 + 250 + 0 = **20_250 ppm, exactly**. In
+row-flip units (q = 15_625):
 
 - **1 net flip** = 15_625 < 20_250 → REJECTED for state advance. A single
   row flip can never advance state (this is also the §6.5 lucky-sampling
@@ -225,15 +248,27 @@ Acceptance threshold ≈ 20_250+ ppm. In row-flip units (q = 15_625):
   threshold" = 60_000 ppm = 4 flips — reachable for genuine cluster patches;
   P4 calibrates and MAY re-pin `minImprovementPpm` within [q+1, 2q] with the
   same one-flip-rejecting property.
-- **Screener staircase:** the controller's dynamic ceiling
-  (`min(maxThresholdPpm=150k, stateAdvanceThresholdPpm≈20.25k)`,
-  `work-units.ts:260-265`) caps the screener at ~20_250 while its floor terms
-  (minDelta 50, `stateAdvanceThresholdFloorBps` 2000 → ~4_050 ppm) keep it
-  far below one quantum in normal regimes — so **1 flip = screener pass,
-  ≥ 2 flips = state advance**: the pass-rate staircase intent
+- **Screener staircase (controller inputs pinned for BMU):** the screener
+  controller is mechanically unchanged (`computeCoreTexScreenerThresholdPpm`,
+  `work-units.ts:207-266`), but one input MUST be clamped: the coordinator's
+  BMU work-policy wiring clamps `recentNoiseFloorPpm` to < q/2 = 7,812 ppm
+  before calling the controller (under quantization a "noise" reading is
+  itself flip-denominated; unclamped, `noiseFloorMultiplierBps = 20000` (2×)
+  would push `noiseDelta` ≥ 15,625+ and pin the screener at its
+  20,250 dynamic ceiling, killing the 1-flip lane). With the clamp, the term
+  arithmetic is: `minDelta` 50; `stateAdvanceFloorDelta` =
+  ceil(20,250 × 2000/10000) = 4,050; `headroomDelta` = remaining ×
+  1 bps ≤ 100 ppm; `noiseDelta` = 2 × (< 7,812) < 15,624. So
+  screener ∈ [4,050, 15,624] < q = 15,625 in all normal regimes — **1 flip =
+  screener pass, ≥ 2 flips = state advance**: the pass-rate staircase intent
   (`specs/research_brief.md:281-308,338-354`) re-emerges denominated in
-  row-flips. The Phase-0 staircase percentages (random ~0% / weak 5–10% /
-  strong 20–30%) are P4/P5 calibration targets, not per-task grading.
+  row-flips. CAVEAT (by design, not a staircase break): under active probe
+  attacks the anti-gaming multiplier (up to ×6,
+  `work-units.ts:256-263`) may legitimately raise the screener to the
+  20,250 ceiling — the 1-flip lane closes while probes persist and reopens
+  when they stop. The Phase-0 staircase percentages (random ~0% / weak
+  5–10% / strong 20–30%) are P4/P5 calibration targets, not per-task
+  grading.
 
 ### 2.5 Floors (quantization-aware; replaces rev1 §2.4)
 
@@ -547,8 +582,21 @@ yields cap = 64 − 50 = **14**. The BMU bundle pins:
   at 12 and shipped `liveeval12-allfam-age32` with limit 12 — `c677e36`);
   rev1's "limit ≥ 16" mandate was un-armable under the validation law and is
   WITHDRAWN. No validation-code change is needed for the limit (§9 site 17).
-- `familyPriority` = the ten logicalFamily names of the §5.6 table (round-
-  robin admission ⇒ ~3 fresh rows per BMU family per pack).
+- **Overlay slot allocation is per BMU FAMILY, pinned: O_f = 3/3/3/3** (12
+  slots). The inherited round-robin unit is the logicalFamily
+  (`admitActiveLiveEvalEvents` iterates `familyPriority` names,
+  `hidden-query-pack.ts:400-440`), and with the ten §5.6 logicalFamily names
+  a 12-slot round-robin would yield ≈ 2/2/4/4 per BMU family — conflict
+  share (15+2)/64 = 0.266, |0.266 − 0.30| = 0.034 > ±0.03, REJECTED by the
+  §2.3 validator. The BMU law therefore allocates slots per BMU family
+  (3 each), each family's slots drawn from the UNION of its mapped
+  logicalFamily cohorts per the §5.6 table (so thin logicalFamilies —
+  entity_resolution_atom 17 / scope_atom 19 / validity_atom 22 rows [E136] —
+  never need their own cohort; they pool into `near_collision_abstention`).
+  Draw + fallback + redistribution rules in §6.4. The bundle still writes
+  `familyPriority` as the ten logicalFamily names (the row-matching
+  namespace); the 3/3/3/3 allocation is a new pinned field of the BMU
+  overlay law (`liveEvalPack.familySlots`), validated to sum to `limit`.
 - `epochFrontier.maxAge = 32`, with A2's canonical retirement semantics
   incorporated by reference (`c677e36`): age-based retirement is a BOUNDED
   per-epoch drain — oldest activation first, capped at `maxRootDeltaPerEpoch`,
@@ -562,11 +610,26 @@ yields cap = 64 − 50 = **14**. The BMU bundle pins:
   `coretex-bmu-v1-r5state`.
 - Free fill = 64 − 50 − 12 = 2 rows (seeded broad sampling, as today).
 
-Expected composition: temporal 10+3=13, conflict 15+3=18, multi_hop 15+3=18,
-near_collision 10+3=13 (=62; +2 fill) → shares 0.203 / 0.281 / 0.281 / 0.203
-vs targets 0.20/0.30/0.30/0.20 — within the ±0.03 composition-validation
-bound (§2.3). Fresh-frontier share = 12/64 = 18.75% per pack, every pack,
-across all four families (I7a).
+**Composition arithmetic, end-to-end (F3 recompute), gate AND confirm:**
+
+| family | Q_f | O_f (slot law) | Q_f+O_f | share /64 | w_f | deviation |
+|---|---|---|---|---|---|---|
+| temporal | 10 | 3 | 13 | 0.203 | 0.20 | 0.003 ✓ |
+| conflict_lifecycle | 15 | 3 | 18 | 0.281 | 0.30 | 0.019 ✓ |
+| multi_hop_relation | 15 | 3 | 18 | 0.281 | 0.30 | 0.019 ✓ |
+| near_collision/abstention | 10 | 3 | 13 | 0.203 | 0.20 | 0.003 ✓ |
+
+All deviations ≤ ±0.03 ⇒ `assertValidBmuWeights` passes the pinned bundle.
+The CONFIRM pack has the identical pinned expectation: the same quotas are
+enforced quota-first on the post-exclusion pool and the same 3/3/3/3 slot law
+applies to its overlay draw. Fill feasibility post-exclusion (worst case,
+per family): the gate pack consumes ≤ ceil(18/5) = 4 clusters ≈ 20 rows of a
+family's clusters; with the §6.7 arm-gate minima (E_f ≥ 80/80 for the
+0.30-share families, ≥ 60/60 for the 0.20-share families), the residual pool
+is ≥ 80−20 = 60 (resp. 60−15 = 45) rows per family — well above the
+per-family demand Q_f + O_f ≤ 18. Free fill (2 rows) excluded from the
+validator per §2.3. Fresh-frontier share = 12/64 = 18.75% per pack, every
+pack, across all four families (I7a).
 
 ### 6.3 The derivation function contract
 
@@ -614,26 +677,46 @@ fresh rows, and any per-row exploit on them would clear `min(gate,confirm)`
 — defeating I6 exactly where the headroom is. BMU therefore changes overlay
 admission (this is named delta (1) of §1):
 
+- **Slot allocation (pinned):** `liveEvalPack.familySlots` = 3/3/3/3 per BMU
+  family (§6.2); each family's slots draw from the union of its mapped
+  logicalFamily cohorts (§5.6).
 - **Fresh cohort:** active `zz_e*` BMU-eligible rows with age ≤
-  `freshWindow` (bundle-pinned, default 2 epochs); if a family's cohort is
-  thinner than its round-robin share, it falls back to newest-first within
-  the active set (deterministic).
-- **Seeded draw:** each overlay slot's row is drawn from its family cohort by
-  the same `digestU256` pattern the quota draws use
+  `freshWindow` (bundle-pinned, default 2 epochs).
+- **Seeded draw:** each overlay slot's row is drawn from its BMU family's
+  fresh cohort by the same `digestU256` pattern the quota draws use
   (`hidden-query-pack.ts:279-296`), domain-tagged `liveEval`, keyed by the
   pack's seed — gateSeed for the gate pack, confirmSeed for the confirm pack.
   Which fresh rows appear is thus unpredictable pre-blockhash, while the
   fresh SHARE stays guaranteed (I7a: freshness is a cohort property, not a
   row-identity property).
+- **Fallback (F6 — SEEDED, never newest-first):** if a family's fresh cohort
+  cannot fill its slots (routine for confirm post-exclusion), the remaining
+  slots draw by the SAME seeded digest over the family's FULL eligible-active
+  membership. Rationale: a deterministic newest-first fallback re-opens the
+  rev1-B3 predictability hole in exactly the thin case; a minimum-cohort
+  precondition was rejected because thinness arises PER-PATCH
+  (post-exclusion) and blocking evaluation on it would let corpus state DoS
+  the lane. The arm-gate minima (§6.7) + the ≥2-clusters/family/epoch
+  generator duty keep cohorts populated in steady state; the fallback
+  degrades freshness gracefully without degrading unpredictability.
+- **Redistribution:** if even the full-membership draw cannot fill a
+  family's slots (impossible post-arm-gate in the broad pool; conceivable
+  only under quota exhaustion bugs), the unfilled slots redistribute
+  round-robin to the remaining BMU families in fixed order
+  (temporal → conflict_lifecycle → multi_hop_relation →
+  near_collision/abstention) and the pack emits a composition-deviation
+  telemetry flag.
 - **Exclusion:** the confirm-side draw additionally excludes rows whose
   motifGroupId/subjectEntityId/templateId ∈ X (§6.3) — the exclusion applies
   to overlay and broad rows alike.
 - **Contract deltas:** `deriveScoredQueryPack(…)` gains an optional
   `exclude?: ReadonlySet<string>` (composite keys); `admitActiveLiveEvalEvents`
-  opts gain `{ seedHex?, freshWindow?, excludeKeys? }`. ALL new parameters
-  absent ⇒ byte-identical current behavior — r5 bundles and every epoch ≤
-  the flip replay unchanged (the same replay-safety pattern the overlay
-  itself used, `hidden-query-pack.ts:59-84`).
+  opts gain `{ seedHex?, freshWindow?, familySlots?, excludeKeys? }` — the
+  per-BMU-family slot allocation replaces the logicalFamily round-robin as
+  the admission unit when present (§8.5 wire/mechanism delta list). ALL new
+  parameters absent ⇒ byte-identical current behavior — r5 bundles and every
+  epoch ≤ the flip replay unchanged (the same replay-safety pattern the
+  overlay itself used, `hidden-query-pack.ts:59-84`).
 - **Determinism/replay:** both packs remain pure functions of
   (seeds, corpus, active set, profile); post-reveal recomputation per §6.6.
 
@@ -679,7 +762,7 @@ carries a clarifying note.
    nothing — u(t) demands trap EVICTION, which demands the real operation
    (§2.2). Knowing labels degrades to search-cost savings on WHERE headroom
    is; performing the operation there is legitimate mining.
-2. **Frontier-aware eligibility + retirement (lifecycle):** under
+2. **Frontier-aware eligibility + bounded age rotation (lifecycle):** under
    `coretex-bmu-v1-r5state`, BROAD-pack eligibility requires active-frontier
    membership: `hiddenPackEventEligible` additionally requires
    `activeFrontierIds.has(event.id)` (the delta at
@@ -687,18 +770,26 @@ carries a clarifying note.
    Stage-4 §A5 `deriveQueryPack(…, activeIds?)` design, now mandatory —
    today's broad pack ignores the frontier entirely, so retirement never
    touches scored packs). Fail-closed pairing both directions, mirroring
-   `production-evaluator.ts:770-790`. On top of that active set:
-   - **retire-on-exposure:** every row referenced by the packs of an
-     ACCEPTED published artifact (screener pass or state advance) is queued
-     for retirement at the next evolve, drained with priority AHEAD of aged
-     rows through A2's bounded oldest-first drain, within the same
-     `maxRootDeltaPerEpoch` budget (`c677e36` — never a mass flush; the
-     measured 9319→19 collapse is the forbidden failure mode);
-   - **retire-by-age:** `maxAge = 32` bounds every row's total exposure
-     lifetime (§6.2).
-   Both are frontier operations ⇒ replayable through the EXISTING on-chain
-   `activeFrontierRoot` pin + root-verified id-set artifact — ZERO new pins
-   or wire fields.
+   `production-evaluator.ts:770-790`. Retirement is A2's retire-by-age ONLY:
+   `maxAge = 32` via the bounded oldest-first drain (§6.2, `c677e36`).
+   Replayable through the EXISTING on-chain `activeFrontierRoot` pin +
+   root-verified id-set artifact — ZERO new pins or wire fields.
+   **rev2's retire-on-exposure is DELETED** (orchestrator decision on the
+   rev2 re-review): it was arithmetically self-contradictory — one accepted
+   artifact exposes ~124 pack rows vs a ≤ `maxRootDeltaPerEpoch` = 24/epoch
+   drain SHARED with aged retirement, so the exposure queue diverges 10–25×
+   under any healthy accept cadence and starves retire-by-age (an I7(b)
+   violation); it was also a new subsystem beyond I1-I10 ⇒ default-DEFER
+   (handoff §8). It is now on the §12 DEFER list alongside commit-reveal.
+   **Honest consequence, stated plainly: a row's labels are Tier-V-visible
+   for its entire ≤ 32-epoch active life. Rotation does NOT meaningfully
+   limit Tier-V label mining. The forbidden-trap task construction (part 1)
+   carries the per-row integrity burden ALONE against Tier-V**, with the
+   seeded overlay draw (§6.4) removing row-targeting predictability and the
+   ≥2-flip threshold (§2.4) bounding lucky sampling. The P4 Tier-V control
+   (labels granted) and G-B15 red-team attack part 1 directly; if it falls,
+   the v2 escalations (exposure-based retirement with a dedicated drain
+   budget, or label commit-reveal) are the recorded next moves.
 3. **Artifact telemetry redaction:** the published artifact carries
    per-family aggregates and the exclusion-set digest ONLY; per-row u(t)
    detail (rev1's bitmaps — a per-row label-correlated leak) is REMOVED from
@@ -720,9 +811,11 @@ j·64/9346; at j = 8, λ ≈ 0.055, P(≥2 in a pack) ≈ 1 − e^{−λ}(1+λ) 
 both packs ≈ 2.2e-6 per attempt; × 50 attempts/epoch (per-miner cap,
 `coretex-coordinator-core.ts:952,1266`) ≈ **1.1e-4 per miner-epoch**, before
 the §2.2 requirement that the flips be real operations. Overlay rows are
-higher-probability per row but are seed-drawn (§6.4) and fast-retired
-(exposure + age); the P4 control suite MUST include a Tier-V exact-anchor
-attack (labels granted) and G-B15 red-team owns beating it.
+higher-probability per row but are seed-drawn (§6.4), so an attacker cannot
+choose WHICH fresh rows the packs will sample; their exposure lifetime is
+nonetheless the full maxAge window (see part 2 — no exposure-retirement
+exists). The P4 control suite MUST include a Tier-V exact-anchor attack
+(labels granted) and G-B15 red-team owns beating part 1.
 
 ### 6.6 Replayability post-epoch-reveal
 
@@ -736,6 +829,99 @@ and recompute both packs byte-identically — `motifGroupId`/`templateId`/
 overlay draws are recomputed, the active set is root-verified against the
 on-chain pin. The validator replay path (`src/validator-sync-cli.ts`)
 verifies pack composition exactly as it does today for the overlay law.
+
+### 6.7 Transition bootstrap and the ARM-GATE (the flip cannot start on an empty pool)
+
+BMU pack eligibility (§4.3) = `bmuTask` present AND active-frontier member.
+At a naive flip that pool is ~EMPTY: no pre-BMU row carries `bmuTask`; new
+rows activate only through the frontier pipe (`activateNext`,
+`src/coordinator/epoch-frontier.ts:186-193` — reserve rows activate in order,
+bounded by the shared `maxRootDeltaPerEpoch` = 24/epoch budget); and
+`deriveQueryPack` THROWS below packSize/quota fill
+(`hidden-query-pack.ts:292-296,306-308`). §10's mandatory two-pass rebaseline
+scores the parent under the NEW law at the transition evolve — on an empty
+pool that throws at step one (the G-B14 rehearsal would fail immediately).
+Three coupled requirements close the gap:
+
+**(a) Pre-flip inert `bmuTask` minting.** Generators MUST stamp full
+`bmuTask` fields (incl. motifGroupId/templateId) on every minted eval_hidden
+row DURING the r5 era, starting as soon as the stamping lands. This is inert
+under r5:
+
+- the corpus LOADER performs no unknown-field rejection —
+  `loadProductionCorpus` validates schemaVersion, corpusRoot, split
+  assignment, and embedding pins only (`retrieval-corpus.ts:844-914`); event
+  objects pass through as parsed;
+- the r5 scorer reads only the fields it knows (TypeScript structural
+  typing; `deriveQueryPack`/`evaluateRetrievalBenchmarkPatch` never touch
+  unknown properties);
+- new rows carry `bmuTask` from birth, so their canonical event hashes and
+  the corpusRoot commit to it — no retro-mutation of existing rows, no
+  replay impact (r5 packs hash the same rows they always did).
+
+ONE canonical pre-requisite: the logical-delta bridge constructs production
+events from an EXPLICIT field allowlist
+(`src/corpus/logical-delta-bridge.ts:355-375` — `qEventBase` +
+field-by-field `Object.assign` for `logicalFamily`/`band`/`ownerEntityId`/
+`subjectEntityId`/…), so an unstamped bridge would silently DROP `bmuTask`.
+The bridge MUST gain a `q.bmuTask ? { bmuTask: q.bmuTask } : {}` pass-through
+BEFORE pre-flip minting starts (P3 canonical item; replay-inert for the same
+from-birth-hash reason).
+
+**(b) ARM-GATE precondition with N_min derived from the pack arithmetic.**
+The BMU bundle MUST refuse to arm unless the eligible-active pool (bmuTask
+rows ∩ active frontier) satisfies per-family minima. Formula, with k = 5
+rows per cluster (minimum typed-cluster size), N_f = the §6.2 per-family
+pack demand (Q_f + O_f), a factor 2 for gate + fully-disjoint confirm, and a
+safety factor s = 2 (cross-epoch template/subject collisions in the
+exclusion set + quota-bucket mismatch):
+
+```
+E_f_min = s · 2 · ceil(N_f / k) · k
+temporal:            2 · 2 · ceil(13/5) · 5 = 60
+conflict_lifecycle:  2 · 2 · ceil(18/5) · 5 = 80
+multi_hop_relation:  2 · 2 · ceil(18/5) · 5 = 80
+near_collision/abst: 2 · 2 · ceil(13/5) · 5 = 60
+N_min = Σ E_f_min = 280 eligible-active rows (≈ 56 clusters)
+```
+
+The arm-gate additionally requires a fresh overlay cohort of ≥ 2 clusters
+per family within `freshWindow`, and the §2.4 variance certification
+(measured `scoreState` variance across the certified rotation < q/2 =
+7,812 ppm). The gate is a fail-closed arm/boot check in the same posture as
+the attestation ARM gate, reporting per-family counts on refusal.
+
+**(c) Frontier continuity and the A2→BMU sequencing.** `activeWindow`
+semantics are UNCHANGED at the flip (same frontier state, same on-chain
+root continuity — the BMU bundle does not reset the frontier). But the
+timeline must respect A2's arming reality: after A2's retire-genesis arming
+rewrite, the active set is ~19 rows + mint ramp, and the activation pipe is
+≤ 24 rows/epoch SHARED with churn/retirement. Sequencing:
+
+1. Operator arms A2 (`liveeval12-allfam-age32`, r5 law) + A1 forced evolves.
+2. The bridge `bmuTask` pass-through (a) lands canonically; generators stamp
+   every subsequent mint.
+3. Generators mint ≥ 24 eligible rows/epoch (≈ 5 clusters/epoch, rotating
+   across all four families per the capability schedule) so the activation
+   pipe stays saturated.
+4. Ramp arithmetic: ceil(280 / 24) = **12 epochs minimum** of saturated
+   minting; realistically 12–16 epochs with churn sharing the root-delta
+   budget. (At A1's forced-evolve cadence of 8 epochs this is 2 evolve
+   cycles of steady minting.)
+5. ARM-GATE (b) opens: per-family counts ≥ {60, 80, 80, 60}.
+6. Two-pass rebaseline under the BMU law (§10) — now derivable, no throw.
+7. Flip (operator decision, outside this program).
+
+**(d) G-B14 rehearsal step list (updated).** The fork rehearsal MUST:
+(i) materialize a pre-flip corpus/frontier state with stamped rows BELOW
+N_min and assert the arm-gate REFUSES with correct per-family counts;
+(ii) advance the simulated mint ramp past N_min and assert the gate opens;
+(iii) run the two-pass rebaseline under the BMU law (blank ≠ parent trap
+explicitly checked; §2.4 variance certification enforced);
+(iv) scorer sync of corpus + BMU bundle + active-id artifact;
+(v) validator parity incl. §6.3/6.4 pack recomputation post-reveal;
+(vi) signed rotation manifest accepted by a cold sidecar reload;
+(vii) historical r4/r5 artifact replay unaffected (G-B12 rerun).
 
 ---
 
@@ -889,6 +1075,22 @@ means byte-compatible):
   deterministic seed and an empty exclusion set) so baselines are measured
   under exactly the law patches are scored under.
 
+### 8.5 Pack-law MECHANISM deltas (no wire fields; part of the same coordinated change)
+
+1. Overlay slot-allocation law: `liveEvalPack.familySlots` (per-BMU-family,
+   3/3/3/3) replaces the logicalFamily round-robin as the admission unit for
+   BMU packs; seeded per-slot draw + seeded full-membership fallback +
+   fixed-order redistribution (§6.2, §6.4) — a semantics delta to
+   `admitActiveLiveEvalEvents` behind absent-parameter back-compat.
+2. Confirm-side exclusion threading through `deriveScoredQueryPack` (§6.4).
+3. Frontier-aware broad-pack eligibility (`hiddenPackEventEligible` +
+   `deriveQueryPack` activeIds threading, §6.5; §9 site 17).
+4. Logical-delta-bridge `bmuTask` pass-through
+   (`logical-delta-bridge.ts:355-375` allowlist extension, §6.7a) — must
+   land BEFORE pre-flip minting; replay-inert.
+5. BMU arm-gate precondition (per-family eligible-active minima + fresh
+   cohort + variance certification, §6.7b).
+
 ---
 
 ## 9. pipelineVersion gate-site checklist (`coretex-bmu-v1-r5state`)
@@ -990,9 +1192,11 @@ silent misdecode — this asymmetry is why I2 pins BMU to the r5 state law.
   `POST /score-state` (`scorer-server-cli.ts:157-179`), deterministic
   caller-derived `baselineSeedHex` (never a future blockhash), bounded
   `samples`, variance reported. The §8.4 `familyUtilitiesPpm` addition makes
-  the per-family baseline decomposition auditable at rebaseline time, and
-  the measured `variancePpm` feeds `baselineVariancePpm` under the
-  `rotating_pack` source rule (§2.1).
+  the per-family baseline decomposition auditable at rebaseline time. The
+  measured `variancePpm` does NOT feed the acceptance threshold (BMU pins
+  `baselineVarianceSource = 'unavailable'` — the §2.4 variance law); instead
+  it is the §6.7 ARM-GATE flip-stability certification input (must be
+  < q/2 = 7,812 ppm, else do not arm).
 - **Historical replay:** epochs scored under r4/r5 replay under their pinned
   profiles forever (G-B12); the BMU transition adds a new pin, removes
   nothing.
@@ -1047,7 +1251,12 @@ appear in v1 implementation:
 - graded/partial per-task utility (§2.2 keeps u binary);
 - per-patch surface-claim classification (V2's classifier — dropped, §14.1);
 - a separate third broad-safety pack (§14.1);
-- label commit-reveal corpus distribution (§6.5 — v2 escalation path only).
+- label commit-reveal corpus distribution (§6.5 — v2 escalation path only);
+- exposure-based row retirement (rev2's retire-on-exposure, DELETED in rev3:
+  ~124 exposed rows per accepted artifact vs the ≤24/epoch shared drain
+  diverges 10–25× and starves retire-by-age (I7b violation), and it is a new
+  subsystem beyond I1-I10 — v2 escalation path only, with its own dedicated
+  drain budget if ever adopted).
 
 Also standing: no r5 tuning beyond the single A2 unbrick transition
 (`c677e36`, built NOT armed); prefer deleting a proposed mechanism over
@@ -1078,17 +1287,48 @@ Binary utilities on a 15,625-ppm lattice cannot hide inside a 250-ppm replay
 band: ONE fp-jitter-induced task flip at replay would be a guaranteed
 mismatch (rev1's flaw). BMU removes the jitter at the decision, not the gate:
 
-- **Quantized-score ranking:** the judge ranks candidates by reranker scores
-  QUANTIZED to a bundle-pinned grid `judgeScoreGrid` (default 1e-3 in
-  normalized rerank-score space), ties broken by `codePointCompare(docId)`.
-  Rank order — hence every top-B membership decision — is then invariant to
-  any cross-implementation score deviation < grid/2, except when a true
-  score lies within grid/2 of a grid boundary with a within-one-cell
-  neighbor.
-- **Certification margin screen (P2, mandatory):** a task is certified only
-  if, on the blank-state, parent, AND oracle-solved substrates, every
-  required/forbidden doc's quantized-score gap to the rank-B boundary is
-  ≥ 3 grid cells. Boundary flips become certified-rare, not structural.
+- **Quantize the COMPOSITE final score, not raw reranker scores.** The final
+  ordering the judge consumes is
+  `finalReorderingScore = effRerank(docId, rerankerScore) + finalBonus +
+  policyBonus` (`retrieval-benchmark.ts:2354`, sort `:2358-2364`) — raw
+  reranker scores are only one term, and bonuses push the composite outside
+  [0,1]. The judge ranks by `finalReorderingScore` QUANTIZED to a
+  bundle-pinned grid `judgeScoreGrid` (default g = 1e-3 in composite-score
+  space). **Range analysis:** `effRerank` ∈ [0,1] (normalized reranker
+  score; peer inheritance takes a max of in-range values,
+  `:2151-2158`); `finalBonus = lensBonus + anchorBonus + temporalBonus +
+  categoryLensFinalBonus + aspectBonus` (`:1911`), each term bounded by its
+  pinned profile beta (live betas are O(0.1), e.g. `temporalCurrentBoost`
+  0.1); `policyBonus` is the bounded query-local nudge
+  ±(budget/1000)·UNIT with UNIT = max−min rerankerScore ≤ 1 (`:2160-2168`).
+  So the composite lies in [−P, 1 + B + P] with B = Σ enabled final-bonus
+  betas and P = the max total policy nudge; BMU bundle validation MUST
+  compute `Rmax = 1 + B + 2P` from the pinned profile and assert Rmax ≤ 4
+  (≤ ~4,000 grid cells at g = 1e-3).
+- **Tiebreak (fully quantized):** (quantized composite desc, quantized
+  `rerankerScore` desc, `docId` asc). The FIRST two keys are quantized —
+  the existing secondary tiebreak compares RAW rerankerScore
+  (`:2362`), which would reintroduce float sensitivity exactly when
+  composites tie on the grid. docId comparison unchanged (`:2363`).
+- **Certification margin screen (P2, mandatory) — two boundaries, three
+  states.** A task is certified only if, on the blank-state, parent, AND
+  oracle-solved substrates:
+  (1) FINAL-ORDER boundary: every required/forbidden doc's quantized
+  composite gap to the rank-B boundary is ≥ 3 grid cells; and
+  (2) ADMISSION (cap) boundary: in `preRankScore` space
+  (`preRankScore = biCosine + admission bonuses`,
+  `retrieval-benchmark.ts:797,839,2433` — the sort that selects the
+  `rerankerInputTopK` candidates; live pin 64, see §15.8), every
+  required/forbidden doc is ≥ 3 cells (grid g_pre = 1e-3) away from the
+  rank-`rerankerInputTopK` admission boundary — ON WHICHEVER SIDE it
+  belongs for that state. A doc outside the cap is invisible to the final
+  ordering no matter how large its judge margin; `grounding: 'distant'`
+  bridge docs (the multi_hop payload) sit at this boundary BY CONSTRUCTION —
+  out-of-cap on blank (that IS the headroom; must be out by ≥ 3 cells so
+  the miss is deterministic too) and in-cap on the oracle-solved state
+  (must be in by ≥ 3 cells; the substrate's routing is what admits them, so
+  the oracle-state margin is the binding certification requirement).
+  Boundary flips become certified-rare at BOTH boundaries, not structural.
   (rev1 screened only the no-substrate baseline; replay re-scores the
   CANDIDATE, so the oracle-solved state must be screened too.)
 - **Evaluated alternatives (review options):** (i) multi-instance tasks —
@@ -1170,8 +1410,8 @@ Inherited verbatim:
   scorer/verify/replay threading, on-chain `activeFrontierRoot`);
 - A2's bounded-drain retirement semantics (`c677e36`: oldest-activation-first
   aged drain capped at `maxRootDeltaPerEpoch`, budget shared with churn; the
-  9319→19 mass-flush hazard is the forbidden mode) — BMU §6.2/§6.5 build the
-  retire-on-exposure queue on the same bounded drain;
+  9319→19 mass-flush hazard is the forbidden mode) — adopted as BMU's ONLY
+  retirement mechanism (§6.2, §6.5; rev2's retire-on-exposure deleted, §12);
 - A2's namespace resolution (quota strata in bucketed-family names,
   familyPriority in logicalFamily names — §5.6);
 - typed-cluster generation as the substrate of mineability
@@ -1256,6 +1496,15 @@ Dropped:
    architecture necessarily exposes all row labels to validator-tier actors
    (§6.5 verified facts). SEEDS stay private pre-reveal at every tier. The
    invariant text is kept verbatim in §16 with this reading noted.
+   **OPERATOR RATIFICATION REQUIRED (go/no-go packet item):** this
+   reinterpretation of I9's privacy clause is a spec-level reading of an
+   handoff invariant and must be explicitly ratified by the operator before
+   any BMU arming decision; it is logged ledger-side.
+8. **(rev3) `rerankerInputTopK`:** handoff §2.1 cites 128; the LIVE bundle
+   pins 64
+   (`release/calibration/2026-06-04-memory-atom-v16/bundle-manifest-…-liveeval8.json:212`).
+   §13.2's cap-boundary rule is written against the PINNED value, whatever a
+   BMU bundle pins.
 
 ---
 
@@ -1330,11 +1579,73 @@ carries the burden immediately; the model itself survives. (c) I9's "hidden
 qrels/answers/seeds stay private" is read per the §6.5 two-tier model:
 labels are private at the Tier-P (public endpoint) surface; validator-tier
 label visibility is architectural fact under r5 and BMU alike; seeds are
-private pre-reveal at every tier.
+private pre-reveal at every tier. This reading requires OPERATOR
+RATIFICATION in the go/no-go packet (§15.7).
 
 ---
 
-## 17. Changelog rev1 → rev2 (adversarial-review response)
+## 17. Changelog
+
+### rev2 → rev3 (second adversarial-review response)
+
+- **F1 (BLOCKER — transition bootstrap gap):** new §6.7. Pre-flip INERT
+  `bmuTask` minting under the r5 era (loader field-inert per
+  `retrieval-corpus.ts:844-914`; one canonical prerequisite: the
+  logical-delta bridge's explicit field allowlist,
+  `logical-delta-bridge.ts:355-375`, must gain a bmuTask pass-through).
+  ARM-GATE precondition with derived minima
+  `E_f_min = 2·2·ceil(N_f/5)·5` = {60, 80, 80, 60}, **N_min = 280**
+  eligible-active rows (≈ 56 clusters); A2→BMU sequencing with ramp
+  arithmetic (activation pipe ≤ 24/epoch ⇒ ceil(280/24) = 12 epochs minimum
+  of saturated minting after A2's retire-genesis ~19-row restart); G-B14
+  rehearsal step list updated (arm-gate refusal below N_min is now a
+  rehearsed assertion).
+- **F2+7 (orchestrator decision):** retire-on-exposure DELETED (queue
+  divergence 10–25× vs the shared ≤24/epoch drain; I7b starvation; new
+  subsystem ⇒ default-DEFER). §6.5 restated: maxAge-32 bounded rotation +
+  seeded overlay + forbidden-trap construction carry the Tier-V defense,
+  with the honest statement that trap construction carries the per-row
+  burden ALONE (labels visible for a row's whole ≤32-epoch life). Exposure
+  retirement AND commit-reveal both on the §12 DEFER list.
+- **F3 (composition arithmetic):** overlay slots now allocated per BMU
+  FAMILY via a pinned `liveEvalPack.familySlots` = 3/3/3/3 (the inherited
+  logicalFamily round-robin would yield ≈2/2/4/4 ⇒ conflict share 0.266,
+  deviation 0.034 > ±0.03, validator-rejected). Slots draw from the union of
+  each family's mapped logicalFamily cohorts (thin atoms pool into
+  near_collision). End-to-end table recomputed for gate AND post-exclusion
+  confirm: deviations 0.003/0.019/0.019/0.003 ✓; free fill excluded from the
+  validator (±0.031 per-pack realized noise). Added as §8.5 mechanism
+  delta 1.
+- **F4 (quantize the right object):** §13.2 now quantizes the COMPOSITE
+  `finalReorderingScore = effRerank + finalBonus + policyBonus`
+  (`retrieval-benchmark.ts:2354,2358-2364`) with range analysis
+  (composite ∈ [−P, 1+B+P]; bundle validates Rmax = 1+B+2P ≤ 4; g = 1e-3);
+  tiebreak fully quantized (quantized composite, quantized rerankerScore,
+  docId) — the raw-rerankerScore secondary tiebreak at `:2362` would
+  reintroduce float sensitivity; NEW cap-boundary certification in
+  `preRankScore` space at the `rerankerInputTopK` admission boundary
+  (± 3 cells on whichever side each doc belongs, per state), binding for
+  `grounding:'distant'` bridge docs on the oracle-solved state.
+- **F5 (variance law):** `baselineVarianceSource = 'unavailable'` pinned ⇒
+  variance term ≡ 0, threshold exactly 20,250 (2-flip law preserved);
+  justification: Δ is same-pack, cross-pack parent variance never enters the
+  accept comparison; the protection moves to the §6.7 arm-gate (measured
+  scoreState variance < q/2 = 7,812 ppm, flip-stability certification).
+  Screener controller inputs pinned: `recentNoiseFloorPpm` clamped < q/2 ⇒
+  screener ∈ [4,050, 15,624] < q — the 1-flip screener lane survives; the
+  anti-gaming ×6 multiplier can still raise it to the 20,250 ceiling under
+  active probe attacks (intended defense, noted).
+- **F6 (fallback predictability):** the overlay fallback is a SEEDED draw
+  over the family's full eligible-active membership — never deterministic
+  newest-first (which re-opened rev1-B3 in the thin case); a minimum-cohort
+  precondition was rejected because thinness arises per-patch
+  post-exclusion and would let corpus state DoS evaluation.
+- **Also:** §15.7 I9 reinterpretation marked OPERATOR RATIFICATION REQUIRED
+  (go/no-go packet item; mirrored in §16 note (c)); §15.8 added
+  (`rerankerInputTopK` 128-vs-64 citation drift); no new mechanisms added
+  beyond the review-specified deltas.
+
+### rev1 → rev2 (first adversarial-review response)
 
 - **B1 (un-armable overlay mandate):** rev1's `limit ≥ 16` violated the
   existing validation `limit ≤ packSize − Σquotas`
@@ -1352,7 +1663,8 @@ private pre-reveal at every tier.
   retire-by-age through A2's bounded drain (zero new pins), and published-
   artifact per-row telemetry redaction. Commit-reveal recorded as the v2
   escalation path. Residual-risk arithmetic included (~1.1e-4/miner-epoch
-  lucky-dual-sample channel, pre-operation-requirement).
+  lucky-dual-sample channel, pre-operation-requirement). *(rev3:
+  retire-on-exposure subsequently DELETED — see rev2→rev3 F2+7 above.)*
 - **B3 (seed-independent overlay defeats I6 on fresh rows):** rev2 makes BMU
   overlay admission a seeded per-slot draw from the fresh cohort (gateSeed /
   confirmSeed) with confirm-side motif/entity/template exclusion; contract
