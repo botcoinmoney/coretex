@@ -332,6 +332,24 @@ test('topic rotation: deterministic grid walk with series suffix past a full cyc
   assert.match(wrapped.topic, /\(series 2\)$/);
 });
 
+// ── sample bank (certification sizing: §6.7b E_f_min = 110 rows / 22 clusters)
+
+test('sample bank: deterministic, certification-sized, m=1-clean', async () => {
+  const { buildMultiHopSampleBank } = await import('../../../../scripts/lib/bmu-generators/emit-multi-hop-sample-bank.mjs');
+  const a = buildMultiHopSampleBank();
+  const b = buildMultiHopSampleBank();
+  assert.deepEqual(JSON.parse(JSON.stringify(a.clusters)), JSON.parse(JSON.stringify(b.clusters)), 'bank is deterministic');
+  assert.ok(a.clusters.length >= 22, `>= 22 clusters (got ${a.clusters.length})`);
+  const rows = a.clusters.reduce((n, c) => n + c.rows.length, 0);
+  assert.ok(rows >= 110, `>= 110 rows (got ${rows})`);
+  assert.ok(new Set(a.clusters.map((c) => c.epoch)).size >= 3, '>= 3 synthetic epochs');
+  assert.deepEqual(a.census, []);
+  const hops = new Set(a.clusters.map((c) => c.hopCount));
+  assert.ok(hops.has(2) && hops.has(3), 'both chain depths represented');
+  assert.ok(a.clusters.some((c) => c.corefFramed), 'coreference-framed chains present');
+  assert.ok(a.clusters.some((c) => c.hopCount === 3 && !c.corefFramed), 'plain (non-coref) 3-hop chains present');
+});
+
 // ── fail-closed behaviors ────────────────────────────────────────────────────
 
 test('fail-closed: invalid args throw', () => {
