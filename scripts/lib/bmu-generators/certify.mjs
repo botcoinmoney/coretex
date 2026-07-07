@@ -39,6 +39,16 @@
  *      substrate states need the full scorer pipeline and are DEFERRED to
  *      the dedicated full-bank certification run (logged as a cap).
  *
+ * ABSTAIN AWARENESS (near_collision_abstention lane extension, backward-
+ * compatible with answerable-only families): abstain rows judge per §2.2's
+ * abstention u(t) — zero forbidden admitted AND the §5.5 policy-atom signal
+ * fires. The signal never fires for substrate-less stacks, so every baseline
+ * lane is u=0 on abstain rows BY LAW; their hardness screen is instead the
+ * §5.4 anti-free-abstention law (trap adjacency: content-driven retrieval
+ * must ADMIT the collision neighborhood on the absent variant). The oracle
+ * derives the abstain decision structurally and returns
+ * { ranked, abstainSignal } instead of a bare ranking.
+ *
  * Usage:
  *   node certify.mjs --bank <sample-bank.json> --out-dir <dir>
  *        [--emit-real-lane-job <path>]   # write job for certify-real-lane.mjs
@@ -48,7 +58,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { unit, prng, lintNoAnswerLeak, lintTokens } from './common.mjs';
+import { unit, prng, lintNoAnswerLeak, lintTokens, slug } from './common.mjs';
 
 // ─── Production pins (mirrors packages/coretex/src/bundle/index.ts; the
 //     real-lane driver re-asserts them; single-sourcing is a P7 merge item) ──
@@ -124,15 +134,33 @@ export function randomKRank(docs, seedStr) {
 }
 
 // ─── The deterministic judge (§13.2 read for offline certification) ─────────
-export function judgeTopB(ranked, bmuTask) {
+/**
+ * Abstain-aware per spec §2.2 u(t):
+ *   ANSWERABLE — u=1 iff R ⊆ top-B AND F ∩ top-B = ∅ AND (a ∈ top-B, implied
+ *     by the §4.1 `answer.id ∈ requiredEvidence` invariant the bank recheck
+ *     enforces) AND the §5.5 abstention signal does NOT fire (false-abstain
+ *     counterweight);
+ *   ABSTAIN (`abstain: true`, R = ∅, answer absent) — u=1 iff F ∩ top-B = ∅
+ *     AND the §5.5 signal FIRES. The signal is the policy-ATOM abstention
+ *     decision; the r5 no-atom fallback is explicitly NOT part of BMU u(t)
+ *     (§5.5), so substrate-less stacks (CPU baselines, blank BGE/Qwen) can
+ *     NEVER judge-succeed on abstain rows — `signalFires` defaults false and
+ *     only the structural ORACLE derives it. `retrievalClean` reports the
+ *     retrieval half (zero forbidden admitted) as telemetry either way.
+ */
+export function judgeTopB(ranked, bmuTask, { signalFires = false } = {}) {
   const topB = ranked.slice(0, bmuTask.budgetB).map((r) => r.docId);
   const topSet = new Set(topB);
   const requiredHit = bmuTask.requiredEvidence.filter((d) => topSet.has(d));
   const forbiddenAdmitted = bmuTask.forbiddenEvidence.filter((d) => topSet.has(d));
+  const retrievalClean = forbiddenAdmitted.length === 0;
+  if (bmuTask.abstain === true) {
+    return { topB, requiredHit: 0, requiredTotal: 0, forbiddenAdmitted, answerInTopB: null, answerNoForbidden: false, retrievalClean, signalFires, judgeSuccess: retrievalClean && signalFires };
+  }
   const answerInTopB = topSet.has(bmuTask.answer.id);
-  const judgeSuccess = requiredHit.length === bmuTask.requiredEvidence.length && forbiddenAdmitted.length === 0;
+  const judgeSuccess = requiredHit.length === bmuTask.requiredEvidence.length && forbiddenAdmitted.length === 0 && !signalFires;
   const answerNoForbidden = answerInTopB && forbiddenAdmitted.length === 0;
-  return { topB, requiredHit: requiredHit.length, requiredTotal: bmuTask.requiredEvidence.length, forbiddenAdmitted, answerInTopB, answerNoForbidden, judgeSuccess };
+  return { topB, requiredHit: requiredHit.length, requiredTotal: bmuTask.requiredEvidence.length, forbiddenAdmitted, answerInTopB, answerNoForbidden, retrievalClean, signalFires, judgeSuccess };
 }
 
 // ─── Family adapters (oracle = structure-only; NEVER reads qrels/bmuTask) ───
@@ -201,14 +229,108 @@ function conflictLeakSensitiveValue(row, { rowsByMotif }) {
   return current.bmuTask.answer.value;
 }
 
+/**
+ * near_collision_abstention oracle: the real memory operation per spec §5.4 —
+ * DISCRIMINATION via the disambiguation structure. Structure-only inputs:
+ * the `disambiguates` (derived_from D→E) relation names the standing filing,
+ * doc metadata (`kind` = nearcol_<attr-slug>, `collisionScope`, `entityIds`)
+ * delimits the collision neighborhood, and the queried (attribute, scope)
+ * come from the row's PUBLIC intent. Never reads qrels/bmuTask.
+ *
+ * Neighborhood N = same-subject docs (E, D, attribute/scope lookalikes) ∪
+ * same-`kind` docs (duplicate-name alias partners share E's window-unique
+ * attribute kind but carry synthetic per-cluster subject ids).
+ *
+ * ANSWERABLE (standing filing E covers the queried scope): rank [E, D] first
+ * (covers required sets [E], [E,D], [D,E] at B=3), neutral docs next, the
+ * rest of N (the sibling decoy set = forbidden) LAST; signal must NOT fire.
+ * ABSTAIN (no doc in N covers the queried scope): the §5.5 MISSING_EVIDENCE
+ * decision fires structurally — rank neutral docs first, D (not forbidden)
+ * next, the rest of N (forbidden = E + decoys) LAST, abstainSignal: true.
+ */
+export function nearCollisionOracleRank(row, { docs, docById, relations }) {
+  const subj = row.subjectEntityId;
+  const attr = row.publicIntent?.attribute;
+  const scopeQ = row.publicIntent?.collisionScope;
+  if (!attr || !scopeQ) return null;
+  const attrKind = `nearcol_${slug(attr)}`;
+  const isSubject = (d) => Array.isArray(d.entityIds) && d.entityIds.includes(subj);
+
+  // The disambiguation structure: D --derived_from/'disambiguates'--> E.
+  let disambig = null; let exact = null;
+  for (const rel of relations) {
+    if (rel.label !== 'disambiguates') continue;
+    const src = docById.get(rel.src); const dst = docById.get(rel.dst);
+    if (!src || !dst || !isSubject(src) || !isSubject(dst)) continue;
+    if (dst.kind !== attrKind) continue;
+    disambig = src.id; exact = dst.id; break;
+  }
+  if (!disambig || !exact) return null;
+
+  const inNeighborhood = (d) => isSubject(d) || d.kind === attrKind;
+  const neutral = []; const excluded = [];
+  for (const d of docs) {
+    if (d.id === exact || d.id === disambig) continue;
+    if (inNeighborhood(d)) excluded.push(d.id);
+    else neutral.push(d.id);
+  }
+  neutral.sort(); excluded.sort();
+
+  const exactDoc = docById.get(exact);
+  if (exactDoc.collisionScope === scopeQ) {
+    // Standing filing covers the queried variant — answerable; no abstain.
+    return { ranked: [exact, disambig, ...neutral, ...excluded].map((docId, i) => ({ docId, score: -i })), abstainSignal: false };
+  }
+  // Queried variant covered by NO neighborhood doc? (scope lookalikes cover
+  // their own decoy scope; if one covered scopeQ the row would be answerable
+  // by a doc outside the disambiguated pair — no structural solution.)
+  const covering = docs.filter((d) => inNeighborhood(d) && d.collisionScope === scopeQ && d.id !== disambig);
+  if (covering.length > 0) return null;
+  return { ranked: [...neutral, disambig, exact, ...excluded].map((docId, i) => ({ docId, score: -i })), abstainSignal: true };
+}
+
+/**
+ * near-collision primary trap: answerable rows — the duplicate-name alias
+ * collision (§5.4 PRIMARY trap, `collisionRole` pin); abstain rows — the
+ * answerable sibling E (§5.4: E is itself the plausible decoy for the
+ * absent variant).
+ */
+function nearCollisionPrimaryTrapDocId(row, { docById }) {
+  const wanted = row.bmuTask.abstain === true ? 'exact_match' : 'alias_collision_decoy';
+  for (const d of row.bmuTask.forbiddenEvidence) {
+    if (docById.get(d)?.collisionRole === wanted) return d;
+  }
+  return row.bmuTask.forbiddenEvidence[0];
+}
+
+/**
+ * near-collision leak-sensitive secret (mirrors the generator's mint lint):
+ * the cluster's exact-match value V on EVERY row — the
+ * lookalike_status_verification row's composite answer legitimately names
+ * the trap's own value (mirrored verbatim in the trap doc, never gold-only),
+ * and abstain rows have no answer; V is recovered from the sibling
+ * exact_variant_lookup row of the same motifGroup.
+ */
+function nearCollisionLeakSensitiveValue(row, { rowsByMotif }) {
+  const siblings = rowsByMotif.get(row.bmuTask.motifGroupId) ?? [];
+  const exactRow = siblings.find((r) => r.questionType === 'exact_variant_lookup');
+  if (!exactRow) throw new Error(`nearCollisionLeakSensitiveValue: motifGroup ${row.bmuTask.motifGroupId} has no exact_variant_lookup row`);
+  return exactRow.bmuTask.answer.value;
+}
+
 export const FAMILY_ADAPTERS = Object.freeze({
   conflict_lifecycle: Object.freeze({
     oracleRank: conflictLifecycleOracleRank,
     primaryTrapDocId: conflictPrimaryTrapDocId,
     leakSensitiveValue: conflictLeakSensitiveValue,
   }),
-  // other family lanes register here (temporal / multi_hop_relation /
-  // near_collision_abstention) — keep certify.mjs shared across lanes.
+  near_collision_abstention: Object.freeze({
+    oracleRank: nearCollisionOracleRank,
+    primaryTrapDocId: nearCollisionPrimaryTrapDocId,
+    leakSensitiveValue: nearCollisionLeakSensitiveValue,
+  }),
+  // other family lanes register here (temporal / multi_hop_relation) —
+  // keep certify.mjs shared across lanes.
 });
 
 // ─── §4.1 fail-closed input recheck (certification is meaningless on a
@@ -228,7 +350,16 @@ export function validateBankRow(row, docById) {
     if (t.requiredEvidence.includes(d)) errors.push(`${row.id}: '${d}' both required and forbidden`);
   }
   if (t.requiredEvidence.length > t.budgetB) errors.push(`${row.id}: |required| > budget B`);
-  if (!t.requiredEvidence.includes(t.answer.id)) errors.push(`${row.id}: answer '${t.answer.id}' not in requiredEvidence`);
+  if (t.abstain === true) {
+    // §4.1: abstain=true ⇒ requiredEvidence = [], answer ABSENT; §5.4: the
+    // forbidden set is the collision neighborhood — it must be non-empty
+    // (abstention with nothing to resist admitting is free blank utility).
+    if (t.requiredEvidence.length !== 0) errors.push(`${row.id}: abstain row has non-empty requiredEvidence`);
+    if (t.answer !== undefined) errors.push(`${row.id}: abstain row carries an answer`);
+    if (t.forbiddenEvidence.length === 0) errors.push(`${row.id}: abstain row has empty forbiddenEvidence (nothing to resist admitting)`);
+  } else if (!t.requiredEvidence.includes(t.answer.id)) {
+    errors.push(`${row.id}: answer '${t.answer.id}' not in requiredEvidence`);
+  }
   return errors;
 }
 
@@ -319,10 +450,18 @@ export function certifyBank(bank, { realLaneScores = null, realClusters = 2, pin
       firstK: judgeTopB(firstK, t),
       randomK: judgeTopB(randomKRank(docs, `${bank.params.seed}:certify:randomK:${row.id}`), t),
     };
-    const oracleRanked = adapter.oracleRank(row, ctx);
-    const oracle = oracleRanked ? judgeTopB(oracleRanked, t) : { judgeSuccess: false, error: 'oracle_no_structural_solution' };
+    // Oracle: adapters return either a plain ranking (answerable-only
+    // families) or { ranked, abstainSignal } (families with abstain rows —
+    // the oracle derives the §5.5 decision structurally).
+    const oracleOut = adapter.oracleRank(row, ctx);
+    const oracleRanked = Array.isArray(oracleOut) ? oracleOut : oracleOut?.ranked;
+    const oracleSignal = Array.isArray(oracleOut) ? false : (oracleOut?.abstainSignal ?? false);
+    const oracle = oracleRanked ? judgeTopB(oracleRanked, t, { signalFires: oracleSignal }) : { judgeSuccess: false, error: 'oracle_no_structural_solution' };
 
     // Answer-leak screen (full-scale, independent re-run over emitted bytes).
+    // Abstain rows mirror the generator's mint lint: no primary-trap
+    // dominance / gold-only checks (no answer doc exists), but the cluster's
+    // leak-sensitive secret must still stay out of the question text.
     const trapDocId = adapter.primaryTrapDocId(row, ctx);
     const leakErrors = lintNoAnswerLeak({
       rowId: row.id,
@@ -330,14 +469,18 @@ export function certifyBank(bank, { realLaneScores = null, realClusters = 2, pin
       answerValue: adapter.leakSensitiveValue(row, ctx),
       requiredDocTexts: t.requiredEvidence.map((d) => docById.get(d).text),
       forbiddenDocTexts: t.forbiddenEvidence.map((d) => docById.get(d).text),
-      primaryTrapText: docById.get(trapDocId)?.text,
-      answerDocText: docById.get(t.answer.id)?.text,
+      ...(t.abstain === true ? {} : {
+        primaryTrapText: docById.get(trapDocId)?.text,
+        answerDocText: docById.get(t.answer.id)?.text,
+      }),
     });
     // Extra lexical-shortcut telemetry: query-token overlap of answer doc vs
-    // the max over forbidden docs (NoLiMa: lexical match must not point gold).
+    // the max over forbidden docs (NoLiMa: lexical match must not point gold;
+    // abstain rows have no gold — forbidden overlap alone documents that the
+    // collision neighborhood lexically out-pulls on the absent variant).
     const qTok = lintTokens(row.queryText);
     const overlap = (text) => { const s = lintTokens(text); let n = 0; for (const x of qTok) if (s.has(x)) n++; return n; };
-    const goldOverlap = overlap(docById.get(t.answer.id).text);
+    const goldOverlap = t.abstain === true ? null : overlap(docById.get(t.answer.id).text);
     const maxForbiddenOverlap = Math.max(...t.forbiddenEvidence.map((d) => overlap(docById.get(d).text)));
 
     // Real lane (subsample only; caps logged at the report level).
@@ -380,9 +523,17 @@ export function certifyBank(bank, { realLaneScores = null, realClusters = 2, pin
     else if (lanes.firstK.answerNoForbidden) reasons.push('firstk_answer_recovery');
     if (leakErrors.length > 0) reasons.push('answer_leak');
     if (realLane?.confidentSuccess) reasons.push('real_lane_confident_success');
+    // Abstain trap adjacency (§5.4 anti-free-abstention law): the abstain row
+    // must sit INSIDE the collision neighborhood — a content-driven baseline
+    // querying the absent variant must ADMIT at least one forbidden sibling
+    // into top-B, else abstention here resists nothing and a blanket
+    // abstention atom would earn the row without the discrimination
+    // operation (modulo only the §5.5 confidence gate).
+    if (t.abstain === true && lanes.bm25.retrievalClean) reasons.push('abstain_trap_not_adjacent_bm25');
 
     perTask.push({
       rowId: row.id, motifGroupId: t.motifGroupId, questionType: row.questionType,
+      abstain: t.abstain === true,
       epoch: row.liveUpdateEpoch, budgetB: t.budgetB,
       baselines: lanes, oracle,
       leak: { errors: leakErrors, goldOverlap, maxForbiddenOverlap },
@@ -392,13 +543,24 @@ export function certifyBank(bank, { realLaneScores = null, realClusters = 2, pin
     });
   }
 
-  // Aggregates.
+  // Aggregates. Lane rates are split answerable/abstain where the bank mixes
+  // them: abstain rows can never baseline-judge-succeed (§5.5, no signal), so
+  // pooled judge-success rates would understate baseline competitiveness on
+  // the answerable rows if left unsplit.
+  const answerable = perTask.filter((p) => !p.abstain);
+  const abstains = perTask.filter((p) => p.abstain);
   const rate = (f) => perTask.filter(f).length / perTask.length;
+  const rateOf = (subset, f) => (subset.length === 0 ? null : subset.filter(f).length / subset.length);
   const laneRates = (lane) => ({
     judgeSuccessRate: rate((p) => p.baselines[lane].judgeSuccess),
-    answerRecoveryNoForbiddenRate: rate((p) => p.baselines[lane].answerNoForbidden),
-    answerInTopBRate: rate((p) => p.baselines[lane].answerInTopB),
+    answerRecoveryNoForbiddenRate: rateOf(answerable, (p) => p.baselines[lane].answerNoForbidden),
+    answerInTopBRate: rateOf(answerable, (p) => p.baselines[lane].answerInTopB),
     forbiddenAdmissionRate: rate((p) => p.baselines[lane].forbiddenAdmitted.length > 0),
+    ...(abstains.length > 0 ? {
+      answerableJudgeSuccessRate: rateOf(answerable, (p) => p.baselines[lane].judgeSuccess),
+      abstainForbiddenAdmissionRate: rateOf(abstains, (p) => p.baselines[lane].forbiddenAdmitted.length > 0),
+      abstainRetrievalCleanRate: rateOf(abstains, (p) => p.baselines[lane].retrievalClean),
+    } : {}),
   });
   const oracleRate = rate((p) => p.oracle.judgeSuccess);
   const realTasks = perTask.filter((p) => p.realLane);
@@ -421,6 +583,16 @@ export function certifyBank(bank, { realLaneScores = null, realClusters = 2, pin
       confidentSuccesses: realTasks.filter((p) => p.realLane.confidentSuccess).map((p) => p.rowId),
     },
     leakScreen: { pass: perTask.every((p) => p.leak.errors.length === 0) },
+    ...(abstains.length > 0 ? {
+      // §5.4 anti-free-abstention: every abstain row's collision neighborhood
+      // must out-pull under content-driven retrieval (BM25 admits >= 1
+      // forbidden sibling at budget B).
+      family_abstainTrapAdjacency_bm25: {
+        abstainRows: abstains.length,
+        pass: abstains.every((p) => !p.baselines.bm25.retrievalClean),
+        cleanRows: abstains.filter((p) => p.baselines.bm25.retrievalClean).map((p) => p.rowId),
+      },
+    } : {}),
   };
 
   return {
@@ -428,7 +600,7 @@ export function certifyBank(bank, { realLaneScores = null, realClusters = 2, pin
     family: bank.family,
     specPin: 'BMU_SPEC.md rev3.2 (ad7e523) §13.2 / I8 / G-B1..G-B3',
     pins,
-    counts: { rows: perTask.length, certified: perTask.length - rejected.length, rejected: rejected.length },
+    counts: { rows: perTask.length, answerable: answerable.length, abstain: abstains.length, certified: perTask.length - rejected.length, rejected: rejected.length },
     gates,
     baselineRates: { bm25: laneRates('bm25'), firstK: laneRates('firstK'), randomK: randomKRate },
     oracle: { rate: oracleRate },
@@ -501,7 +673,11 @@ if (isMain) {
 
   // Certified-subset pointer on the generator's bank manifest (the bank
   // itself stays byte-frozen; consumers select rows via the pointer).
-  const manifestPath = resolve(bankPath, '..', 'sample-bank.manifest.json');
+  // Lane conventions differ on the manifest basename — probe both.
+  const manifestPath = ['sample-bank.manifest.json', 'manifest.json']
+    .map((name) => resolve(bankPath, '..', name))
+    .find((p) => { try { readFileSync(p); return true; } catch { return false; } })
+    ?? resolve(bankPath, '..', 'sample-bank.manifest.json');
   try {
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     manifest.certification = {
