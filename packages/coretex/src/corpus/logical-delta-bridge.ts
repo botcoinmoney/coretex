@@ -14,6 +14,7 @@
  */
 import type { ProductionCorpus, ProductionCorpusEvent, ProductionCorpusFamily, CorpusSplit, RelationAnnotation, HardNegativeRecord, RelationEdgeType, HardNegativeCategory, PublicScopeMetadata, PublicValidityMetadata, PublicQueryIntent } from '../eval/retrieval-corpus.js';
 import { assertGradedRelevance, splitForRecord } from '../eval/retrieval-corpus.js';
+import type { BmuTask } from '../eval/bmu-task.js';
 
 export interface LogicalDeltaDoc {
   readonly id: string;
@@ -68,6 +69,9 @@ export interface LogicalDeltaQuery {
   readonly scope?: PublicScopeMetadata;
   readonly publicIntent?: PublicQueryIntent;
   readonly liveUpdateEpoch?: number;
+  /** BMU v1 task fields stamped by the generator (BMU_SPEC.md §4.1/§6.7a).
+   *  Pre-flip inert under the r5 law; validated fail-closed at corpus load. */
+  readonly bmuTask?: BmuTask;
 }
 
 export interface LogicalDelta {
@@ -375,6 +379,12 @@ export function bridgeLogicalDeltaToProductionEvents(
       q.subjectEntityId !== undefined ? { subjectEntityId: q.subjectEntityId } : {},
       q.scope ? { scope: q.scope } : {},
       q.publicIntent ? { publicIntent: q.publicIntent } : {},
+      // BMU §6.7a pass-through: this bridge constructs events from an EXPLICIT
+      // field allowlist, so without this line an upstream-stamped bmuTask would
+      // be silently DROPPED and the row could never be BMU-pack-eligible.
+      // Replay-inert: new rows carry bmuTask from birth (hashes commit to it);
+      // absent on every pre-BMU row.
+      q.bmuTask ? { bmuTask: q.bmuTask } : {},
     ) as ProductionCorpusEvent;
     if (bucketed === 'temporal') {
       (qEvent as { temporal?: unknown }).temporal = { validFromEpoch: 1, validUntilEpoch: Number.MAX_SAFE_INTEGER, currentStaleFlag: false };

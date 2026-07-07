@@ -28,6 +28,26 @@
  *     transition (the new activeFrontierRoot is repinned with the bundle
  *     transition + rebaseline, BEFORE the first post-arm evolve).
  *
+ *   --mode bulk-activate   (BMU arming prerequisite — BMU_SPEC.md §6.7a
+ *     prerequisite 2, §8.5 item 6)
+ *     One-time arm-time BULK-ACTIVATION: activate reserve rows in PRECOMMITTED
+ *     RESERVE ORDER (order[] from reservePtr, exactly `activateNext`'s walk)
+ *     until at least --count (default 380 = BMU N_min) STAMPED rows (ids listed
+ *     in the REQUIRED --stamped-ids file: a JSON array of ids, or an object
+ *     with an `activeIds`/`ids` array — e.g. a generator-produced bmuTask-row
+ *     id list) are active. Required because the in-code frontier pipe is
+ *     REPLACEMENT-ONLY (activations strictly replace retirements; the active
+ *     set never grows), so minted BMU rows only QUEUE in the reserve and the
+ *     BMU arm-gate could never open without this operation. Unstamped reserve
+ *     rows encountered in the walked prefix are activated too (the reserve
+ *     pointer is a scalar — skipping rows would corrupt the precommitted-order
+ *     invariant); counts of both are reported. All newly activated rows get
+ *     activationEpoch = --arm-epoch (age 0 at arm — fresh-cohort eligible).
+ *     MUST be applied as part of the atomic arming transition: the new
+ *     activeFrontierRoot is repinned with the BMU bundle transition +
+ *     rebaseline (variance certification runs AFTER this, over the
+ *     post-activation active set), BEFORE the first post-arm evolve.
+ *
  *   --mode stagger
  *     Rewrite genesis activation epochs into a deterministic uniform stagger so
  *     age-eligibility flows at a fixed per-evolve rate instead of arriving all
@@ -77,8 +97,8 @@ const intFlag = (name, fb) => {
 const inPath = flag('in');
 const outPath = flag('out');
 const mode = flag('mode');
-if (!inPath || !outPath || !['retire-genesis', 'stagger'].includes(mode)) {
-  console.error('usage: --in <state.json> --out <state.json> --mode retire-genesis|stagger --arm-epoch N --max-age N [--cadence 8] [--mint-per-evolve 12] [--prune-headroom 2] [--max-root-delta 24] [--genesis-epoch 0]');
+if (!inPath || !outPath || !['retire-genesis', 'stagger', 'bulk-activate'].includes(mode)) {
+  console.error('usage: --in <state.json> --out <state.json> --mode retire-genesis|stagger|bulk-activate --arm-epoch N --max-age N [--cadence 8] [--mint-per-evolve 12] [--prune-headroom 2] [--max-root-delta 24] [--genesis-epoch 0] [--count 380 --stamped-ids <ids.json>  (bulk-activate)]');
   exit(2);
 }
 for (const p of [inPath, outPath]) {
@@ -93,7 +113,9 @@ if (resolve(inPath) === resolve(outPath)) {
 }
 
 const armEpoch = intFlag('arm-epoch');
-const maxAge = intFlag('max-age');
+// maxAge parameterizes the two genesis-rewrite modes' summaries; bulk-activate
+// does not consume it (the BMU bundle pins maxAge separately).
+const maxAge = mode === 'bulk-activate' ? intFlag('max-age', '32') : intFlag('max-age');
 const cadence = intFlag('cadence', '8');
 const mintPerEvolve = intFlag('mint-per-evolve', '12');
 const pruneHeadroom = intFlag('prune-headroom', '2');
@@ -113,17 +135,78 @@ if (state.schemaVersion !== 'coretex.epoch-frontier-state.v1') {
 const orderIdx = new Map(state.order.map((id, i) => [id, i]));
 const oldRoot = activeFrontierRootOf(state.active.map(([id]) => id));
 
-const genesis = state.active
+const genesis = mode === 'bulk-activate' ? [] : state.active
   .filter(([, ae]) => ae === genesisEpoch)
   .sort((a, b) => orderIdx.get(a[0]) - orderIdx.get(b[0]));
-if (genesis.length === 0) {
+if (genesis.length === 0 && mode !== 'bulk-activate') {
   console.error(`no active rows with activation epoch ${genesisEpoch}; nothing to rewrite`);
   exit(1);
 }
 
 let next;
 let summary;
-if (mode === 'retire-genesis') {
+if (mode === 'bulk-activate') {
+  // BMU one-time arm-time bulk activation (BMU_SPEC.md §6.7a prerequisite 2).
+  // Deterministic: pure function of (state bytes, stamped-id set, count,
+  // arm-epoch). Mirrors `activateNext`'s precommitted reserve-order walk
+  // exactly — the reserve pointer is a scalar, so the walked prefix activates
+  // contiguously (unstamped rows in the prefix activate too; reported).
+  const count = intFlag('count', '380');
+  if (count < 1) { console.error('--count must be >= 1'); exit(2); }
+  const stampedPath = flag('stamped-ids');
+  if (!stampedPath) {
+    console.error('--mode bulk-activate requires --stamped-ids <ids.json> (JSON array of bmuTask-stamped eval_hidden row ids, or an object with an activeIds/ids array) — fail-closed: without it stamped-row coverage cannot be verified');
+    exit(2);
+  }
+  const stampedRaw = JSON.parse(readFileSync(stampedPath, 'utf8'));
+  const stampedList = Array.isArray(stampedRaw) ? stampedRaw : (stampedRaw.activeIds ?? stampedRaw.ids);
+  if (!Array.isArray(stampedList) || stampedList.length === 0 || stampedList.some((id) => typeof id !== 'string' || id.length === 0)) {
+    console.error(`--stamped-ids ${stampedPath}: expected a non-empty JSON string array (or {activeIds|ids: [...]})`);
+    exit(1);
+  }
+  const stamped = new Set(stampedList);
+  const activeMap = new Map(state.active);
+  const retired = new Set(state.retired);
+  let stampedActive = 0;
+  for (const [id] of state.active) if (stamped.has(id)) stampedActive++;
+  let ptr = state.reservePtr;
+  let activated = 0;
+  let stampedActivated = 0;
+  let unstampedActivated = 0;
+  const activatedIds = [];
+  while (stampedActive < count && ptr < state.order.length) {
+    const id = state.order[ptr++];
+    if (activeMap.has(id) || retired.has(id)) continue;
+    activeMap.set(id, armEpoch);
+    activatedIds.push(id);
+    activated++;
+    if (stamped.has(id)) { stampedActivated++; stampedActive++; } else { unstampedActivated++; }
+  }
+  if (stampedActive < count) {
+    console.error(`bulk-activate: reserve exhausted at ${stampedActive}/${count} stamped-active rows (activated ${activated}, reservePtr ${state.reservePtr} -> ${ptr} of ${state.order.length}); mint more stamped rows before arming — refusing a partial activation`);
+    exit(1);
+  }
+  next = {
+    ...state,
+    reservePtr: ptr,
+    active: [...activeMap.entries()],
+    cumulativeActivated: state.cumulativeActivated + activated,
+  };
+  summary = {
+    mode,
+    countRequired: count,
+    stampedActiveBefore: stampedActive - stampedActivated,
+    stampedActiveAfter: stampedActive,
+    activated,
+    stampedActivated,
+    unstampedActivated,
+    reservePtrBefore: state.reservePtr,
+    reservePtrAfter: ptr,
+    activeAfter: activeMap.size,
+    activationEpoch: armEpoch,
+    note: 'Repin the new activeFrontierRoot atomically with the BMU bundle transition + rebaseline (variance certification runs AFTER this rewrite) — BEFORE the first post-arm evolve.',
+  };
+} else if (mode === 'retire-genesis') {
   const genesisIds = new Set(genesis.map(([id]) => id));
   next = {
     ...state,

@@ -10,6 +10,7 @@
  */
 
 import type { CortexState, Patch } from '../state/index.js';
+import { CORETEX_PIPELINE_VERSION_R5, CORETEX_PIPELINE_VERSION_BMU_V1 } from '../pipeline-versions.js';
 import { applyPatch } from '../state/patch.js';
 import { keccak256 } from '../state/keccak256.js';
 import { decodeSubstrate, type DecodedSubstrate, type RelationCategoryLens, POLICY_SELECTOR } from '../substrate/retrieval-decoder.js';
@@ -539,11 +540,14 @@ export interface ScoringOptions {
  *  words read as typed PolicyAtoms (this binary implements BOTH r4 and r5;
  *  r4 stays replayable). The active decode is chosen by the profile's pin. */
 export const CORETEX_PIPELINE_VERSION_THIS_BINARY = 'coretex-retrieval-v2-lens-r4';
-export const CORETEX_PIPELINE_VERSION_R5 = 'coretex-retrieval-v2-policy-r5';
-/** Versions this binary can replay (r4 + r5 coexist; decode mode chosen by the profile pin). */
+export { CORETEX_PIPELINE_VERSION_R5, CORETEX_PIPELINE_VERSION_BMU_V1, isR5StateLaw, isBmuScoringLaw } from '../pipeline-versions.js';
+/** Versions this binary can replay (r4 + r5 + bmu-v1 coexist; decode mode is
+ *  the r5 law for both r5 and bmu-v1 — BMU_SPEC.md §3; scoring law routes on
+ *  `isBmuScoringLaw`, spec §9 site 1). */
 export const CORETEX_PIPELINE_VERSIONS_SUPPORTED: ReadonlySet<string> = new Set([
   CORETEX_PIPELINE_VERSION_THIS_BINARY,
   CORETEX_PIPELINE_VERSION_R5,
+  CORETEX_PIPELINE_VERSION_BMU_V1,
 ]);
 
 /**
@@ -851,7 +855,7 @@ export interface PerQueryBreakdown {
    * complete reranked list and recompute nDCG faithfully. Undefined unless the
    * opt-in is set. Pure diagnostic — does not affect scoring.
    */
-  readonly finalRankingFull?: readonly { docId: string; relevance: number; rerankerScore: number }[];
+  readonly finalRankingFull?: readonly { docId: string; relevance: number; rerankerScore: number; finalReorderingScore?: number }[];
   /** Diagnostic-only rendered candidate text for the final top-20. Undefined unless exposeRenderedCandidates=true. */
   readonly renderedCandidatesTop20?: readonly RenderedCandidateTrace[];
   /** Diagnostic-only rendered candidate text for reranker input cap. Undefined unless exposeRenderedCandidates=true. */
@@ -958,7 +962,7 @@ export async function scoreSubstrateAgainstQuery(
     temporalBonus: number;
   }[];
   answerInCap: boolean;
-  finalRankingFull: readonly { docId: string; relevance: number; rerankerScore: number }[] | undefined;
+  finalRankingFull: readonly { docId: string; relevance: number; rerankerScore: number; finalReorderingScore?: number }[] | undefined;
   renderedCandidatesTop20: readonly RenderedCandidateTrace[] | undefined;
   rerankerInputCandidates: readonly RenderedCandidateTrace[] | undefined;
   policyTraces: readonly PolicyAtomTrace[];
@@ -2344,7 +2348,7 @@ export async function scoreSubstrateAgainstQuery(
 
   // ─── Pinned final ranking formula ────────────────────────────────────────
   const qrelById = new Map(query.qrels.map((q) => [q.documentId, q.relevance]));
-  const ranked = candidates
+  const rankedScored = candidates
     .map((c) => {
       const r = rerankerScoreByDocId.get(c.record.docId) ?? 0;
       return {
@@ -2361,13 +2365,13 @@ export async function scoreSubstrateAgainstQuery(
       }
       if (b.rerankerScore !== a.rerankerScore) return b.rerankerScore - a.rerankerScore;
       return a.documentId < b.documentId ? -1 : a.documentId > b.documentId ? 1 : 0;
-    })
-    .map((r) => ({
-      documentId: r.documentId,
-      memorySlot: r.memorySlot,
-      rerankerScore: r.rerankerScore,
-      relevance: r.relevance,
-    }));
+    });
+  const ranked = rankedScored.map((r) => ({
+    documentId: r.documentId,
+    memorySlot: r.memorySlot,
+    rerankerScore: r.rerankerScore,
+    relevance: r.relevance,
+  }));
 
   const top1Score = ranked.length > 0 ? ranked[0]!.rerankerScore : 0;
   // Expose the cap pool's docIds so gates G1/G2 can verify substrate
@@ -2437,9 +2441,11 @@ export async function scoreSubstrateAgainstQuery(
   // (no relevance>0 qrels) there is no answer to admit, so this is false.
   const capSetForAnswer = new Set(cappedDocIds);
   const answerInCap = query.qrels.some((q) => q.relevance > 0 && capSetForAnswer.has(q.documentId));
-  // Opt-in: the FULL reranked list (diagnostic only, for offline oracle probes).
+  // Opt-in: the FULL reranked list (diagnostic only, for offline oracle probes;
+  // the BMU deterministic judge consumes `finalReorderingScore` from here to
+  // re-rank on the quantized-composite chain — BMU_SPEC.md §13.2).
   const finalRankingFull = opts.exposeFullRanking === true
-    ? ranked.map((r) => ({ docId: r.documentId, relevance: r.relevance, rerankerScore: r.rerankerScore }))
+    ? rankedScored.map((r) => ({ docId: r.documentId, relevance: r.relevance, rerankerScore: r.rerankerScore, finalReorderingScore: r.finalReorderingScore }))
     : undefined;
   const renderedTrace = (docId: string, rank: number): RenderedCandidateTrace | null => {
     const c = componentsByDocId.get(docId);
