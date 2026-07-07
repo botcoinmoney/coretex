@@ -1,6 +1,6 @@
 # BMU v1 — Budgeted Memory Utility: the permanent CoreTex scoring law
 
-**Revision:** rev3.1 (post-PASS line-item edits; changelog in §17).
+**Revision:** rev3.2 (post-PASS line-item edits, second pass; changelog in §17).
 **Status:** SPEC FREEZE candidate (Track B, phase P1 B-lane). No production code
 accompanies this document. Nothing here arms, pins, or deploys anything.
 
@@ -376,20 +376,26 @@ minted for the same epoch carry DISJOINT `templateId` sets; two rows share a
 `templateId` iff they instantiate the same surface-form template. This is
 what makes §6.3's template-disjoint confirm derivation well-defined.
 
-**Multiplicity mint law (m = 1, PINNED — rev3.1):** within one family, a
-`subjectEntityId` and a `templateId` each appear in AT MOST ONE ACTIVE
-cluster at any time — i.e., in at most 1 cluster per family within the
-maxAge(32)-epoch active window. Enforced at mint time (the generator MUST
-NOT mint a cluster whose subject or template collides with a still-active
-same-family cluster) and checked by the §6.7 arm-gate census. Consequence:
-the §6.3 exclusion keys (motifGroupId, subjectEntityId, templateId) are
+**Multiplicity mint law (m = 1, GLOBAL — rev3.2; rev3.1's per-family scope
+was insufficient):** a `subjectEntityId` and a `templateId` each appear in
+AT MOST ONE ACTIVE cluster GLOBALLY — across ALL families — within the
+maxAge(32)-epoch active window. Per-family scoping does not suffice because
+§6.3's confirm exclusion set X is GLOBAL across families: a subject reused
+in a different family's active cluster would silently spill exclusions
+between families and re-open the confirm-refusal DoS this pin exists to
+prevent (the §6.7b E_f_min arithmetic assumes ZERO cross-family spill).
+Enforced at mint time (the generator MUST NOT mint a cluster whose subject
+or template collides with ANY still-active cluster, any family) and checked
+by the §6.7 arm-gate census, which is likewise GLOBAL. Consequence: the
+§6.3 exclusion keys (motifGroupId, subjectEntityId, templateId) are
 COEXTENSIVE with the cluster — excluding a gate row excludes exactly its own
-cluster (5 rows), never a second one. Without this pin, multiplicity m > 1
-multiplies worst-case confirm exclusion by m (at m = 2 a gate pack's ~13
-temporal rows could exclude ~130 rows > the arm-gate minimum — routine
-confirm-derivation refusal = lane DoS). m > 1 was considered and REJECTED:
-it buys no v1 design capability and costs m× in E_f_min (§6.7b arithmetic).
-This constrains the inherited attribute rotation — see §14.2.
+cluster (5 rows), never a second one, in any family. Without this pin,
+multiplicity m > 1 multiplies worst-case confirm exclusion by m (at m = 2 a
+gate pack's ~13 temporal rows could exclude ~130 rows > the arm-gate
+minimum — routine confirm-derivation refusal = lane DoS). m > 1 was
+considered and REJECTED: it buys no v1 design capability and costs m× in
+E_f_min (§6.7b arithmetic). This constrains the inherited attribute
+rotation — see §14.2.
 
 ### 4.2 Budget defaults
 
@@ -614,7 +620,8 @@ yields cap = 64 − 50 = **14**. The BMU bundle pins:
   overlay law (`liveEvalPack.familySlots`), validated to sum to `limit`.
 - `epochFrontier.maxAge = 32`, with A2's canonical retirement semantics
   incorporated by reference (`c677e36`): age-based retirement is a BOUNDED
-  per-epoch drain — oldest activation first, capped at `maxRootDeltaPerEpoch`,
+  per-EVOLVE drain (rev3.2 units note: the frontier steps only at real
+  evolves) — oldest activation first, capped at `maxRootDeltaPerEpoch`,
   sharing the root-delta budget with churn. UNBOUNDED aged retirement is
   forbidden: on the live epoch-136 frontier state, 9,300 of 9,319 active rows
   share activation epoch 0, and any finite maxAge applied unboundedly would
@@ -639,21 +646,29 @@ The CONFIRM pack has the identical pinned expectation: the same quotas are
 enforced quota-first on the post-exclusion pool and the same 3/3/3/3 slot law
 applies to its overlay draw. **Fill feasibility post-exclusion (TRUE worst
 case, per family — rev3.1, counting subject + template exclusion under the
-§4.1 m = 1 multiplicity pin):** each gate row of family f excludes exactly
-its own cluster (m = 1 makes subject/template exclusion coextensive with the
-motifGroup — no cross-cluster spill); worst case, the N_f = Q_f + O_f gate
+§4.1 GLOBAL m = 1 multiplicity pin):** each gate row of family f excludes
+exactly its own cluster (global m = 1 makes subject/template exclusion
+coextensive with the motifGroup — no cross-cluster AND no cross-FAMILY
+spill); worst case, the N_f = Q_f + O_f gate
 rows land in N_f DISTINCT clusters (rev3's "≤ ceil(N_f/5) clusters" was the
 minimum-supply count, not the worst case — corrected), excluding up to
 N_f · 5 rows: 90 for the 0.30-share families (N_f = 18), 65 for the
 0.20-share families (N_f = 13). Confirm then needs N_f more rows. The §6.7b
 arm-gate minima are derived from exactly this bound
 (E_f_min ≥ N_f·(k+1), cluster-rounded: 110/110/80/80), so the residual pool
-is ≥ 110 − 90 = 20 ≥ 18 (resp. 80 − 65 = 15 ≥ 13) rows per family — feasible
-by construction, with the cluster rounding as slack. Free fill (2 rows)
-excluded from the validator per §2.3. Fresh-frontier share = 12/64 = 18.75%
-per pack across all four families when per-family fresh cohorts suffice
-(I7a as clarified in §16 note (d); thin families degrade to seeded-active
-via the §6.4 fallback).
+is ≥ 110 − 90 = 20 ≥ 18 (resp. 80 − 65 = 15 ≥ 13) rows per family — the
+64-row confirm pack always fills, with the cluster rounding as slack.
+**Honest corner (rev3.2): in this same worst case the TOTAL residual is
+Σ_f (E_f_min − N_f·k) = 20+20+15+15 = 70 rows; after the confirm BASE fills
+its 64, at most 70 − 64 = 6 distinct rows remain for the 12 overlay slots —
+the confirm overlay may fill as few as 6 slots. This is a graceful
+underfill (unreplaced base rows keep the pack at 64; quotas unaffected),
+not a refusal — but it means the overlay's 12-slot CAPACITY is not
+unconditional; see the softened I7(a) reading, §16 note (d).** Free fill
+(2 rows) excluded from the validator per §2.3. Fresh-frontier share =
+12/64 = 18.75% per pack across all four families when per-family fresh
+cohorts suffice (§16 note (d); thin families degrade to seeded-active via
+the §6.4 fallback).
 
 ### 6.3 The derivation function contract
 
@@ -713,14 +728,19 @@ admission (this is named delta (1) of §1):
   `idx_j = digestU256([ enc('bmu-overlay-v1'), u64BE(epochId),
   seedBytes(S), enc(F), u64BE(i), u64BE(j) ]) % poolSize` for
   j = 0, 1, 2, …, skipping rows already drawn (any slot, either overlay
-  phase), rows in the pack base, and excluded rows — WITHOUT replacement,
-  bounded at j < poolSize·8 then fail-closed (the same skip-probe/dedup/
-  bound pattern as `deriveQueryPack`'s quota draws,
+  phase), rows in the pack base, and excluded rows — WITHOUT replacement
+  (the same skip-probe/dedup pattern as `deriveQueryPack`'s quota draws,
   `hidden-query-pack.ts:279-296`; `enc` = UTF-8, `seedBytes` = the 32-byte
   seed, `F` = the `bmuTask.family` ENUM NAME — also the key namespace of
-  `liveEvalPack.familySlots`). Which fresh rows appear is thus unpredictable
-  pre-blockhash, while the fresh SHARE stays guaranteed when cohorts suffice
-  (I7a as clarified in §16 note (d)).
+  `liveEvalPack.familySlots`). **Probe exhaustion (j ≥ poolSize·8) is NOT a
+  pack-derivation refusal (rev3.2):** it marks THAT SLOT unfillable from the
+  current pool, which then falls through the §6.4 chain — fallback pool
+  first, then redistribution to the remaining families; pack derivation
+  refuses only if the redistribution chain ALSO cannot fill. (Refusing at
+  first exhaustion would add a ~0.7%-per-evaluation stochastic refusal
+  channel that the redistribution rule was designed to absorb.) Which fresh
+  rows appear is thus unpredictable pre-blockhash, while the fresh SHARE
+  stays guaranteed when cohorts suffice (I7a as clarified in §16 note (d)).
 - **Fallback (F6 — SEEDED, never newest-first):** if a family's fresh cohort
   cannot fill its slots (routine for confirm post-exclusion), the remaining
   slots draw by the SAME seeded digest over the family's FULL eligible-active
@@ -808,8 +828,9 @@ carries a clarifying note.
    root-verified id-set artifact — ZERO new pins or wire fields.
    **rev2's retire-on-exposure is DELETED** (orchestrator decision on the
    rev2 re-review): it was arithmetically self-contradictory — one accepted
-   artifact exposes ~124 pack rows vs a ≤ `maxRootDeltaPerEpoch` = 24/epoch
-   drain SHARED with aged retirement, so the exposure queue diverges 10–25×
+   artifact exposes ~124 pack rows vs a ≤ `maxRootDeltaPerEpoch` = 24
+   per-EVOLVE drain SHARED with aged retirement, so the exposure queue
+   diverges 10–25×
    under any healthy accept cadence and starves retire-by-age (an I7(b)
    violation); it was also a new subsystem beyond I1-I10 ⇒ default-DEFER
    (handoff §8). It is now on the §12 DEFER list alongside commit-reveal.
@@ -865,14 +886,22 @@ verifies pack composition exactly as it does today for the overlay law.
 ### 6.7 Transition bootstrap and the ARM-GATE (the flip cannot start on an empty pool)
 
 BMU pack eligibility (§4.3) = `bmuTask` present AND active-frontier member.
-At a naive flip that pool is ~EMPTY: no pre-BMU row carries `bmuTask`; new
-rows activate only through the frontier pipe (`activateNext`,
-`src/coordinator/epoch-frontier.ts:186-193` — reserve rows activate in order,
-bounded by the shared `maxRootDeltaPerEpoch` = 24/epoch budget); and
-`deriveQueryPack` THROWS below packSize/quota fill
-(`hidden-query-pack.ts:292-296,306-308`). §10's mandatory two-pass rebaseline
-scores the parent under the NEW law at the transition evolve — on an empty
-pool that throws at step one (the G-B14 rehearsal would fail immediately).
+At a naive flip that pool is ~EMPTY, and — rev3.2, the structural fact —
+STAYS empty no matter how much is minted: activations strictly REPLACE
+retirements (`activateNext(ret)` is fed the retirement count,
+`src/coordinator/epoch-frontier.ts:186-193,246-248`; the prune backfill is
+likewise replacement-only), so the active set NEVER grows after
+initialization — minted rows only QUEUE in the reserve (spliced at
+`reservePtr`, BMU rows first, `:252-260`). A2's own evidence proves it:
+`g-a4-retirement-sim-rework-v2-retire-genesis.json` shows
+activeSizeStart = activeSizeEnd = 19 over 80 evolves / 948 mints. Note also
+the UNITS: the frontier steps only at REAL EVOLVES, so `maxRootDeltaPerEpoch`
+is a per-EVOLVE budget (max 12/evolve via C3 in that sim), not per-epoch.
+Meanwhile `deriveQueryPack` THROWS below packSize/quota fill
+(`hidden-query-pack.ts:292-296,306-308`), and §10's mandatory two-pass
+rebaseline scores the parent under the NEW law at the transition evolve — on
+an empty pool that throws at step one (the G-B14 rehearsal would fail
+immediately). Without an activation operation the arm-gate would NEVER open.
 Three coupled requirements close the gap:
 
 **(a) Pre-flip inert `bmuTask` minting.** Generators MUST stamp full
@@ -891,20 +920,35 @@ under r5:
   the corpusRoot commit to it — no retro-mutation of existing rows, no
   replay impact (r5 packs hash the same rows they always did).
 
-ONE canonical pre-requisite: the logical-delta bridge constructs production
-events from an EXPLICIT field allowlist
-(`src/corpus/logical-delta-bridge.ts:355-375` — `qEventBase` +
-field-by-field `Object.assign` for `logicalFamily`/`band`/`ownerEntityId`/
-`subjectEntityId`/…), so an unstamped bridge would silently DROP `bmuTask`.
-The bridge MUST gain a `q.bmuTask ? { bmuTask: q.bmuTask } : {}` pass-through
-BEFORE pre-flip minting starts (P3 canonical item; replay-inert for the same
-from-birth-hash reason).
+TWO named canonical prerequisites (P3/P7 pick both up from here):
+
+1. **Bridge pass-through:** the logical-delta bridge constructs production
+   events from an EXPLICIT field allowlist
+   (`src/corpus/logical-delta-bridge.ts:355-375` — `qEventBase` +
+   field-by-field `Object.assign` for `logicalFamily`/`band`/
+   `ownerEntityId`/`subjectEntityId`/…), so an unstamped bridge would
+   silently DROP `bmuTask`. The bridge MUST gain a
+   `q.bmuTask ? { bmuTask: q.bmuTask } : {}` pass-through BEFORE pre-flip
+   minting starts (P3 canonical item; replay-inert for the same
+   from-birth-hash reason).
+2. **Bulk-activate tool mode (rev3.2):** a `--bulk-activate` mode of
+   `scripts/coretex-stagger-frontier-activation.mjs` that activates the
+   stamped BMU reserve rows (≥ N_min of them) in PRECOMMITTED RESERVE ORDER
+   — offline-only, deterministic, atomic-repin posture identical to A2's
+   retire-genesis rewrite (runbook `docs/a2-unbrick-arming.md`), with the
+   resulting `activeFrontierRoot` repinned atomically with the BMU bundle
+   transition + rebaseline. Required because the frontier NEVER grows the
+   active set on its own (§6.7 intro); without this operation the arm-gate
+   cannot open. (P3 canonical item; P7 rehearses it, G-B14(ii-b).)
 
 **(b) ARM-GATE precondition with N_min derived from the pack arithmetic
 (rev3.1: re-derived from the TRUE worst case under the §4.1 m = 1
-multiplicity pin).** The BMU bundle MUST refuse to arm unless the
-eligible-active pool (bmuTask rows ∩ active frontier) satisfies per-family
-minima. With k = 5 rows per cluster (minimum typed-cluster size) and
+multiplicity pin).** The BMU bundle MUST refuse to arm unless the pool of
+stamped rows AVAILABLE FOR BULK-ACTIVATION (bmuTask rows in
+reserve ∪ active — rev3.2: pre-arm they sit in the RESERVE, §6.7 intro; the
+prerequisite-2 bulk-activation is what makes them eligible-active at arm)
+satisfies per-family minima. With k = 5 rows per cluster (minimum
+typed-cluster size) and
 N_f = the §6.2 per-family pack demand (Q_f + O_f): worst case, all N_f gate
 rows land in distinct clusters and each excludes its full cluster (exactly
 one cluster under m = 1 — subject/template exclusion is coextensive with the
@@ -928,11 +972,14 @@ pinned.)
 
 The arm-gate additionally requires: a fresh overlay cohort of ≥ 2 clusters
 per family within `freshWindow` (trivially m=1-compatible: 2 distinct
-subjects + templates per family per epoch); an m = 1 census (no
-subjectEntityId or templateId in > 1 active same-family cluster); and the
+subjects + templates per family per epoch); a GLOBAL m = 1 census (no
+subjectEntityId or templateId in > 1 cluster across the ENTIRE
+reserve ∪ active stamped pool, any family — §4.1); and the
 variance certification below. The gate is a fail-closed arm/boot check in
 the same posture as the attestation ARM gate, reporting per-family counts on
-refusal.
+refusal. Ordering: the census + count checks run BEFORE bulk-activation; the
+variance certification runs AFTER bulk-activation (it needs the BMU pack law
+derivable over the post-activation active set), as part of the rebaseline.
 
 **Variance certification procedure (executable; rehearsed by G-B14(iii)):**
 
@@ -952,41 +999,61 @@ refusal.
    AND the arm log; the manifest copy is what G-B14(vi)'s cold sidecar
    reload re-verifies.
 
-**(c) Frontier continuity and the A2→BMU sequencing.** `activeWindow`
-semantics are UNCHANGED at the flip (same frontier state, same on-chain
-root continuity — the BMU bundle does not reset the frontier). But the
-timeline must respect A2's arming reality. A2 ships TWO distinct mechanisms
-(branch `coretex-a2-unbrick`): (i) IN CODE, the bounded age-drain —
-retirement capped at `maxRootDeltaPerEpoch` = 24/epoch, oldest-first, budget
-shared with churn (`c677e36`); (ii) AT ARM TIME, a one-time retire-genesis
+**(c) Frontier state at arm and the A2→BMU sequencing (rev3.2 — corrected
+for the replacement-only frontier).** The BMU bundle DOES rewrite frontier
+STATE at arm — a one-time bulk-activation (prerequisite 2 of (a)), exactly
+as A2's arming applies its one-time retire-genesis rewrite. Root-PIN
+continuity is preserved per-epoch thereafter (the rewritten
+`activeFrontierRoot` is repinned atomically with the bundle transition +
+rebaseline, and every subsequent epoch steps normally). A2 ships TWO
+distinct mechanisms (branch `coretex-a2-unbrick`): (i) IN CODE, the bounded
+age-drain — retirement capped at `maxRootDeltaPerEpoch` = 24 per EVOLVE
+(the frontier steps only at real evolves — per-evolve units, NOT per-epoch;
+A2's sim stepped max 12/evolve via C3), oldest-first, budget shared with
+churn (`c677e36`); (ii) AT ARM TIME, the one-time retire-genesis
 frontier-STATE rewrite applied offline via
 `scripts/coretex-stagger-frontier-activation.mjs` + atomic repin (runbook
 `docs/a2-unbrick-arming.md`) — it is THIS rewrite, not the drain, that
-leaves the post-arm active set at ~19 rows + mint ramp. Both bound the
-BMU ramp identically: the activation pipe is ≤ 24 rows/epoch. Sequencing:
+leaves the post-arm active set at ~19 rows. CRUCIALLY (the rev3 error this
+corrects): the in-code pipe is REPLACEMENT-ONLY (§6.7 intro) — it never
+grows the active set, so no amount of minting ramps eligibility. The
+~16-epoch ramp is therefore a MINT ramp (filling the RESERVE), and the
+bulk-activation at arm is what makes those rows eligible. Sequencing:
 
 1. Operator arms A2 (`liveeval12-allfam-age32`, r5 law, incl. the
    retire-genesis state rewrite) + A1 forced evolves.
-2. The bridge `bmuTask` pass-through (a) lands canonically; generators stamp
-   every subsequent mint (m = 1 mint law enforced from the first stamped
-   cluster).
-3. Generators mint ≥ 24 eligible rows/epoch (≈ 5 clusters/epoch, rotating
-   across all four families per the capability schedule) so the activation
-   pipe stays saturated.
-4. Ramp arithmetic: ceil(380 / 24) = **16 epochs minimum** of saturated
-   minting (= exactly 2 A1 forced-evolve cycles at cadence 8); realistically
-   16–20 epochs with churn sharing the root-delta budget.
-5. ARM-GATE (b) opens: per-family counts ≥ {80, 110, 110, 80}; m = 1 census
-   clean; variance certification passes.
-6. Two-pass rebaseline under the BMU law (§10) — now derivable, no throw.
-7. Flip (operator decision, outside this program).
+2. The bridge `bmuTask` pass-through (a.1) lands canonically; generators
+   stamp every subsequent mint (GLOBAL m = 1 mint law enforced from the
+   first stamped cluster).
+3. MINT ramp: generators mint ~25 stamped rows/epoch (≈ 5 clusters/epoch,
+   rotating across all four families per the capability schedule). These
+   QUEUE in the reserve (spliced BMU-first at `reservePtr`,
+   `epoch-frontier.ts:252-260`) — the replacement-only pipe activates only
+   a trickle of them; that is expected and fine.
+4. Ramp arithmetic: ceil(380 / 25) ≈ **16 epochs minimum** of steady minting
+   to accumulate ≥ N_min stamped rows in reserve ∪ active (= 2 A1
+   forced-evolve cycles at cadence 8). This is generator THROUGHPUT
+   arithmetic, not activation-pipe arithmetic.
+5. ARM-GATE (b) count + census checks pass: stamped per-family counts ≥
+   {80, 110, 110, 80} in reserve ∪ active; GLOBAL m = 1 census clean.
+6. One-time BULK-ACTIVATION ((a) prerequisite 2): ≥ 380 stamped reserve rows
+   activated in precommitted reserve order; new `activeFrontierRoot`
+   repinned atomically with the bundle transition.
+7. Two-pass rebaseline under the BMU law (§10) over the post-activation
+   active set — now derivable, no throw — incl. the variance certification.
+8. Flip (operator decision, outside this program).
 
 **(d) G-B14 rehearsal step list (updated).** The fork rehearsal MUST:
 (i) materialize a pre-flip corpus/frontier state with stamped rows BELOW
 N_min and assert the arm-gate REFUSES with correct per-family counts;
-(ii) advance the simulated mint ramp past N_min and assert the gate opens;
-(iii) run the two-pass rebaseline under the BMU law (blank ≠ parent trap
-explicitly checked; §2.4 variance certification enforced);
+(ii) advance the simulated mint ramp past N_min (reserve-resident stamped
+rows) and assert the count + census checks open;
+(ii-b) apply the one-time BULK-ACTIVATION ((a) prerequisite 2) and assert
+the ≥ 380 stamped rows activate in precommitted reserve order with the new
+`activeFrontierRoot` repinned atomically;
+(iii) run the two-pass rebaseline under the BMU law over the
+post-activation active set (blank ≠ parent trap explicitly checked; §2.4
+variance certification enforced);
 (iv) scorer sync of corpus + BMU bundle + active-id artifact;
 (v) validator parity incl. §6.3/6.4 pack recomputation post-reveal;
 (vi) signed rotation manifest accepted by a cold sidecar reload;
@@ -1155,10 +1222,15 @@ means byte-compatible):
 3. Frontier-aware broad-pack eligibility (`hiddenPackEventEligible` +
    `deriveQueryPack` activeIds threading, §6.5; §9 site 17).
 4. Logical-delta-bridge `bmuTask` pass-through
-   (`logical-delta-bridge.ts:355-375` allowlist extension, §6.7a) — must
-   land BEFORE pre-flip minting; replay-inert.
-5. BMU arm-gate precondition (per-family eligible-active minima + fresh
-   cohort + variance certification, §6.7b).
+   (`logical-delta-bridge.ts:355-375` allowlist extension, §6.7a
+   prerequisite 1) — must land BEFORE pre-flip minting; replay-inert.
+5. BMU arm-gate precondition (per-family stamped-row minima + GLOBAL m = 1
+   census + fresh cohort + variance certification, §6.7b).
+6. One-time arm-time BULK-ACTIVATION (`--bulk-activate` mode of
+   `scripts/coretex-stagger-frontier-activation.mjs`, §6.7a prerequisite 2;
+   offline, deterministic, atomic repin with the bundle transition) —
+   required because the frontier's activation pipe is replacement-only and
+   never grows the active set (§6.7 intro).
 
 ---
 
@@ -1322,7 +1394,7 @@ appear in v1 implementation:
 - a separate third broad-safety pack (§14.1);
 - label commit-reveal corpus distribution (§6.5 — v2 escalation path only);
 - exposure-based row retirement (rev2's retire-on-exposure, DELETED in rev3:
-  ~124 exposed rows per accepted artifact vs the ≤24/epoch shared drain
+  ~124 exposed rows per accepted artifact vs the ≤24 per-evolve shared drain
   diverges 10–25× and starves retire-by-age (I7b violation), and it is a new
   subsystem beyond I1-I10 — v2 escalation path only, with its own dedicated
   drain budget if ever adopted).
@@ -1657,28 +1729,69 @@ label visibility is architectural fact under r5 and BMU alike; seeds are
 private pre-reveal at every tier. This reading requires OPERATOR
 RATIFICATION in the go/no-go packet (§15.7). (d) I7(a)'s "guaranteed
 fresh-frontier share" is read per §6.4: the 12-slot overlay share is
-guaranteed as CAPACITY every pack; its FRESHNESS is guaranteed only when
+guaranteed as CAPACITY in every pack EXCEPT the confirm-side exclusion
+worst case (§6.2 honest corner: as few as 6 of 12 slots fillable —
+graceful underfill, never refusal); its FRESHNESS is guaranteed only when
 per-family fresh cohorts suffice — a family whose fresh cohort is thin
 (routine for confirm post-exclusion) degrades to a seeded draw over its
 full eligible-active membership, never to a predictable deterministic
-order. Tests and gate phrasings MUST NOT assert unconditional freshness:
-assert cohort-conditional freshness plus fallback-engagement telemetry.
+order. Tests and gate phrasings MUST NOT assert unconditional capacity or
+freshness: assert cohort-conditional freshness, worst-case-bounded
+capacity, plus fallback/underfill-engagement telemetry.
 
 ---
 
 ## 17. Changelog
+
+### rev3.1 → rev3.2 (diff-review re-edits)
+
+- **(A) m = 1 made GLOBAL (§4.1, §6.2, §6.7b):** rev3.1's per-family scope
+  left cross-family subject/template reuse spilling exclusions between
+  families through the GLOBAL §6.3 exclusion set — re-opening the
+  confirm-refusal DoS (E_f_min assumes zero cross-family spill). Now: ≤ 1
+  active cluster GLOBALLY per subject/template within the maxAge window;
+  arm-gate census global. Honest corner added (§6.2 + softened §16 note
+  (d)): in the exclusion worst case the total residual (Σ = 70) minus the
+  confirm base fill (64) leaves ≤ 6 rows for the 12 overlay slots — the
+  confirm overlay may underfill to 6 slots (graceful, never refusal;
+  capacity is no longer stated as unconditional).
+- **(B) Replacement-only frontier — the structural correction (§6.7):**
+  activations strictly REPLACE retirements (`activateNext(ret)`,
+  `epoch-frontier.ts:186-193,246-248`); the active set NEVER grows — A2's
+  own evidence (g-a4-retirement-sim-rework-v2-retire-genesis.json:
+  activeSizeStart = activeSizeEnd = 19 over 80 evolves / 948 mints) proves
+  minting alone can never open the arm-gate. rev3.1's "activation pipe
+  ramps eligibility" premise was WRONG. Fix: (i) new named canonical
+  prerequisite — one-time arm-time BULK-ACTIVATION (`--bulk-activate` mode
+  of `scripts/coretex-stagger-frontier-activation.mjs`; precommitted
+  reserve order, offline + deterministic + atomic repin, same posture as
+  retire-genesis), listed alongside the bridge pass-through in §6.7a and
+  §8.5; (ii) frontier-continuity sentence amended — the BMU bundle DOES
+  rewrite frontier state at arm, root-pin continuity per-epoch thereafter;
+  (iii) ramp restated as a MINT ramp (~25 rows/epoch generator throughput,
+  ceil(380/25) ≈ 16 epochs, filling the RESERVE); all pipe language
+  corrected to per-EVOLVE units (frontier steps only at real evolves; max
+  12/evolve via C3 in the A2 sim). Arm-gate census now counts stamped rows
+  in reserve ∪ active; variance certification ordered AFTER
+  bulk-activation; G-B14 gains step (ii-b).
+- **(C) Probe-exhaustion semantics (§6.4):** j ≥ poolSize·8 marks the SLOT
+  unfillable → fallback → redistribution chain; pack-derivation refusal
+  only if redistribution also cannot fill (first-exhaustion refusal would
+  have been a ~0.7%/evaluation stochastic refusal channel).
 
 ### rev3 → rev3.1 (post-PASS line-item edits)
 
 - **(1) Multiplicity mint law (P2-blocking):** m = 1 PINNED (§4.1): a
   subjectEntityId and a templateId each appear in ≤ 1 active same-family
   cluster within the maxAge window — exclusion keys become coextensive with
-  the cluster. §6.2 fill feasibility restated at the TRUE worst case (N_f
+  the cluster *(scope broadened to GLOBAL in rev3.2 (A))*. §6.2 fill feasibility restated at the TRUE worst case (N_f
   gate rows in N_f distinct clusters, subject+template counted; rev3's
   ceil(N_f/5) was the minimum-supply count, not worst case). §6.7b minima
   re-derived: `E_f_min = k·ceil(N_f·(k+1)/k)` = {80, 110, 110, 80},
   **N_min = 380** (76 clusters); ramp ceil(380/24) = **16 epochs** (was
-  280/12); s = 2 superseded (m = 1 removes the collision uncertainty it
+  280/12) *(ramp premise corrected in rev3.2 (B): it is a MINT ramp; the
+  activation pipe never grows the active set — bulk-activation at arm)*;
+  s = 2 superseded (m = 1 removes the collision uncertainty it
   padded). m > 1 rejected: worst case scales as N_f·(m·k+1) (m = 2 conflict:
   198) for zero v1 benefit. §14.2 notes the attribute-rotation constraint
   (same-subject reuse waits for retirement; subject supply makes it cheap).
