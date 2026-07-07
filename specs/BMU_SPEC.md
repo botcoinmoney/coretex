@@ -1,6 +1,6 @@
 # BMU v1 — Budgeted Memory Utility: the permanent CoreTex scoring law
 
-**Revision:** rev3.2 (post-PASS line-item edits, second pass; changelog in §17).
+**Revision:** rev3.3 (P3-R1 implementation-review backports; changelog in §17).
 **Status:** SPEC FREEZE candidate (Track B, phase P1 B-lane). No production code
 accompanies this document. Nothing here arms, pins, or deploys anything.
 
@@ -231,7 +231,8 @@ BMU bundle pins:
   3–4 flips — exactly the failure this pin forbids. The protection variance
   used to provide moves to an ARM-GATE certification (§6.7): measured
   `scoreState` variance across the certified pack rotation MUST be
-  < q/2 = 7,812 ppm (parent utility flip-stable), else certification failed
+  ≤ 7,811 ppm — the integer pin for strict < q/2 = 7,812.5 (parent utility
+  flip-stable) — else certification failed
   and the bundle MUST NOT arm.
 
 Acceptance threshold = 20_000 + 250 + 0 = **20_250 ppm, exactly**. In
@@ -251,14 +252,15 @@ row-flip units (q = 15_625):
 - **Screener staircase (controller inputs pinned for BMU):** the screener
   controller is mechanically unchanged (`computeCoreTexScreenerThresholdPpm`,
   `work-units.ts:207-266`), but one input MUST be clamped: the coordinator's
-  BMU work-policy wiring clamps `recentNoiseFloorPpm` to < q/2 = 7,812 ppm
+  BMU work-policy wiring clamps `recentNoiseFloorPpm` to ≤ 7,811 ppm (the integer pin for
+  strict < q/2 = 7,812.5)
   before calling the controller (under quantization a "noise" reading is
   itself flip-denominated; unclamped, `noiseFloorMultiplierBps = 20000` (2×)
   would push `noiseDelta` ≥ 15,625+ and pin the screener at its
   20,250 dynamic ceiling, killing the 1-flip lane). With the clamp, the term
   arithmetic is: `minDelta` 50; `stateAdvanceFloorDelta` =
   ceil(20,250 × 2000/10000) = 4,050; `headroomDelta` = remaining ×
-  1 bps ≤ 100 ppm; `noiseDelta` = 2 × (< 7,812) < 15,624. So
+  1 bps ≤ 100 ppm; `noiseDelta` = 2 × (≤ 7,811) ≤ 15,622 < q. So
   screener ∈ [4,050, 15,624] < q = 15,625 in all normal regimes — **1 flip =
   screener pass, ≥ 2 flips = state advance**: the pass-rate staircase intent
   (`specs/research_brief.md:281-308,338-354`) re-emerges denominated in
@@ -368,7 +370,14 @@ the corpus; `|requiredEvidence| ≤ budgetB`; `abstain=true ⇒ requiredEvidence
 = [] ∧ answer absent`; `family` matches the row's (`logicalFamily`,
 bucketed `family`) pair per the §5.6 table; `motifGroupId` non-empty and
 shared by every row minted from the same memory structure and by no other
-row; `templateId` non-empty.
+row; `templateId` non-empty. **Charset law (rev3.3):** `subjectEntityId`
+and `templateId` MUST contain no control characters (U+0000–U+001F,
+U+007F — including `'\n'`), rejected at corpus load AND at mint-time lint —
+this kills join-injection into the §8.3 exclusion-set digest (a crafted id
+containing the join separator could alias two distinct key sets to one
+digest). Length-prefixing the digest was the considered alternative; the
+implementation chose charset rejection, pinned here. `motifGroupId` is
+generator-minted under the same lint.
 
 **Template mint law (P2 generator obligation):** template banks are
 partitioned per (family, epoch) so that any two clusters of the same family
@@ -663,7 +672,8 @@ is ≥ 110 − 90 = 20 ≥ 18 (resp. 80 − 65 = 15 ≥ 13) rows per family — 
 its 64, at most 70 − 64 = 6 distinct rows remain for the 12 overlay slots —
 the confirm overlay may fill as few as 6 slots. This is a graceful
 underfill (unreplaced base rows keep the pack at 64; quotas unaffected),
-not a refusal — but it means the overlay's 12-slot CAPACITY is not
+not a refusal — RATIFIED as the terminal semantics by P3-R1 (§6.4) — but it
+means the overlay's 12-slot CAPACITY is not
 unconditional; see the softened I7(a) reading, §16 note (d).** Free fill
 (2 rows) excluded from the validator per §2.3. Fresh-frontier share =
 12/64 = 18.75% per pack across all four families when per-family fresh
@@ -751,13 +761,34 @@ admission (this is named delta (1) of §1):
   the lane. The arm-gate minima (§6.7) + the ≥2-clusters/family/epoch
   generator duty keep cohorts populated in steady state; the fallback
   degrades freshness gracefully without degrading unpredictability.
-- **Redistribution:** if even the full-membership draw cannot fill a
-  family's slots (impossible post-arm-gate in the broad pool; conceivable
-  only under quota exhaustion bugs), the unfilled slots redistribute
-  round-robin to the remaining BMU families in fixed order
-  (temporal → conflict_lifecycle → multi_hop_relation →
-  near_collision/abstention) and the pack emits a composition-deviation
-  telemetry flag.
+- **Redistribution (semantics pinned — rev3.3):** if even the
+  full-membership draw cannot fill a family's slots, the unfilled slots
+  redistribute FIRST-FIT over all four BMU families in fixed order
+  restarting at temporal (temporal → conflict_lifecycle →
+  multi_hop_relation → near_collision/abstention), and a redistributed slot
+  CONTINUES the TARGET family's slot numbering (its draws use the target
+  family's name and next slot index in the §6.4 digest tuple). The pack
+  emits a composition-deviation telemetry flag. **Terminal semantics
+  (ratified, P3-R1):** underfill — overlay slots that no family can fill —
+  is GRACEFUL: the pack proceeds at packSize with unreplaced base rows,
+  emitting composition/underfill telemetry; overlay shortfall NEVER causes
+  pack-derivation refusal (refusal remains reserved for base quota failure,
+  `hidden-query-pack.ts:292-296,306-308`). Reviewer-ruled sound and not
+  materially gameable.
+- **Digest/byte conventions (pinned — rev3.3):**
+  `digestU256` = keccak256 over the PLAIN CONCATENATION of the input parts
+  (no length prefixes), digest interpreted as a BIG-ENDIAN uint256
+  (`hidden-query-pack.ts:235-248`); seed hex is parsed case-insensitively
+  into bytes, canonical textual form lowercase `0x`-prefixed (the
+  `deriveQueryPack` normalization, `:312`); `bmuQuantize(x) =
+  Math.round(x / g)` — JavaScript `Math.round` semantics, ties toward +∞;
+  `codePointCompare` ordering = UTF-16 code-unit lexicographic order.
+- **Golden vectors (REQUIRED — rev3.3):** the implementation MUST commit
+  golden hex vectors (in-repo test fixtures) for the seeded-draw byte law
+  above — fixed (epochId, seed, family, slot, probe) tuples with their
+  exact digest bytes and drawn row ids — and every independent
+  implementation (scorer server, validator replay, replay CLI) MUST
+  reproduce them byte-for-byte.
 - **Exclusion:** the confirm-side draw additionally excludes rows whose
   motifGroupId/subjectEntityId/templateId ∈ X (§6.3) — the exclusion applies
   to overlay and broad rows alike.
@@ -904,18 +935,23 @@ an empty pool that throws at step one (the G-B14 rehearsal would fail
 immediately). Without an activation operation the arm-gate would NEVER open.
 Three coupled requirements close the gap:
 
-**(a) Pre-flip inert `bmuTask` minting.** Generators MUST stamp full
+**(a) Pre-flip `bmuTask` minting — SCORING-inert under r5, NOT
+validation-inert (rev3.3 wording fix).** Generators MUST stamp full
 `bmuTask` fields (incl. motifGroupId/templateId) on every minted eval_hidden
-row DURING the r5 era, starting as soon as the stamping lands. This is inert
-under r5:
+row DURING the r5 era, starting as soon as the stamping lands. Precisely:
 
-- the corpus LOADER performs no unknown-field rejection —
-  `loadProductionCorpus` validates schemaVersion, corpusRoot, split
-  assignment, and embedding pins only (`retrieval-corpus.ts:844-914`); event
-  objects pass through as parsed;
-- the r5 scorer reads only the fields it knows (TypeScript structural
-  typing; `deriveQueryPack`/`evaluateRetrievalBenchmarkPatch` never touch
-  unknown properties);
+- SCORING-inert: the r5 scorer reads only the fields it knows (TypeScript
+  structural typing; `deriveQueryPack`/`evaluateRetrievalBenchmarkPatch`
+  never touch unknown properties), and the corpus LOADER performs no
+  unknown-field rejection — `loadProductionCorpus` validates schemaVersion,
+  corpusRoot, split assignment, and embedding pins only
+  (`retrieval-corpus.ts:844-914`); event objects pass through as parsed;
+- **NOT validation-inert:** the §4.1 `bmuTask` load-time validation
+  (structure, cross-references, charset law) is VERSION-INDEPENDENT and
+  live from the moment a stamped row exists — an INVALID stamped mint would
+  fail corpus load and brick the r5-era lane. Mint-time LINT (the full §4.1
+  validation run before publish) is therefore MANDATORY from the first
+  stamped cluster, not a nicety deferred to the flip;
 - new rows carry `bmuTask` from birth, so their canonical event hashes and
   the corpusRoot commit to it — no retro-mutation of existing rows, no
   replay impact (r5 packs hash the same rows they always did).
@@ -975,11 +1011,25 @@ per family within `freshWindow` (trivially m=1-compatible: 2 distinct
 subjects + templates per family per epoch); a GLOBAL m = 1 census (no
 subjectEntityId or templateId in > 1 cluster across the ENTIRE
 reserve ∪ active stamped pool, any family — §4.1); and the
-variance certification below. The gate is a fail-closed arm/boot check in
-the same posture as the attestation ARM gate, reporting per-family counts on
-refusal. Ordering: the census + count checks run BEFORE bulk-activation; the
-variance certification runs AFTER bulk-activation (it needs the BMU pack law
-derivable over the post-activation active set), as part of the rebaseline.
+variance certification below. Ordering: the census + count checks run BEFORE
+bulk-activation; the variance certification runs AFTER bulk-activation (it
+needs the BMU pack law derivable over the post-activation active set), as
+part of the rebaseline.
+
+**Boot-vs-arm posture split (rev3.3, P3-R1 ruling):** the FULL gate above —
+counts + global census + fresh cohort + variance certification — binds at
+the ARM posture ONLY. Boot / evaluator-construction re-checks the
+STRUCTURAL census only: per-family eligible-active counts ≥ E_f_min and the
+global m = 1 census — NEVER freshness. **Fresh-AGE definition (pinned):**
+a row's freshness reads its MINT epoch, embedded in the row id (`zz_eN_…`
+prefix, `liveEpochFromEventId`, `hidden-query-pack.ts:318-321`) — NOT the
+frontier `activationEpoch`. Liveness rationale: mints occur only at real
+evolves (A1 cadence 8) while `freshWindow` = 2, so in ~6 of 8 epochs there
+exist NO rows with mint-age ≤ freshWindow — a boot-time freshness check
+would fail-closed a healthy lane most epochs (the §6.4 seeded
+full-membership fallback is the designed steady-state behavior between
+evolves). The structural boot check is fail-closed in the same posture as
+the attestation ARM gate, reporting per-family counts on refusal.
 
 **Variance certification procedure (executable; rehearsed by G-B14(iii)):**
 
@@ -991,13 +1041,18 @@ derivable over the post-activation active set), as part of the rebaseline.
    never a future blockhash (the `scoreState` contract,
    `production-evaluator.ts:871-873`).
 3. Criterion: per state, the MAX PAIRWISE SPREAD of the K `parentScorePpm`
-   values < q/2 = 7,812 ppm (i.e., zero row flips across the rotation, since
+   values ≤ 7,811 ppm — the INTEGER pin (rev3.3): q/2 = 7,812.5, criterion is
+   strict <, so integer spreads pass iff ≤ 7,811 (i.e., zero row flips, since
    any flip = 15,625). Both states MUST pass.
 4. Recording: the K seeds, K scores, and both spreads are written into the
    signed rotation manifest's baseline section
    (`armVarianceCertification: { states, K, seeds, scoresPpm, spreadPpm }`)
    AND the arm log; the manifest copy is what G-B14(vi)'s cold sidecar
    reload re-verifies.
+5. Golden vectors (REQUIRED — rev3.3): the variance-seed schedule of step 2
+   MUST have committed golden hex vectors (fixed epochId/stateLabel/i →
+   exact `baselineSeedHex_i` bytes) alongside the §6.4 seeded-draw vectors;
+   every independent implementation reproduces them byte-for-byte.
 
 **(c) Frontier state at arm and the A2→BMU sequencing (rev3.2 — corrected
 for the replacement-only frontier).** The BMU bundle DOES rewrite frontier
@@ -1299,13 +1354,29 @@ Sites marked **[STATE]** must treat the new version exactly as r5
     `liveEvalPack` required with the §6.2 minimums, composition validation
     (§2.3), and the seeded-overlay/exclusion law flags (§6.4).
 
+18. **[LAW]** `src/validator-sync-cli.ts` — the validator SCORE-REPLAY path
+    (`buildValidatorScorerContext` `:1414-1439` and the post-reveal
+    score-replay drain that rescoring advances flows through, `:2220+`,
+    incl. the `scorerForParent` construction): BMU artifacts MUST be
+    re-scored under the BMU law — bmuTask eligibility (§4.3),
+    `familySlots` overlay slot law (§6.4), and the §6.3 exclusion — routed
+    by the artifact's pinned bundle profile. An r5-era artifact keeps the
+    r5 path (G-B12).
+
 Rule for implementers: introduce a single
 `isR5StateLaw(pipelineVersion): boolean` helper and replace every literal
 `=== 'coretex-retrieval-v2-policy-r5'` STATE check with it in one commit, so
-site 1's law routing is the only place the two versions diverge. Any site
+the LAW sites are the only places the two versions diverge. Any site
 discovered later that still string-compares the r5 literal for a state
 decision is a bug with a failing-closed symptom (BMU bundle refused), never a
 silent misdecode — this asymmetry is why I2 pins BMU to the r5 state law.
+**Fail-closed asymmetry rule for LAW sites (rev3.3):** membership in
+`CORETEX_PIPELINE_VERSIONS_SUPPORTED` MUST NEVER imply the r5 SCORING path.
+Scoring/validation routing at every [LAW] site switches EXPLICITLY on the
+version string and THROWS on any version it does not explicitly route —
+adding a version to the supported set makes it replayable-in-principle, not
+silently r5-scored. A forgotten LAW site therefore refuses BMU artifacts
+loudly rather than mis-scoring them under the wrong law.
 
 ---
 
@@ -1337,7 +1408,7 @@ silent misdecode — this asymmetry is why I2 pins BMU to the r5 state law.
   measured `variancePpm` does NOT feed the acceptance threshold (BMU pins
   `baselineVarianceSource = 'unavailable'` — the §2.4 variance law); instead
   it is the §6.7 ARM-GATE flip-stability certification input (must be
-  < q/2 = 7,812 ppm, else do not arm).
+  ≤ 7,811 ppm (integer pin for strict < q/2 = 7,812.5), else do not arm).
 - **Historical replay:** epochs scored under r4/r5 replay under their pinned
   profiles forever (G-B12); the BMU transition adds a new pin, removes
   nothing.
@@ -1441,11 +1512,20 @@ mismatch (rev1's flaw). BMU removes the jitter at the decision, not the gate:
   categoryLensFinalBonus + aspectBonus` (`:1911`), each term bounded by its
   pinned profile beta (live betas are O(0.1), e.g. `temporalCurrentBoost`
   0.1); `policyBonus` is the bounded query-local nudge
-  ±(budget/1000)·UNIT with UNIT = max−min rerankerScore ≤ 1 (`:2160-2168`).
-  So the composite lies in [−P, 1 + B + P] with B = Σ enabled final-bonus
-  betas and P = the max total policy nudge; BMU bundle validation MUST
-  compute `Rmax = 1 + B + 2P` from the pinned profile and assert Rmax ≤ 4
-  (≤ ~4,000 grid cells at g = 1e-3).
+  ±(budget/1000)·UNIT PER ATOM with UNIT = max−min rerankerScore ≤ 1
+  (`:2160-2168`). **Honest stacking arithmetic (rev3.3 — rev3's
+  per-mechanism "P" undercounted):** multiple atoms can target the SAME doc,
+  and with up to 128 atoms per policy region the uncapped worst-case per-doc
+  policy contribution is ≈ 77 in composite-score units — nowhere near the
+  ≤ 4 bound rev3 asserted. **PINNED FIX: per-doc atom-contribution cap** —
+  the BMU judge clamps the SUMMED `policyBonus` per doc to ±1·UNIT
+  (P_cap = 1) before quantization. (Chosen over re-deriving an
+  honest-but-huge Rmax, which would put ~78,000 cells on the grid and
+  dilute the margin semantics.) With the cap the composite lies in
+  [−P_cap, 1 + B + P_cap]; BMU bundle validation computes
+  `Rmax = 1 + B + 2·P_cap` from the pinned profile and asserts Rmax ≤ 4
+  (≤ ~4,000 grid cells at g = 1e-3), and asserts the pinned
+  `judgeScoreGrid` ∈ (0, 0.1] (rev3.3 ratified domain).
 - **Tiebreak (fully quantized):** (quantized composite desc, quantized
   `rerankerScore` desc, `docId` asc). The FIRST two keys are quantized —
   the existing secondary tiebreak compares RAW rerankerScore
@@ -1742,6 +1822,53 @@ capacity, plus fallback/underfill-engagement telemetry.
 ---
 
 ## 17. Changelog
+
+### rev3.2 → rev3.3 (P3-R1 implementation-review backports — documenting decisions already made)
+
+- **(1) Boot-vs-arm posture (blocker fix, orchestrator ruling, §6.7b):**
+  fresh-cohort ≥ 2 clusters/family binds at ARM only; boot/evaluator
+  construction re-checks the STRUCTURAL census (counts ≥ E_f_min + global
+  m = 1), never freshness. Fresh-AGE pinned to the row's MINT epoch
+  (id-embedded, `liveEpochFromEventId`), not activationEpoch; liveness
+  rationale stated (mints only at evolves, cadence 8, freshWindow 2 ⇒
+  boot-time freshness false ~6/8 epochs).
+- **(2) §9 site 18 [LAW]:** validator score-replay
+  (`validator-sync-cli.ts` `buildValidatorScorerContext`/`scorerForParent`
+  path) must score BMU artifacts under the BMU law; fail-closed asymmetry
+  rule for LAW sites added (SUPPORTED-set membership never implies the r5
+  scoring path; explicit routing, throw on unrouted versions).
+- **(3) Terminal semantics ratified (§6.2/§6.4):** graceful underfill with
+  composition/underfill telemetry, never refusal (reviewer-ruled sound, not
+  materially gameable).
+- **(4) Digest/byte conventions pinned (§6.4):** digestU256 =
+  plain-concatenation keccak256 read as big-endian u256; seed hex parsed
+  case-insensitively, canonical lowercase 0x form; `bmuQuantize(x) =
+  Math.round(x/g)` (ties toward +∞); redistribution = first-fit over all
+  four families restarting at temporal, redistributed slot continues the
+  TARGET family's numbering; codePointCompare = UTF-16 code-unit order.
+- **(5) Rmax stacking honesty (§13.2):** per-mechanism P undercounted
+  multi-atom same-doc stacking (uncapped worst ≈ 77 vs the asserted ≤ 4
+  with 128 atoms/region). PINNED: per-doc atom-contribution cap — summed
+  policyBonus clamped to ±1·UNIT per doc before quantization; Rmax =
+  1 + B + 2·P_cap ≤ 4 re-validated (cap chosen over an honest-but-huge
+  Rmax ⇒ ~78k grid cells).
+- **(6) Exclusion-key charset law (§4.1):** subjectEntityId/templateId
+  reject control characters (incl. `'\n'`) at corpus load + mint lint —
+  kills join-injection into the exclusion-set digest; charset rejection
+  chosen over digest length-prefixing (implementation decision).
+- **(7) Variance boundary integer (§2.4, §6.7b, §10):** q/2 = 7,812.5 ⇒
+  acceptance is spread ≤ 7,811 ppm (strict <), pinned at every normative
+  site (incl. the screener noise clamp: ≤ 7,811 ⇒ noiseDelta ≤ 15,622 < q).
+- **(8) judgeScoreGrid domain ratified (§13.2):** bundle validation asserts
+  g ∈ (0, 0.1].
+- **(9) §6.7a wording fix:** pre-flip stamped rows are SCORING-inert under
+  r5 but NOT validation-inert — §4.1 bmuTask validation is
+  version-independent and live from stamping; mint-time lint is mandatory
+  from the first stamped cluster (an invalid stamped mint would brick the
+  r5-era corpus load).
+- **(10) Golden vectors required (§6.4, §6.7b):** committed golden hex
+  vectors for the seeded-draw byte law and the variance-seed schedule;
+  every independent implementation reproduces them byte-for-byte.
 
 ### rev3.1 → rev3.2 (diff-review re-edits)
 
