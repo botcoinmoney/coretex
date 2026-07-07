@@ -714,6 +714,12 @@ export function evaluateBmuArmGate(input: {
    */
   readonly posture: 'arm' | 'boot';
 }): BmuArmGateReport {
+  // P3-R2 hardening: an untyped caller omitting `posture` must never get
+  // boot (structural-only) semantics silently — fail closed on anything
+  // other than the two pinned postures.
+  if (input.posture !== 'arm' && input.posture !== 'boot') {
+    throw new Error(`evaluateBmuArmGate: posture must be 'arm' or 'boot' (got ${String((input as { posture?: unknown }).posture)})`);
+  }
   const freshWindow = input.freshWindow ?? BMU_FRESH_WINDOW_DEFAULT;
   const perFamilyCount: Record<BmuFamily, number> = { temporal: 0, conflict_lifecycle: 0, multi_hop_relation: 0, near_collision_abstention: 0 };
   const freshClusters: Record<BmuFamily, Set<string>> = {
