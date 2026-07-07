@@ -495,7 +495,29 @@ if (isMain) {
   };
   mkdirSync(outDir, { recursive: true });
   const outPath = resolve(outDir, 'certification.json');
-  writeFileSync(outPath, JSON.stringify(report, null, 1) + '\n');
+  const outBytes = JSON.stringify(report, null, 1) + '\n';
+  writeFileSync(outPath, outBytes);
   console.log(`wrote ${outPath}`);
+
+  // Certified-subset pointer on the generator's bank manifest (the bank
+  // itself stays byte-frozen; consumers select rows via the pointer).
+  const manifestPath = resolve(bankPath, '..', 'sample-bank.manifest.json');
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest.certification = {
+      path: 'certification.json',
+      sha256: createHash('sha256').update(outBytes).digest('hex'),
+      rowsTotal: report.counts.rows,
+      certified: report.counts.certified,
+      rejected: report.counts.rejected,
+      realLaneRowsMeasured: report.realLane.rowsCertified,
+      gates: Object.fromEntries(Object.entries(report.gates).map(([k, v]) => [k, v.pass])),
+      certifiedRowIdsField: 'certifiedRowIds (in certification.json)',
+    };
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 1) + '\n');
+    console.log(`updated ${manifestPath} with certified-subset pointer`);
+  } catch (err) {
+    console.error(`WARNING: could not update bank manifest (${manifestPath}): ${err.message}`);
+  }
   console.log(JSON.stringify({ counts: report.counts, gates: Object.fromEntries(Object.entries(report.gates).map(([k, v]) => [k, v.pass])), oracleRate: report.oracle.rate, reasons: report.rejectionReasonHistogram }, null, 1));
 }
