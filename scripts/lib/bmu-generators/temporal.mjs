@@ -138,7 +138,10 @@ const DA_FORMS = [
   'which {attr} should be applied on behalf of {canonical}?',
 ];
 const CP_PREFIXES = [
-  '', 'Ledger question:', 'History check:', 'For the audit trail:', 'Provenance:', 'Follow-up:',
+  // 'Paper trail:' replaced 'Ledger question:' (P2 certification screen fix:
+  // 'ledger' is gold-only vocabulary — inside a cluster it appears ONLY in
+  // the current/provenance doc templates, a NoLiMa lexical pointer to gold).
+  '', 'Paper trail:', 'History check:', 'For the audit trail:', 'Provenance:', 'Follow-up:',
   'Background:', 'Trace request:', 'Looking back:', 'For the record:', 'Timeline check:', 'Context:',
 ];
 const CP_FORMS = [
