@@ -190,7 +190,7 @@ const DR_FORMS = [
   'which {target} should new automation inherit for {canonical}’s {topic}?',
 ];
 const CP_PREFIXES = [
-  '', 'Ledger question:', 'History check:', 'For the audit trail:', 'Provenance:', 'Follow-up:',
+  '', 'Records question:', 'History check:', 'For the audit trail:', 'Provenance:', 'Follow-up:',
   'Background:', 'Trace request:', 'Looking back:', 'For the record:', 'Paper trail:', 'Context:',
 ];
 const CP_FORMS = [
