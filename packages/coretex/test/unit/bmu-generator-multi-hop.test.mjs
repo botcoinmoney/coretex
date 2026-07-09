@@ -130,20 +130,20 @@ test('every row carries a complete, self-consistent §4.1 bmuTask stamp', () => 
 
 // ── chain-shape law (§5.3) ───────────────────────────────────────────────────
 
-test('chains: 2-hop and 3-hop both minted; requiredEvidence = the full chain', () => {
+test('chains: 2-hop and 3-hop both minted; requiredEvidence = bridge + answer (§5.3)', () => {
   const { clusters, telemetry } = generateMultiHopClusters(baseOpts());
   assert.ok(telemetry.hopCountHistogram[2] >= 1, '2-hop clusters present');
   assert.ok(telemetry.hopCountHistogram[3] >= 1, '3-hop clusters present');
   for (const cluster of clusters) {
     const byRole = new Map(cluster.docs.map((d) => [d.role, d]));
-    const chain = cluster.hopCount === 2
-      ? [byRole.get('chain_hop1'), byRole.get('chain_answer')]
-      : [byRole.get('chain_hop1'), byRole.get('chain_hop2'), byRole.get('chain_answer')];
-    for (const d of chain) assert.ok(d, 'chain doc exists');
-    const chainIds = chain.map((d) => d.id);
+    assert.ok(byRole.get('chain_hop1'), 'hop1 exists');
+    assert.ok(byRole.get('chain_answer'), 'answer exists');
+    if (cluster.hopCount === 3) assert.ok(byRole.get('chain_hop2'), 'hop2 exists on 3-hop');
+    const utilityRequired = [byRole.get('chain_hop1').id, byRole.get('chain_answer').id].sort();
     for (const row of cluster.rows) {
-      assert.deepEqual([...row.bmuTask.requiredEvidence].sort(), [...chainIds].sort(),
-        'requiredEvidence is exactly the chain (bridge docs + answer doc)');
+      assert.deepEqual([...row.bmuTask.requiredEvidence].sort(), utilityRequired,
+        'requiredEvidence is bridge + answer (intermediate hop stays graded support)');
+      assert.ok(row.bmuTask.requiredEvidence.length <= row.bmuTask.budgetB);
       if (row.questionType === 'chain_provenance') {
         assert.equal(row.bmuTask.answer.id, byRole.get('chain_hop1').id);
       } else {
@@ -190,10 +190,10 @@ test('trap law: off-path decoy out-ranks honestly; near-bridge decoy breaks the 
     const offpath = cluster.docs.find((d) => d.role === 'offpath_decoy');
     const nearBridge = cluster.docs.find((d) => d.role === 'near_bridge_decoy');
     assert.ok(offpath && nearBridge, 'both decoy kinds minted');
-    // off-path decoy: maximal lexical overlap with every question — subject + topic + target + a wrong value
+    // off-path decoy: competitive lexical overlap (subject + topic + wrong value)
+    // without the exact targetAttr query skeleton that caused cross-cluster bleed.
     assert.ok(containsValue(offpath.text, cluster.canonicalName));
     assert.ok(containsValue(offpath.text, cluster.topic));
-    assert.ok(containsValue(offpath.text, cluster.targetAttribute));
     assert.ok(containsValue(offpath.text, cluster.decoyValues[0]));
     assert.ok(!containsValue(offpath.text, cluster.answerValue), 'decoy never carries the true value');
     // near-bridge decoy: names the REAL last bridge token with a wrong draft value

@@ -433,21 +433,25 @@ export function generateMultiHopClusters({
         ? `Relay ${relayToken}'s duty register lists ${value} as the confirmed ${targetAttr}.`
         : `Desk ${deskToken}'s duty register lists ${value} as the confirmed ${targetAttr}.`,
     });
+    // Off-path traps remain competitive distractors (subject + topic + wrong
+    // value) but avoid the exact "working ${targetAttr}" query skeleton that
+    // dominated every pack under real Qwen (cross-cluster op bleed). They stay
+    // linked by co_occurs_with noise edges.
     pushDoc({
       id: offpathId, kind: 'bridge_offpath_digest', role: 'offpath_decoy',
       entityIds: [universe, subj.id], currentStaleFlag: false,
-      text: `The weekly shared digest mentions ${canonical}'s ${topic} alongside relay ${wrongRelay}, noting ${decoyVal} as the working ${targetAttr} in passing.`,
+      text: `Shared inbox note about ${canonical}'s ${topic}: relay ${wrongRelay} was mentioned in passing with provisional figure ${decoyVal}, not entered as a standing assignment.`,
     });
     pushDoc({
       id: nearBridgeId, kind: 'bridge_draft_note', role: 'near_bridge_decoy',
       entityIds: [universe], currentStaleFlag: false,
-      text: `A draft planning note for ${hopCount === 2 ? 'relay' : 'desk'} ${lastBridgeToken} pencils in ${decoyVal2} as ${targetAttr}, pending confirmation and not yet entered anywhere.`,
+      text: `A draft planning note for ${hopCount === 2 ? 'relay' : 'desk'} ${lastBridgeToken} pencils in ${decoyVal2} as a candidate figure, pending confirmation and not yet entered anywhere.`,
     });
     for (let i = 0; i < shadowIds.length; i++) {
       pushDoc({
         id: shadowIds[i], kind: 'bridge_offpath_digest', role: 'offpath_shadow',
         entityIds: [universe, subj.id], currentStaleFlag: false,
-        text: `An older digest excerpt from ${priorDate} pairs ${canonical}'s ${topic} with ${shadowVals[i]} for the ${targetAttr}, without any assignment behind it.`,
+        text: `An older inbox excerpt from ${priorDate} about ${canonical}'s ${topic} lists provisional figure ${shadowVals[i]}, without any assignment behind it.`,
       });
     }
 
@@ -459,14 +463,23 @@ export function generateMultiHopClusters({
       relations.push({ src: b1Id, dst: b2Id, type: 'supports', label: 'delegates_to' });
       relations.push({ src: b2Id, dst: ansId, type: 'supports', label: 'routes_to' });
     }
+    // Bidirectional co_occurs_with so a public suppress atom on a chain
+    // anchor can demote off-path neighbors (and vice versa if the miner
+    // anchors the trap itself).
     relations.push({ src: offpathId, dst: b1Id, type: 'co_occurs_with', label: 'co_mentioned' });
+    relations.push({ src: b1Id, dst: offpathId, type: 'co_occurs_with', label: 'co_mentioned' });
     relations.push({ src: nearBridgeId, dst: ansId, type: 'co_occurs_with', label: 'draft_variant' });
+    relations.push({ src: ansId, dst: nearBridgeId, type: 'co_occurs_with', label: 'draft_variant' });
     for (const shadowId of shadowIds) {
       relations.push({ src: shadowId, dst: b1Id, type: 'co_occurs_with', label: 'digest_mention' });
+      relations.push({ src: b1Id, dst: shadowId, type: 'co_occurs_with', label: 'digest_mention' });
     }
 
-    // ── Evidence law (delta 1): required = THE CHAIN ─────────────────────────
-    const chainDocIds = hopCount === 2 ? [b1Id, ansId] : [b1Id, b2Id, ansId];
+    // ── Evidence law (§5.3): required = bridge + answer (not the full 3-hop set).
+    // Intermediate hop-2 stays graded support in qrels so routing still pays,
+    // but B=4 top-B is not arithmetically over-subscribed by 3 required docs.
+    const utilityRequired = [b1Id, ansId];
+    const fullChainDocIds = hopCount === 2 ? [b1Id, ansId] : [b1Id, b2Id, ansId];
     const forbiddenEvidence = [offpathId, nearBridgeId, ...shadowIds];
     const bridgeQrels = (hopCount === 2 ? [b1Id] : [b1Id, b2Id]).map((docId) => ({ docId, relevance: 0.6, role: 'bridge' }));
     const decoyQrels = [
@@ -484,19 +497,21 @@ export function generateMultiHopClusters({
         case 'chain_endpoint_value':
         case 'downstream_routing':
           return {
-            requiredEvidence: [...chainDocIds],
+            requiredEvidence: [...utilityRequired],
             answer: { id: ansId, value },
             qrels: [{ docId: ansId, relevance: 1.0, role: 'direct' }, ...bridgeQrels, ...decoyQrels],
           };
         case 'offpath_rejection':
           return {
-            requiredEvidence: [...chainDocIds],
+            requiredEvidence: [...utilityRequired],
             answer: { id: ansId, value: `no — the routed ${targetAttr} is ${value}` },
             qrels: [{ docId: ansId, relevance: 1.0, role: 'direct' }, ...bridgeQrels, ...decoyQrels],
           };
         case 'chain_provenance':
           return {
-            requiredEvidence: [...chainDocIds],
+            // Provenance answers on the subject-bearing bridge; keep answer
+            // support in required so the row still rewards chain evidence.
+            requiredEvidence: [...utilityRequired],
             answer: { id: b1Id, value: hopCount === 2 ? `standing delegation through ${relayToken}` : `delegation memo ${ticket}` },
             qrels: [
               { docId: b1Id, relevance: 1.0, role: 'direct' },
@@ -509,7 +524,6 @@ export function generateMultiHopClusters({
           throw new Error(`bmu multi_hop: unknown question type '${qtype}'`);
       }
     };
-
     // ── k=5 rows: template bank + bmuTask stamps (deltas 1, 5, 6) ───────────
     const clusterTemplateIds = [];
     const rows = [];
@@ -576,7 +590,7 @@ export function generateMultiHopClusters({
 
     // ── Delta 7: mint-time answer-leak + grounding-distance lint ────────────
     lintCluster({
-      rows, docs, chainDocIds, answerDocId: ansId, value,
+      rows, docs, chainDocIds: fullChainDocIds, answerDocId: ansId, value,
       bridgeTokens: [relayToken, deskToken, ticket].filter((t, i) => hopCount === 3 || i === 0),
       distantForbidden: [canonical, corefFramed ? alias : null, topic],
       slotValues: [

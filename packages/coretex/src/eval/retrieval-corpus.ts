@@ -183,10 +183,16 @@ export interface PublicQueryIntent {
   readonly atom?: string;
   readonly subjectEntityId?: string;
   readonly attribute?: string;
+  readonly lifecycleScope?: string;
+  readonly collisionScope?: string;
+  readonly topic?: string;
+  readonly targetAttribute?: string;
+  readonly hopCount?: number;
   readonly queryTime?: string;
   readonly name?: string;
   readonly alias?: string;
   readonly roleAlias?: string;
+  readonly selector?: string;
   readonly projectId?: string;
   readonly sessionId?: string;
   readonly topicId?: string;

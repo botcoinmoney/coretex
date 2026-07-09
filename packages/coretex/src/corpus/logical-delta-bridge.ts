@@ -316,7 +316,15 @@ export function bridgeLogicalDeltaToProductionEvents(
         ...(r.label ? { label: r.label } : {}),
       })),
       ...(d.entityIds && d.entityIds.length > 0 ? { entityIds: [...d.entityIds] } : {}),
-      ...(d.scope ? { scope: d.scope } : {}),
+      // Public lifecycleScope is miner-visible conflict/scope metadata. Map it
+      // into PublicScopeMetadata.topicId so conflict scope-mismatch suppress
+      // can discriminate same-subject decoys without reading qrels.
+      ...((d.scope || d.lifecycleScope) ? {
+        scope: {
+          ...(d.scope ?? {}),
+          ...(d.lifecycleScope && !(d.scope?.topicId) ? { topicId: d.lifecycleScope } : {}),
+        },
+      } : {}),
       ...(d.validity ? { validity: d.validity } : {}),
       ...(d.aliases && d.aliases.length > 0 ? { aliases: [...d.aliases] } : {}),
       ...(d.roleAliases && d.roleAliases.length > 0 ? { roleAliases: [...d.roleAliases] } : {}),
