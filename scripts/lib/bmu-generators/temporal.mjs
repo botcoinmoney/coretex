@@ -381,7 +381,7 @@ export function generateTemporalClusters({
       docs.push({
         id: shortcutControlIds[i], lane: 'deep', kind: `temporal_${controlAttr}`,
         entityIds: [universe, subj.id],
-        text: `${canonical}'s ${controlAttr} has an additional active observation that does not establish the supersession chain.`,
+        text: `${canonical}'s ${controlAttr} record effective ${tsDate} lists ${decoyVals[i % decoyVals.length]}. It follows an earlier revision of the same field.`,
         shape: 'temporal_update_record', timestamp: observedAt,
         currentStaleFlag: true,
         validity: {

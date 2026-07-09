@@ -263,7 +263,7 @@ export function createM1Registry(initial = {}, identityStore = createEntityHoldo
       for (const key of entityHoldoutKeys) identities.set(key, motifGroupId);
     },
     /** Retirement hook: release a cluster's keys (subject/attribute reuse may resume). */
-    releaseCluster({ subjectEntityId, templateIds, entityHoldoutKeys = [] }) {
+    releaseCluster({ subjectEntityId, templateIds, entityHoldoutKeys = [], motifGroupId }) {
       subjects.delete(subjectEntityId);
       for (const t of templateIds) templates.delete(t);
       for (const key of entityHoldoutKeys) {

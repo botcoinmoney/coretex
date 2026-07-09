@@ -293,6 +293,7 @@ export function mintEvolve(world, epoch, clusterCounts, { escalationLevel = 0 } 
         family,
         subjectEntityId: cluster.subjectEntityId,
         templateIds: [...(cluster.templateIds ?? [])],
+        entityHoldoutKeys: [...(cluster.entityHoldoutKeys ?? cluster.rows?.[0]?.bmuTask?.entityHoldoutKeys ?? [])],
         mechanism,
         mintEpoch: epoch,
         rowProductionIds,
@@ -314,12 +315,20 @@ export function releaseRetiredClusters(world, retiredIdSet) {
     if (c.released) continue;
     if (!c.rowProductionIds.every((id) => retiredIdSet.has(id))) continue;
     if (c.mechanism === 'registry') {
-      world.registry.releaseCluster({ subjectEntityId: c.subjectEntityId, templateIds: c.templateIds });
+      world.registry.releaseCluster({
+        subjectEntityId: c.subjectEntityId,
+        templateIds: c.templateIds,
+        entityHoldoutKeys: c.entityHoldoutKeys,
+        motifGroupId: c.motifGroupId,
+      });
     } else {
       const idx = world.activeIndex;
       idx.clusters.delete(c.motifGroupId);
       if (idx.subjects.get(c.subjectEntityId) === c.motifGroupId) idx.subjects.delete(c.subjectEntityId);
       for (const t of c.templateIds) if (idx.templates.get(t) === c.motifGroupId) idx.templates.delete(t);
+      for (const key of c.entityHoldoutKeys) {
+        if (idx.identities.get(key) === c.motifGroupId) idx.identities.delete(key);
+      }
     }
     c.released = true;
     released.push(c.motifGroupId);

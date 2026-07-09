@@ -140,6 +140,7 @@ test('every row carries a complete, self-consistent §4.1 bmuTask stamp', () => 
     assert.ok(shortcutControls.every((d) => d.validity.subjectEntityId === cluster.subjectEntityId));
     assert.ok(shortcutControls.every((d) => d.validity.attribute === cluster.attribute));
     assert.ok(shortcutControls.every((d) => Date.parse(d.timestamp) <= Date.parse(cluster.rows[0].publicIntent.queryTime)));
+    assert.ok(shortcutControls.every((d) => !/does not establish|shortcut|decoy|control/i.test(d.text)));
     const current = cluster.docs.find((d) => d.role === 'current');
     const provenance = cluster.docs.find((d) => d.role === 'change_provenance');
     assert.doesNotMatch(current.text, /supersession ledger/i);
@@ -166,6 +167,22 @@ test('alias m=1 is shared across the active-index and registry generator APIs be
     escalationLevel: 0,
     ownerEntityId: 'e_universe',
   }), /subject bank exhausted under GLOBAL m=1/);
+});
+
+test('shared alias claims are released by registry retirement without leaking capacity', () => {
+  const identities = createEntityHoldoutIdentityStore();
+  const registry = createM1Registry({}, identities);
+  const claim = {
+    subjectEntityId: 'release-subject',
+    templateIds: ['release-template'],
+    entityHoldoutKeys: ['id:release-subject', 'alias:release alias'],
+    motifGroupId: 'release-motif',
+  };
+  registry.claimCluster(claim);
+  assert.equal(registry.hasEntityHoldoutKey('alias:release alias'), true);
+  registry.releaseCluster(claim);
+  assert.equal(registry.hasEntityHoldoutKey('alias:release alias'), false);
+  assert.doesNotThrow(() => registry.claimCluster({ ...claim, motifGroupId: 'replacement-motif' }));
 });
 
 test('mint-time consistency rule (§4.3): required ⊆ qrels≥0.5, forbidden ⊆ qrels=0 ∪ hardNegatives', () => {
