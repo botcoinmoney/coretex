@@ -234,8 +234,9 @@ function bmuEvidenceForSlot(qtype, { currentId, changeId, val, staleVal }) {
 }
 
 /** Mint-time no-answer-leak lint (fail-closed; delta 5 in module header). */
-function lintCluster({ rows, docs, currentValue, slotValues }) {
-  const goldDocTexts = new Map(docs.filter((d) => d.role === 'current' || d.role === 'change_provenance').map((d) => [d.id, d.text]));
+function lintCluster({ rows, docs, currentValue, slotValues, goldDocIds }) {
+  const goldIds = new Set(goldDocIds);
+  const goldDocTexts = new Map(docs.filter((d) => goldIds.has(d.id)).map((d) => [d.id, d.text]));
   for (const row of rows) {
     if (containsValue(row.queryText, currentValue)) {
       throw new Error(`bmu temporal lint: answer value '${currentValue}' leaks into question '${row.queryText}'`);
@@ -363,12 +364,19 @@ export function generateTemporalClusters({
         : doc.role === 'change_provenance'
           ? `Revision note ${tsDate}: ${canonical}'s ${attr} changed from ${staleVal} to ${val}; the prior record closed.`
           : doc.text;
-      return {
-        id: doc.id, lane: 'deep', kind: doc.kind, entityIds: [universe, subj.id],
+      const emitted = {
+        // `role` and role-correlated `kind` are generator-internal only.
+        // Emitting either lets an attacker classify a path position without
+        // performing the public operation. v2 exposes one neutral envelope.
+        id: doc.id, lane: 'deep', kind: 'bmu_public_record', entityIds: [universe, subj.id],
         text, shape: 'temporal_update_record', timestamp: doc.timestamp,
         currentStaleFlag: doc.currentStaleFlag, validity,
-        liveUpdateEpoch: epoch, role: doc.role,
+        liveUpdateEpoch: epoch,
       };
+      // Keep construction diagnostics available to the in-process generator
+      // tests without serializing a public envelope field.
+      Object.defineProperty(emitted, 'role', { value: doc.role, enumerable: false });
+      return emitted;
     });
     // Benign current observations for the SAME attribute prevent even an
     // attribute-scoped latest/current metadata ranker from becoming an answer
@@ -378,8 +386,8 @@ export function generateTemporalClusters({
     for (let i = 0; i < shortcutControlIds.length; i++) {
       const controlAttr = attr;
       const observedAt = `${tsDate}T12:${String(i).padStart(2, '0')}:00Z`;
-      docs.push({
-        id: shortcutControlIds[i], lane: 'deep', kind: `temporal_${controlAttr}`,
+      const emitted = {
+        id: shortcutControlIds[i], lane: 'deep', kind: 'bmu_public_record',
         entityIds: [universe, subj.id],
         text: `${canonical}'s ${controlAttr} record effective ${tsDate} lists ${decoyVals[i % decoyVals.length]}. It follows an earlier revision of the same field.`,
         shape: 'temporal_update_record', timestamp: observedAt,
@@ -388,8 +396,10 @@ export function generateTemporalClusters({
           subjectEntityId: subj.id, attribute: controlAttr,
           validFrom: priorDate, observedAt,
         },
-        liveUpdateEpoch: epoch, role: 'shortcut_control',
-      });
+        liveUpdateEpoch: epoch,
+      };
+      Object.defineProperty(emitted, 'role', { value: 'shortcut_control', enumerable: false });
+      docs.push(emitted);
     }
     const relations = spec.relations.map((r) => ({ ...r }));
 
@@ -459,6 +469,7 @@ export function generateTemporalClusters({
     lintCluster({
       rows, docs, currentValue: val,
       slotValues: [canonical, attr, val, staleVal, ...decoyVals, subj.id, tsDate, priorDate],
+      goldDocIds: [currentId, changeId],
     });
 
     // ── Register in the GLOBAL m=1 index (fail-closed on any collision) ─────

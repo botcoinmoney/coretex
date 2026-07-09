@@ -1,6 +1,6 @@
-# BMU v1 — Budgeted Memory Utility: the permanent CoreTex scoring law
+# BMU — Budgeted Memory Utility: versioned CoreTex scoring laws
 
-**Revision:** rev3.4 (pre-arm metadata-integrity hardening; changelog in §17).
+**Revision:** rev4.0 (BMU v2 public-path law; changelog in §17).
 **Status:** PRE-ARM implementation candidate. Code and offline evidence may
 accompany this document; nothing here arms, pins, or deploys anything.
 
@@ -11,7 +11,10 @@ class; all four families saturate within four epochs. A new versioned generic
 operation law with multiple truthful operation classes per family, fresh
 gate+excluded-confirm evidence, and a `GREEN_SUSTAINABLE` exact-commit
 attestation are required before operator ratification. v1 remains useful as a
-replay/evidence identity and MUST NOT be armed from this document.
+replay/evidence identity and MUST NOT be armed from this document. BMU v2 is
+the only successor candidate described here; it is also unarmable until the
+full v2 bank, real-Qwen gate/confirm, P5, variance, and margin proof chain is
+regenerated on one pinned context.
 
 **Pinned code baseline:** every `file:line` citation below is into THIS
 repository at commit `20412b5` (branch `coretex-c1-work-policy`), verified
@@ -1884,6 +1887,42 @@ capacity, plus fallback/underfill-engagement telemetry.
 ---
 
 ## 17. Changelog
+
+### rev3.4 → rev4.0 (BMU v2 replacement law; 2026-07-10)
+
+**Decision:** v1 is retained solely for replay. The replacement pipeline is
+`coretex-bmu-v2-r5state`; it preserves the r5 state layout, I1 scalar, I5
+deterministic judge, and I6 gate/confirm exclusion, but removes the v1
+family-specific scorer assistance that made a one-class miner saturate every
+family.
+
+- **One primitive, no family switch:** v2 admits a bounded directed public
+  path bundle before reranking. It starts from at most four stage-1 public
+  seed events, applies two explicitly ordered edge/direction steps, and takes
+  at most four codepoint-sorted public branches per event (one document per
+  branch). The calculated maximum (`seeds × branchLimit^steps`) MUST fit the
+  pinned Qwen input cap or bundle evaluation refuses; no admitted branch is
+  silently trimmed. The primitive reads
+  neither qrels, `bmuTask`, family, role, timestamps, lifecycle metadata, nor
+  `publicIntent`. Every admitted branch is sent to the existing Qwen cap as a
+  normal candidate; it receives no additive final-score or answer promotion.
+- **Free riders removed:** v2 force-disables temporal motif admission,
+  conflict scope/classifier promotion, evidence motif admission, query-
+  conditioned policy admission, entity/scope atom admission, conflict/evidence
+  atom promotion, and relation-intent routing. It scores a query copy with
+  `publicIntent` absent, so no `publicIntent.atom` selector can influence the
+  law. The remaining substrate operation is generic path/ranking work.
+- **Field oracle closed:** temporal and multi-hop generated public document
+  envelopes serialize neither `role` nor role-correlated `kind` values. Their
+  emitted kind is the neutral `bmu_public_record`; generator-local role
+  diagnostics are non-enumerable and never enter canonical JSON, corpus roots,
+  or miner-visible documents.
+- **Proof obligation unchanged and explicit:** this implementation is not a
+  claim of sustainability. v2 requires multiple truthful operation classes and
+  balanced same-path decoys per family, a metadata-only P6 failure, one
+  same-patch real-Qwen gate + excluded-confirm acceptance per family, then
+  `GREEN_SUSTAINABLE` P5, parent/blank K=5, parent/oracle three-state margins,
+  watermark horizons, and shadow evidence before any operator action.
 
 ### rev3.3 → rev3.4 (pre-arm metadata-integrity hardening)
 

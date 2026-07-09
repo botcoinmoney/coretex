@@ -148,6 +148,13 @@ test('every row carries a complete, self-consistent §4.1 bmuTask stamp', () => 
   }
 });
 
+test('v2 public envelopes contain neither a role oracle nor a role-correlated kind', () => {
+  const { clusters } = generateTemporalClusters(baseOpts({ clusterCount: 1 }));
+  const serialized = JSON.parse(JSON.stringify(clusters[0].docs));
+  assert.ok(serialized.every((doc) => !Object.hasOwn(doc, 'role')));
+  assert.ok(serialized.every((doc) => doc.kind === 'bmu_public_record'));
+});
+
 test('alias m=1 is shared across the active-index and registry generator APIs before mint', () => {
   const identities = createEntityHoldoutIdentityStore();
   const activeIndex = createBmuActiveIndex(identities);

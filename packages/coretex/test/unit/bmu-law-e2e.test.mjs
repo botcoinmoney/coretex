@@ -27,6 +27,8 @@ import {
   merkleizeState,
   PATCH_TYPE,
   RANGES,
+  CORETEX_PIPELINE_VERSION_BMU_V2,
+  isBmuV2ScoringLaw,
 } from '../../dist/index.js';
 
 const BI = { modelId: 'BAAI/bge-m3', revision: 'a'.repeat(40), mode: 'dense' };
@@ -184,6 +186,28 @@ function makeApplyablePatch(parentState) {
 }
 
 describe('evaluateBmuBenchmarkState (e2e through the real pipeline)', () => {
+  test('v2 is a separately pinned law and preserves the deterministic scalar contract', async () => {
+    const { corpus, pack } = makeFixture();
+    const opts = {
+      ...bmuOpts(rerankerFor()),
+      pipelineVersion: CORETEX_PIPELINE_VERSION_BMU_V2,
+      // These are deliberately hostile v1 knobs. v2 owns the invocation and
+      // removes them before scoring; the fixture still has no family route.
+      temporalMotifAdmission: true,
+      conflictMotifAdmission: true,
+      evidenceMotifAdmission: true,
+      policyQueryConditionedAdmission: true,
+    };
+    assert.equal(isBmuV2ScoringLaw(opts.pipelineVersion), true);
+    const result = await evaluateBmuBenchmarkState(ZERO_STATE, corpus, pack, opts);
+    assert.equal(result.bmu.packSize, 8);
+    assert.equal(result.bmu.scalarPpm, 875000);
+    await assert.rejects(
+      () => evaluateBmuBenchmarkState(ZERO_STATE, corpus, pack, { ...opts, rerankerInputTopK: 63 }),
+      /refusing non-uniform Qwen admission/,
+    );
+  });
+
   test('scalar law: 7/8 answerable rows lift; the blank state earns NO abstention utility (§5.5)', async () => {
     const { corpus, pack } = makeFixture();
     const score = await evaluateBmuBenchmarkState(ZERO_STATE, corpus, pack, bmuOpts(rerankerFor()));

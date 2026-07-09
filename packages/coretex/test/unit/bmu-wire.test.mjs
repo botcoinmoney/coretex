@@ -116,6 +116,25 @@ describe('BMU bundle validation (§9 site 17)', () => {
     assert.deepEqual(verifyBundleManifest(m, repoRoot), []);
   });
 
+  test('v2 accepts the generic-path pin and refuses every v1 scorer free rider', () => {
+    const v2 = bmuProfileFields({
+      pipelineVersion: 'coretex-bmu-v2-r5state',
+      enableEvidenceBundleAtoms: false,
+      enableConflictLifecycleAtoms: false,
+      policyConflictIntentAdmission: false,
+      policyQueryConditionedAdmission: false,
+      policyRelationTypedAdmission: false,
+      enableEntityResolutionAtoms: false,
+      enableScopeAtoms: false,
+      temporalMotifAdmission: false,
+      conflictMotifAdmission: false,
+      evidenceMotifAdmission: false,
+    });
+    assert.doesNotThrow(() => buildWith(v2));
+    assert.throws(() => buildWith({ ...v2, temporalMotifAdmission: true }), /BMU v2 forbids temporalMotifAdmission/);
+    assert.throws(() => buildWith({ ...v2, enableConflictLifecycleAtoms: true }), /BMU v2 forbids enableConflictLifecycleAtoms/);
+  });
+
   test('r5 default profile still builds clean (replay pin)', () => {
     assert.deepEqual(verifyBundleManifest(buildWith(), repoRoot), []);
   });

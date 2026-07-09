@@ -159,6 +159,15 @@ test('chains: 2-hop and 3-hop both minted; requiredEvidence = bridge + answer (Â
   }
 });
 
+test('v2 public envelopes contain neither bridge roles nor bridge kind labels', () => {
+  const { clusters } = generateMultiHopClusters(baseOpts({ clusterCount: 2 }));
+  for (const cluster of clusters) {
+    const serialized = JSON.parse(JSON.stringify(cluster.docs));
+    assert.ok(serialized.every((doc) => !Object.hasOwn(doc, 'role')));
+    assert.ok(serialized.every((doc) => doc.kind === 'bmu_public_record'));
+  }
+});
+
 test('grounding-distant law: answer doc (and hop2) never name subject/topic; entityIds carry no subject tag', () => {
   const { clusters } = generateMultiHopClusters(baseOpts({ clusterCount: 6 }));
   for (const cluster of clusters) {

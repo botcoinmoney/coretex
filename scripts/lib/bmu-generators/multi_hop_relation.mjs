@@ -412,10 +412,18 @@ export function generateMultiHopClusters({
 
     // ── Docs: the chain + the forbidden traps (deltas 2, 3) ─────────────────
     const docs = [];
-    const pushDoc = (doc) => docs.push({
-      lane: 'deep', shape: 'multi_session_bridge_record', timestamp: tsDate,
-      liveUpdateEpoch: epoch, ...doc,
-    });
+    const pushDoc = (doc) => {
+      // Roles and the old bridge_* kind vocabulary were a public path oracle.
+      // Keep them local to generator construction, then emit one neutral
+      // envelope; qrels/bmuTask remain the hidden judge contract.
+      const { role: _role, kind: _kind, ...publicDoc } = doc;
+      const emitted = {
+        lane: 'deep', shape: 'multi_session_bridge_record', timestamp: tsDate,
+        liveUpdateEpoch: epoch, kind: 'bmu_public_record', ...publicDoc,
+      };
+      Object.defineProperty(emitted, 'role', { value: _role, enumerable: false });
+      docs.push(emitted);
+    };
     if (hopCount === 2) {
       pushDoc({
         id: b1Id, kind: 'bridge_link_record', role: 'chain_hop1',

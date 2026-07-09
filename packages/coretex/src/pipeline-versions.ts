@@ -23,11 +23,19 @@ export const CORETEX_PIPELINE_VERSION_R5 = 'coretex-retrieval-v2-policy-r5';
  *  layout/decode law (BMU_SPEC.md §3.1; exact name is normative). */
 export const CORETEX_PIPELINE_VERSION_BMU_V1 = 'coretex-bmu-v1-r5state';
 
+/** BMU v2: the same r5 state layout with the generic public-path scoring law.
+ *
+ * v2 is deliberately a new pipeline pin rather than a behavioural flag on
+ * v1: receipts and evidence created under the free-rider-prone v1 law must
+ * remain replayable under their original semantics. */
+export const CORETEX_PIPELINE_VERSION_BMU_V2 = 'coretex-bmu-v2-r5state';
+
 /** Pipeline versions whose STATE LAYOUT / decode / patch-grammar law is the
  *  r5 law (spec §3.2): r5 itself plus BMU v1 (r5state by construction). */
 export const R5_STATE_LAW_PIPELINE_VERSIONS: ReadonlySet<string> = new Set([
   CORETEX_PIPELINE_VERSION_R5,
   CORETEX_PIPELINE_VERSION_BMU_V1,
+  CORETEX_PIPELINE_VERSION_BMU_V2,
 ]);
 
 /** STATE-LAYOUT routing (spec §9 [STATE] sites): true iff `pipelineVersion`
@@ -40,5 +48,11 @@ export function isR5StateLaw(pipelineVersion: string | undefined): boolean {
 /** SCORING-LAW routing (spec §9 [LAW] sites): true iff `pipelineVersion`
  *  routes scoring to the BMU v1 deterministic budgeted-utility judge. */
 export function isBmuScoringLaw(pipelineVersion: string | undefined): boolean {
-  return pipelineVersion === CORETEX_PIPELINE_VERSION_BMU_V1;
+  return pipelineVersion === CORETEX_PIPELINE_VERSION_BMU_V1
+    || pipelineVersion === CORETEX_PIPELINE_VERSION_BMU_V2;
+}
+
+/** True only for the v2 generic, non-indexing public-path law. */
+export function isBmuV2ScoringLaw(pipelineVersion: string | undefined): boolean {
+  return pipelineVersion === CORETEX_PIPELINE_VERSION_BMU_V2;
 }

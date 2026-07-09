@@ -32,7 +32,7 @@ import type { CortexState, Patch } from '../state/index.js';
 import { applyPatch } from '../state/patch.js';
 import { keccak256 } from '../state/keccak256.js';
 import { bytesToHex } from '../state/merkle.js';
-import { isBmuScoringLaw } from '../pipeline-versions.js';
+import { isBmuScoringLaw, isBmuV2ScoringLaw } from '../pipeline-versions.js';
 import {
   evaluateRetrievalBenchmarkState,
   type CompositeScore,
@@ -234,6 +234,21 @@ export interface BmuScoringContext {
   readonly judgeScoreGrid?: number;
 }
 
+/**
+ * The v2 primitive is intentionally law-owned, rather than emitted by a
+ * family generator. No task/family/role value participates in this routing.
+ * The shape is small enough that every admitted branch fits the normal Qwen
+ * cap (4 seeds × 4 branches × two ordered steps = 64 event admissions max).
+ */
+export const BMU_V2_PUBLIC_PATH_BUNDLE = Object.freeze({
+  stage1SeedLimit: 4,
+  branchLimit: 4,
+  steps: Object.freeze([
+    Object.freeze({ direction: 'outgoing' as const, edgeTypes: Object.freeze(['supports', 'supersedes', 'coreference_of', 'causes', 'derived_from', 'co_occurs_with']) }),
+    Object.freeze({ direction: 'incoming' as const, edgeTypes: Object.freeze(['supports', 'supersedes', 'coreference_of', 'causes', 'derived_from', 'co_occurs_with']) }),
+  ]),
+});
+
 // ─── State evaluation (the LAW entrypoint) ────────────────────────────────────
 
 /**
@@ -267,8 +282,35 @@ export async function evaluateBmuBenchmarkState(
   }
   // exposeFullRanking feeds the judge; bmuPolicyBonusClamp arms the §13.2
   // rev3.3 per-doc atom-contribution cap (P_cap = 1) — part of the BMU LAW,
-  // never a bundle knob.
-  const r5 = await evaluateRetrievalBenchmarkState(state, corpus, pack, { ...opts, exposeFullRanking: true, bmuPolicyBonusClamp: true });
+  // never a bundle knob. v2 removes the v1 scorer free riders wholesale:
+  // no motif/scope classifier/forced inheritance/publicIntent route can add
+  // or promote an answer. It instead has one family-agnostic public-path
+  // admission primitive, whose branches are uniformly sent to Qwen.
+  const v2 = isBmuV2ScoringLaw(opts.pipelineVersion);
+  const scorePack = v2
+    ? { ...pack, events: pack.events.map((event) => {
+      const { publicIntent: _publicIntent, ...withoutPublicIntent } = event;
+      return withoutPublicIntent;
+    }) }
+    : pack;
+  const r5 = await evaluateRetrievalBenchmarkState(state, corpus, scorePack, {
+    ...opts,
+    exposeFullRanking: true,
+    bmuPolicyBonusClamp: true,
+    ...(v2 ? {
+      temporalMotifAdmission: false,
+      conflictMotifAdmission: false,
+      evidenceMotifAdmission: false,
+      policyConflictIntentAdmission: false,
+      policyQueryConditionedAdmission: false,
+      policyRelationTypedAdmission: false,
+      enableEntityResolutionAtoms: false,
+      enableScopeAtoms: false,
+      enableConflictLifecycleAtoms: false,
+      enableEvidenceBundleAtoms: false,
+      bmuPublicPathBundle: BMU_V2_PUBLIC_PATH_BUNDLE,
+    } : {}),
+  });
 
   const perTask: BmuPerTaskResult[] = [];
   const famSum: Record<BmuFamily, number> = { temporal: 0, conflict_lifecycle: 0, multi_hop_relation: 0, near_collision_abstention: 0 };

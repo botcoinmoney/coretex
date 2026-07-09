@@ -33,7 +33,7 @@ import type { ScoringOptions } from '../eval/retrieval-benchmark.js';
 import type { BiEncoder } from '../eval/bi-encoder.js';
 import type { CrossEncoderReranker } from '../eval/reranker.js';
 import type { LiveEvalPackLaw } from '../eval/hidden-query-pack.js';
-import { CORETEX_PIPELINE_VERSION_BMU_V1, isR5StateLaw, isBmuScoringLaw } from '../pipeline-versions.js';
+import { isR5StateLaw, isBmuScoringLaw, isBmuV2ScoringLaw } from '../pipeline-versions.js';
 import { assertValidBmuWeights, computeBmuJudgeRmax, BMU_JUDGE_RMAX_LIMIT, BMU_ROW_QUANTUM_PPM } from '../eval/bmu-benchmark.js';
 import { canonicalJson } from '../canonical/json.js';
 
@@ -186,7 +186,7 @@ export interface EvaluatorProfile {
   /** Pinned scorer pipeline. v2-lens is the two-stage corpus-retrieval + substrate-bias pipeline.
    *  `coretex-retrieval-v2-policy-r5` = the PolicyAtom epoch (reclaimed RetrievalKeys+Codebook
    *  words read as typed PolicyAtoms; r4 stays replayable). */
-  readonly pipelineVersion?: 'coretex-retrieval-v2-lens' | 'coretex-retrieval-v2-lens-r2' | 'coretex-retrieval-v2-lens-r3' | 'coretex-retrieval-v2-lens-r4' | 'coretex-retrieval-v2-policy-r5' | 'coretex-bmu-v1-r5state';
+  readonly pipelineVersion?: 'coretex-retrieval-v2-lens' | 'coretex-retrieval-v2-lens-r2' | 'coretex-retrieval-v2-lens-r3' | 'coretex-retrieval-v2-lens-r4' | 'coretex-retrieval-v2-policy-r5' | 'coretex-bmu-v1-r5state' | 'coretex-bmu-v2-r5state';
   /** Calibration-blessed list of reward-active substrate surfaces (named for
    *  the miner API). The reward-active set is this list UNION the surfaces
    *  derived from the per-family enable flags — see rewardActiveSubstrateSurfaces. */
@@ -1476,6 +1476,26 @@ function validateProfile(profile: EvaluatorProfile, errors?: string[]): void {
   if (r5Enabled && !isR5StateLaw(profile.pipelineVersion)) {
     out.push('r5 PolicyAtom enables require an r5-state-law pipelineVersion (coretex-retrieval-v2-policy-r5 or coretex-bmu-v1-r5state)');
   }
+  // v2's law has exactly one public routing primitive. Rejecting rather than
+  // silently ignoring a v1 helper pin keeps a future bundle from claiming a
+  // generic path law while depending on family/intent-specific promotion.
+  if (isBmuV2ScoringLaw(profile.pipelineVersion)) {
+    const forbiddenV1Pins: readonly [string, unknown][] = [
+      ['temporalMotifAdmission', profile.temporalMotifAdmission],
+      ['conflictMotifAdmission', profile.conflictMotifAdmission],
+      ['evidenceMotifAdmission', profile.evidenceMotifAdmission],
+      ['policyConflictIntentAdmission', profile.policyConflictIntentAdmission],
+      ['policyQueryConditionedAdmission', profile.policyQueryConditionedAdmission],
+      ['policyRelationTypedAdmission', profile.policyRelationTypedAdmission],
+      ['enableEntityResolutionAtoms', profile.enableEntityResolutionAtoms],
+      ['enableScopeAtoms', profile.enableScopeAtoms],
+      ['enableConflictLifecycleAtoms', profile.enableConflictLifecycleAtoms],
+      ['enableEvidenceBundleAtoms', profile.enableEvidenceBundleAtoms],
+    ];
+    for (const [name, value] of forbiddenV1Pins) {
+      if (value === true) out.push(`BMU v2 forbids ${name}=true (generic public-path law has no v1 free riders)`);
+    }
+  }
   // aspect_constraint is an A100 CANDIDATE, not a launch surface: its boost hook is not wired (r5.1).
   // Fail closed so it cannot be silently shipped or half-enabled. Admission requires the enable; the
   // enable itself is rejected until the r5.1 hook lands (keeps the signed profile honest).
@@ -1528,7 +1548,7 @@ function validateProfile(profile: EvaluatorProfile, errors?: string[]): void {
       // BMU §6.2 slot law (familySlots may only appear under the BMU pipeline).
       if (lp.familySlots !== undefined) {
         if (!isBmuScoringLaw(profile.pipelineVersion)) {
-          out.push('epochFrontier.liveEvalPack.familySlots requires pipelineVersion = coretex-bmu-v1-r5state');
+          out.push('epochFrontier.liveEvalPack.familySlots requires a BMU pipelineVersion');
         }
         const slotFamilies = ['temporal', 'conflict_lifecycle', 'multi_hop_relation', 'near_collision_abstention'];
         let slotSum = 0;
@@ -1604,7 +1624,7 @@ function validateProfile(profile: EvaluatorProfile, errors?: string[]): void {
       out.push(`BMU judge Rmax validation failed: ${(err as Error).message}`);
     }
   } else if (profile.judgeScoreGrid !== undefined) {
-    out.push('judgeScoreGrid is only meaningful under pipelineVersion = coretex-bmu-v1-r5state');
+    out.push('judgeScoreGrid is only meaningful under a BMU pipelineVersion');
   }
   if (profile.replayTolerancePpm > profile.patchAcceptanceFloors.minImprovementPpm)
     out.push('replayTolerancePpm must be <= patchAcceptanceFloors.minImprovementPpm');
