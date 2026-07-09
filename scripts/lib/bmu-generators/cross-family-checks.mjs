@@ -45,7 +45,7 @@ import { generateMultiHopClusters } from './multi_hop_relation.mjs';
 import { generateConflictLifecycleClusters, CONFLICT_FAMILY } from './conflict_lifecycle.mjs';
 import { generateNearCollisionAbstentionClusters, NEARCOL_FAMILY } from './near_collision_abstention.mjs';
 import {
-  createBmuActiveIndex, retireAgedClusters, m1Census,
+  createBmuActiveIndex, createEntityHoldoutIdentityStore, retireAgedClusters, m1Census,
   createM1Registry, makeCanonicalSplitOf,
   BMU_E_F_MIN, BMU_CLUSTER_SIZE_K,
 } from './common.mjs';
@@ -100,8 +100,9 @@ export function buildCombinedSample(params = COMBINED_PARAMS) {
   // ONE active index across temporal+multihop, ONE registry across
   // conflict+nearcol — cross-family collisions inside each mechanism throw
   // at mint time; the unified census below covers the cross-mechanism pairs.
-  const activeIndex = createBmuActiveIndex();
-  const registry = createM1Registry();
+  const identityStore = createEntityHoldoutIdentityStore();
+  const activeIndex = createBmuActiveIndex(identityStore);
+  const registry = createM1Registry({}, identityStore);
 
   const conflictSubjects = Array.from({ length: 60 }, (_, i) => ({
     id: `e_bmu_p2c_s${i}`,
@@ -168,6 +169,7 @@ export function buildCombinedSample(params = COMBINED_PARAMS) {
 export function globalM1Census(families) {
   const bySubject = new Map();   // subjectEntityId -> [{family, motifGroupId}]
   const byTemplate = new Map();  // templateId -> [{family, motifGroupId}]
+  const byIdentity = new Map();  // alias/canonical identity key -> [{family, motifGroupId}]
   const byMotif = new Map();     // motifGroupId -> family (motif ids must be globally unique too)
   const violations = [];
   for (const [family, lane] of Object.entries(families)) {
@@ -183,6 +185,11 @@ export function globalM1Census(families) {
         arr.push({ family, motifGroupId: cluster.motifGroupId });
         byTemplate.set(t, arr);
       }
+      for (const key of cluster.entityHoldoutKeys ?? []) {
+        const arr = byIdentity.get(key) ?? [];
+        arr.push({ family, motifGroupId: cluster.motifGroupId });
+        byIdentity.set(key, arr);
+      }
     }
   }
   for (const [subj, refs] of bySubject) {
@@ -191,6 +198,9 @@ export function globalM1Census(families) {
   for (const [tpl, refs] of byTemplate) {
     if (refs.length > 1) violations.push(`templateId '${tpl}' in ${refs.length} active clusters: ${refs.map((r) => `${r.family}:${r.motifGroupId}`).join(', ')}`);
   }
+  for (const [key, refs] of byIdentity) {
+    if (refs.length > 1) violations.push(`entityHoldoutKey '${key}' in ${refs.length} active clusters: ${refs.map((r) => `${r.family}:${r.motifGroupId}`).join(', ')}`);
+  }
   return {
     violations,
     holds: violations.length === 0,
@@ -198,6 +208,7 @@ export function globalM1Census(families) {
       clusters: byMotif.size,
       distinctSubjects: bySubject.size,
       distinctTemplates: byTemplate.size,
+      distinctEntityHoldoutKeys: byIdentity.size,
     },
   };
 }

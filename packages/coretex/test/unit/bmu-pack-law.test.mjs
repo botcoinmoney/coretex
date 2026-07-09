@@ -39,7 +39,7 @@ const FAMS = [
   { bmu: 'near_collision_abstention', bucketed: 'near_collision', logical: 'abstention_missing' },
 ];
 
-function row({ id, fam, motif, subject, template }) {
+function row({ id, fam, motif, subject, template, aliases = [`alias:${subject}`] }) {
   return {
     id,
     family: fam.bucketed,
@@ -60,10 +60,29 @@ function row({ id, fam, motif, subject, template }) {
       answer: { id: `${id}-t` },
       motifGroupId: motif,
       templateId: template,
+      entityHoldoutKeys: [`id:${subject}`, ...aliases],
     },
     provenance: { source: 'synthetic_challenge', sourceHash: '0x' + '00'.repeat(32) },
   };
 }
+
+test('alias identity is a held-out key even when subject ids differ', () => {
+  const gate = row({
+    id: 'q_alias_gate', fam: FAMS[0], motif: 'mg_alias_gate',
+    subject: 'entity_alpha', template: 'tt_alias_gate', aliases: ['alias:shared name'],
+  });
+  const candidate = row({
+    id: 'q_alias_confirm', fam: FAMS[1], motif: 'mg_alias_confirm',
+    subject: 'entity_beta', template: 'tt_alias_confirm', aliases: ['alias:shared name'],
+  });
+  const unrelated = row({
+    id: 'q_alias_clean', fam: FAMS[1], motif: 'mg_alias_clean',
+    subject: 'entity_gamma', template: 'tt_alias_clean', aliases: ['alias:different name'],
+  });
+  const keys = bmuExclusionKeySetForPack({ events: [gate], seedHex: '0x' + '00'.repeat(32) });
+  assert.equal(bmuEventExcluded(candidate, keys), true);
+  assert.equal(bmuEventExcluded(unrelated, keys), false);
+});
 
 /**
  * Full §6.2-shape corpus: per family, `broadPerFam` non-live broad rows

@@ -100,6 +100,20 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
     assert.equal(out2.clusters[0].subjectEntityId, subjects[0].id);
   });
 
+  test('distinct subject ids sharing a canonical alias cannot occupy two active clusters', () => {
+    const subjects = [
+      { id: 'e_alias_a', canonicalName: 'Shared Name', aliases: ['S. Name'] },
+      { id: 'e_alias_b', canonicalName: 'Shared Name', aliases: ['Other Alias'] },
+      { id: 'e_alias_c', canonicalName: 'Clean Name', aliases: ['Clean Alias'] },
+    ];
+    const out = generateConflictLifecycleClusters({
+      epoch: 137, seed: 'bmu-alias-m1', subjects, registry: createM1Registry(),
+      splitOf, clusterCount: 2, escalationLevel: 0,
+    });
+    assert.deepEqual(out.clusters.map((c) => c.subjectEntityId), ['e_alias_a', 'e_alias_c']);
+    assert.ok(out.addedQueries.every((q) => q.bmuTask.entityHoldoutKeys.includes(`id:${q.subjectEntityId}`)));
+  });
+
   test('fail-closed: bank exhaustion under m=1 throws (no partial mint)', () => {
     const registry = createM1Registry();
     assert.throws(
@@ -170,30 +184,33 @@ describe('forbidden-trap construction (§5.2, §6.5)', () => {
   test('every row forbids the candidate trap + >=2 scope-mismatch decoys', () => {
     for (const escalationLevel of [0, 2]) {
       const out = gen({ escalationLevel });
+      const docById = new Map(out.addedDocs.map((d) => [d.id, d]));
       for (const q of out.addedQueries) {
         const t = q.bmuTask;
         assert.ok(t.forbiddenEvidence.length >= 3, 'trap + >=2 decoys');
         assert.equal(t.forbiddenEvidence.length, 1 + conflictDecoyCount(escalationLevel));
-        assert.ok(t.forbiddenEvidence[0].endsWith('_ca'), 'first forbidden = candidate trap');
-        assert.ok(t.forbiddenEvidence.slice(1).every((id) => /_dx\d+$/.test(id)));
+        assert.equal(docById.get(t.forbiddenEvidence[0]).lifecycleScope, q.publicIntent.lifecycleScope,
+          'first forbidden is the same-scope candidate trap');
+        assert.ok(t.forbiddenEvidence.slice(1).every((id) => docById.get(id).lifecycleScope !== q.publicIntent.lifecycleScope));
         // Trap doc claims currency with exact-question vocabulary (the §2.2
         // "out-ranks honestly" screen — asserted via the lint in mint, spot-
         // checked here on text shape).
         const trapDoc = out.addedDocs.find((d) => d.id === t.forbiddenEvidence[0]);
         assert.match(trapDoc.text, /^What is .*current .*\?/);
-        assert.equal(trapDoc.lifecycleState, 'conflict_candidate');
+        assert.equal('lifecycleState' in trapDoc, false, 'public docs must not expose answer/trap role metadata');
       }
     }
   });
   test('cluster relations carry the Stage 3-G1-CONFLICT cross-type shape', () => {
     const out = gen({ clusterCount: 3 });
+    const docById = new Map(out.addedDocs.map((d) => [d.id, d]));
     for (const c of out.clusters) {
       const rels = out.addedRelations.filter((r) => c.docIds.includes(r.src));
       const contradicts = rels.find((r) => r.label === 'contradicts');
       const derived = rels.find((r) => r.type === 'derived_from');
-      assert.ok(contradicts && contradicts.src.endsWith('_cb') && contradicts.dst.endsWith('_ca'), 'contradicts B→A');
+      assert.ok(contradicts && docById.has(contradicts.src) && docById.has(contradicts.dst), 'contradicts B→A');
       assert.equal(contradicts.type, 'co_occurs_with'); // ancestor encoding (evolve-corpus.mjs:446)
-      assert.ok(derived && derived.src.endsWith('_cr') && derived.dst.endsWith('_ca'), 'derived_from R→A');
+      assert.ok(derived && docById.has(derived.src) && derived.dst === contradicts.dst, 'derived_from R→A');
     }
   });
   test('distractor pressure at B=4: forbidden+required neighborhood exceeds the budget', () => {
@@ -214,6 +231,7 @@ describe('§4.1 schema completeness (P3 load-validation invariants, replicated)'
     const rowsByMotif = new Map();
     for (const q of out.addedQueries) {
       const t = q.bmuTask;
+      assert.ok(t.entityHoldoutKeys.includes(`id:${q.subjectEntityId}`));
       // family + namespaces (§5.6: logicalFamily conflict_lifecycle ↔ bucketed conflict_lifecycle)
       assert.ok(BMU_FAMILIES.includes(t.family));
       assert.equal(t.family, CONFLICT_FAMILY);
@@ -267,6 +285,10 @@ describe('§4.1 schema completeness (P3 load-validation invariants, replicated)'
     }
     // no partial clusters, ever (fail-closed salt search)
     assert.equal(out.addedQueries.length % BMU_CLUSTER_SIZE_K, 0);
+    for (const d of out.addedDocs) {
+      assert.match(d.id, /^d_bmu_[0-9a-f]{64}$/);
+      assert.doesNotMatch(d.id, /_(?:ca|cb|cr|dx\d+)$/);
+    }
   });
 });
 
@@ -277,7 +299,9 @@ describe('no-answer-leak lint', () => {
     for (const q of out.addedQueries) {
       const t = q.bmuTask;
       const answerValue = out.clusters.find((c) => c.motifGroupId === t.motifGroupId);
-      const resolvedDoc = docText.get(t.requiredEvidence.find((id) => id.endsWith('_cb')));
+      const cluster = out.clusters.find((c) => c.motifGroupId === t.motifGroupId);
+      const resolvedId = out.addedRelations.find((r) => r.label === 'contradicts' && cluster.docIds.includes(r.src))?.src;
+      const resolvedDoc = docText.get(resolvedId);
       assert.ok(!q.queryText.includes(t.answer.id));
       const errors = lintNoAnswerLeak({
         rowId: q.id,

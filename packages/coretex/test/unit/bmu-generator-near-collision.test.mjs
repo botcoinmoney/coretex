@@ -134,7 +134,10 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
   test('synthetic duplicate-entity ids are cluster-scoped, never bank subjects', () => {
     const out = gen({ clusterCount: 6, escalationLevel: 3 });
     const bankIds = new Set(bank(40).map((s) => s.id));
-    for (const doc of out.addedDocs.filter((d) => d.collisionRole === 'alias_collision_decoy')) {
+    const aliasDecoyIds = new Set(out.addedRelations
+      .filter((r) => r.label === 'disambiguates_duplicate')
+      .map((r) => r.dst));
+    for (const doc of out.addedDocs.filter((d) => aliasDecoyIds.has(d.id))) {
       const dupId = doc.entityIds[1];
       assert.match(dupId, /^e_e137_.*_dup\d+$/);
       assert.ok(!bankIds.has(dupId), 'duplicate entity must not be a bank subject');
@@ -189,25 +192,27 @@ describe('forbidden-trap construction (§5.4, §6.5) + answerable/abstain mix', 
   test('answerable rows forbid the full sibling decoy set (alias trap first); abstain rows also forbid E', () => {
     for (const escalationLevel of [0, 2]) {
       const out = gen({ escalationLevel });
+      const docById = new Map(out.addedDocs.map((d) => [d.id, d]));
       for (const q of out.addedQueries) {
         const t = q.bmuTask;
         if (t.abstain) {
           assert.equal(t.forbiddenEvidence.length, 1 + nearcolDecoyCount(escalationLevel));
-          assert.ok(t.forbiddenEvidence[0].endsWith('_ne'), 'abstain row forbids the answerable sibling E first');
-          assert.ok(t.forbiddenEvidence[1].endsWith('_na0'), 'then the alias primary trap');
+          const disambiguates = out.addedRelations.find((r) => r.label === 'disambiguates' && r.dst === t.forbiddenEvidence[0]);
+          assert.ok(disambiguates, 'abstain row forbids the structurally disambiguated answerable sibling E first');
+          assert.ok(out.addedRelations.some((r) => r.label === 'disambiguates_duplicate' && r.dst === t.forbiddenEvidence[1]), 'then the alias primary trap');
         } else {
           assert.equal(t.forbiddenEvidence.length, nearcolDecoyCount(escalationLevel));
           assert.ok(t.forbiddenEvidence.length >= 3, 'alias + attribute + scope lookalikes');
-          assert.ok(t.forbiddenEvidence[0].endsWith('_na0'), 'first forbidden = alias-collision primary trap');
+          assert.ok(out.addedRelations.some((r) => r.label === 'disambiguates_duplicate' && r.dst === t.forbiddenEvidence[0]), 'first forbidden = alias-collision primary trap');
         }
         // The primary trap ECHOES the question skeleton and claims currency
         // (§2.2 "out-ranks honestly" — asserted via the lint at mint, spot-
         // checked here on text shape).
-        const trapId = t.forbiddenEvidence.find((id) => id.endsWith('_na0'));
+        const trapId = t.forbiddenEvidence.find((id) => out.addedRelations.some((r) => r.label === 'disambiguates_duplicate' && r.dst === id));
         const trapDoc = out.addedDocs.find((d) => d.id === trapId);
         assert.match(trapDoc.text, /^What .* did .* set for the .*\?/);
         assert.match(trapDoc.text, /remains the standing/);
-        assert.equal(trapDoc.collisionRole, 'alias_collision_decoy');
+        assert.equal('collisionRole' in trapDoc, false, 'public docs must not expose answer/trap role metadata');
       }
     }
   });
@@ -233,13 +238,14 @@ describe('forbidden-trap construction (§5.4, §6.5) + answerable/abstain mix', 
   });
   test('cluster relations: disambiguation record disambiguates E and flags the duplicate', () => {
     const out = gen({ clusterCount: 3 });
+    const docById = new Map(out.addedDocs.map((d) => [d.id, d]));
     for (const c of out.clusters) {
       const rels = out.addedRelations.filter((r) => c.docIds.includes(r.src));
       const derived = rels.find((r) => r.type === 'derived_from');
       const flags = rels.find((r) => r.label === 'disambiguates_duplicate');
-      assert.ok(derived && derived.src.endsWith('_nd') && derived.dst.endsWith('_ne'), 'derived_from D→E');
+      assert.ok(derived && docById.has(derived.src) && docById.has(derived.dst), 'derived_from D→E');
       assert.equal(derived.label, 'disambiguates');
-      assert.ok(flags && flags.src.endsWith('_nd') && flags.dst.endsWith('_na0'), 'co_occurs_with D→trap');
+      assert.ok(flags && flags.src === derived.src && docById.has(flags.dst), 'co_occurs_with D→trap');
       assert.equal(flags.type, 'co_occurs_with'); // ancestor label encoding (evolve-corpus.mjs:446)
     }
   });
@@ -247,6 +253,7 @@ describe('forbidden-trap construction (§5.4, §6.5) + answerable/abstain mix', 
     const out = gen({ escalationLevel: 0 });
     for (const q of out.addedQueries) {
       const t = q.bmuTask;
+      assert.ok(t.entityHoldoutKeys.includes(`id:${q.subjectEntityId}`));
       assert.ok(t.requiredEvidence.length + t.forbiddenEvidence.length > t.budgetB,
         'cluster neighborhood must overflow top-B so admission is contested');
     }
@@ -325,6 +332,10 @@ describe('§4.1 schema completeness (P3 load-validation invariants, replicated)'
       assert.equal(q.liveUpdateEpoch, 137);
     }
     assert.equal(out.addedQueries.length % BMU_CLUSTER_SIZE_K, 0);
+    for (const d of out.addedDocs) {
+      assert.match(d.id, /^d_bmu_[0-9a-f]{64}$/);
+      assert.doesNotMatch(d.id, /_(?:ne|nd|na\d+|nt\d+|ns\d+)$/);
+    }
   });
 });
 
@@ -335,7 +346,8 @@ describe('no-answer-leak lint', () => {
     for (const q of out.addedQueries) {
       const t = q.bmuTask;
       const cluster = out.clusters.find((c) => c.motifGroupId === t.motifGroupId);
-      const exactDoc = docText.get(cluster.docIds.find((id) => id.endsWith('_ne')));
+      const exactId = out.addedRelations.find((r) => r.label === 'disambiguates' && cluster.docIds.includes(r.src))?.dst;
+      const exactDoc = docText.get(exactId);
       const exactValue = / to (\S+) in the registry/.exec(exactDoc)?.[1];
       assert.ok(exactValue, 'exact-match value recoverable from E');
       assert.ok(!q.queryText.includes(exactValue), 'the cluster secret never appears in any question');

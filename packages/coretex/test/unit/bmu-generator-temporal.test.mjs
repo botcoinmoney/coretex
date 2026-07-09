@@ -19,15 +19,19 @@ import {
   TEMPORAL_ROW_SLOTS,
   BMU_TEMPORAL_BUDGET_B,
   BMU_TEMPORAL_CLUSTER_K,
+  BMU_TEMPORAL_SHORTCUT_CONTROL_DOCS,
   renderTemplate,
 } from '../../../../scripts/lib/bmu-generators/temporal.mjs';
 import {
   createBmuActiveIndex,
+  createEntityHoldoutIdentityStore,
+  createM1Registry,
   retireAgedClusters,
   m1Census,
   containsValue,
   sharedSkeletonNgrams,
 } from '../../../../scripts/lib/bmu-generators/common.mjs';
+import { generateConflictLifecycleClusters } from '../../../../scripts/lib/bmu-generators/conflict_lifecycle.mjs';
 
 const CORPUS_EPOCH = 138;
 /** Canonical split composition — exactly the evolve wiring (coretex-epoch-evolve.mjs:583). */
@@ -103,6 +107,8 @@ test('every row carries a complete, self-consistent §4.1 bmuTask stamp', () => 
       assert.equal(t.abstain, false);
       assert.ok(typeof t.motifGroupId === 'string' && t.motifGroupId.length > 0);
       assert.ok(typeof t.templateId === 'string' && t.templateId.length > 0);
+      assert.ok(t.entityHoldoutKeys.includes(`id:${cluster.subjectEntityId}`));
+      assert.ok(t.entityHoldoutKeys.includes(`alias:${cluster.canonicalName.toLowerCase()}`));
       // load-time validation mirror (§4.1)
       assert.ok(t.requiredEvidence.includes(t.answer.id), 'answer.id ∈ requiredEvidence');
       assert.ok(t.requiredEvidence.length <= t.budgetB, '|requiredEvidence| ≤ budgetB');
@@ -124,9 +130,42 @@ test('every row carries a complete, self-consistent §4.1 bmuTask stamp', () => 
     // temporal docs carry validity (§4.3)
     for (const d of cluster.docs) {
       assert.ok(d.validity && d.validity.subjectEntityId === cluster.subjectEntityId);
-      assert.equal(d.validity.attribute, cluster.attribute);
+      if (d.role !== 'shortcut_control') assert.equal(d.validity.attribute, cluster.attribute);
+      assert.match(d.id, /^d_bmu_[0-9a-f]{64}$/);
+      assert.doesNotMatch(d.id, /(?:cur|stale|chg|shadow|answer|trap)$/);
     }
+    const shortcutControls = cluster.docs.filter((d) => d.role === 'shortcut_control');
+    assert.equal(shortcutControls.length, BMU_TEMPORAL_SHORTCUT_CONTROL_DOCS);
+    assert.ok(shortcutControls.length > BMU_TEMPORAL_BUDGET_B);
+    assert.ok(shortcutControls.every((d) => d.validity.subjectEntityId === cluster.subjectEntityId));
+    assert.ok(shortcutControls.every((d) => d.validity.attribute === cluster.attribute));
+    assert.ok(shortcutControls.every((d) => Date.parse(d.timestamp) <= Date.parse(cluster.rows[0].publicIntent.queryTime)));
+    const current = cluster.docs.find((d) => d.role === 'current');
+    const provenance = cluster.docs.find((d) => d.role === 'change_provenance');
+    assert.doesNotMatch(current.text, /supersession ledger/i);
+    assert.doesNotMatch(provenance.text, /superseded and replaced/i);
   }
+});
+
+test('alias m=1 is shared across the active-index and registry generator APIs before mint', () => {
+  const identities = createEntityHoldoutIdentityStore();
+  const activeIndex = createBmuActiveIndex(identities);
+  generateTemporalClusters(baseOpts({
+    clusterCount: 1,
+    activeIndex,
+    subjects: [{ id: 'temporal-id', canonicalName: 'Shared Alias' }],
+  }));
+  const registry = createM1Registry({}, identities);
+  assert.throws(() => generateConflictLifecycleClusters({
+    epoch: 150,
+    seed: 'cross-api-alias-m1',
+    subjects: [{ id: 'different-conflict-id', canonicalName: 'Shared Alias' }],
+    registry,
+    splitOf: canonicalSplitOf,
+    clusterCount: 1,
+    escalationLevel: 0,
+    ownerEntityId: 'e_universe',
+  }), /subject bank exhausted under GLOBAL m=1/);
 });
 
 test('mint-time consistency rule (§4.3): required ⊆ qrels≥0.5, forbidden ⊆ qrels=0 ∪ hardNegatives', () => {
@@ -151,7 +190,10 @@ test('trap presence: stale doc claims currency, is forbidden on every row, shado
     // the trap claims currency with exact-question vocabulary (ancestor law)
     assert.ok(stale.text.includes(`current ${cluster.attribute}`));
     assert.ok(containsValue(stale.text, cluster.staleValue));
-    assert.ok(stale.validity.supersededBy, 'trap validity records supersession');
+    assert.equal(stale.validity.supersededBy, undefined, 'public validity must not point directly at the answer doc');
+    assert.ok(stale.validity.validUntil, 'non-leaking validity interval is retained');
+    assert.ok(cluster.relations.some((r) => r.type === 'supersedes' && r.src !== stale.id && r.dst === stale.id),
+      'non-leaking public supersedes relation is retained');
     assert.equal(stale.currentStaleFlag, false);
     const shadows = cluster.docs.filter((d) => d.role === 'escalation_shadow');
     assert.equal(shadows.length, cluster.escalationLevel);

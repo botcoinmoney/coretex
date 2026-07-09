@@ -27,6 +27,7 @@ import type {
   RetrievalKeyLayout,
 } from './retrieval-corpus.js';
 import { isMemoryDocumentEventId } from './retrieval-corpus.js';
+import { BMU_MULTI_HOP_FORCED_INHERIT_ALPHA } from './bmu-task.js';
 import {
   buildPublicCorpusIndex,
   publicTextTokens,
@@ -2175,6 +2176,12 @@ export async function scoreSubstrateAgainstQuery(
     if (!Number.isFinite(rerankerScoresTopN[i])) {
       throw new Error(`retrieval-benchmark: reranker score[${i}] is non-finite (${rerankerScoresTopN[i]})`);
     }
+    if (opts.bmuPolicyBonusClamp === true
+        && (rerankerScoresTopN[i]! < 0 || rerankerScoresTopN[i]! > 1)) {
+      throw new Error(
+        `retrieval-benchmark: BMU reranker score[${i}] must be in [0,1], got ${rerankerScoresTopN[i]}`,
+      );
+    }
   }
   // Map rerank scores back to candidates by docId. Indexing by array
   // position is unsafe because `rerankerCandidates = anchorMandatory ++
@@ -2235,7 +2242,9 @@ export async function scoreSubstrateAgainstQuery(
     }
   }
   const effectiveRerankByDocId = new Map<string, number>();
-  const inheritAlphaEff = multiHopBoostPresent ? Math.max(inheritAlpha, 1.0) : inheritAlpha;
+  const inheritAlphaEff = multiHopBoostPresent
+    ? Math.max(inheritAlpha, BMU_MULTI_HOP_FORCED_INHERIT_ALPHA)
+    : inheritAlpha;
   if (inheritAlphaEff > 0 && lensPeerEvents.size > 0) {
     const docsByEvent = new Map<string, string[]>();
     for (const c of candidates) {

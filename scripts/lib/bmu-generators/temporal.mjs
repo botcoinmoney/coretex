@@ -60,18 +60,25 @@ import {
   datesForEpoch,
   createBmuActiveIndex,
   indexHasSubject,
+  indexHasEntityHoldoutKey,
   indexHasTemplate,
   indexHasMotifGroup,
   registerCluster,
   searchEvalHiddenId,
   containsValue,
   sharedSkeletonNgrams,
+  opaqueBmuDocId,
+  bmuEntityHoldoutKeysForSubject,
 } from './common.mjs';
 
 export const BMU_TEMPORAL_FAMILY = 'temporal';            // bmuTask.family / bucketed (§5.6)
 export const BMU_TEMPORAL_LOGICAL_FAMILY = 'temporal_update'; // corpus logicalFamily (§5.6)
 export const BMU_TEMPORAL_BUDGET_B = 3;                   // §4.2 default
 export const BMU_TEMPORAL_CLUSTER_K = 5;                  // spec cluster size law
+/** Same-subject, currently-valid records for unrelated attributes. Keep this
+ * above B=3 so recency/validity-only shortcut rankers cannot recover the
+ * temporal positives without also applying attribute/relation structure. */
+export const BMU_TEMPORAL_SHORTCUT_CONTROL_DOCS = 4;
 
 /**
  * §4.1 template banks — surface-form grids per question type.
@@ -284,6 +291,7 @@ export function generateTemporalClusters({
   const escalationLevel = escalationLevelForEpoch(epoch, escalation);
   const usedTemplatesThisEpoch = new Set(); // §4.1 per-(family, epoch) disjoint partition
   const usedSubjectsThisRun = new Set();
+  const usedEntityHoldoutKeysThisRun = new Set();
   const clusters = [];
 
   const subjectStart = Math.floor(prng(`${seed}:subject-start:${epoch}`)() * subjects.length);
@@ -291,17 +299,22 @@ export function generateTemporalClusters({
   for (let ordinal = 0; ordinal < clusterCount; ordinal++) {
     // ── Subject pick: seeded-start skip-scan, m=1 GLOBAL (delta 3) ──────────
     let subj = null;
+    let entityHoldoutKeys = null;
     for (let step = 0; step < subjects.length; step++) {
       const cand = subjects[(subjectStart + ordinal + step) % subjects.length];
       if (usedSubjectsThisRun.has(cand.id)) continue;
       if (indexHasSubject(activeIndex, cand.id)) continue;
+      const candKeys = bmuEntityHoldoutKeysForSubject(cand);
+      if (candKeys.some((key) => indexHasEntityHoldoutKey(activeIndex, key) || usedEntityHoldoutKeysThisRun.has(key))) continue;
       subj = cand;
+      entityHoldoutKeys = candKeys;
       break;
     }
     if (!subj) {
       throw new Error(`bmu temporal: subject bank exhausted at epoch ${epoch} ordinal ${ordinal} — every subject is in an active cluster (m=1); grow the bank or wait for retirement`);
     }
     usedSubjectsThisRun.add(subj.id);
+    for (const key of entityHoldoutKeys) usedEntityHoldoutKeysThisRun.add(key);
     const canonical = subj.canonicalName;
     const isProject = /-svc-/.test(canonical);
 
@@ -322,10 +335,15 @@ export function generateTemporalClusters({
     if (indexHasMotifGroup(activeIndex, motifGroupId)) {
       throw new Error(`bmu temporal: motifGroupId collision '${motifGroupId}' — active index already holds it`);
     }
-    const currentId = `d_${idBase}_cur`;
-    const staleId = `d_${idBase}_stale`;
-    const changeId = `d_${idBase}_chg`;
-    const shadowIds = decoyVals.map((_, i) => `d_${idBase}_sh${i}`);
+    const docId = (slot) => opaqueBmuDocId({ seed, epoch, motifGroupId, slot });
+    const currentId = docId('current');
+    const staleId = docId('stale_trap');
+    const changeId = docId('change_provenance');
+    const shadowIds = decoyVals.map((_, i) => docId(`escalation_shadow:${i}`));
+    const shortcutControlIds = Array.from(
+      { length: BMU_TEMPORAL_SHORTCUT_CONTROL_DOCS },
+      (_, i) => docId(`current_unrelated_attribute:${i}`),
+    );
 
     // ── Inherited 3-doc memory structure + qrels (verbatim import) ──────────
     const spec = buildTypedTemporalClusterSpec({
@@ -334,12 +352,45 @@ export function generateTemporalClusters({
     });
 
     // Doc envelope exactly as the evolve minter stamps it (:749-753).
-    const docs = spec.docs.map((doc) => ({
-      id: doc.id, lane: 'deep', kind: doc.kind, entityIds: [universe, subj.id],
-      text: doc.text, shape: 'temporal_update_record', timestamp: doc.timestamp,
-      currentStaleFlag: doc.currentStaleFlag, validity: doc.validity,
-      liveUpdateEpoch: epoch, role: doc.role,
-    }));
+    const docs = spec.docs.map((doc) => {
+      // The ancestor writes validity.supersededBy = currentId on every stale
+      // document.  That is an exact answer pointer, so BMU keeps the public
+      // validUntil/observedAt semantics and the supersedes relation while
+      // removing this one leaking field from generated documents.
+      const { supersededBy: _exactAnswerPointer, ...validity } = doc.validity ?? {};
+      const text = doc.role === 'current'
+        ? `${canonical}'s ${attr} record effective ${tsDate} lists ${val}. It follows an earlier revision of the same field.`
+        : doc.role === 'change_provenance'
+          ? `Revision note ${tsDate}: ${canonical}'s ${attr} changed from ${staleVal} to ${val}; the prior record closed.`
+          : doc.text;
+      return {
+        id: doc.id, lane: 'deep', kind: doc.kind, entityIds: [universe, subj.id],
+        text, shape: 'temporal_update_record', timestamp: doc.timestamp,
+        currentStaleFlag: doc.currentStaleFlag, validity,
+        liveUpdateEpoch: epoch, role: doc.role,
+      };
+    });
+    // Benign current observations for the SAME attribute prevent even an
+    // attribute-scoped latest/current metadata ranker from becoming an answer
+    // selector. They are
+    // deliberately absent from qrels/forbidden sets; the correct operation
+    // must scope by the public attribute and follow supersession structure.
+    for (let i = 0; i < shortcutControlIds.length; i++) {
+      const controlAttr = attr;
+      const observedAt = `${tsDate}T12:${String(i).padStart(2, '0')}:00Z`;
+      docs.push({
+        id: shortcutControlIds[i], lane: 'deep', kind: `temporal_${controlAttr}`,
+        entityIds: [universe, subj.id],
+        text: `${canonical}'s ${controlAttr} has an additional active observation that does not establish the supersession chain.`,
+        shape: 'temporal_update_record', timestamp: observedAt,
+        currentStaleFlag: true,
+        validity: {
+          subjectEntityId: subj.id, attribute: controlAttr,
+          validFrom: priorDate, observedAt,
+        },
+        liveUpdateEpoch: epoch, role: 'shortcut_control',
+      });
+    }
     const relations = spec.relations.map((r) => ({ ...r }));
 
     // ── k=5 rows: inherited qrels per type + template bank + bmuTask ────────
@@ -373,7 +424,7 @@ export function generateTemporalClusters({
         hardNegatives: stub.hardNegatives.map((n) => ({ ...n })),
         publicIntent: {
           atom: 'temporal_cluster', subjectEntityId: subj.id, attribute: attr,
-          queryTime: tsDate, selector: `qtype_${qtype}_v${slot}`,
+          queryTime: `${tsDate}T23:59:59Z`, selector: `qtype_${qtype}_v${slot}`,
         },
         questionType: qtype, capability: 'temporal_supersession',
         band: escalationLevel > 0 ? 'very_hard' : 'hard',
@@ -387,6 +438,7 @@ export function generateTemporalClusters({
           abstain: false,
           motifGroupId,
           templateId: variant.templateId,
+          entityHoldoutKeys,
         },
       });
     }
@@ -412,7 +464,7 @@ export function generateTemporalClusters({
     // ── Register in the GLOBAL m=1 index (fail-closed on any collision) ─────
     registerCluster(activeIndex, {
       motifGroupId, family: BMU_TEMPORAL_FAMILY, subjectEntityId: subj.id,
-      templateIds: clusterTemplateIds, mintEpoch: epoch,
+      templateIds: clusterTemplateIds, entityHoldoutKeys, mintEpoch: epoch,
     });
 
     clusters.push({
@@ -428,6 +480,7 @@ export function generateTemporalClusters({
       decoyValues: [...decoyVals],
       escalationLevel,
       templateIds: [...clusterTemplateIds],
+      entityHoldoutKeys: [...entityHoldoutKeys],
       docs,
       relations,
       rows,

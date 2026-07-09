@@ -78,12 +78,15 @@ import {
   datesForEpoch,
   createBmuActiveIndex,
   indexHasSubject,
+  indexHasEntityHoldoutKey,
   indexHasTemplate,
   indexHasMotifGroup,
   registerCluster,
   searchEvalHiddenId,
   containsValue,
   sharedSkeletonNgrams,
+  opaqueBmuDocId,
+  bmuEntityHoldoutKeysForSubject,
 } from './common.mjs';
 
 export const BMU_MULTI_HOP_FAMILY = 'multi_hop_relation';        // bmuTask.family / bucketed (§5.6)
@@ -346,6 +349,7 @@ export function generateMultiHopClusters({
   const escalationLevel = escalationLevelForEpoch(epoch, escalation);
   const usedTemplatesThisEpoch = new Set(); // §4.1 per-(family, epoch) disjoint partition
   const usedSubjectsThisRun = new Set();
+  const usedEntityHoldoutKeysThisRun = new Set();
   const clusters = [];
 
   const subjectStart = Math.floor(prng(`${seed}:mh-subject-start:${epoch}`)() * subjects.length);
@@ -353,17 +357,22 @@ export function generateMultiHopClusters({
   for (let ordinal = 0; ordinal < clusterCount; ordinal++) {
     // ── Subject pick: seeded-start skip-scan, m=1 GLOBAL (delta 4) ──────────
     let subj = null;
+    let entityHoldoutKeys = null;
     for (let step = 0; step < subjects.length; step++) {
       const cand = subjects[(subjectStart + ordinal + step) % subjects.length];
       if (usedSubjectsThisRun.has(cand.id)) continue;
       if (indexHasSubject(activeIndex, cand.id)) continue;
+      const candKeys = bmuEntityHoldoutKeysForSubject(cand);
+      if (candKeys.some((key) => indexHasEntityHoldoutKey(activeIndex, key) || usedEntityHoldoutKeysThisRun.has(key))) continue;
       subj = cand;
+      entityHoldoutKeys = candKeys;
       break;
     }
     if (!subj) {
       throw new Error(`bmu multi_hop: subject bank exhausted at epoch ${epoch} ordinal ${ordinal} — every subject is in an active cluster (m=1); grow the bank or wait for retirement`);
     }
     usedSubjectsThisRun.add(subj.id);
+    for (const key of entityHoldoutKeys) usedEntityHoldoutKeysThisRun.add(key);
     const canonical = subj.canonicalName;
     const isProject = /-svc-/.test(canonical);
     const alias = aliasFor(canonical);
@@ -393,12 +402,13 @@ export function generateMultiHopClusters({
     if (indexHasMotifGroup(activeIndex, motifGroupId)) {
       throw new Error(`bmu multi_hop: motifGroupId collision '${motifGroupId}' — active index already holds it`);
     }
-    const b1Id = `d_${idBase}_b1`;
-    const b2Id = `d_${idBase}_b2`;
-    const ansId = `d_${idBase}_ans`;
-    const offpathId = `d_${idBase}_op`;
-    const nearBridgeId = `d_${idBase}_nb`;
-    const shadowIds = shadowVals.map((_, i) => `d_${idBase}_sh${i}`);
+    const docId = (slot) => opaqueBmuDocId({ seed, epoch, motifGroupId, slot });
+    const b1Id = docId('chain_hop1');
+    const b2Id = docId('chain_hop2');
+    const ansId = docId('chain_answer');
+    const offpathId = docId('offpath_decoy');
+    const nearBridgeId = docId('near_bridge_decoy');
+    const shadowIds = shadowVals.map((_, i) => docId(`offpath_shadow:${i}`));
 
     // ── Docs: the chain + the forbidden traps (deltas 2, 3) ─────────────────
     const docs = [];
@@ -562,6 +572,7 @@ export function generateMultiHopClusters({
           abstain: false,
           motifGroupId,
           templateId: variant.templateId,
+          entityHoldoutKeys,
         },
       });
     }
@@ -602,7 +613,7 @@ export function generateMultiHopClusters({
     // ── Register in the GLOBAL m=1 index (fail-closed on any collision) ─────
     registerCluster(activeIndex, {
       motifGroupId, family: BMU_MULTI_HOP_FAMILY, subjectEntityId: subj.id,
-      templateIds: clusterTemplateIds, mintEpoch: epoch,
+      templateIds: clusterTemplateIds, entityHoldoutKeys, mintEpoch: epoch,
     });
 
     clusters.push({
@@ -621,6 +632,7 @@ export function generateMultiHopClusters({
       decoyValues: [decoyVal, decoyVal2, ...shadowVals],
       escalationLevel,
       templateIds: [...clusterTemplateIds],
+      entityHoldoutKeys: [...entityHoldoutKeys],
       docs,
       relations,
       rows,

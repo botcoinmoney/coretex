@@ -216,16 +216,25 @@ describe('§2.3 composition validator', () => {
   });
 });
 
-describe('§13.2 Rmax bundle validation (rev3.3: per-doc clamp, P_cap = 1)', () => {
+describe('§13.2 Rmax bundle validation (forced alpha=1 + two-sided temporal range)', () => {
   const LIVE_LIKE = {
     lensWeight: 0.1, anchorWeight: 0.15, temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1,
     categoryLensFinalBonusWeight: 0,
   };
 
-  test('Rmax = 1 + B + 2·P_cap; live-like betas give 3.35 ≤ 4', () => {
+  test('Rmax includes BOTH temporal sides; live-like betas give 3.45 ≤ 4', () => {
     const rmax = computeBmuJudgeRmax(LIVE_LIKE);
-    assert.ok(Math.abs(rmax - (1 + 0.35 + 2)) < 1e-9, `rmax ${rmax}`);
+    assert.ok(Math.abs(rmax - (1 + 0.45 + 2)) < 1e-9, `rmax ${rmax}`);
     assert.doesNotThrow(() => assertBmuJudgeRmax(LIVE_LIKE));
+  });
+
+  test('configured alpha≤1 and the runtime forced alpha=1 do not widen reranker [0,1]', () => {
+    assert.equal(
+      computeBmuJudgeRmax({ ...LIVE_LIKE, categoryLensScoreInheritance: 0.3 }),
+      computeBmuJudgeRmax({ ...LIVE_LIKE, categoryLensScoreInheritance: 1 }),
+    );
+    assert.throws(() => computeBmuJudgeRmax({ ...LIVE_LIKE, categoryLensScoreInheritance: 1.01 }), /\[0,1\]/);
+    assert.throws(() => computeBmuJudgeRmax({ ...LIVE_LIKE, categoryLensScoreInheritance: Number.NaN }), /finite/);
   });
 
   test('policy budget caps no longer enter Rmax (the per-doc clamp bounds stacking, not budgets)', () => {
@@ -239,7 +248,7 @@ describe('§13.2 Rmax bundle validation (rev3.3: per-doc clamp, P_cap = 1)', () 
 
   test('aspect beta counts only when the aspect family is enabled', () => {
     const withAspect = { ...LIVE_LIKE, enableAspectConstraintAtoms: true, policyAspectBoost: 0.4 };
-    assert.ok(Math.abs(computeBmuJudgeRmax(withAspect) - (3.35 + 0.4)) < 1e-9);
+    assert.ok(Math.abs(computeBmuJudgeRmax(withAspect) - (3.45 + 0.4)) < 1e-9);
     const disabled = { ...LIVE_LIKE, enableAspectConstraintAtoms: false, policyAspectBoost: 0.4 };
     assert.equal(computeBmuJudgeRmax(disabled), computeBmuJudgeRmax(LIVE_LIKE));
   });
@@ -301,12 +310,14 @@ describe('§7.3 taxonomy mapping (exactly one external reason)', () => {
 
 function armRow(family, logicalFamily, bucketed, i, { epoch = 137, subject, template, motif } = {}) {
   const id = `zz_e${String(epoch).padStart(12, '0')}_q_${family}_${i}`;
+  const subjectId = subject ?? `ent_${family}_${Math.floor(i / 5)}`;
   return {
     id,
     family: bucketed,
     split: 'eval_hidden',
     logicalFamily,
-    subjectEntityId: subject ?? `ent_${family}_${Math.floor(i / 5)}`,
+    subjectEntityId: subjectId,
+    ownerEntityId: 'e_shared_owner',
     bmuTask: {
       family,
       budgetB: 3,
@@ -315,6 +326,7 @@ function armRow(family, logicalFamily, bucketed, i, { epoch = 137, subject, temp
       answer: { id: 'd1' },
       motifGroupId: motif ?? `mg_${family}_${Math.floor(i / 5)}`,
       templateId: template ?? `tt_${family}_${Math.floor(i / 5)}_${i % 5}`,
+      entityHoldoutKeys: [`id:${subjectId}`, `alias:${family} subject ${Math.floor(i / 5)}`],
     },
   };
 }
@@ -421,6 +433,51 @@ describe('§6.7b ARM-GATE census (rev3.2 reserve∪active pool)', () => {
     const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137, posture: 'arm' });
     assert.equal(report.ok, false);
     assert.ok(report.multiplicityViolations.some((v) => v.includes('templateId')), report.multiplicityViolations.join('; '));
+  });
+
+  test('entity aliases are globally m=1 even when canonical subject ids differ', () => {
+    const events = armPool();
+    const a = events.findIndex((e) => e.bmuTask.motifGroupId === 'mg_temporal_0');
+    const b = events.findIndex((e) => e.bmuTask.motifGroupId === 'mg_conflict_lifecycle_0');
+    const sharedAlias = 'alias:shared canonical alias';
+    events[a] = { ...events[a], bmuTask: { ...events[a].bmuTask,
+      entityHoldoutKeys: [`id:${events[a].subjectEntityId}`, sharedAlias] } };
+    events[b] = { ...events[b], bmuTask: { ...events[b].bmuTask,
+      entityHoldoutKeys: [`id:${events[b].subjectEntityId}`, sharedAlias] } };
+    const report = evaluateBmuArmGate({
+      corpus: { events }, poolIds: new Set(events.map((e) => e.id)), epochId: 137, posture: 'arm',
+    });
+    assert.equal(report.ok, false);
+    assert.ok(report.multiplicityViolations.some((v) => v.includes(`entityHoldoutKey ${sharedAlias}`)));
+  });
+
+  test('historical rows without alias identities load but cannot arm/boot BMU', () => {
+    const events = armPool();
+    const motif = events[0].bmuTask.motifGroupId;
+    for (let i = 0; i < events.length; i++) {
+      if (events[i].bmuTask.motifGroupId !== motif) continue;
+      const { entityHoldoutKeys: _removed, ...legacyTask } = events[i].bmuTask;
+      events[i] = { ...events[i], bmuTask: legacyTask };
+    }
+    for (const posture of ['arm', 'boot']) {
+      const report = evaluateBmuArmGate({
+        corpus: { events }, poolIds: new Set(events.map((e) => e.id)), epochId: 137, posture,
+      });
+      assert.equal(report.ok, false);
+      assert.ok(report.identityHoldoutViolations.some((v) => v.includes(`motifGroupId ${motif} has no entityHoldoutKeys`)));
+    }
+  });
+
+  test('shared owner/universe ids are forbidden from the narrow holdout field', () => {
+    const events = armPool();
+    const target = events[0];
+    events[0] = { ...target, bmuTask: { ...target.bmuTask,
+      entityHoldoutKeys: [...target.bmuTask.entityHoldoutKeys, 'id:e_shared_owner'] } };
+    const report = evaluateBmuArmGate({
+      corpus: { events }, poolIds: new Set(events.map((e) => e.id)), epochId: 137, posture: 'arm',
+    });
+    assert.equal(report.ok, false);
+    assert.ok(report.identityHoldoutViolations.some((v) => v.includes('includes shared owner id e_shared_owner')));
   });
 });
 

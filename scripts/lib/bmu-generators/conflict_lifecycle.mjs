@@ -69,6 +69,8 @@ import {
   lintNoAnswerLeak,
   prng,
   slug,
+  opaqueBmuDocId,
+  bmuEntityHoldoutKeysForSubject,
 } from './common.mjs';
 
 export const CONFLICT_FAMILY = 'conflict_lifecycle';
@@ -123,6 +125,7 @@ export function conflictTemplateId(questionType, variant, attr, scope) {
 export function buildConflictLifecycleClusterSpec({
   canonical, subjectId, attr, scope, decoyScopes, valA, valB, decoyVals,
   tsDate, priorDate, candidateId, resolvedId, resolutionId, decoyIds, motifGroupId,
+  subjectAliases = [],
 }) {
   if (decoyIds.length !== decoyVals.length || decoyIds.length !== decoyScopes.length) {
     throw new Error('buildConflictLifecycleClusterSpec: decoyIds/decoyVals/decoyScopes must align');
@@ -165,6 +168,7 @@ export function buildConflictLifecycleClusterSpec({
   const decoyNegs = decoyIds.map((docId) => ({ docId, category: 'scope_mismatch_near_collision' }));
   const forbiddenEvidence = [candidateId, ...decoyIds];
 
+  const entityHoldoutKeys = bmuEntityHoldoutKeysForSubject({ id: subjectId, canonicalName: canonical, aliases: subjectAliases });
   const stampTask = ({ requiredEvidence, answerId, answerValue, questionType, variant }) => ({
     family: CONFLICT_FAMILY,
     budgetB: CONFLICT_BUDGET_B,
@@ -174,6 +178,7 @@ export function buildConflictLifecycleClusterSpec({
     abstain: false,
     motifGroupId,
     templateId: conflictTemplateId(questionType, variant, attr, scope),
+    entityHoldoutKeys,
   });
 
   // §4.3 mint-time consistency: requiredEvidence ⊆ {qrels ≥ 0.5} — support
@@ -238,7 +243,9 @@ export function generateConflictLifecycleClusters({
   if (typeof seed !== 'string' || !seed) throw new Error('generateConflictLifecycleClusters: seed required');
   if (!Array.isArray(subjects) || subjects.length === 0) throw new Error('generateConflictLifecycleClusters: subjects bank required');
   if (typeof splitOf !== 'function') throw new Error('generateConflictLifecycleClusters: canonical splitOf must be injected');
-  if (!registry || typeof registry.claimCluster !== 'function') throw new Error('generateConflictLifecycleClusters: m=1 registry required');
+  if (!registry || typeof registry.claimCluster !== 'function' || typeof registry.hasEntityHoldoutKey !== 'function') {
+    throw new Error('generateConflictLifecycleClusters: alias-aware m=1 registry required');
+  }
   if (!Number.isInteger(clusterCount) || clusterCount < 1) throw new Error('generateConflictLifecycleClusters: clusterCount >= 1');
 
   // Same deterministic date derivation as the ancestor (evolve-corpus.mjs:376-377).
@@ -250,6 +257,7 @@ export function generateConflictLifecycleClusters({
   const addedQueries = [];
   const clusters = [];
   const usedSubjectsThisRun = new Set();
+  const usedEntityHoldoutKeysThisRun = new Set();
 
   let subjectCursor = 0;
   const nextFreeSubject = (motifGroupId) => {
@@ -258,7 +266,11 @@ export function generateConflictLifecycleClusters({
     // bank order, monotone cursor.
     while (subjectCursor < subjects.length) {
       const s = subjects[subjectCursor++];
-      if (!registry.hasSubject(s.id) && !usedSubjectsThisRun.has(s.id)) return s;
+      const keys = bmuEntityHoldoutKeysForSubject(s);
+      if (!registry.hasSubject(s.id) && !usedSubjectsThisRun.has(s.id)
+          && !keys.some((key) => registry.hasEntityHoldoutKey(key) || usedEntityHoldoutKeysThisRun.has(key))) {
+        return { subject: s, entityHoldoutKeys: keys };
+      }
     }
     throw new Error(`generateConflictLifecycleClusters: subject bank exhausted under GLOBAL m=1 (minting ${motifGroupId}); supply more subjects or wait for retirements`);
   };
@@ -266,7 +278,9 @@ export function generateConflictLifecycleClusters({
   for (let c = 0; c < clusterCount; c++) {
     const clusterSlot = clusterSlotOffset + c;
     const motifGroupId = `mg_e${epoch}_conflict_${String(clusterSlot).padStart(4, '0')}`;
-    const subj = nextFreeSubject(motifGroupId);
+    const picked = nextFreeSubject(motifGroupId);
+    const subj = picked.subject;
+    const entityHoldoutKeys = picked.entityHoldoutKeys;
     const canonical = subj.canonicalName;
     const isProject = /-svc-/.test(canonical);
     const rnd = prng(`${seed}:bmu-conflict:${epoch}:${subj.id}:${clusterSlot}`);
@@ -293,11 +307,13 @@ export function generateConflictLifecycleClusters({
     }
 
     const idBase = `e${epoch}_${subj.id}_bc${clusterSlot}`;
+    const docId = (slot) => opaqueBmuDocId({ seed, epoch, motifGroupId, slot });
     const spec = buildConflictLifecycleClusterSpec({
       canonical, subjectId: subj.id, attr, scope, decoyScopes, valA, valB, decoyVals,
-      tsDate, priorDate,
-      candidateId: `d_${idBase}_ca`, resolvedId: `d_${idBase}_cb`, resolutionId: `d_${idBase}_cr`,
-      decoyIds: decoyVals.map((_, i) => `d_${idBase}_dx${i}`), motifGroupId,
+      tsDate, priorDate, subjectAliases: subj.aliases,
+      candidateId: docId('conflict_candidate_trap'), resolvedId: docId('conflict_resolved'),
+      resolutionId: docId('resolution_record'),
+      decoyIds: decoyVals.map((_, i) => docId(`scope_mismatch_decoy:${i}`)), motifGroupId,
     });
 
     // Mint-time no-answer-leak lint (fail-closed). answerValue is always the
@@ -324,14 +340,15 @@ export function generateConflictLifecycleClusters({
 
     // Claim GLOBAL m=1 keys BEFORE emitting (fail-closed; throws on collision).
     const templateIds = spec.queryStubs.map((s) => s.bmuTask.templateId);
-    registry.claimCluster({ subjectEntityId: subj.id, templateIds, motifGroupId });
+    registry.claimCluster({ subjectEntityId: subj.id, templateIds, entityHoldoutKeys, motifGroupId });
     usedSubjectsThisRun.add(subj.id);
+    for (const key of entityHoldoutKeys) usedEntityHoldoutKeysThisRun.add(key);
 
     for (const doc of spec.docs) {
       addedDocs.push({
         id: doc.id, lane: 'deep', kind: doc.kind, entityIds: [ownerEntityId, subj.id],
         text: doc.text, shape: 'lifecycle_conflict_record', timestamp: doc.timestamp,
-        currentStaleFlag: doc.currentStaleFlag, lifecycleState: doc.lifecycleState,
+        currentStaleFlag: doc.currentStaleFlag,
         lifecycleScope: doc.lifecycleScope, liveUpdateEpoch: epoch,
       });
     }
@@ -360,6 +377,7 @@ export function generateConflictLifecycleClusters({
       subjectEntityId: subj.id, attribute: attr, scope,
       escalationLevel, decoyCount,
       docIds: spec.docs.map((d) => d.id), rowIds, templateIds,
+      entityHoldoutKeys: [...entityHoldoutKeys],
       questionTypes: [...new Set(spec.queryStubs.map((s) => s.questionType))],
       forbiddenEvidence: spec.forbiddenEvidence,
     });

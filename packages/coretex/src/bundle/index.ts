@@ -1462,6 +1462,13 @@ function validateProfile(profile: EvaluatorProfile, errors?: string[]): void {
   if (profile.rerankerMemoryIRSource !== undefined && !['corpus', 'resolved'].includes(profile.rerankerMemoryIRSource)) {
     out.push("rerankerMemoryIRSource must be 'corpus' or 'resolved' when present");
   }
+  if (profile.categoryLensScoreInheritance !== undefined
+      && (typeof profile.categoryLensScoreInheritance !== 'number'
+        || !Number.isFinite(profile.categoryLensScoreInheritance)
+        || profile.categoryLensScoreInheritance < 0
+        || profile.categoryLensScoreInheritance > 1)) {
+    out.push('categoryLensScoreInheritance must be a finite number in [0,1] when present');
+  }
   // r5 enables only meaningful under the policy-r5 pipeline pin (warn-as-error: prevents
   // accidentally shipping r5 atoms under an r4 profile, where they would be ignored).
   const r5Enabled = profile.enableEvidenceBundleAtoms || profile.enableConflictLifecycleAtoms || profile.enableAbstentionAtoms || profile.enableAspectConstraintAtoms || profile.enableValidityAtoms || profile.enableEntityResolutionAtoms || profile.enableScopeAtoms;

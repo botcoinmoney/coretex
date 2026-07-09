@@ -35,7 +35,7 @@ import { generateTemporalClusters } from '../bmu-generators/temporal.mjs';
 import { generateMultiHopClusters } from '../bmu-generators/multi_hop_relation.mjs';
 import { generateConflictLifecycleClusters } from '../bmu-generators/conflict_lifecycle.mjs';
 import { generateNearCollisionAbstentionClusters } from '../bmu-generators/near_collision_abstention.mjs';
-import { createBmuActiveIndex, createM1Registry, makeCanonicalSplitOf, m1Census } from '../bmu-generators/common.mjs';
+import { createBmuActiveIndex, createEntityHoldoutIdentityStore, createM1Registry, makeCanonicalSplitOf, m1Census } from '../bmu-generators/common.mjs';
 import { packHeadroom, BMU_SIM_BASE_STACK_FLOORS } from './headroom-accounting.mjs';
 import { createFamilyConcentrationAlarm } from './family-concentration-alarm.mjs';
 
@@ -117,12 +117,13 @@ export function buildWorld({ dist, simSeed = 'bmu-p5-sim-v1', bankSize = 240 }) 
     liveTailQueryId: dist.liveTailQueryId,
     corpusEpoch: SIM_PINS.corpusEpochPin,
   });
+  const identityStore = createEntityHoldoutIdentityStore();
   return {
     dist,
     simSeed,
     splitOf,
-    activeIndex: createBmuActiveIndex(),   // temporal + multihop m=1 mechanism
-    registry: createM1Registry(),          // conflict + nearcol m=1 mechanism
+    activeIndex: createBmuActiveIndex(identityStore),   // temporal + multihop m=1 mechanism
+    registry: createM1Registry({}, identityStore),      // conflict + nearcol; alias authority shared globally
     banks: {
       temporal: makeSubjectBank('e_bmu_p5t_s', 'Persona Tarrow', 'helios', bankSize),
       multi_hop_relation: makeSubjectBank('e_bmu_p5m_s', 'Persona Quillon', 'meridian', bankSize),

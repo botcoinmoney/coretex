@@ -45,6 +45,7 @@ import {
   BMU_FAMILIES,
   BMU_COMPOSITION_TARGETS,
   BMU_FRESH_WINDOW_DEFAULT,
+  BMU_MULTI_HOP_FORCED_INHERIT_ALPHA,
   type BmuFamily,
   type BmuTask,
   bmuFamilyForLogicalFamily,
@@ -507,6 +508,7 @@ export interface BmuRmaxProfileShape {
   readonly temporalCurrentBoost?: number;
   readonly temporalStaleSuppression?: number;
   readonly categoryLensFinalBonusWeight?: number;
+  readonly categoryLensScoreInheritance?: number;
   readonly enableAspectConstraintAtoms?: boolean;
   readonly policyAspectBoost?: number;
 }
@@ -516,14 +518,29 @@ export interface BmuRmaxProfileShape {
  *  (`bmuPolicyBonusClamp`, armed unconditionally by the BMU law module). */
 export const BMU_JUDGE_POLICY_CAP = 1;
 
+/** Multi-hop boost currently raises score inheritance to at least one inside
+ *  the BMU retrieval law (`retrieval-benchmark.ts`, `inheritAlphaEff`). Keep
+ *  the forced value in the range proof instead of relying on a profile-only
+ *  derivation that can silently miss the runtime override. */
+export const BMU_JUDGE_FORCED_INHERIT_ALPHA = BMU_MULTI_HOP_FORCED_INHERIT_ALPHA;
+
 /**
  * §13.2 range analysis (rev3.3 pinned arithmetic): with the per-doc
  * atom-contribution cap (P_cap = 1 — the summed policyBonus per doc is
  * clamped to ±1·UNIT before quantization, `bmuPolicyBonusClamp`), the
- * composite lies in [−P_cap, 1 + B + P_cap] and
- *   Rmax = 1 + B + 2·P_cap
- * where B = Σ enabled final-bonus betas (lens + anchor + temporal +
- * categoryLens final + aspect). The rev3-era per-mechanism "P" arithmetic
+ * With reranker scores in [0,1], configured inheritance alpha in [0,1], and
+ * the runtime's forced alpha=1, `effRerank` remains in [0,1]. Lens, anchor,
+ * category-lens and aspect bonuses are non-negative, while temporal spans
+ * [−temporalStaleSuppression, +temporalCurrentBoost]. Therefore the honest
+ * composite range is
+ *   min = −temporalStaleSuppression − P_cap
+ *   max = A + lens + anchor + temporalCurrentBoost + categoryLens + aspect + P_cap
+ *   Rmax = A + lens + anchor + temporalCurrentBoost
+ *          + temporalStaleSuppression + categoryLens + aspect + 2·P_cap
+ * where A=max(1, configured alpha, forced alpha)=1 under the pinned law. The
+ * stale side is deliberately additive: `max(current, stale)` undercounts the
+ * full interval whenever both temporal betas are positive. The rev3-era
+ * per-mechanism "P" arithmetic
  * (and its pinned-budget-cap requirement) is superseded: multi-atom same-doc
  * stacking is bounded by the CLAMP in the law itself, not by budget-cap
  * bookkeeping (uncapped worst case was ≈ 77 composite units at 128
@@ -532,11 +549,25 @@ export const BMU_JUDGE_POLICY_CAP = 1;
 export function computeBmuJudgeRmax(profile: BmuRmaxProfileShape): number {
   const lensW = profile.lensWeight ?? 0.1;
   const anchorW = profile.anchorWeight ?? 0.15;
-  const temporalW = Math.max(profile.temporalCurrentBoost ?? 0.1, profile.temporalStaleSuppression ?? 0.1);
+  const temporalCurrentW = profile.temporalCurrentBoost ?? 0.1;
+  const temporalStaleW = profile.temporalStaleSuppression ?? 0.1;
   const catLensFinalW = profile.categoryLensFinalBonusWeight ?? lensW;
   const aspectW = profile.enableAspectConstraintAtoms === true ? (profile.policyAspectBoost ?? 0) : 0;
-  const B = lensW + anchorW + temporalW + catLensFinalW + aspectW;
-  return 1 + B + 2 * BMU_JUDGE_POLICY_CAP;
+  const inheritAlpha = profile.categoryLensScoreInheritance ?? 0;
+  const named = { lensWeight: lensW, anchorWeight: anchorW, temporalCurrentBoost: temporalCurrentW,
+    temporalStaleSuppression: temporalStaleW, categoryLensFinalBonusWeight: catLensFinalW,
+    policyAspectBoost: aspectW, categoryLensScoreInheritance: inheritAlpha };
+  for (const [name, value] of Object.entries(named)) {
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error(`BMU judge Rmax: ${name} must be a finite non-negative number (got ${String(value)})`);
+    }
+  }
+  if (inheritAlpha > 1) {
+    throw new Error(`BMU judge Rmax: categoryLensScoreInheritance must be in [0,1] (got ${inheritAlpha})`);
+  }
+  const rerankerMax = Math.max(1, inheritAlpha, BMU_JUDGE_FORCED_INHERIT_ALPHA);
+  return rerankerMax + lensW + anchorW + temporalCurrentW + temporalStaleW
+    + catLensFinalW + aspectW + 2 * BMU_JUDGE_POLICY_CAP;
 }
 
 export function assertBmuJudgeRmax(profile: BmuRmaxProfileShape): void {
@@ -671,6 +702,9 @@ export interface BmuArmGateReport {
   /** GLOBAL m=1 census violations (rev3.2): a subjectEntityId or templateId in
    *  more than one ACTIVE cluster across ALL families. */
   readonly multiplicityViolations: readonly string[];
+  /** Missing/malformed/inconsistent hidden entity+alias holdout identities.
+   * Historical rows may load without them, but can never arm or boot BMU. */
+  readonly identityHoldoutViolations: readonly string[];
   readonly reasons: readonly string[];
 }
 
@@ -728,6 +762,9 @@ export function evaluateBmuArmGate(input: {
   // GLOBAL m=1 census: key → set of distinct active motifGroupIds.
   const clustersBySubject = new Map<string, Set<string>>();
   const clustersByTemplate = new Map<string, Set<string>>();
+  const clustersByEntityHoldout = new Map<string, Set<string>>();
+  const holdoutSignatureByMotif = new Map<string, string>();
+  const identityHoldoutViolationSet = new Set<string>();
 
   let total = 0;
   for (const e of input.corpus.events) {
@@ -747,6 +784,31 @@ export function evaluateBmuArmGate(input: {
     const t = clustersByTemplate.get(task.templateId) ?? new Set<string>();
     t.add(task.motifGroupId);
     clustersByTemplate.set(task.templateId, t);
+    const holdoutKeys = task.entityHoldoutKeys;
+    if (!Array.isArray(holdoutKeys) || holdoutKeys.length === 0) {
+      identityHoldoutViolationSet.add(`motifGroupId ${task.motifGroupId} has no entityHoldoutKeys (historical rows are not arm-eligible)`);
+    } else {
+      const sorted = [...new Set(holdoutKeys)].sort(codePointCompare);
+      const canonicalSubjectKey = e.subjectEntityId ? `id:${e.subjectEntityId}` : null;
+      if (canonicalSubjectKey !== null && !sorted.includes(canonicalSubjectKey)) {
+        identityHoldoutViolationSet.add(`motifGroupId ${task.motifGroupId} omits canonical subject holdout key ${canonicalSubjectKey}`);
+      }
+      if (e.ownerEntityId && e.ownerEntityId !== e.subjectEntityId && sorted.includes(`id:${e.ownerEntityId}`)) {
+        identityHoldoutViolationSet.add(`motifGroupId ${task.motifGroupId} includes shared owner id ${e.ownerEntityId} in entityHoldoutKeys`);
+      }
+      const signature = sorted.join('\n');
+      const priorSignature = holdoutSignatureByMotif.get(task.motifGroupId);
+      if (priorSignature !== undefined && priorSignature !== signature) {
+        identityHoldoutViolationSet.add(`motifGroupId ${task.motifGroupId} has inconsistent entityHoldoutKeys across rows`);
+      } else {
+        holdoutSignatureByMotif.set(task.motifGroupId, signature);
+      }
+      for (const key of sorted) {
+        const clusters = clustersByEntityHoldout.get(key) ?? new Set<string>();
+        clusters.add(task.motifGroupId);
+        clustersByEntityHoldout.set(key, clusters);
+      }
+    }
   }
 
   const reasons: string[] = [];
@@ -778,8 +840,15 @@ export function evaluateBmuArmGate(input: {
   for (const [template, clusters] of clustersByTemplate) {
     if (clusters.size > 1) multiplicityViolations.push(`templateId ${template} in ${clusters.size} active clusters (${[...clusters].sort().join(', ')})`);
   }
+  for (const [identity, clusters] of clustersByEntityHoldout) {
+    if (clusters.size > 1) multiplicityViolations.push(`entityHoldoutKey ${identity} in ${clusters.size} active clusters (${[...clusters].sort().join(', ')})`);
+  }
   if (multiplicityViolations.length > 0) {
     reasons.push(`m=1 multiplicity census failed: ${multiplicityViolations.length} violation(s)`);
+  }
+  const identityHoldoutViolations = [...identityHoldoutViolationSet].sort(codePointCompare);
+  if (identityHoldoutViolations.length > 0) {
+    reasons.push(`entity/alias holdout census failed: ${identityHoldoutViolations.length} violation(s)`);
   }
 
   return {
@@ -791,6 +860,7 @@ export function evaluateBmuArmGate(input: {
     nMinRequired: BMU_ARM_GATE_N_MIN,
     perFamily,
     multiplicityViolations,
+    identityHoldoutViolations,
     reasons,
   };
 }

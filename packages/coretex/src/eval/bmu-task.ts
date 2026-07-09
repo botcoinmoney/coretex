@@ -87,6 +87,11 @@ export const BMU_TASK_MAX_BUDGET = 8;
  *  pack law (overlay slot draw) and the arm-gate census consume it. */
 export const BMU_FRESH_WINDOW_DEFAULT = 2;
 
+/** BMU multi-hop retrieval law: a transferring boost operation raises score
+ * inheritance to this floor. Kept in the leaf law module so the runtime and
+ * the §13.2 Rmax proof cannot drift onto different literals. */
+export const BMU_MULTI_HOP_FORCED_INHERIT_ALPHA = 1;
+
 // ─── Task shape (§4.1) ────────────────────────────────────────────────────────
 
 export interface BmuTaskAnswer {
@@ -112,6 +117,15 @@ export interface BmuTask {
   readonly motifGroupId: string;
   /** Surface-form template id — held-out partition key (§6.3). Generator-pinned. */
   readonly templateId: string;
+  /**
+   * Hidden, narrowly-scoped entity identity partition keys (§6.3). New BMU
+   * mints include the canonical subject id (`id:<subjectEntityId>`) plus
+   * normalized canonical-name/alias keys. Broad document entityIds are never
+   * copied here because shared owner/universe ids would exclude unrelated
+   * confirm rows. Optional only for loading historical pre-hardening mints;
+   * the arm/boot census refuses a pool row where it is absent.
+   */
+  readonly entityHoldoutKeys?: readonly string[];
 }
 
 /** Structural duck-type of the event fields the BMU task law reads (kept a
@@ -135,7 +149,8 @@ export function hasBmuTask(event: BmuTaskEventShape): boolean {
 
 /**
  * Composite exclusion keys for a gate-pack row (§6.3): namespaced so a
- * motifGroupId can never collide with a subjectEntityId/templateId string.
+ * motifGroupId can never collide with a subjectEntityId/templateId/entity
+ * identity string.
  * A candidate row is EXCLUDED from the confirm pool iff ANY of its own keys
  * is in the gate pack's key set X.
  */
@@ -145,6 +160,7 @@ export function bmuExclusionKeysForEvent(event: BmuTaskEventShape): readonly str
   if (t?.motifGroupId) keys.push(`motif:${t.motifGroupId}`);
   if (event.subjectEntityId) keys.push(`subject:${event.subjectEntityId}`);
   if (t?.templateId) keys.push(`template:${t.templateId}`);
+  for (const key of t?.entityHoldoutKeys ?? []) keys.push(`entity:${key}`);
   return keys;
 }
 
@@ -193,14 +209,32 @@ export function validateBmuTaskOnEvent(
   if (!strArray(t.forbiddenEvidence)) err('bmuTask.forbiddenEvidence must be an array of non-empty doc-id strings');
   if (typeof t.motifGroupId !== 'string' || t.motifGroupId.length === 0) err('bmuTask.motifGroupId must be non-empty');
   if (typeof t.templateId !== 'string' || t.templateId.length === 0) err('bmuTask.templateId must be non-empty');
+  if (t.entityHoldoutKeys !== undefined
+      && (!strArray(t.entityHoldoutKeys) || t.entityHoldoutKeys.length === 0 || t.entityHoldoutKeys.length > 32)) {
+    err('bmuTask.entityHoldoutKeys must be an array of 1..32 non-empty strings when present');
+  }
   // Control characters (incl. '\n') in the §6.3 exclusion-key fields would let
   // a crafted id smuggle bytes into the sorted-join exclusion-set DIGEST
   // (§8.3 uses '\n' as the join separator) — refuse them at load, all three
-  // key fields (motifGroupId / templateId / event subjectEntityId).
+  // key fields (motifGroupId / templateId / event subjectEntityId /
+  // entityHoldoutKeys).
   const CONTROL = /[\u0000-\u001f\u007f]/;
   if (typeof t.motifGroupId === 'string' && CONTROL.test(t.motifGroupId)) err('bmuTask.motifGroupId must not contain control characters');
   if (typeof t.templateId === 'string' && CONTROL.test(t.templateId)) err('bmuTask.templateId must not contain control characters');
   if (event.subjectEntityId !== undefined && CONTROL.test(event.subjectEntityId)) err('subjectEntityId must not contain control characters on a bmuTask row');
+  if (Array.isArray(t.entityHoldoutKeys)) {
+    const seen = new Set<string>();
+    for (const key of t.entityHoldoutKeys) {
+      if (typeof key !== 'string') continue;
+      if (key.length > 256) err('bmuTask.entityHoldoutKeys entries must be at most 256 characters');
+      if (CONTROL.test(key)) err('bmuTask.entityHoldoutKeys entries must not contain control characters');
+      if (seen.has(key)) err(`duplicate bmuTask.entityHoldoutKeys entry '${key}'`);
+      seen.add(key);
+    }
+    if (event.subjectEntityId !== undefined && !seen.has(`id:${event.subjectEntityId}`)) {
+      err(`bmuTask.entityHoldoutKeys must include canonical subject key 'id:${event.subjectEntityId}'`);
+    }
+  }
   if (t.abstain !== undefined && typeof t.abstain !== 'boolean') err('bmuTask.abstain must be boolean when present');
   if (errors.length > 0) return errors;
 
@@ -262,18 +296,27 @@ export function lintBmuTaskForMint(
  */
 export function validateBmuCorpusConsistency(events: readonly BmuTaskEventShape[]): string[] {
   const errors: string[] = [];
-  const familyByMotif = new Map<string, { family: BmuFamily; firstRow: string }>();
+  const familyByMotif = new Map<string, { family: BmuFamily; firstRow: string; holdoutSignature: string | null }>();
   for (const e of events) {
     const t = e.bmuTask;
     if (!t || typeof t.motifGroupId !== 'string' || t.motifGroupId.length === 0) continue;
     const prior = familyByMotif.get(t.motifGroupId);
+    const holdoutSignature = t.entityHoldoutKeys === undefined
+      ? null
+      : [...t.entityHoldoutKeys].sort(codePointStringCompare).join('\n');
     if (!prior) {
-      familyByMotif.set(t.motifGroupId, { family: t.family, firstRow: e.id });
+      familyByMotif.set(t.motifGroupId, { family: t.family, firstRow: e.id, holdoutSignature });
     } else if (prior.family !== t.family) {
       errors.push(
         `motifGroupId '${t.motifGroupId}' spans families '${prior.family}' (${prior.firstRow}) and '${t.family}' (${e.id})`,
       );
+    } else if (prior.holdoutSignature !== holdoutSignature) {
+      errors.push(`motifGroupId '${t.motifGroupId}' has inconsistent entityHoldoutKeys (${prior.firstRow} vs ${e.id})`);
     }
   }
   return errors;
+}
+
+function codePointStringCompare(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }

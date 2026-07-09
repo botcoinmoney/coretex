@@ -70,6 +70,7 @@ function stampedEvent(fam, id) {
     bmuTask: {
       family: fam.bmu, budgetB: 3, requiredEvidence: [truthId], forbiddenEvidence: [],
       answer: { id: truthId }, motifGroupId: `mg-${id}`, templateId: `tt-${id}`,
+      entityHoldoutKeys: [`id:ent-${id}`, `alias:${id}`],
     },
     provenance: { source: 'synthetic_challenge', sourceHash: '0x' + 'aa'.repeat(32) },
     embeddings: {

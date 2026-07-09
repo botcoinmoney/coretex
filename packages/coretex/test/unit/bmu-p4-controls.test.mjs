@@ -176,13 +176,25 @@ function rerankerFor({ trapHighRows = [] } = {}) {
       return pairs.map((p) => {
         const rid = p.query.slice(2);
         if (p.document === `truth-${rid}`) return 0.90;
-        if (p.document === `trap-${rid}`) return trapHigh.has(rid) ? 0.95 : -0.50;
+        if (p.document === `trap-${rid}`) return trapHigh.has(rid) ? 0.95 : 0;
         if (p.document === `fill-${rid}`) return 0.35;
         return 0.01;
       });
     },
   };
 }
+
+test('BMU evaluator fails closed when a reranker violates its pinned [0,1] range', async () => {
+  const { corpus, gatePack } = makeFixture();
+  const invalidReranker = {
+    model: 'invalid-range-reranker',
+    async score(pairs) { return pairs.map(() => 1.01); },
+  };
+  await assert.rejects(
+    evaluateBmuBenchmarkState(ZERO_STATE, corpus, gatePack, bmuOpts(invalidReranker)),
+    /BMU reranker score\[0\] must be in \[0,1\]/,
+  );
+});
 
 function patchAt(index, word = 1n, patchType = PATCH_TYPE.SLOT_REPLACE) {
   return {

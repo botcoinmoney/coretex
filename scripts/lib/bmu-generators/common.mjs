@@ -66,6 +66,59 @@ export function slug(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 96);
 }
 
+// ─── Opaque BMU identities (audit hardening F3/F8) ─────────────────────────
+
+/**
+ * Deterministic document id for a BMU-generated document.  The serialized id
+ * intentionally carries no family, cluster, subject, answer/trap role, or
+ * ordinal suffix: those fields made the old ids a proposer-visible role
+ * oracle.  `slot` remains an INTERNAL generator discriminator and is only
+ * committed through SHA-256.
+ */
+export function opaqueBmuDocId({ seed, epoch, motifGroupId, slot }) {
+  if (typeof seed !== 'string' || seed.length === 0) throw new Error('opaqueBmuDocId: non-empty seed required');
+  if (!Number.isInteger(epoch) || epoch < 0) throw new Error('opaqueBmuDocId: non-negative integer epoch required');
+  if (typeof motifGroupId !== 'string' || motifGroupId.length === 0) throw new Error('opaqueBmuDocId: non-empty motifGroupId required');
+  if (typeof slot !== 'string' || slot.length === 0) throw new Error('opaqueBmuDocId: non-empty internal slot required');
+  const digest = createHash('sha256')
+    .update('coretex-bmu-doc-id-v1\0')
+    .update(seed).update('\0')
+    .update(String(epoch)).update('\0')
+    .update(motifGroupId).update('\0')
+    .update(slot)
+    .digest('hex');
+  return `d_bmu_${digest}`;
+}
+
+function normalizeBmuEntityAlias(value) {
+  return String(value).normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/**
+ * Hidden identity keys used only by the BMU gate→confirm partition law.
+ * The canonical subject id plus every canonical name/alias are included, but
+ * broad document `entityIds` (owner/universe ids included) are deliberately
+ * excluded so one shared owner cannot wipe out the confirm pool.
+ */
+export function bmuEntityHoldoutKeysForSubject(subject) {
+  if (!subject || typeof subject.id !== 'string' || subject.id.length === 0) {
+    throw new Error('bmuEntityHoldoutKeysForSubject: subject.id required');
+  }
+  const CONTROL = /[\u0000-\u001f\u007f]/;
+  if (CONTROL.test(subject.id)) throw new Error('bmuEntityHoldoutKeysForSubject: subject.id must not contain control characters');
+  const out = new Set([`id:${subject.id}`]);
+  const aliases = [subject.canonicalName, ...(Array.isArray(subject.aliases) ? subject.aliases : [])];
+  for (const alias of aliases) {
+    if (typeof alias !== 'string') throw new Error('bmuEntityHoldoutKeysForSubject: aliases must be strings');
+    const normalized = normalizeBmuEntityAlias(alias);
+    if (normalized.length === 0) continue;
+    if (CONTROL.test(normalized)) throw new Error('bmuEntityHoldoutKeysForSubject: aliases must not contain control characters');
+    out.add(`alias:${normalized}`);
+  }
+  if (out.size > 32) throw new Error(`bmuEntityHoldoutKeysForSubject: ${out.size} keys exceeds cap 32`);
+  return [...out].sort();
+}
+
 // ── Epoch dates (port of evolve-corpus.mjs:376-377) ─────────────────────────
 export function datesForEpoch(epoch) {
   const tsDate = new Date(new Date('2024-01-01').getTime() + (40 + epoch) * 30 * 86400000)
@@ -178,29 +231,50 @@ export function makeCanonicalSplitOf({ splitForRecord, liveTailQueryId, corpusEp
  * entries when their cluster RETIRES (attribute/subject reuse WAITS for
  * retirement — spec §14.2). The arm-gate census (§6.7b) re-checks globally.
  */
-export function createM1Registry(initial = {}) {
+/** Shared alias-identity authority for all generator APIs. */
+export function createEntityHoldoutIdentityStore(initial = {}) {
+  return new Map(Object.entries(initial));
+}
+
+export function createM1Registry(initial = {}, identityStore = createEntityHoldoutIdentityStore()) {
   const subjects = new Set(initial.subjectEntityIds ?? []);
   const templates = new Set(initial.templateIds ?? []);
+  const identities = identityStore;
+  for (const key of initial.entityHoldoutKeys ?? []) {
+    if (!identities.has(key)) identities.set(key, 'historical');
+  }
   return {
     hasSubject: (id) => subjects.has(id),
     hasTemplate: (id) => templates.has(id),
+    hasEntityHoldoutKey: (key) => identities.has(key),
     /** Atomically claim a cluster's subject + template ids; throws on any collision (fail-closed mint). */
-    claimCluster({ subjectEntityId, templateIds, motifGroupId }) {
+    claimCluster({ subjectEntityId, templateIds, entityHoldoutKeys = [], motifGroupId }) {
       if (subjects.has(subjectEntityId)) {
         throw new Error(`m=1 violation: subject '${subjectEntityId}' already in an active cluster (minting ${motifGroupId})`);
       }
       for (const t of templateIds) {
         if (templates.has(t)) throw new Error(`m=1 violation: templateId '${t}' already in an active cluster (minting ${motifGroupId})`);
       }
+      for (const key of entityHoldoutKeys) {
+        if (identities.has(key)) throw new Error(`m=1 violation: entityHoldoutKey '${key}' already in an active cluster (minting ${motifGroupId})`);
+      }
       subjects.add(subjectEntityId);
       for (const t of templateIds) templates.add(t);
+      for (const key of entityHoldoutKeys) identities.set(key, motifGroupId);
     },
     /** Retirement hook: release a cluster's keys (subject/attribute reuse may resume). */
-    releaseCluster({ subjectEntityId, templateIds }) {
+    releaseCluster({ subjectEntityId, templateIds, entityHoldoutKeys = [] }) {
       subjects.delete(subjectEntityId);
       for (const t of templateIds) templates.delete(t);
+      for (const key of entityHoldoutKeys) {
+        if (identities.get(key) === motifGroupId) identities.delete(key);
+      }
     },
-    snapshot: () => ({ subjectEntityIds: [...subjects].sort(), templateIds: [...templates].sort() }),
+    snapshot: () => ({
+      subjectEntityIds: [...subjects].sort(),
+      templateIds: [...templates].sort(),
+      entityHoldoutKeys: [...identities.keys()].sort(),
+    }),
   };
 }
 
@@ -213,6 +287,7 @@ export function m1CensusOverRows(rows) {
   const errors = [];
   const motifBySubject = new Map();
   const motifByTemplate = new Map();
+  const motifByIdentity = new Map();
   for (const row of rows) {
     const t = row.bmuTask;
     if (!t) { errors.push(`${row.id}: missing bmuTask`); continue; }
@@ -223,6 +298,11 @@ export function m1CensusOverRows(rows) {
     const priorT = motifByTemplate.get(t.templateId);
     if (priorT && priorT !== t.motifGroupId) errors.push(`templateId '${t.templateId}' spans motifGroups '${priorT}' and '${t.motifGroupId}'`);
     else motifByTemplate.set(t.templateId, t.motifGroupId);
+    for (const key of t.entityHoldoutKeys ?? []) {
+      const priorI = motifByIdentity.get(key);
+      if (priorI && priorI !== t.motifGroupId) errors.push(`entityHoldoutKey '${key}' spans motifGroups '${priorI}' and '${t.motifGroupId}'`);
+      else motifByIdentity.set(key, t.motifGroupId);
+    }
   }
   return errors;
 }
@@ -232,11 +312,12 @@ export function m1CensusOverRows(rows) {
  * Index of ACTIVE clusters keyed by the three §6.3 exclusion-key namespaces.
  * One index instance spans ALL families (the law is GLOBAL).
  */
-export function createBmuActiveIndex() {
+export function createBmuActiveIndex(identityStore = createEntityHoldoutIdentityStore()) {
   return {
-    clusters: new Map(),   // motifGroupId -> { motifGroupId, family, subjectEntityId, templateIds, mintEpoch }
+    clusters: new Map(),   // motifGroupId -> { motifGroupId, family, subjectEntityId, templateIds, entityHoldoutKeys, mintEpoch }
     subjects: new Map(),   // subjectEntityId -> motifGroupId
     templates: new Map(),  // templateId -> motifGroupId
+    identities: identityStore, // entityHoldoutKey -> motifGroupId; share across all family generators
   };
 }
 
@@ -249,10 +330,13 @@ export function indexHasTemplate(index, templateId) {
 export function indexHasMotifGroup(index, motifGroupId) {
   return index.clusters.has(motifGroupId);
 }
+export function indexHasEntityHoldoutKey(index, key) {
+  return index.identities.has(key);
+}
 
 /** Fail-closed registration: throws on ANY m=1 collision (defense in depth —
  *  generators must have already skipped colliding subjects/templates). */
-export function registerCluster(index, { motifGroupId, family, subjectEntityId, templateIds, mintEpoch }) {
+export function registerCluster(index, { motifGroupId, family, subjectEntityId, templateIds, entityHoldoutKeys = [], mintEpoch }) {
   if (index.clusters.has(motifGroupId)) {
     throw new Error(`bmu m=1 violation: motifGroupId '${motifGroupId}' already active`);
   }
@@ -264,9 +348,15 @@ export function registerCluster(index, { motifGroupId, family, subjectEntityId, 
       throw new Error(`bmu m=1 violation: templateId '${t}' already in active cluster '${index.templates.get(t)}'`);
     }
   }
-  index.clusters.set(motifGroupId, { motifGroupId, family, subjectEntityId, templateIds: [...templateIds], mintEpoch });
+  for (const key of entityHoldoutKeys) {
+    if (index.identities.has(key)) {
+      throw new Error(`bmu m=1 violation: entityHoldoutKey '${key}' already in active cluster '${index.identities.get(key)}'`);
+    }
+  }
+  index.clusters.set(motifGroupId, { motifGroupId, family, subjectEntityId, templateIds: [...templateIds], entityHoldoutKeys: [...entityHoldoutKeys], mintEpoch });
   index.subjects.set(subjectEntityId, motifGroupId);
   for (const t of templateIds) index.templates.set(t, motifGroupId);
+  for (const key of entityHoldoutKeys) index.identities.set(key, motifGroupId);
 }
 
 /** OFFLINE age-window retirement model (see module honesty note). Removes
@@ -283,6 +373,9 @@ export function retireAgedClusters(index, epoch, maxAge = 32) {
     for (const t of c.templateIds) {
       if (index.templates.get(t) === mg) index.templates.delete(t);
     }
+    for (const key of c.entityHoldoutKeys ?? []) {
+      if (index.identities.get(key) === mg) index.identities.delete(key);
+    }
   }
   return retired;
 }
@@ -293,6 +386,7 @@ export function m1Census(index) {
   const violations = [];
   const bySubject = new Map();
   const byTemplate = new Map();
+  const byIdentity = new Map();
   for (const c of index.clusters.values()) {
     const subj = bySubject.get(c.subjectEntityId) ?? [];
     subj.push(c.motifGroupId);
@@ -302,9 +396,15 @@ export function m1Census(index) {
       arr.push(c.motifGroupId);
       byTemplate.set(t, arr);
     }
+    for (const key of c.entityHoldoutKeys ?? []) {
+      const arr = byIdentity.get(key) ?? [];
+      arr.push(c.motifGroupId);
+      byIdentity.set(key, arr);
+    }
   }
   for (const [s, mgs] of bySubject) if (mgs.length > 1) violations.push(`subject '${s}' in ${mgs.length} active clusters: ${mgs.join(',')}`);
   for (const [t, mgs] of byTemplate) if (mgs.length > 1) violations.push(`template '${t}' in ${mgs.length} active clusters: ${mgs.join(',')}`);
+  for (const [key, mgs] of byIdentity) if (mgs.length > 1) violations.push(`entityHoldoutKey '${key}' in ${mgs.length} active clusters: ${mgs.join(',')}`);
   return violations;
 }
 

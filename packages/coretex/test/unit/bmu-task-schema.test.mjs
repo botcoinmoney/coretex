@@ -40,6 +40,7 @@ function taskOf(overrides = {}) {
     answer: { id: 'd1', value: 'vegan' },
     motifGroupId: 'mg_e137_temporal_0042',
     templateId: 'tt_supersession_q7_v3',
+    entityHoldoutKeys: ['id:ent_42', 'alias:subject forty two', 'alias:s42'],
     ...overrides,
   };
 }
@@ -115,6 +116,20 @@ describe('validateBmuTaskOnEvent (§4.1 fail-closed load rules)', () => {
     assert.ok(validateBmuTaskOnEvent(eventOf({ templateId: undefined }), docIdExists).length > 0);
   });
 
+  test('entityHoldoutKeys validate canonical identity, charset, uniqueness, and cap', () => {
+    assert.ok(validateBmuTaskOnEvent(eventOf({ entityHoldoutKeys: [] }), docIdExists)
+      .some((e) => e.includes('1..32')));
+    assert.ok(validateBmuTaskOnEvent(eventOf({ entityHoldoutKeys: ['alias:s42'] }), docIdExists)
+      .some((e) => e.includes("canonical subject key 'id:ent_42'")));
+    assert.ok(validateBmuTaskOnEvent(eventOf({ entityHoldoutKeys: ['id:ent_42', 'id:ent_42'] }), docIdExists)
+      .some((e) => e.includes('duplicate bmuTask.entityHoldoutKeys')));
+    assert.ok(validateBmuTaskOnEvent(eventOf({ entityHoldoutKeys: ['id:ent_42', 'alias:bad\nkey'] }), docIdExists)
+      .some((e) => e.includes('must not contain control characters')));
+    // Historical pre-hardening mints remain loadable, but the ARM census
+    // independently refuses to arm them.
+    assert.deepEqual(validateBmuTaskOnEvent(eventOf({ entityHoldoutKeys: undefined }), docIdExists), []);
+  });
+
   test('bmuTask on a non-eval_hidden row is refused', () => {
     const errors = validateBmuTaskOnEvent(eventOf({}, { split: 'train_visible' }), docIdExists);
     assert.ok(errors.some((e) => e.includes("split 'train_visible'")), errors.join('; '));
@@ -163,15 +178,26 @@ describe('cross-row consistency + mappings', () => {
     assert.equal(BMU_FAMILIES.length, 4);
   });
 
-  test('bmuExclusionKeysForEvent emits namespaced motif/subject/template keys', () => {
+  test('bmuExclusionKeysForEvent emits namespaced motif/subject/template/entity-alias keys', () => {
     assert.deepEqual([...bmuExclusionKeysForEvent(eventOf())].sort(), [
+      'entity:alias:s42',
+      'entity:alias:subject forty two',
+      'entity:id:ent_42',
       'motif:mg_e137_temporal_0042',
       'subject:ent_42',
       'template:tt_supersession_q7_v3',
     ]);
-    // No subjectEntityId → only two keys (never an 'undefined' key).
-    const noSubject = eventOf({}, { subjectEntityId: undefined });
-    assert.equal(bmuExclusionKeysForEvent(noSubject).length, 2);
+    // No subjectEntityId → no 'undefined' key; hidden identity aliases remain.
+    const noSubject = eventOf({ entityHoldoutKeys: ['alias:s42'] }, { subjectEntityId: undefined });
+    assert.deepEqual([...bmuExclusionKeysForEvent(noSubject)].sort(), [
+      'entity:alias:s42', 'motif:mg_e137_temporal_0042', 'template:tt_supersession_q7_v3',
+    ]);
+  });
+
+  test('cross-row consistency refuses divergent alias identity keys inside one motif', () => {
+    const a = eventOf();
+    const b = eventOf({ entityHoldoutKeys: ['id:ent_42', 'alias:different'] }, { id: 'zz_e000000000137_q_q2' });
+    assert.ok(validateBmuCorpusConsistency([a, b]).some((e) => e.includes('inconsistent entityHoldoutKeys')));
   });
 });
 
@@ -218,6 +244,7 @@ describe('bmuTask canonical hashing + serialization (§6.7a inert-minting premis
       bmuTask: {
         family: 'temporal', budgetB: 3, requiredEvidence: ['e1-t'], forbiddenEvidence: [],
         answer: { id: 'e1-t' }, motifGroupId: 'mg1', templateId: 'tt1',
+        entityHoldoutKeys: ['id:ent_1', 'alias:entity one'],
       },
     });
     assert.notDeepEqual(computeCorpusEventLeafHash(bare), computeCorpusEventLeafHash(stamped));
@@ -228,6 +255,7 @@ describe('bmuTask canonical hashing + serialization (§6.7a inert-minting premis
       bmuTask: {
         family: 'temporal', budgetB: 3, requiredEvidence: ['e1-t'], forbiddenEvidence: [],
         answer: { id: 'e1-t' }, motifGroupId: 'mg1', templateId: 'tt1',
+        entityHoldoutKeys: ['id:ent_1', 'alias:entity one'],
       },
     });
     const corpus = {
@@ -275,6 +303,7 @@ describe('logical-delta-bridge bmuTask pass-through (§6.7a prerequisite 1)', ()
     const bmuTask = {
       family: 'temporal', budgetB: 3, requiredEvidence: [docId], forbiddenEvidence: [],
       answer: { id: docId, value: 'v' }, motifGroupId: 'mg_e137_temporal_0001', templateId: 'tt_supersession_q1_v1',
+      entityHoldoutKeys: ['id:ent_9', 'alias:entity nine'],
     };
     const emb = new Uint8Array(4 + 8).fill(3);
     const events = bridgeLogicalDeltaToProductionEvents({

@@ -1,8 +1,17 @@
 # BMU v1 — Budgeted Memory Utility: the permanent CoreTex scoring law
 
-**Revision:** rev3.3 (P3-R1 implementation-review backports; changelog in §17).
-**Status:** SPEC FREEZE candidate (Track B, phase P1 B-lane). No production code
-accompanies this document. Nothing here arms, pins, or deploys anything.
+**Revision:** rev3.4 (pre-arm metadata-integrity hardening; changelog in §17).
+**Status:** PRE-ARM implementation candidate. Code and offline evidence may
+accompany this document; nothing here arms, pins, or deploys anything.
+
+**Hard stop:** rev3.4 closes opaque-id, alias-holdout, recency-control, and
+Rmax integrity defects, but BMU v1 is not armable. The operation-general P5
+lane proves that each current generator exposes only one effective operation
+class; all four families saturate within four epochs. A new versioned generic
+operation law with multiple truthful operation classes per family, fresh
+gate+excluded-confirm evidence, and a `GREEN_SUSTAINABLE` exact-commit
+attestation are required before operator ratification. v1 remains useful as a
+replay/evidence identity and MUST NOT be armed from this document.
 
 **Pinned code baseline:** every `file:line` citation below is into THIS
 repository at commit `20412b5` (branch `coretex-c1-work-policy`), verified
@@ -355,9 +364,14 @@ back-compat convention as `entityIds`, `:208-217`).
   "abstain": false,                             // OPTIONAL, default false
   "motifGroupId": "mg_e137_temporal_0042",      // REQUIRED — cluster identity;
                                                 //   held-out partition key (§6.3)
-  "templateId": "tt_supersession_q7_v3"         // REQUIRED — generator-stamped
+  "templateId": "tt_supersession_q7_v3",        // REQUIRED — generator-stamped
                                                 //   surface-form template id;
                                                 //   held-out partition key (§6.3)
+  "entityHoldoutKeys": [                         // REQUIRED for arm-eligible
+    "id:e_subject_0042",                         //   new BMU mints; hidden
+    "alias:canonical subject name",              //   canonical id + normalized
+    "alias:subject alias"                        //   canonical-name aliases only
+  ]
 }
 ```
 
@@ -370,8 +384,16 @@ the corpus; `|requiredEvidence| ≤ budgetB`; `abstain=true ⇒ requiredEvidence
 = [] ∧ answer absent`; `family` matches the row's (`logicalFamily`,
 bucketed `family`) pair per the §5.6 table; `motifGroupId` non-empty and
 shared by every row minted from the same memory structure and by no other
-row; `templateId` non-empty. **Charset law (rev3.3):** `subjectEntityId`
-and `templateId` MUST contain no control characters (U+0000–U+001F,
+row; `templateId` non-empty. `entityHoldoutKeys`, when present, MUST contain
+1..32 unique non-empty strings, MUST include `id:<subjectEntityId>`, and each
+entry is capped at 256 characters. It is optional at corpus LOAD only so
+historical pre-hardening stamped rows remain readable; the ARM and BOOT
+censuses MUST reject every BMU pool containing a row where it is absent.
+New generators MUST stamp the canonical subject id, normalized canonical
+name, and all normalized subject-name aliases. They MUST NOT copy broad doc
+`entityIds` into this field: shared owner/universe ids would exclude unrelated
+confirm rows. **Charset law (rev3.4):** `subjectEntityId`, `templateId`, and
+every `entityHoldoutKeys` entry MUST contain no control characters (U+0000–U+001F,
 U+007F — including `'\n'`), rejected at corpus load AND at mint-time lint —
 this kills join-injection into the §8.3 exclusion-set digest (a crafted id
 containing the join separator could alias two distinct key sets to one
@@ -385,18 +407,23 @@ minted for the same epoch carry DISJOINT `templateId` sets; two rows share a
 `templateId` iff they instantiate the same surface-form template. This is
 what makes §6.3's template-disjoint confirm derivation well-defined.
 
-**Multiplicity mint law (m = 1, GLOBAL — rev3.2; rev3.1's per-family scope
+**Multiplicity mint law (m = 1, GLOBAL — rev3.4 extends identity to aliases;
+rev3.1's per-family scope
 was insufficient):** a `subjectEntityId` and a `templateId` each appear in
 AT MOST ONE ACTIVE cluster GLOBALLY — across ALL families — within the
-maxAge(32)-epoch active window. Per-family scoping does not suffice because
+maxAge(32)-epoch active window. Every `entityHoldoutKeys` entry likewise
+appears in at most one active cluster, so two nominal subject ids sharing a
+canonical name/alias cannot straddle gate and confirm. Per-family scoping does not suffice because
 §6.3's confirm exclusion set X is GLOBAL across families: a subject reused
 in a different family's active cluster would silently spill exclusions
 between families and re-open the confirm-refusal DoS this pin exists to
 prevent (the §6.7b E_f_min arithmetic assumes ZERO cross-family spill).
-Enforced at mint time (the generator MUST NOT mint a cluster whose subject
-or template collides with ANY still-active cluster, any family) and checked
+Enforced at mint time (the generator MUST NOT mint a cluster whose subject,
+canonical alias identity, or template collides with ANY still-active cluster,
+any family) and checked
 by the §6.7 arm-gate census, which is likewise GLOBAL. Consequence: the
-§6.3 exclusion keys (motifGroupId, subjectEntityId, templateId) are
+§6.3 exclusion keys (motifGroupId, subjectEntityId, templateId, canonical
+entity/alias identities) are
 COEXTENSIVE with the cluster — excluding a gate row excludes exactly its own
 cluster (5 rows), never a second one, in any family. Without this pin,
 multiplicity m > 1 multiplies worst-case confirm exclusion by m (at m = 2 a
@@ -428,6 +455,14 @@ the hard cap 8 is law — `budgetB > 8` fails corpus load):
   (unstall plan, Stage-3 G0A).
 - `validity` (`:220-221`, type `:172-179`): unchanged and still REQUIRED on
   temporal-family docs — `temporalRecordAppliesToQuery` scoping depends on it.
+  BMU-generated stale docs MUST retain their `validFrom`/`validUntil`/
+  `observedAt` interval and the public structural `supersedes` relation, but
+  MUST NOT publish `validity.supersededBy`: that field is an exact answer-doc
+  pointer and therefore a proposer-visible shortcut, not validity semantics.
+- BMU-generated document ids MUST be deterministic opaque SHA-256-derived ids
+  with no family, subject, ordinal, answer/trap, or role suffix. Generator-side
+  docs MAY retain an internal `role` for construction/certification; the
+  production bridge does not publish that role. Public ids MUST NOT carry it.
 - `band` (`:279`): unchanged; still generator difficulty metadata feeding
   band strata (`strataOf`, `src/eval/hidden-query-pack.ts:163-194`).
 - `logicalFamily` (`:293`): unchanged; consumed per the §5.6 namespace table.
@@ -475,6 +510,17 @@ multiple tasks and per-doc indexing lifts ~none.
   `scripts/lib/evolve-corpus.mjs:120-123`) plus escalation shadows. Any of
   these in top-B zeroes the task. Under r5 the trap was a graded negative;
   under BMU it is a hard veto — the family's anti-lexical-shortcut screen.
+- **Recency/currency shortcut controls (rev3.4):** every BMU temporal cluster
+  also mints four benign, same-subject, currently-valid records for unrelated
+  attributes whose public observation times are later than the scored
+  revision. They are neither required nor forbidden. Certification runs two
+  public-only attacker lanes — subject-scoped last mention and generic
+  validity-current filtering — and rejects a row if either obtains utility
+  OR matches the structural oracle's positive-evidence coverage. The pack
+  gate is fail-closed unless both attacker lanes remain strictly below the
+  oracle. The rankers may read public intent, entity ids, timestamps, and
+  validity intervals only; qrels, `bmuTask`, generator roles, and answer ids
+  are forbidden inputs.
 
 ### 5.2 conflict_lifecycle
 
@@ -655,9 +701,9 @@ The CONFIRM pack has the identical pinned expectation: the same quotas are
 enforced quota-first on the post-exclusion pool and the same 3/3/3/3 slot law
 applies to its overlay draw. **Fill feasibility post-exclusion (TRUE worst
 case, per family — rev3.1, counting subject + template exclusion under the
-§4.1 GLOBAL m = 1 multiplicity pin):** each gate row of family f excludes
+§4.1 GLOBAL m = 1 multiplicity pin, including entity-alias identities):** each gate row of family f excludes
 exactly its own cluster (global m = 1 makes subject/template exclusion
-coextensive with the motifGroup — no cross-cluster AND no cross-FAMILY
+and alias-identity exclusion coextensive with the motifGroup — no cross-cluster AND no cross-FAMILY
 spill); worst case, the N_f = Q_f + O_f gate
 rows land in N_f DISTINCT clusters (rev3's "≤ ceil(N_f/5) clusters" was the
 minimum-supply count, not the worst case — corrected), excluding up to
@@ -698,15 +744,18 @@ deriveBmuDualPacks(input: {
    activeLiveEval)` over BMU-eligible rows (§4.3), with the overlay admission
    law of §6.4 (seeded draw, gate side).
 2. **Exclusion key set:** `X = { motifGroupId(e) } ∪ { subjectEntityId(e) } ∪
-   { templateId(e) }` for every `e` in the gate pack. All three fields have
+   { templateId(e) } ∪ { entityHoldoutKeys(e) }` for every `e` in the gate
+   pack. All four namespaces have
    schema anchors: `subjectEntityId` on the event
-   (`retrieval-corpus.ts:248`), `motifGroupId`/`templateId` on `bmuTask`
+   (`retrieval-corpus.ts:248`), `motifGroupId`/`templateId`/
+   `entityHoldoutKeys` on `bmuTask`
    (§4.1).
 3. **Confirm pack (held-out motifs):**
    the SAME derivation with `confirmSeedHex`, over the BMU-eligible pool
-   MINUS every row whose `motifGroupId`, `subjectEntityId`, or `templateId`
-   is in `X` — same family quotas, same overlay law (confirm side, §6.4).
-   HELD-OUT means: same motif FAMILIES, disjoint entities AND disjoint
+   MINUS every row whose `motifGroupId`, `subjectEntityId`, `templateId`, or
+   canonical entity/alias identity is in `X` — same family quotas, same
+   overlay law (confirm side, §6.4).
+   HELD-OUT means: same motif FAMILIES, disjoint canonical entities/aliases AND disjoint
    surface templates (template disjointness guaranteed at mint time, §4.1).
 4. **Fail-closed:** if the residual pool cannot satisfy the quotas, the
    evaluation REFUSES (maps to `stale_context` externally only if caused by a
@@ -1009,7 +1058,8 @@ pinned.)
 The arm-gate additionally requires: a fresh overlay cohort of ≥ 2 clusters
 per family within `freshWindow` (trivially m=1-compatible: 2 distinct
 subjects + templates per family per epoch); a GLOBAL m = 1 census (no
-subjectEntityId or templateId in > 1 cluster across the ENTIRE
+subjectEntityId, templateId, or canonical entity/alias holdout key in > 1
+cluster across the ENTIRE
 reserve ∪ active stamped pool, any family — §4.1); and the
 variance certification below. Ordering: the census + count checks run BEFORE
 bulk-activation; the variance certification runs AFTER bulk-activation (it
@@ -1019,8 +1069,10 @@ part of the rebaseline.
 **Boot-vs-arm posture split (rev3.3, P3-R1 ruling):** the FULL gate above —
 counts + global census + fresh cohort + variance certification — binds at
 the ARM posture ONLY. Boot / evaluator-construction re-checks the
-STRUCTURAL census only: per-family eligible-active counts ≥ E_f_min and the
-global m = 1 census — NEVER freshness. **Fresh-AGE definition (pinned):**
+STRUCTURAL census only: per-family eligible-active counts ≥ E_f_min, the
+global m = 1 census, and complete/consistent `entityHoldoutKeys` — NEVER
+freshness. Thus historical pre-hardening rows remain loadable but are never
+arm- or boot-eligible. **Fresh-AGE definition (pinned):**
 a row's freshness reads its MINT epoch, embedded in the row id (`zz_eN_…`
 prefix, `liveEpochFromEventId`, `hidden-query-pack.ts:318-321`) — NOT the
 frontier `activationEpoch`. Liveness rationale: mints occur only at real
@@ -1522,9 +1574,19 @@ mismatch (rev1's flaw). BMU removes the jitter at the decision, not the gate:
   (P_cap = 1) before quantization. (Chosen over re-deriving an
   honest-but-huge Rmax, which would put ~78,000 cells on the grid and
   dilute the margin semantics.) With the cap the composite lies in
-  [−P_cap, 1 + B + P_cap]; BMU bundle validation computes
-  `Rmax = 1 + B + 2·P_cap` from the pinned profile and asserts Rmax ≤ 4
-  (≤ ~4,000 grid cells at g = 1e-3), and asserts the pinned
+  [−temporalStaleSuppression − P_cap,
+  A + lensWeight + anchorWeight + temporalCurrentBoost +
+  categoryLensFinalBonusWeight + aspectBoost + P_cap], where
+  `A = max(1, categoryLensScoreInheritance, forcedMultiHopAlpha) = 1` after
+  validating the configured inheritance alpha is finite and in `[0,1]` (the
+  multi-hop law forces alpha to at least 1). BMU bundle validation therefore
+  computes the full two-sided range
+  `Rmax = A + lensWeight + anchorWeight + temporalCurrentBoost +
+  temporalStaleSuppression + categoryLensFinalBonusWeight + aspectBoost +
+  2·P_cap` and asserts Rmax ≤ 4. Both temporal sides are additive: using
+  only `max(currentBoost, staleSuppression)` would undercount the interval
+  whenever both are positive. This remains ≤ ~4,000 grid cells at g = 1e-3.
+  Bundle validation also asserts the pinned
   `judgeScoreGrid` ∈ (0, 0.1] (rev3.3 ratified domain).
 - **Tiebreak (fully quantized):** (quantized composite desc, quantized
   `rerankerScore` desc, `docId` asc). The FIRST two keys are quantized —
@@ -1822,6 +1884,29 @@ capacity, plus fallback/underfill-engagement telemetry.
 ---
 
 ## 17. Changelog
+
+### rev3.3 → rev3.4 (pre-arm metadata-integrity hardening)
+
+- **F3 doc-id oracle removed:** all four BMU generators now emit
+  deterministic SHA-256-derived opaque document ids. Family/role suffixes
+  (`_cur`, `_stale`, `_ans`, `_ca`, `_ne`, etc.) are forbidden on public
+  generated ids; construction roles remain generator-internal.
+- **F7 exact temporal answer pointer removed:** BMU stale docs no longer
+  publish `validity.supersededBy`. Non-leaking interval semantics
+  (`validFrom`/`validUntil`/`observedAt`) and the public structural
+  `supersedes` relation remain.
+- **F8 alias-aware holdout:** `bmuTask.entityHoldoutKeys` adds the canonical
+  subject id plus normalized canonical name/aliases to gate→confirm
+  exclusion. Historical absence is load-compatible only; ARM/BOOT refuse it.
+  The global m=1 census now covers these keys and refuses shared owner ids,
+  while broad doc `entityIds` remain outside the holdout field.
+- **F7 recency/currency screen:** temporal certification now includes
+  subject-scoped last-mention and attribute-aware validity-current attacker
+  lanes. Four current same-subject/same-attribute observations per cluster,
+  all available no later than query time, make those shortcuts
+  non-discriminative without relying on the forbidden veto;
+  explicit gold-only “supersession ledger / superseded and replaced” prose is
+  removed from the BMU current/provenance documents.
 
 ### rev3.2 → rev3.3 (P3-R1 implementation-review backports — documenting decisions already made)
 

@@ -45,6 +45,7 @@ function row({ id, fam, motif, subject, template }) {
     bmuTask: {
       family: fam.bmu, budgetB: 3, requiredEvidence: [`${id}-t`], forbiddenEvidence: [],
       answer: { id: `${id}-t` }, motifGroupId: motif, templateId: template,
+      entityHoldoutKeys: [`id:${subject}`, `alias:${subject}`],
     },
     provenance: { source: 'synthetic_challenge', sourceHash: '0x' + '00'.repeat(32) },
   };

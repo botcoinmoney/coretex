@@ -57,8 +57,9 @@ test('oracle: answer doc is the chain TERMINAL for endpoint/rejection/routing an
   const term = multiHopOracleLane(byType.chain_endpoint_value, threeHop, docs, 4);
   const prov = multiHopOracleLane(byType.chain_provenance, threeHop, docs, 4);
   assert.notEqual(term.answerId, prov.answerId);
-  assert.ok(term.answerId.endsWith('_ans'));
-  assert.ok(prov.answerId.endsWith('_b1'));
+  const docById = new Map(docs.map((d) => [d.id, d]));
+  assert.equal(docById.get(term.answerId)?.role, 'chain_answer');
+  assert.equal(docById.get(prov.answerId)?.role, 'chain_hop1');
   // Both still require bridge + answer (head + terminal); hop-2 is graded support.
   assert.equal(term.evidence.length, 2);
   assert.equal(prov.evidence.length, 2);

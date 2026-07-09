@@ -161,7 +161,7 @@ describe('BMU bundle validation (§9 site 17)', () => {
     })), /baselineVarianceSource = 'unavailable'/);
   });
 
-  test('§13.2 (rev3.3): judge grid domain (0, 0.1]; Rmax = 1 + B + 2·P_cap refuses oversized betas', () => {
+  test('§13.2: judge grid, forced-alpha domain, and two-sided Rmax fail closed', () => {
     assert.doesNotThrow(() => buildWith(bmuProfileFields({ judgeScoreGrid: 1e-3 })));
     assert.doesNotThrow(() => buildWith(bmuProfileFields({ judgeScoreGrid: 0.1 })));
     assert.throws(() => buildWith(bmuProfileFields({ judgeScoreGrid: 0 })), /judgeScoreGrid/);
@@ -171,6 +171,9 @@ describe('BMU bundle validation (§9 site 17)', () => {
     assert.doesNotThrow(() => buildWith(bmuProfileFields({ policyMaxBudgetEvidence: 65535, policyMaxBudgetConflict: 65535 })));
     // oversized FINAL-BONUS betas push Rmax = 1 + B + 2 past 4 → refused.
     assert.throws(() => buildWith(bmuProfileFields({ lensWeight: 0.9 })), /Rmax/);
+    assert.doesNotThrow(() => buildWith(bmuProfileFields({ categoryLensScoreInheritance: 1 })));
+    assert.throws(() => buildWith(bmuProfileFields({ categoryLensScoreInheritance: 1.01 })), /categoryLensScoreInheritance/);
+    assert.throws(() => buildWith(bmuProfileFields({ categoryLensScoreInheritance: -0.01 })), /categoryLensScoreInheritance/);
   });
 
   test('judgeScoreGrid on a NON-BMU profile is refused', () => {

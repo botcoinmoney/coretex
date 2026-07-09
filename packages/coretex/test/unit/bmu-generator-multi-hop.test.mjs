@@ -102,6 +102,8 @@ test('every row carries a complete, self-consistent §4.1 bmuTask stamp', () => 
       assert.equal(t.abstain, false);
       assert.ok(typeof t.motifGroupId === 'string' && t.motifGroupId.length > 0);
       assert.ok(typeof t.templateId === 'string' && t.templateId.length > 0);
+      assert.ok(t.entityHoldoutKeys.includes(`id:${cluster.subjectEntityId}`));
+      assert.ok(t.entityHoldoutKeys.includes(`alias:${cluster.canonicalName.toLowerCase()}`));
       // load-time validation mirror (§4.1)
       assert.ok(t.requiredEvidence.includes(t.answer.id), 'answer.id ∈ requiredEvidence');
       assert.ok(t.requiredEvidence.length <= t.budgetB, '|requiredEvidence| ≤ budgetB');
@@ -125,6 +127,10 @@ test('every row carries a complete, self-consistent §4.1 bmuTask stamp', () => 
     const types = new Set(cluster.rows.map((r) => r.questionType));
     assert.equal(types.size, 4);
     assert.deepEqual(cluster.rows.map((r) => r.questionType), MULTI_HOP_ROW_SLOTS);
+    for (const d of cluster.docs) {
+      assert.match(d.id, /^d_bmu_[0-9a-f]{64}$/);
+      assert.doesNotMatch(d.id, /_(?:b1|b2|ans|op|nb|sh\d+)$/);
+    }
   }
 });
 

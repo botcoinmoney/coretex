@@ -205,11 +205,12 @@ export function conflictLifecycleOracleRank(row, { docs, docById, relations }) {
   return [...top, ...neutral, ...excluded].map((docId, i) => ({ docId, score: -i }));
 }
 
-/** conflict primary trap = the contradicted candidate (lifecycleState pin). */
-function conflictPrimaryTrapDocId(row, { docById }) {
-  for (const d of row.bmuTask.forbiddenEvidence) {
-    const doc = docById.get(d);
-    if (doc?.lifecycleState === 'conflict_candidate') return d;
+/** conflict primary trap = the PUBLIC contradicted target. No lifecycle role
+ * metadata is consulted. */
+function conflictPrimaryTrapDocId(row, { relations }) {
+  const forbidden = new Set(row.bmuTask.forbiddenEvidence);
+  for (const rel of relations) {
+    if (rel.label === 'contradicts' && forbidden.has(rel.dst)) return rel.dst;
   }
   return row.bmuTask.forbiddenEvidence[0];
 }
@@ -295,10 +296,19 @@ export function nearCollisionOracleRank(row, { docs, docById, relations }) {
  * answerable sibling E (§5.4: E is itself the plausible decoy for the
  * absent variant).
  */
-function nearCollisionPrimaryTrapDocId(row, { docById }) {
-  const wanted = row.bmuTask.abstain === true ? 'exact_match' : 'alias_collision_decoy';
-  for (const d of row.bmuTask.forbiddenEvidence) {
-    if (docById.get(d)?.collisionRole === wanted) return d;
+function nearCollisionPrimaryTrapDocId(row, { docById, relations }) {
+  const forbidden = new Set(row.bmuTask.forbiddenEvidence);
+  const disambiguates = relations.find((rel) => rel.label === 'disambiguates');
+  const exact = disambiguates ? docById.get(disambiguates.dst) : null;
+  if (row.bmuTask.abstain === true && exact && forbidden.has(exact.id)) return exact.id;
+  if (exact) {
+    for (const id of row.bmuTask.forbiddenEvidence) {
+      const doc = docById.get(id);
+      const isSameKind = doc?.kind === exact.kind;
+      const isDifferentSubject = Array.isArray(doc?.entityIds)
+        && !doc.entityIds.includes(row.subjectEntityId);
+      if (isSameKind && isDifferentSubject) return id;
+    }
   }
   return row.bmuTask.forbiddenEvidence[0];
 }

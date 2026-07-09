@@ -92,6 +92,8 @@ import {
   lintNoAnswerLeak,
   prng,
   slug,
+  opaqueBmuDocId,
+  bmuEntityHoldoutKeysForSubject,
 } from './common.mjs';
 
 export const NEARCOL_FAMILY = 'near_collision_abstention';
@@ -162,7 +164,7 @@ export function nearcolTemplateId(questionType, variant, attr, scope) {
  */
 export function buildNearCollisionClusterSpec({
   canonical, subjectId, attr, scope, absentScope, role, value,
-  decoys, tsDate, exactId, disambigId, motifGroupId,
+  decoys, tsDate, exactId, disambigId, motifGroupId, subjectAliases = [],
 }) {
   if (!Array.isArray(decoys) || decoys.length < 3) {
     throw new Error('buildNearCollisionClusterSpec: >=3 sibling decoys required (alias + attribute + scope collision axes)');
@@ -223,6 +225,7 @@ export function buildNearCollisionClusterSpec({
   const forbiddenAnswerable = decoyIds;
   const forbiddenAbstain = [exactId, ...decoyIds]; // §5.4: the answerable sibling is a plausible decoy for the absent variant
 
+  const entityHoldoutKeys = bmuEntityHoldoutKeysForSubject({ id: subjectId, canonicalName: canonical, aliases: subjectAliases });
   const stampTask = ({ requiredEvidence, answerId, answerValue, abstain, questionType, variant, templateScope }) => ({
     family: NEARCOL_FAMILY,
     budgetB: NEARCOL_BUDGET_B,
@@ -232,6 +235,7 @@ export function buildNearCollisionClusterSpec({
     abstain,
     motifGroupId,
     templateId: nearcolTemplateId(questionType, variant, attr, templateScope ?? scope),
+    entityHoldoutKeys,
   });
 
   const hardNegatives = decoyNegs;
@@ -298,7 +302,9 @@ export function generateNearCollisionAbstentionClusters({
   if (typeof seed !== 'string' || !seed) throw new Error('generateNearCollisionAbstentionClusters: seed required');
   if (!Array.isArray(subjects) || subjects.length === 0) throw new Error('generateNearCollisionAbstentionClusters: subjects bank required');
   if (typeof splitOf !== 'function') throw new Error('generateNearCollisionAbstentionClusters: canonical splitOf must be injected');
-  if (!registry || typeof registry.claimCluster !== 'function') throw new Error('generateNearCollisionAbstentionClusters: m=1 registry required');
+  if (!registry || typeof registry.claimCluster !== 'function' || typeof registry.hasEntityHoldoutKey !== 'function') {
+    throw new Error('generateNearCollisionAbstentionClusters: alias-aware m=1 registry required');
+  }
   if (!Number.isInteger(clusterCount) || clusterCount < 1) throw new Error('generateNearCollisionAbstentionClusters: clusterCount >= 1');
 
   // Same deterministic date derivation as the ancestor (evolve-corpus.mjs:376-377).
@@ -309,6 +315,7 @@ export function generateNearCollisionAbstentionClusters({
   const addedQueries = [];
   const clusters = [];
   const usedSubjectsThisRun = new Set();
+  const usedEntityHoldoutKeysThisRun = new Set();
 
   let subjectCursor = 0;
   const nextFreeSubject = (motifGroupId) => {
@@ -317,7 +324,11 @@ export function generateNearCollisionAbstentionClusters({
     // bank order, monotone cursor.
     while (subjectCursor < subjects.length) {
       const s = subjects[subjectCursor++];
-      if (!registry.hasSubject(s.id) && !usedSubjectsThisRun.has(s.id)) return s;
+      const keys = bmuEntityHoldoutKeysForSubject(s);
+      if (!registry.hasSubject(s.id) && !usedSubjectsThisRun.has(s.id)
+          && !keys.some((key) => registry.hasEntityHoldoutKey(key) || usedEntityHoldoutKeysThisRun.has(key))) {
+        return { subject: s, entityHoldoutKeys: keys };
+      }
     }
     throw new Error(`generateNearCollisionAbstentionClusters: subject bank exhausted under GLOBAL m=1 (minting ${motifGroupId}); supply more subjects or wait for retirements`);
   };
@@ -325,7 +336,9 @@ export function generateNearCollisionAbstentionClusters({
   for (let c = 0; c < clusterCount; c++) {
     const clusterSlot = clusterSlotOffset + c;
     const motifGroupId = `mg_e${epoch}_nearcol_${String(clusterSlot).padStart(4, '0')}`;
-    const subj = nextFreeSubject(motifGroupId);
+    const picked = nextFreeSubject(motifGroupId);
+    const subj = picked.subject;
+    const entityHoldoutKeys = picked.entityHoldoutKeys;
     const canonical = subj.canonicalName;
     const isProject = /-svc-/.test(canonical);
     const rnd = prng(`${seed}:bmu-nearcol:${epoch}:${subj.id}:${clusterSlot}`);
@@ -347,30 +360,31 @@ export function generateNearCollisionAbstentionClusters({
     const decoyValue = (k) => bank[(valueIdx + 1 + k) % bank.length];
 
     const idBase = `e${epoch}_${subj.id}_bn${clusterSlot}`;
+    const docId = (slot) => opaqueBmuDocId({ seed, epoch, motifGroupId, slot });
     const decoyCount = nearcolDecoyCount(escalationLevel);
     const decoys = [];
     let aliasCount = 0;
     let attrCount = 0;
     const pushAlias = () => {
       const k = aliasCount++;
-      decoys.push({ kind: 'alias', id: `d_${idBase}_na${k}`, entityId: `e_${idBase}_dup${k}`,
+      decoys.push({ kind: 'alias', id: docId(`alias_collision_decoy:${k}`), entityId: `e_${idBase}_dup${k}`,
         value: decoyValue(decoys.length), role: ROLES_DECOY[k % ROLES_DECOY.length] });
     };
     const pushAttr = () => {
       const k = attrCount++;
       const base = attr.replace(/\s*\(series \d+\)$/, '').split(' ').pop();
-      decoys.push({ kind: 'attribute', id: `d_${idBase}_nt${k}`,
+      decoys.push({ kind: 'attribute', id: docId(`attribute_lookalike_decoy:${k}`),
         value: decoyValue(decoys.length), lookalikeAttr: `${LOOKALIKE_QUALIFIERS[k % LOOKALIKE_QUALIFIERS.length]} ${base}` });
     };
     pushAlias(); // decoys[0] = primary trap
     pushAttr();
-    decoys.push({ kind: 'scope', id: `d_${idBase}_ns0`, value: decoyValue(decoys.length), scope: scopeDecoyScope });
+    decoys.push({ kind: 'scope', id: docId('scope_lookalike_decoy:0'), value: decoyValue(decoys.length), scope: scopeDecoyScope });
     for (let i = 3; i < decoyCount; i++) (i % 2 === 1 ? pushAlias : pushAttr)(); // extras alternate alias/attr
 
     const spec = buildNearCollisionClusterSpec({
       canonical, subjectId: subj.id, attr, scope, absentScope, role, value,
-      decoys, tsDate,
-      exactId: `d_${idBase}_ne`, disambigId: `d_${idBase}_nd`, motifGroupId,
+      decoys, tsDate, subjectAliases: subj.aliases,
+      exactId: docId('exact_match'), disambigId: docId('disambiguation_record'), motifGroupId,
     });
 
     // Mint-time no-answer-leak lint (fail-closed). answerValue passed is the
@@ -400,8 +414,9 @@ export function generateNearCollisionAbstentionClusters({
 
     // Claim GLOBAL m=1 keys BEFORE emitting (fail-closed; throws on collision).
     const templateIds = spec.queryStubs.map((s) => s.bmuTask.templateId);
-    registry.claimCluster({ subjectEntityId: subj.id, templateIds, motifGroupId });
+    registry.claimCluster({ subjectEntityId: subj.id, templateIds, entityHoldoutKeys, motifGroupId });
     usedSubjectsThisRun.add(subj.id);
+    for (const key of entityHoldoutKeys) usedEntityHoldoutKeysThisRun.add(key);
 
     for (const doc of spec.docs) {
       addedDocs.push({
@@ -409,7 +424,7 @@ export function generateNearCollisionAbstentionClusters({
         entityIds: [ownerEntityId, doc.subjectKey],
         roleAliases: doc.roleAliases,
         text: doc.text, shape: 'near_collision_record', timestamp: doc.timestamp,
-        currentStaleFlag: doc.currentStaleFlag, collisionRole: doc.collisionRole,
+        currentStaleFlag: doc.currentStaleFlag,
         collisionScope: doc.collisionScope, liveUpdateEpoch: epoch,
       });
     }
@@ -442,6 +457,7 @@ export function generateNearCollisionAbstentionClusters({
       subjectEntityId: subj.id, attribute: attr, scope, absentScope, role,
       escalationLevel, decoyCount,
       docIds: spec.docs.map((d) => d.id), rowIds, templateIds,
+      entityHoldoutKeys: [...entityHoldoutKeys],
       questionTypes: [...new Set(spec.queryStubs.map((s) => s.questionType))],
       answerableRowCount: spec.queryStubs.filter((s) => !s.abstain).length,
       abstainRowCount: spec.queryStubs.filter((s) => s.abstain).length,

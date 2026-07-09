@@ -19,7 +19,14 @@
  *           must not recover the answer within top-B without admitting
  *           forbidden items at rates competitive with the oracle. Exact
  *           per-lane rates are recorded; a row is rejected if ANY trivial
- *           baseline achieves u=1 on it.
+ *           baseline achieves u=1 on it. Temporal additionally runs two
+ *           public-structure shortcut attackers: subject-scoped recency
+ *           (the last-mention scan) and validity-currency filtering. These
+ *           rankers may read only the public query intent and public corpus
+ *           fields -- never qrels, bmuTask, generator roles, or answer ids.
+ *           A temporal row is rejected if either shortcut passes the judge
+ *           OR matches the structural oracle's positive-evidence coverage;
+ *           the report also carries an aggregate fail-closed pack gate.
  *   - G-B2  oracle structural solver (hidden qrels/structure granted) must
  *           reach u=1 on ≥0.90 of tasks. The oracle here is deliberately NOT
  *           a label-reader: it derives evidence from the cluster's document
@@ -150,6 +157,101 @@ export function randomKLane(row, docs, seed) {
   return arr;
 }
 
+// ── Temporal shortcut-attacker lanes (F5/F7; public structure only) ────────
+// These functions deliberately accept no qrels/bmuTask argument and never
+// inspect generator-only `role`, `kind`, or `currentStaleFlag`. They model the
+// two cheap strategies that the temporal bank must defeat before it may enter
+// an armable frontier: "take the subject's latest mentions" and "discard
+// records whose public validity interval is not current at query time".
+function publicTime(value) {
+  if (typeof value !== 'string' || value.length === 0) return Number.NEGATIVE_INFINITY;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : Number.NEGATIVE_INFINITY;
+}
+
+function publicSubjectId(row) {
+  const subject = row?.publicIntent?.subjectEntityId ?? row?.subjectEntityId;
+  return typeof subject === 'string' && subject.length > 0 ? subject : null;
+}
+
+function publicSubjectMatch(doc, subject) {
+  if (!subject) return false;
+  return doc?.validity?.subjectEntityId === subject
+    || (Array.isArray(doc?.entityIds) && doc.entityIds.includes(subject));
+}
+
+function publicAttributeMatch(doc, attribute) {
+  return typeof attribute === 'string' && attribute.length > 0
+    && doc?.validity?.attribute === attribute;
+}
+
+function compareDocId(a, b) {
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * Public last-mention attacker. Subject membership and `timestamp` are both
+ * production-corpus fields. Ties are resolved only by opaque doc id.
+ */
+export function subjectScopedRecencyLane(row, docs) {
+  const subject = publicSubjectId(row);
+  return [...docs].sort((a, b) => {
+    const aScoped = publicSubjectMatch(a, subject) ? 1 : 0;
+    const bScoped = publicSubjectMatch(b, subject) ? 1 : 0;
+    if (aScoped !== bScoped) return bScoped - aScoped;
+    const aTime = publicTime(a.timestamp);
+    const bTime = publicTime(b.timestamp);
+    if (aTime !== bTime) return bTime - aTime;
+    return compareDocId(a, b);
+  }).map((d) => d.id);
+}
+
+function publicValidityCurrentAt(doc, queryMs) {
+  if (!Number.isFinite(queryMs)) return false;
+  const validity = doc?.validity;
+  if (!validity || typeof validity !== 'object') return false;
+  const from = publicTime(validity.validFrom ?? validity.observedAt ?? doc.timestamp);
+  const observed = publicTime(validity.observedAt ?? doc.timestamp);
+  const until = validity.validUntil === undefined
+    ? Number.POSITIVE_INFINITY
+    : publicTime(validity.validUntil);
+  return from <= queryMs && observed <= queryMs && queryMs <= until;
+}
+
+/**
+ * Public validity-currency attacker. Invalid records are filtered behind the
+ * complete current-record pool; among current records, a subject match wins,
+ * then the latest public observation. No relation, role, qrel, or answer label
+ * is consulted.
+ */
+export function validityCurrencyLane(row, docs) {
+  const subject = publicSubjectId(row);
+  const attribute = row?.publicIntent?.attribute;
+  const queryMs = publicTime(row?.publicIntent?.queryTime);
+  return [...docs].sort((a, b) => {
+    const aCurrent = publicValidityCurrentAt(a, queryMs) ? 1 : 0;
+    const bCurrent = publicValidityCurrentAt(b, queryMs) ? 1 : 0;
+    if (aCurrent !== bCurrent) return bCurrent - aCurrent;
+    const aScoped = publicSubjectMatch(a, subject) ? 1 : 0;
+    const bScoped = publicSubjectMatch(b, subject) ? 1 : 0;
+    if (aScoped !== bScoped) return bScoped - aScoped;
+    const aAttribute = publicAttributeMatch(a, attribute) ? 1 : 0;
+    const bAttribute = publicAttributeMatch(b, attribute) ? 1 : 0;
+    if (aAttribute !== bAttribute) return bAttribute - aAttribute;
+    const aTime = publicTime(a.validity?.observedAt ?? a.timestamp);
+    const bTime = publicTime(b.validity?.observedAt ?? b.timestamp);
+    if (aTime !== bTime) return bTime - aTime;
+    return compareDocId(a, b);
+  }).map((d) => d.id);
+}
+
+export const SHORTCUT_LANES = Object.freeze({
+  temporal: Object.freeze({
+    subjectScopedRecency: subjectScopedRecencyLane,
+    validityCurrency: validityCurrencyLane,
+  }),
+});
+
 // ── Oracle structural solvers (G-B2) — family registry ──────────────────────
 /**
  * temporal (§5.1): the oracle performs the SUPERSESSION memory operation on
@@ -165,9 +267,14 @@ export function randomKLane(row, docs, seed) {
  */
 function temporalOracleLane(row, cluster, docs, budget) {
   const clusterDocs = cluster.docs;
-  const superseded = new Set(clusterDocs.filter((d) => d.validity?.supersededBy).map((d) => d.id));
-  const provenance = clusterDocs.find((d) => typeof d.kind === 'string' && d.kind.endsWith('_provenance'));
-  const current = clusterDocs.find((d) => !superseded.has(d.id) && d !== provenance);
+  const clusterIds = new Set(clusterDocs.map((d) => d.id));
+  const relations = (cluster.relations ?? []).filter((r) => clusterIds.has(r.src) && clusterIds.has(r.dst));
+  const supersedes = relations.filter((r) => r.type === 'supersedes' || r.label === 'supersedes');
+  const currentIds = [...new Set(supersedes.map((r) => r.src))];
+  const superseded = new Set(supersedes.map((r) => r.dst));
+  const provenanceEdge = relations.find((r) => r.type === 'derived_from' || r.label === 'records_supersession_of');
+  const provenance = provenanceEdge ? clusterDocs.find((d) => d.id === provenanceEdge.src) : null;
+  const current = currentIds.length === 1 ? clusterDocs.find((d) => d.id === currentIds[0]) : null;
   if (!provenance || !current) return { evidence: [], answerId: null, ranked: [] };
   let evidence; let answerId;
   switch (row.questionType) {
@@ -181,7 +288,6 @@ function temporalOracleLane(row, cluster, docs, budget) {
     default:
       return { evidence: [], answerId: null, ranked: [] };
   }
-  const clusterIds = new Set(clusterDocs.map((d) => d.id));
   const filler = docs.map((d) => d.id).filter((id) => !clusterIds.has(id)).sort();
   const ranked = [...evidence, ...filler.slice(0, Math.max(0, budget - evidence.length))];
   return { evidence, answerId, ranked };
@@ -295,13 +401,16 @@ export function certifyBank(bank, {
     seen.add(d.id);
   }
   const bm25Index = buildBm25Index(docs);
+  const shortcutRankers = SHORTCUT_LANES[family] ?? {};
 
   const perTask = [];
   const laneTotals = {
-    bm25: { u: 0, answerInTopB: 0, requiredCovered: 0, forbiddenAdmitted: 0 },
-    firstK: { u: 0, answerInTopB: 0, requiredCovered: 0, forbiddenAdmitted: 0 },
-    randomK: { u: 0, answerInTopB: 0, requiredCovered: 0, forbiddenAdmitted: 0 },
-    oracle: { u: 0, answerInTopB: 0, requiredCovered: 0, forbiddenAdmitted: 0 },
+    bm25: { u: 0, answerInTopB: 0, requiredCovered: 0, positiveCoverage: 0, forbiddenAdmitted: 0 },
+    firstK: { u: 0, answerInTopB: 0, requiredCovered: 0, positiveCoverage: 0, forbiddenAdmitted: 0 },
+    randomK: { u: 0, answerInTopB: 0, requiredCovered: 0, positiveCoverage: 0, forbiddenAdmitted: 0 },
+    ...Object.fromEntries(Object.keys(shortcutRankers).map((lane) => [lane,
+      { u: 0, answerInTopB: 0, requiredCovered: 0, positiveCoverage: 0, forbiddenAdmitted: 0 }])),
+    oracle: { u: 0, answerInTopB: 0, requiredCovered: 0, positiveCoverage: 0, forbiddenAdmitted: 0 },
   };
   let leakPass = 0; let trapDominant = 0;
   const realRows = [];
@@ -315,6 +424,8 @@ export function certifyBank(bank, {
         bm25: judgeTopB(bm25Lane(row, docs, bm25Index), row.bmuTask, budgetOverride),
         firstK: judgeTopB(firstKLane(row, docs), row.bmuTask, budgetOverride),
         randomK: judgeTopB(randomKLane(row, docs, seed), row.bmuTask, budgetOverride),
+        ...Object.fromEntries(Object.entries(shortcutRankers).map(([lane, ranker]) =>
+          [lane, judgeTopB(ranker(row, docs), row.bmuTask, budgetOverride)])),
       };
       const o = oracle(row, cluster, docs, B);
       lanes.oracle = judgeTopB(o.ranked, row.bmuTask, budgetOverride);
@@ -323,9 +434,24 @@ export function certifyBank(bank, {
         laneTotals[lane].u += res.u;
         laneTotals[lane].answerInTopB += res.answerInTopB ? 1 : 0;
         laneTotals[lane].requiredCovered += res.requiredCovered ? 1 : 0;
+        laneTotals[lane].positiveCoverage += res.requiredCovered && res.answerInTopB ? 1 : 0;
         laneTotals[lane].forbiddenAdmitted += res.forbiddenAdmitted.length > 0 ? 1 : 0;
       }
-      for (const lane of ['bm25', 'firstK', 'randomK']) {
+      for (const lane of Object.keys(shortcutRankers)) {
+        if (lanes[lane].u === 1) {
+          reasons.push(`temporal_shortcut_solves:${lane}`);
+        } else if (lanes.oracle.u === 1 && lanes[lane].requiredCovered && lanes[lane].answerInTopB) {
+          // The shortcut matches the oracle on every positive-evidence
+          // conjunct and differs only by admitting a forbidden record. That
+          // is still a competitive last-mention/currency oracle and must not
+          // be hidden by BMU's hard-negative veto.
+          reasons.push(`temporal_shortcut_competitive:${lane}`);
+        }
+      }
+      // A single seeded random-K hit is chance, not a content shortcut. BM25
+      // and first-K reject rows individually; random-K is enforced only as a
+      // bank-level rate bound below.
+      for (const lane of ['bm25', 'firstK']) {
         if (lanes[lane].u === 1) reasons.push(`trivial_baseline_solves:${lane}`);
       }
       if (lanes.oracle.u !== 1) reasons.push(`oracle_failed:required=${lanes.oracle.requiredCovered},forbidden=${lanes.oracle.forbiddenAdmitted.join('+') || 'none'},answer=${lanes.oracle.answerInTopB}`);
@@ -386,6 +512,24 @@ export function certifyBank(bank, {
     const key = r.split(':')[0];
     rejectedReasonHistogram[key] = (rejectedReasonHistogram[key] ?? 0) + 1;
   }
+  const shortcutGates = Object.fromEntries(Object.keys(shortcutRankers).map((lane) => {
+    const uRate = rate(laneTotals[lane].u);
+    const positiveCoverageRate = rate(laneTotals[lane].positiveCoverage);
+    const oraclePositiveCoverageRate = rate(laneTotals.oracle.positiveCoverage);
+    const competitiveWithOracle = oraclePositiveCoverageRate > 0
+      && positiveCoverageRate >= oraclePositiveCoverageRate;
+    return [lane, {
+      pass: uRate === 0 && !competitiveWithOracle,
+      uRate,
+      positiveCoverageRate,
+      oraclePositiveCoverageRate,
+      competitiveWithOracle,
+      rule: 'pass iff judge uRate=0 and positive-evidence coverage rate is below the structural oracle',
+    }];
+  }));
+  const shortcutPackPass = Object.values(shortcutGates).every((gate) => gate.pass);
+  const randomKRate = rate(laneTotals.randomK.u);
+  const randomKPackPass = randomKRate <= 0.05;
 
   return {
     kind: 'bmu-p2-certification',
@@ -401,13 +545,26 @@ export function certifyBank(bank, {
       oracleRate: rate(laneTotals.oracle.u),
       leakScreenPassRate: rate(leakPass),
       trapLexicallyDominantRate: rate(trapDominant),
+      packCertified: rejected.length === 0 && shortcutPackPass && randomKPackPass,
     },
-    baselineRates: Object.fromEntries(['bm25', 'firstK', 'randomK', 'oracle'].map((lane) => [lane, {
+    baselineRates: Object.fromEntries(Object.keys(laneTotals).map((lane) => [lane, {
       uRate: rate(laneTotals[lane].u),
       answerInTopBRate: rate(laneTotals[lane].answerInTopB),
       requiredCoveredRate: rate(laneTotals[lane].requiredCovered),
+      positiveCoverageRate: rate(laneTotals[lane].positiveCoverage),
       forbiddenAdmittedRate: rate(laneTotals[lane].forbiddenAdmitted),
     }])),
+    shortcutGates: {
+      requiredForFamily: Object.keys(shortcutRankers).length > 0,
+      pass: shortcutPackPass,
+      lanes: shortcutGates,
+    },
+    randomKPackGate: {
+      pass: randomKPackPass,
+      uRate: randomKRate,
+      maximumRate: 0.05,
+      rule: 'bank-level only; isolated seeded random hits do not reject individual rows',
+    },
     realLaneCoverage: realLane ? {
       rowsCertified: realRows.length,
       rowsTotal: nRows,

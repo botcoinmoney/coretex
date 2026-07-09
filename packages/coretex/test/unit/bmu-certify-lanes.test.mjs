@@ -25,6 +25,8 @@ import {
   buildBm25Index,
   bm25Score,
   randomKLane,
+  subjectScopedRecencyLane,
+  validityCurrencyLane,
   ORACLE_LANES,
   LEAK_SCREENS,
   certifyBank,
@@ -91,6 +93,25 @@ test('randomKLane: deterministic per (seed,row), varies across rows', () => {
   assert.deepEqual([...a].sort(), docs.map((d) => d.id));
 });
 
+test('temporal shortcut attackers use public structure only and the minted controls defeat them', () => {
+  const bank = smallBank();
+  const docs = bank.clusters.flatMap((c) => c.docs);
+  for (const cluster of bank.clusters) {
+    for (const row of cluster.rows) {
+      const recency = judgeTopB(subjectScopedRecencyLane(row, docs), row.bmuTask);
+      const currency = judgeTopB(validityCurrencyLane(row, docs), row.bmuTask);
+      assert.equal(recency.u, 0, `${row.id}: last-mention must not solve`);
+      assert.equal(currency.u, 0, `${row.id}: validity-only must not solve`);
+      assert.equal(recency.requiredCovered && recency.answerInTopB, false,
+        `${row.id}: last-mention must not match oracle positive coverage`);
+      assert.equal(currency.requiredCovered && currency.answerInTopB, false,
+        `${row.id}: validity-only must not match oracle positive coverage`);
+      assert.equal(recency.topB.some((id) => row.bmuTask.forbiddenEvidence.includes(id)), false,
+        'shortcut controls should defeat recency without relying on the forbidden veto');
+    }
+  }
+});
+
 test('temporal oracle derives evidence from STRUCTURE and matches generator labels', () => {
   const bank = smallBank();
   const docs = bank.clusters.flatMap((c) => c.docs);
@@ -139,6 +160,11 @@ test('certifyBank end-to-end on a real generator bank: oracle 1.0, trivial basel
   assert.equal(report.baselineRates.bm25.uRate, 0);
   assert.equal(report.baselineRates.firstK.uRate, 0);
   assert.equal(report.baselineRates.randomK.uRate, 0);
+  assert.equal(report.shortcutGates.requiredForFamily, true);
+  assert.equal(report.shortcutGates.pass, true);
+  assert.equal(report.shortcutGates.lanes.subjectScopedRecency.competitiveWithOracle, false);
+  assert.equal(report.shortcutGates.lanes.validityCurrency.competitiveWithOracle, false);
+  assert.equal(report.totals.packCertified, true);
   assert.equal(report.totals.certificationRate, 1);
   assert.deepEqual(report.rejectedTasks, []);
   assert.equal(report.certifiedSubset.length, 10);
