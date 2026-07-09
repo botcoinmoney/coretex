@@ -433,25 +433,25 @@ export function generateMultiHopClusters({
         ? `Relay ${relayToken}'s duty register lists ${value} as the confirmed ${targetAttr}.`
         : `Desk ${deskToken}'s duty register lists ${value} as the confirmed ${targetAttr}.`,
     });
-    // Off-path traps remain competitive distractors (subject + topic + wrong
-    // value) but avoid the exact "working ${targetAttr}" query skeleton that
-    // dominated every pack under real Qwen (cross-cluster op bleed). They stay
-    // linked by co_occurs_with noise edges.
+    // Off-path traps stay lexically dominant over golds (BM25 certify / §6.5)
+    // via subject + topic + targetAttr + wrong value, but avoid the exact
+    // "working ${targetAttr}" query skeleton that caused cross-cluster op
+    // bleed under real Qwen. Linked by co_occurs_with noise edges.
     pushDoc({
       id: offpathId, kind: 'bridge_offpath_digest', role: 'offpath_decoy',
       entityIds: [universe, subj.id], currentStaleFlag: false,
-      text: `Shared inbox note about ${canonical}'s ${topic}: relay ${wrongRelay} was mentioned in passing with provisional figure ${decoyVal}, not entered as a standing assignment.`,
+      text: `Shared digest about ${canonical}'s ${topic} lists ${decoyVal} in the ${targetAttr} field next to relay ${wrongRelay}, without any standing assignment behind it.`,
     });
     pushDoc({
       id: nearBridgeId, kind: 'bridge_draft_note', role: 'near_bridge_decoy',
       entityIds: [universe], currentStaleFlag: false,
-      text: `A draft planning note for ${hopCount === 2 ? 'relay' : 'desk'} ${lastBridgeToken} pencils in ${decoyVal2} as a candidate figure, pending confirmation and not yet entered anywhere.`,
+      text: `A draft planning note for ${hopCount === 2 ? 'relay' : 'desk'} ${lastBridgeToken} pencils in ${decoyVal2} as ${targetAttr}, pending confirmation and not yet entered anywhere.`,
     });
     for (let i = 0; i < shadowIds.length; i++) {
       pushDoc({
         id: shadowIds[i], kind: 'bridge_offpath_digest', role: 'offpath_shadow',
         entityIds: [universe, subj.id], currentStaleFlag: false,
-        text: `An older inbox excerpt from ${priorDate} about ${canonical}'s ${topic} lists provisional figure ${shadowVals[i]}, without any assignment behind it.`,
+        text: `An older digest excerpt from ${priorDate} about ${canonical}'s ${topic} lists ${shadowVals[i]} in the ${targetAttr} field, without any assignment behind it.`,
       });
     }
 

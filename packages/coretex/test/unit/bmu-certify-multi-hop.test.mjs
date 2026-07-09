@@ -59,9 +59,10 @@ test('oracle: answer doc is the chain TERMINAL for endpoint/rejection/routing an
   assert.notEqual(term.answerId, prov.answerId);
   assert.ok(term.answerId.endsWith('_ans'));
   assert.ok(prov.answerId.endsWith('_b1'));
-  // Both still require the FULL chain (§5.3: traversal evidence must pay).
-  assert.equal(term.evidence.length, 3);
-  assert.equal(prov.evidence.length, 3);
+  // Both still require bridge + answer (head + terminal); hop-2 is graded support.
+  assert.equal(term.evidence.length, 2);
+  assert.equal(prov.evidence.length, 2);
+  assert.deepEqual([...term.evidence].sort(), [...byType.chain_endpoint_value.bmuTask.requiredEvidence].sort());
 });
 
 test('oracle is structure-only: cutting one supports edge breaks it even though bmuTask labels are intact', () => {

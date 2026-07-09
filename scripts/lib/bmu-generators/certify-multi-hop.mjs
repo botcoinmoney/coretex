@@ -21,9 +21,11 @@
  *   off `co_occurs_with` edges (§6.5 noise-edge hazard) and is therefore
  *   structurally excluded without reading forbiddenEvidence. Per question
  *   type the answer doc is the chain TERMINAL (endpoint/rejection/routing)
- *   or the chain HEAD (provenance); evidence = the full chain (§5.3
- *   evidence law). Oracle success therefore doubles as a mint-consistency
- *   check between generator labels and minted structure.
+ *   or the chain HEAD (provenance); evidence = bridge + answer (head +
+ *   terminal) so B=4 top-B is not over-subscribed on 3-hop rows while
+ *   intermediate hops stay graded support in qrels. Oracle success
+ *   therefore doubles as a mint-consistency check between generator
+ *   labels and minted structure.
  *
  * LEAK SCREEN (NoLiMa anti-lexical-shortcut, full-scale independent re-run
  * over the emitted bank bytes — the mint-time lint in multi_hop_relation.mjs
@@ -72,7 +74,10 @@ export function multiHopOracleLane(row, cluster, docs, budget) {
     default:
       return { evidence: [], answerId: null, ranked: [] };
   }
-  const evidence = [...chain]; // §5.3: the FULL chain, every question type
+  // §5.3 utility required = chain head + terminal (bridge + answer). Intermediate
+  // hop-2 remains on the supports path for structure checks but is not required
+  // evidence (matches generator requiredEvidence / B=4 budget arithmetic).
+  const evidence = chain.length >= 2 ? [chain[0], chain[chain.length - 1]] : [...chain];
   const clusterIds = new Set(cluster.docs.map((d) => d.id));
   const filler = docs.map((d) => d.id).filter((id) => !clusterIds.has(id)).sort();
   const ranked = [...evidence, ...filler.slice(0, Math.max(0, budget - evidence.length))];

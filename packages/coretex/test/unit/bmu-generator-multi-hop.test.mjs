@@ -190,12 +190,14 @@ test('trap law: off-path decoy out-ranks honestly; near-bridge decoy breaks the 
     const offpath = cluster.docs.find((d) => d.role === 'offpath_decoy');
     const nearBridge = cluster.docs.find((d) => d.role === 'near_bridge_decoy');
     assert.ok(offpath && nearBridge, 'both decoy kinds minted');
-    // off-path decoy: competitive lexical overlap (subject + topic + wrong value)
-    // without the exact targetAttr query skeleton that caused cross-cluster bleed.
+    // off-path decoy: subject + topic + targetAttr + wrong value (lexical trap),
+    // without the bleed-prone "working ${targetAttr}" query skeleton.
     assert.ok(containsValue(offpath.text, cluster.canonicalName));
     assert.ok(containsValue(offpath.text, cluster.topic));
+    assert.ok(containsValue(offpath.text, cluster.targetAttribute));
     assert.ok(containsValue(offpath.text, cluster.decoyValues[0]));
     assert.ok(!containsValue(offpath.text, cluster.answerValue), 'decoy never carries the true value');
+    assert.ok(!/\bworking\b/i.test(offpath.text), 'avoid working-targetAttr bleed phrase');
     // near-bridge decoy: names the REAL last bridge token with a wrong draft value
     const lastBridge = cluster.bridgeTokens[cluster.bridgeTokens.length - 1];
     assert.ok(containsValue(nearBridge.text, lastBridge));
