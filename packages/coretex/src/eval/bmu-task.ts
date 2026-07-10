@@ -86,7 +86,7 @@ export const BMU_TASK_MAX_BUDGET = 8;
  *  `liveEvalPack.freshWindow`. Lives in this leaf module because both the
  *  pack law (overlay slot draw) and the arm-gate census consume it. */
 export const BMU_FRESH_WINDOW_DEFAULT = 2;
-export const BMU_V2_OPERATION_CLASS_BASIS = 'shared evidence region: 128 words / 4 bound atoms = 32 resident key->program mappings';
+export const BMU_V2_OPERATION_CLASS_BASIS = 'shared-policy-evidence-384-511-4w-program-v1';
 
 /** BMU multi-hop retrieval law: a transferring boost operation raises score
  * inheritance to this floor. Kept in the leaf law module so the runtime and

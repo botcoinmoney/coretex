@@ -258,6 +258,15 @@ test('ambiguous route collisions and oversized lineage fail closed without trunc
 
 test('paired I6-disjoint mints exert aggregate pressure on one shared 32-program region', () => {
   assert.equal(BMU_EXECUTABLE_OPERATION_CLASS_BASIS, BMU_V2_OPERATION_CLASS_BASIS);
+  assert.equal(BMU_V2_OPERATION_CLASS_BASIS, 'shared-policy-evidence-384-511-4w-program-v1');
+  assert.throws(() => executableOperationSignature({
+    operationCue: 'invalid operation direction', operationClass: 'invalid-direction',
+    steps: [{ direction: 'sideways', edgeType: 'supports' }],
+  }), /unknown direction or public edge type/);
+  assert.throws(() => executableOperationSignature({
+    operationCue: 'invalid operation edge', operationClass: 'invalid-edge',
+    steps: [{ direction: 'outgoing', edgeType: 'answers' }],
+  }), /unknown direction or public edge type/);
   const aggregate = new Set();
   const aggregateKeys = new Set();
   const edges = ['supports', 'supersedes', 'coreference_of', 'causes', 'derived_from', 'co_occurs_with'];
