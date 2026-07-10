@@ -463,9 +463,11 @@ describe('MINOR fixes: charset law, mint lint, familyUtilities digest', () => {
     const corpus = smallBmuCorpus();
     const pack = deriveQueryPack(7, B32('11'), corpus, { packSize: 8, quotas: [] });
     const reranker = { model: 'x', async score(pairs) { return pairs.map((p) => p.document.startsWith('truth-') ? 0.9 : 0.1); } };
-    const baseline = await evaluateBmuBaseline(ZERO_STATE, corpus, pack, baseOpts(reranker), {}, { samples: 1 });
+    const scoringOpts = baseOpts(reranker);
+    const baseline = await evaluateBmuBaseline(ZERO_STATE, corpus, pack, scoringOpts, {}, { samples: 1 });
     assert.ok(baseline.familyUtilitiesDigest, 'digest missing');
     const recomputed = computeBmuFamilyUtilitiesDigest({
+      scoringPipelineVersion: scoringOpts.pipelineVersion,
       epochId: pack.epochId,
       corpusRoot: pack.corpusRoot,
       baselineSeedHex: pack.evalSeedHex,
@@ -475,6 +477,7 @@ describe('MINOR fixes: charset law, mint lint, familyUtilities digest', () => {
     assert.equal(baseline.familyUtilitiesDigest, recomputed);
     // tampering with the decomposition breaks the digest
     const tampered = computeBmuFamilyUtilitiesDigest({
+      scoringPipelineVersion: scoringOpts.pipelineVersion,
       epochId: pack.epochId, corpusRoot: pack.corpusRoot, baselineSeedHex: pack.evalSeedHex,
       parentScorePpm: baseline.parentScorePpm,
       familyUtilitiesPpm: { ...baseline.familyUtilitiesPpm, temporal: 999_999 },
