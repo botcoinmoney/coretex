@@ -112,8 +112,10 @@ export function deriveScoredQueryPack(
     if (!activeLiveEval.law.familySlots) {
       throw new Error('deriveScoredQueryPack: BMU pack law requires liveEvalPack.familySlots (§6.2 slot law)');
     }
+    const excludedOperationClasses = bmuSampledBlockClasses(epochId, corpus, activeLiveEval);
     const base = deriveQueryPack(epochId, evalSeedHex, corpus, profile, {
       activeIds: activeLiveEval.activeIds,
+      ...(excludedOperationClasses.size > 0 ? { excludedOperationClasses } : {}),
       ...(bmu.excludeKeys !== undefined ? { excludeKeys: bmu.excludeKeys } : {}),
     });
     return admitActiveLiveEvalEvents(base, corpus, {
@@ -151,6 +153,12 @@ export interface BmuPackLawOptions {
 export interface BmuBroadEligibilityOptions {
   readonly activeIds: ReadonlySet<string>;
   readonly excludeKeys?: ReadonlySet<string>;
+  /** §18 fix-3: operation classes sampled by this epoch's density blocks.
+   * Base (broad) draws never touch rows of a sampled class — the class-locked
+   * overlay is their ONLY entry point, so a gate base stray can never consume
+   * the paired cluster the §6.3 excluded-confirm pack depends on. Computed
+   * seed-independently, so gate and confirm agree. */
+  readonly excludedOperationClasses?: ReadonlySet<string>;
 }
 
 export function disabledHiddenEvalFamiliesFromProfile(profile: {
@@ -444,6 +452,9 @@ export interface BmuOverlayTelemetry {
    *  surfaced as the composition-deviation telemetry the spec requires. */
   readonly underfilled: number;
   readonly compositionDeviation: boolean;
+  /** §18 fix-3 density telemetry: rows drawn per sampled operation class
+   *  (class-locked draws only; empty for pre-executable cohorts). */
+  readonly sampledOperationClassRows?: Readonly<Record<string, number>>;
 }
 
 export function admitActiveLiveEvalEvents(
@@ -623,6 +634,80 @@ function quotaSafeLiveOverlay({
 /** rev3.1 pinned seeded-draw domain tag. */
 export const BMU_OVERLAY_DRAW_DOMAIN = 'bmu-overlay-v1';
 
+/** §18 fix-3 pack-density law (executable era only). Each family's overlay
+ * slots are grouped into blocks of this size; every block samples ONE
+ * operation class, so a scored pack covers FEWER distinct classes with
+ * >=2-3 rows per sampled class. With the 64-row pack (one flip = 15,625 ppm)
+ * and the 20,000 ppm minImprovement floor, a single-row class is
+ * arithmetically unacceptable (15,625 < 20,000); two same-class rows clear
+ * the floor with margin (31,250 >= 20,000 + 11,250). */
+export const BMU_PACK_CLASS_DENSITY = 3;
+/** One judged row flip on the 64-row pack, in ppm. */
+export const BMU_PACK_ROW_FLIP_PPM = 15_625;
+/** Required acceptance margin over the floor for the density arithmetic. */
+export const BMU_PACK_DENSITY_MARGIN_PPM = 11_250;
+/** Class-block selection domain tag. Deliberately SEED-INDEPENDENT: the
+ * sampled class set is a pure function of (epochId, family cohort), so the
+ * gate pack and the §6.3 excluded-confirm pack sample the SAME classes (a
+ * class patch must be able to clear BOTH packs), while remaining
+ * patch-independent and un-steerable by the miner. Row selection within a
+ * block stays fully seed-driven under BMU_OVERLAY_DRAW_DOMAIN. */
+export const BMU_OVERLAY_CLASS_DOMAIN = 'bmu-overlay-class-density-v2';
+
+/** §18 fix-3 block-class law (exported so certification lanes and sims can
+ * recompute the sampled class): SEED-INDEPENDENT digest over the family's
+ * sorted distinct class list. */
+export function bmuClassForBlock(
+  epochId: number,
+  family: BmuFamily,
+  blockIndex: number,
+  classes: readonly string[],
+): string | undefined {
+  if (classes.length === 0) return undefined;
+  const enc = new TextEncoder();
+  const idx = digestU256([
+    enc.encode(BMU_OVERLAY_CLASS_DOMAIN), u64BE(epochId), enc.encode(family), u64BE(blockIndex),
+  ]) % BigInt(classes.length);
+  return classes[Number(idx)];
+}
+
+/** The full sampled-class set for an epoch's density blocks — the classes the
+ * base draw must leave to the overlay. Seed-independent by construction. */
+export function bmuSampledBlockClasses(
+  epochId: number,
+  corpus: ProductionCorpus,
+  activeLiveEval: { readonly activeIds: ReadonlySet<string>; readonly law: LiveEvalPackLaw },
+): ReadonlySet<string> {
+  const familySlots = activeLiveEval.law.familySlots;
+  if (!familySlots) return new Set();
+  const classesByFamily = new Map<BmuFamily, Set<string>>();
+  for (const f of BMU_FAMILIES) classesByFamily.set(f, new Set());
+  for (const e of corpus.events) {
+    if (!activeLiveEval.activeIds.has(e.id) || e.split !== 'eval_hidden'
+      || !e.id.startsWith('zz_e') || e.bmuTask === undefined) continue;
+    const cls = (e.bmuTask as { operationClass?: string }).operationClass;
+    if (typeof cls !== 'string' || cls.length === 0) continue;
+    classesByFamily.get(e.bmuTask.family)?.add(cls);
+  }
+  const sampled = new Set<string>();
+  for (const f of BMU_FAMILIES) {
+    const classes = [...classesByFamily.get(f)!].sort(codePointCompare);
+    const slots = familySlots[f] ?? 0;
+    const blocks = Math.ceil(slots / BMU_PACK_CLASS_DENSITY);
+    for (let b = 0; b < blocks; b++) {
+      const cls = bmuClassForBlock(epochId, f, b, classes);
+      if (cls !== undefined) sampled.add(cls);
+    }
+  }
+  return sampled;
+}
+
+function operationClassOf(event: ProductionCorpusEvent): string | undefined {
+  const task = event.bmuTask as (typeof event.bmuTask & { operationClass?: string }) | undefined;
+  const cls = task?.operationClass;
+  return typeof cls === 'string' && cls.length > 0 ? cls : undefined;
+}
+
 function liveMintEpoch(id: string): number {
   return liveEpochFromEventId(id);
 }
@@ -707,20 +792,38 @@ function admitBmuFamilySlotOverlay(
   const drawn = new Set<string>();
   const skippable = (e: ProductionCorpusEvent): boolean =>
     drawn.has(e.id) || baseIds.has(e.id) || (excludeKeys !== undefined && bmuEventExcluded(e, excludeKeys));
-  const drawSlot = (family: BmuFamily, slotIndex: number, pool: readonly ProductionCorpusEvent[]): ProductionCorpusEvent | undefined => {
-    if (pool.length === 0) return undefined;
-    if (!pool.some((e) => !skippable(e))) return undefined; // nothing available — no probing needed
+  const drawSlot = (family: BmuFamily, slotIndex: number, pool: readonly ProductionCorpusEvent[], classLock?: string, motifLock?: string): ProductionCorpusEvent | undefined => {
+    const effectivePool = classLock === undefined ? pool : pool.filter((e) => operationClassOf(e) === classLock
+      && (motifLock === undefined || e.bmuTask?.motifGroupId === motifLock));
+    if (effectivePool.length === 0) return undefined;
+    if (!effectivePool.some((e) => !skippable(e))) return undefined; // nothing available — no probing needed
     const famBytes = enc.encode(family);
     const slotBE = u64BE(slotIndex);
-    const bound = pool.length * 8;
+    const bound = effectivePool.length * 8;
     for (let j = 0; j < bound; j++) {
-      const idx = digestU256([domain, epochBE, seed, famBytes, slotBE, u64BE(j)]) % BigInt(pool.length);
-      const cand = pool[Number(idx)]!;
+      const idx = digestU256([domain, epochBE, seed, famBytes, slotBE, u64BE(j)]) % BigInt(effectivePool.length);
+      const cand = effectivePool[Number(idx)]!;
       if (skippable(cand)) continue;
       return cand;
     }
     return undefined; // probe exhaustion → the slot falls through the chain (rev3.2)
   };
+
+  // §18 fix-3 class-density law: per family, the DISTINCT operation classes of
+  // the full active cohort (sorted; executable-era rows only) form the block
+  // pool. The block's class is chosen by a SEED-INDEPENDENT digest so gate and
+  // excluded-confirm packs sample identical class sets; families whose rows
+  // carry no operationClass (pre-executable fixtures, r5 rows) have an empty
+  // class list and draw exactly as before — byte-identical legacy behavior.
+  const classListByFamily = new Map<BmuFamily, readonly string[]>();
+  for (const f of BMU_FAMILIES) {
+    const classes = [...new Set(fullPool.get(f)!.map(operationClassOf)
+      .filter((cls): cls is string => cls !== undefined))].sort(codePointCompare);
+    classListByFamily.set(f, classes);
+  }
+  const classForBlock = (family: BmuFamily, blockIndex: number): string | undefined =>
+    bmuClassForBlock(pack.epochId, family, blockIndex, classListByFamily.get(family)!);
+  const sampledClassRows: Record<string, number> = {};
 
   const live: ProductionCorpusEvent[] = [];
   let freshFilled = 0;
@@ -733,8 +836,34 @@ function admitBmuFamilySlotOverlay(
   // full-membership fallback (F6) for that family's remaining slots.
   for (const f of BMU_FAMILIES) {
     const slots = familySlots[f] ?? 0;
+    let blockMotif: string | undefined;
     for (let i = 0; i < slots; i++) {
       const slotIndex = nextSlotIndex[f]++;
+      // Class-locked draws first (fresh, then full) inside the slot's density
+      // block; the unfiltered chain below is the graceful fall-through when
+      // the block class cannot supply another disjoint row (§6.2 posture:
+      // never a refusal). After the block's FIRST successful draw the block
+      // additionally locks to that row's motifGroupId (one CLUSTER): a block
+      // that consumed both paired mints of a class would leave the §6.3
+      // excluded-confirm pack no same-class disjoint instance to transfer to.
+      if (i % BMU_PACK_CLASS_DENSITY === 0) blockMotif = undefined;
+      const blockClass = classForBlock(f, Math.floor(i / BMU_PACK_CLASS_DENSITY));
+      if (blockClass !== undefined) {
+        const classFresh = drawSlot(f, slotIndex, freshPool.get(f)!, blockClass, blockMotif);
+        if (classFresh) {
+          live.push(classFresh); drawn.add(classFresh.id); freshFilled++;
+          blockMotif ??= classFresh.bmuTask?.motifGroupId;
+          sampledClassRows[blockClass] = (sampledClassRows[blockClass] ?? 0) + 1;
+          continue;
+        }
+        const classFull = drawSlot(f, slotIndex, fullPool.get(f)!, blockClass, blockMotif);
+        if (classFull) {
+          live.push(classFull); drawn.add(classFull.id); fallbackFilled++;
+          blockMotif ??= classFull.bmuTask?.motifGroupId;
+          sampledClassRows[blockClass] = (sampledClassRows[blockClass] ?? 0) + 1;
+          continue;
+        }
+      }
       const fresh = drawSlot(f, slotIndex, freshPool.get(f)!);
       if (fresh) { live.push(fresh); drawn.add(fresh.id); freshFilled++; continue; }
       const fallback = drawSlot(f, slotIndex, fullPool.get(f)!);
@@ -787,6 +916,7 @@ function admitBmuFamilySlotOverlay(
       redistributedFilled,
       underfilled,
       compositionDeviation: redistributedFilled > 0 || underfilled > 0,
+      sampledOperationClassRows: { ...sampledClassRows },
     },
   };
 }
@@ -886,7 +1016,7 @@ export function packFamilyCounts(pack: QueryPack): PerFamilyCount {
 export function hiddenPackEventEligible(
   event: ProductionCorpusEvent,
   profile: HiddenPackProfile,
-  bmu?: { readonly activeIds: ReadonlySet<string> },
+  bmu?: { readonly activeIds: ReadonlySet<string>; readonly excludedOperationClasses?: ReadonlySet<string> },
 ): boolean {
   if (event.split !== 'eval_hidden') return false;
   // BMU §4.3/§6.5 eligibility delta: under the BMU law a broad-pack row must
@@ -896,6 +1026,9 @@ export function hiddenPackEventEligible(
   if (bmu !== undefined) {
     if (event.bmuTask === undefined) return false;
     if (!bmu.activeIds.has(event.id)) return false;
+    const cls = (event.bmuTask as { operationClass?: string }).operationClass;
+    if (bmu.excludedOperationClasses !== undefined && typeof cls === 'string'
+        && bmu.excludedOperationClasses.has(cls)) return false;
   }
   const family = (event as ProductionCorpusEvent & { logicalFamily?: string }).logicalFamily ?? event.family ?? 'unknown';
   const disabled = new Set([...(profile.disabledFamilies ?? []), ...(profile.disabledSubstrateSurfaces ?? [])]);
