@@ -61,6 +61,10 @@ function saturatedFixture() {
     id: 'q_saturated', family: 'generic', domain: 'test', split: 'eval_hidden',
     queryText: 'find the authoritative terminal branch',
     bmuOperationCue: 'saturated directed bundle',
+    bmuOperationProgram: {
+      branchLimit: 4,
+      steps: [{ direction: 'outgoing', edgeType: 'derived_from' }, { direction: 'incoming', edgeType: 'supports' }],
+    },
     truthDocuments: [{ id: terminalDocIds[0], text: 'answer', isCurrent: true }],
     hardNegatives: [], qrels: [{ documentId: terminalDocIds[0], relevance: 1 }],
     provenance: { source: 'synthetic_challenge', sourceHash: '0x' + '22'.repeat(32) },

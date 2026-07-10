@@ -10,6 +10,8 @@ import {
   RANGES,
   applyPatch,
   bmuOperationQueryKey,
+  bmuOperationProgramValidationError,
+  bmuOperationProgramsEqual,
   computeCorpusRoot,
   decodeBmuPublicPathPrograms,
   decodeSubstrate,
@@ -29,6 +31,13 @@ const LAYOUT = { dim: 8, headerBytes: 9, quantization: 'int8' };
 const MODEL_ID = 'test/bmu-v2-executable';
 const REVISION = 'operation-law-v1';
 const CUE = 'effective record protocol 017';
+const EXACT_PROGRAM = {
+  branchLimit: 4,
+  steps: [
+    { direction: 'outgoing', edgeType: 'derived_from' },
+    { direction: 'incoming', edgeType: 'supports' },
+  ],
+};
 
 function quantize(values) {
   const bytes = new Uint8Array(4 + values.length);
@@ -74,12 +83,40 @@ function fixture() {
   };
   const query = {
     ...event('query', 'which reviewed branch is authoritative and in force?', high),
-    split: 'eval_hidden', bmuOperationCue: CUE,
+    split: 'eval_hidden', bmuOperationCue: CUE, bmuOperationProgram: EXACT_PROGRAM,
     qrels: [{ documentId: 'opaque-71-doc', relevance: 1 }],
     truthDocuments: [{ id: 'opaque-71-doc', text: 'hidden answer', isCurrent: true }],
   };
   return { corpus, query };
 }
+
+test('exact operation-body matcher rejects every other legal 1..4-step body and branch limit', () => {
+  const opcodes = ['outgoing', 'incoming'].flatMap((direction) =>
+    ['supports', 'supersedes', 'coreference_of', 'causes', 'derived_from', 'co_occurs_with']
+      .map((edgeType) => ({ direction, edgeType })));
+  let legalBodies = 0;
+  let matches = 0;
+  const visit = (steps, remaining) => {
+    if (steps.length > 0) {
+      for (let branchLimit = 1; branchLimit <= 4; branchLimit++) {
+        const candidate = { branchLimit, steps };
+        legalBodies += 1;
+        assert.equal(bmuOperationProgramValidationError(candidate), branchLimit === 4 ? null : 'branchLimit must equal 4');
+        if (bmuOperationProgramsEqual(EXACT_PROGRAM, candidate)) matches += 1;
+      }
+    }
+    if (remaining === 0) return;
+    for (const opcode of opcodes) visit([...steps, opcode], remaining - 1);
+  };
+  visit([], 4);
+  assert.equal(legalBodies, 90_480);
+  assert.equal(matches, 1, 'only exact branchLimit and ordered bytecode may bind a cue key');
+  assert.notEqual(bmuOperationProgramValidationError(undefined), null);
+  assert.notEqual(bmuOperationProgramValidationError({ branchLimit: 4, steps: [] }), null);
+  assert.notEqual(bmuOperationProgramValidationError({
+    branchLimit: 4, steps: [{ direction: 'sideways', edgeType: 'supports' }],
+  }), null);
+});
 
 function stateWithProgram(steps, queryKey = bmuOperationQueryKey(CUE), slot = 0) {
   const state = { words: new Array(1024).fill(0n) };
@@ -110,6 +147,45 @@ function opts(pipelineVersion, capture) {
     ...(pipelineVersion === CORETEX_PIPELINE_VERSION_BMU_V2 ? { bmuPublicPathBundle: BMU_V2_PUBLIC_PATH_BUNDLE } : {}),
   };
 }
+
+test('v2 scorer fails closed on missing or malformed public operation bodies', async () => {
+  const { corpus, query } = fixture();
+  const state = { words: new Array(1024).fill(0n) };
+  const invalidPrograms = [
+    undefined,
+    { branchLimit: 3, steps: EXACT_PROGRAM.steps },
+    { branchLimit: 4, steps: [] },
+    { branchLimit: 4, steps: [{ direction: 'incoming', edgeType: 'answers' }] },
+  ];
+  for (const operationProgram of invalidPrograms) {
+    const invalid = { ...query };
+    if (operationProgram === undefined) delete invalid.bmuOperationProgram;
+    else invalid.bmuOperationProgram = operationProgram;
+    await assert.rejects(
+      evaluateRetrievalBenchmarkState(
+        state,
+        corpus,
+        { epoch: 0, seed: `0x${'23'.repeat(32)}`, events: [invalid] },
+        opts(CORETEX_PIPELINE_VERSION_BMU_V2, []),
+      ),
+      /missing\/malformed bmuOperationProgram/,
+    );
+  }
+  const missing = { ...query };
+  delete missing.bmuOperationProgram;
+  const v2WithoutExplicitBundle = { ...opts(CORETEX_PIPELINE_VERSION_BMU_V2, []) };
+  delete v2WithoutExplicitBundle.bmuPublicPathBundle;
+  await assert.rejects(
+    evaluateRetrievalBenchmarkState(
+      state,
+      corpus,
+      { epoch: 0, seed: `0x${'25'.repeat(32)}`, events: [missing] },
+      v2WithoutExplicitBundle,
+    ),
+    /missing\/malformed bmuOperationProgram/,
+    'the pipeline pin itself fails closed even if a direct caller omits the bundle option',
+  );
+});
 
 test('blank and obsolete parent fail while a four-word query-key program executes and supplies uniform route context', async () => {
   const { corpus, query } = fixture();
@@ -148,7 +224,14 @@ test('diagonal edge programs exclude seed backtracking before applying the four-
     biEncoderModelId: MODEL_ID, biEncoderRevision: REVISION, biEncoderRetrievalKeyLayout: LAYOUT,
     labelingModelId: 'test/qwen', labelingModelRevision: 'q'.repeat(40),
   };
-  const query = { ...event('diagonal-query', 'execute diagonal route', high), split: 'eval_hidden', bmuOperationCue: CUE };
+  const query = {
+    ...event('diagonal-query', 'execute diagonal route', high),
+    split: 'eval_hidden', bmuOperationCue: CUE,
+    bmuOperationProgram: {
+      branchLimit: 4,
+      steps: [{ direction: 'outgoing', edgeType: 'supports' }, { direction: 'incoming', edgeType: 'supports' }],
+    },
+  };
   const capture = [];
   const state = stateWithProgram([
     { direction: 'outgoing', edgeType: 'supports' },
@@ -249,7 +332,14 @@ test('terminal overflow fails before Qwen instead of truncating a program bundle
     biEncoderModelId: MODEL_ID, biEncoderRevision: REVISION, biEncoderRetrievalKeyLayout: LAYOUT,
     labelingModelId: 'test/qwen', labelingModelRevision: 'q'.repeat(40),
   };
-  const query = { ...event('overflow-query', 'follow the bounded route', high), split: 'eval_hidden', bmuOperationCue: CUE };
+  const query = {
+    ...event('overflow-query', 'follow the bounded route', high),
+    split: 'eval_hidden', bmuOperationCue: CUE,
+    bmuOperationProgram: {
+      branchLimit: 4,
+      steps: Array.from({ length: 4 }, () => ({ direction: 'outgoing', edgeType: 'derived_from' })),
+    },
+  };
   const capture = [];
   const overflowOpts = { ...opts(CORETEX_PIPELINE_VERSION_BMU_V2, capture), rerankerInputTopK: 64 };
   const state = stateWithProgram(Array.from({ length: 4 }, () => ({ direction: 'outgoing', edgeType: 'derived_from' })));
@@ -263,7 +353,14 @@ test('terminal overflow fails before Qwen instead of truncating a program bundle
 test('ambiguous route collisions and oversized lineage fail closed without truncation', async () => {
   const high = [1, 0, 0, 0, 0, 0, 0, 0];
   const low = [0, 1, 0, 0, 0, 0, 0, 0];
-  const query = { ...event('route-query', 'follow route', high), split: 'eval_hidden', bmuOperationCue: CUE };
+  const query = {
+    ...event('route-query', 'follow route', high),
+    split: 'eval_hidden', bmuOperationCue: CUE,
+    bmuOperationProgram: {
+      branchLimit: 4,
+      steps: [{ direction: 'outgoing', edgeType: 'derived_from' }, { direction: 'outgoing', edgeType: 'supports' }],
+    },
+  };
   const makeCorpus = (events) => ({
     events, byId: new Map(events.map((e) => [e.id, e])), corpusRoot: computeCorpusRoot(events), corpusEpoch: 0,
     biEncoderModelId: MODEL_ID, biEncoderRevision: REVISION, biEncoderRetrievalKeyLayout: LAYOUT,

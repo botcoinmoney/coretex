@@ -6,8 +6,10 @@ import {
   CORETEX_PIPELINE_VERSION_BMU_V2,
   DEFAULT_PROFILE,
   applyPatch,
+  bmuOperationQueryKey,
   buildBmuPublicPathProgramPatch,
   computeCorpusRoot,
+  decodeBmuPublicPathPrograms,
   evaluateBmuBenchmarkState,
 } from '../../dist/index.js';
 import { buildCombinedSample } from '../../../../scripts/lib/bmu-generators/cross-family-checks.mjs';
@@ -163,9 +165,10 @@ function scoringOptions(semanticsByQuery) {
   };
 }
 
-test('one generated four-word program transfers across an I6-disjoint pair and makes both rows judge-success, for every family', async () => {
+test('exact generated programs transfer across I6 pairs while same-cue temporal/conflict shortcut bodies stay inert', async () => {
   const { families } = buildCombinedSample(undefined, { docIdMasterKeyHex: DOC_ID_MASTER_KEY });
   let familyIndex = 0;
+  let sameCueWrongBodyFamilies = 0;
   for (const [family, lane] of Object.entries(families)) {
     const { clusters, corpus, queries, operationRequiredByQuery, semanticsByQuery } = generatedPairFixture(family, lane);
     const pack = { epochId: 152, evalSeedCommit: `0x${String(familyIndex + 1).padStart(64, '0')}`, events: queries };
@@ -188,13 +191,53 @@ test('one generated four-word program transfers across an I6-disjoint pair and m
     assert.deepEqual(patch.indices, Array.from({ length: 4 }, (_, offset) => 384 + familyIndex * 4 + offset));
     const applied = applyPatch(obsolete.state, patch, true);
     assert.equal(applied.ok, true);
+    let sameCueWrongBodyState = null;
+    let sameCueWrongBodyLabel = null;
+    if (family === 'temporal' || family === 'conflict_lifecycle') {
+      const shortcutEdge = family === 'temporal' ? 'supersedes' : 'derived_from';
+      for (let queryIndex = 0; queryIndex < queries.length; queryIndex++) {
+        const seedId = clusters[queryIndex].publicPath.seedId;
+        const incomingShortcutSources = new Set(lane.relations
+          .filter((relation) => relation.dst === seedId && relation.type === shortcutEdge)
+          .map((relation) => relation.src));
+        assert.ok([...operationRequiredByQuery[queryIndex]].some((id) => incomingShortcutSources.has(id)),
+          `${family}: one-step incoming:${shortcutEdge} is a real emitted-row shortcut counterexample`);
+      }
+      const wrongBodyProgram = {
+        branchLimit: 4,
+        steps: [{ direction: 'incoming', edgeType: shortcutEdge }],
+      };
+      const wrongBodyPatch = buildBmuPublicPathProgramPatch({
+        parent: zero,
+        operationCue: queries[0].bmuOperationCue,
+        // These real-generator shortcuts were executable under cue-only
+        // binding because they skip the advertised outgoing step.
+        operationProgram: wrongBodyProgram,
+        programSlot: familyIndex,
+      });
+      const wrongBody = applyPatch(zero, wrongBodyPatch, true);
+      assert.equal(wrongBody.ok, true);
+      const decodedWrongBody = decodeBmuPublicPathPrograms(wrongBody.state).programs[0];
+      assert.equal(decodedWrongBody.queryKey, bmuOperationQueryKey(queries[0].bmuOperationCue),
+        `${family}: negative control deliberately shares the exact cue key`);
+      assert.deepEqual(decodedWrongBody.steps, wrongBodyProgram.steps);
+      assert.notDeepEqual(decodedWrongBody.steps, queries[0].bmuOperationProgram.steps);
+      sameCueWrongBodyState = wrongBody.state;
+      sameCueWrongBodyLabel = `same-cue/wrong-body incoming:${shortcutEdge}`;
+      sameCueWrongBodyFamilies += 1;
+    }
     const opts = scoringOptions(semanticsByQuery);
-    const [blankScore, parentScore, candidateScore] = await Promise.all([
+    const [blankScore, parentScore, candidateScore, sameCueWrongBodyScore] = await Promise.all([
       evaluateBmuBenchmarkState(zero, corpus, pack, opts),
       evaluateBmuBenchmarkState(obsolete.state, corpus, pack, opts),
       evaluateBmuBenchmarkState(applied.state, corpus, pack, opts),
+      sameCueWrongBodyState === null
+        ? Promise.resolve(null)
+        : evaluateBmuBenchmarkState(sameCueWrongBodyState, corpus, pack, opts),
     ]);
-    for (const [label, score] of [['ZERO_STATE', blankScore], ['parent', parentScore]]) {
+    const inertScores = [['ZERO_STATE', blankScore], ['parent', parentScore]];
+    if (sameCueWrongBodyScore !== null) inertScores.push([sameCueWrongBodyLabel, sameCueWrongBodyScore]);
+    for (const [label, score] of inertScores) {
       assert.equal(score.perQuery.some((result) => result.cappedDocSources.some((sources) => sources.includes('publicPath'))),
         false, `${family}:${label}: no executable public-path source`);
       for (let queryIndex = 0; queryIndex < queries.length; queryIndex++) {
@@ -224,4 +267,5 @@ test('one generated four-word program transfers across an I6-disjoint pair and m
     assert.equal(clusters[0].operationClass, clusters[1].operationClass);
     familyIndex += 1;
   }
+  assert.equal(sameCueWrongBodyFamilies, 2, 'real emitted temporal and conflict wrong-body controls both executed');
 });

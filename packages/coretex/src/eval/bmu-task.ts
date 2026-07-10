@@ -104,6 +104,45 @@ export interface BmuOperationProgram {
   readonly steps: readonly BmuOperationProgramStep[];
 }
 
+/** Validate the complete public operation body before it can bind scorer
+ * bytecode. Kept independent of bmuTask so the runtime can fail closed even
+ * when a caller bypasses corpus-load validation with an in-memory pack. */
+export function bmuOperationProgramValidationError(program: unknown): string | null {
+  if (!program || typeof program !== 'object') return 'program must be an object';
+  const candidate = program as { branchLimit?: unknown; steps?: unknown };
+  if (candidate.branchLimit !== BMU_V2_OPERATION_BRANCH_LIMIT) {
+    return `branchLimit must equal ${BMU_V2_OPERATION_BRANCH_LIMIT}`;
+  }
+  if (!Array.isArray(candidate.steps) || candidate.steps.length < 1 || candidate.steps.length > 4) {
+    return 'steps must contain 1..4 operations';
+  }
+  const validDirections = new Set<string>(['outgoing', 'incoming']);
+  const validEdges = new Set<string>(BMU_V2_OPERATION_EDGE_TYPES);
+  for (const step of candidate.steps) {
+    if (!step || typeof step !== 'object') return 'every step must be an object';
+    const typed = step as { direction?: unknown; edgeType?: unknown };
+    if (typeof typed.direction !== 'string' || !validDirections.has(typed.direction)) {
+      return `unknown step direction '${String(typed.direction)}'`;
+    }
+    if (typeof typed.edgeType !== 'string' || !validEdges.has(typed.edgeType)) {
+      return `unknown public edge type '${String(typed.edgeType)}'`;
+    }
+  }
+  return null;
+}
+
+/** Exact ordered executable-body equality. A cue-key hit is insufficient. */
+export function bmuOperationProgramsEqual(
+  expected: BmuOperationProgram,
+  candidate: { readonly branchLimit: number; readonly steps: readonly BmuOperationProgramStep[] },
+): boolean {
+  if (candidate.branchLimit !== expected.branchLimit || candidate.steps.length !== expected.steps.length) return false;
+  return expected.steps.every((step, index) => {
+    const other = candidate.steps[index];
+    return other?.direction === step.direction && other.edgeType === step.edgeType;
+  });
+}
+
 /** Exact executable equivalence-class law shared with the public generator. */
 export function bmuExecutableOperationClass(cue: string, program: BmuOperationProgram): string {
   return `${cue}=>b${program.branchLimit}/${program.steps
@@ -261,14 +300,11 @@ export function validateBmuTaskOnEvent(
     if (typeof t.operationClass !== 'string' || t.operationClass.length < 4 || t.operationClass.length > 256 || CONTROL.test(t.operationClass)) {
       err('BMU v2 bmuTask.operationClass must be a printable string of length 4..256');
     }
-    const validDirections = new Set<BmuOperationDirection>(['outgoing', 'incoming']);
-    const validEdges = new Set<string>(BMU_V2_OPERATION_EDGE_TYPES);
-    if (!program || program.branchLimit !== BMU_V2_OPERATION_BRANCH_LIMIT
-        || !Array.isArray(program.steps) || program.steps.length < 1 || program.steps.length > 4
-        || program.steps.some((step) => !step || !validDirections.has(step.direction) || !validEdges.has(step.edgeType))) {
-      err(`BMU v2 bmuOperationProgram must carry branchLimit=${BMU_V2_OPERATION_BRANCH_LIMIT} and 1..4 valid directed public-edge steps`);
-    } else if (typeof cue === 'string' && t.operationClass !== bmuExecutableOperationClass(cue, program)) {
-      err(`BMU v2 bmuTask.operationClass must equal the recomputed executable signature '${bmuExecutableOperationClass(cue, program)}'`);
+    const programError = bmuOperationProgramValidationError(program);
+    if (programError !== null) {
+      err(`BMU v2 bmuOperationProgram is invalid: ${programError}`);
+    } else if (typeof cue === 'string' && t.operationClass !== bmuExecutableOperationClass(cue, program as BmuOperationProgram)) {
+      err(`BMU v2 bmuTask.operationClass must equal the recomputed executable signature '${bmuExecutableOperationClass(cue, program as BmuOperationProgram)}'`);
     }
     if (t.operationClassBasis !== BMU_V2_OPERATION_CLASS_BASIS) {
       err(`BMU v2 bmuTask.operationClassBasis must equal '${BMU_V2_OPERATION_CLASS_BASIS}'`);

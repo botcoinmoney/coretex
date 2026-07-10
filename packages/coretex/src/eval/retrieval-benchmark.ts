@@ -27,7 +27,12 @@ import type {
   RetrievalKeyLayout,
 } from './retrieval-corpus.js';
 import { codePointCompare, isMemoryDocumentEventId } from './retrieval-corpus.js';
-import { BMU_MULTI_HOP_FORCED_INHERIT_ALPHA } from './bmu-task.js';
+import {
+  BMU_MULTI_HOP_FORCED_INHERIT_ALPHA,
+  bmuOperationProgramValidationError,
+  bmuOperationProgramsEqual,
+  type BmuOperationProgram,
+} from './bmu-task.js';
 import {
   buildPublicCorpusIndex,
   publicTextTokens,
@@ -1208,8 +1213,17 @@ export async function scoreSubstrateAgainstQuery(
   // later fail-closes if terminals plus any direct anchors cannot all reach
   // Qwen. The operation can increase availability but never adds an
   // answer-shaped final-score bonus.
+  let validatedBmuQueryProgram: BmuOperationProgram | undefined;
+  if (opts.pipelineVersion === CORETEX_PIPELINE_VERSION_BMU_V2 || opts.bmuPublicPathBundle !== undefined) {
+    const queryProgramError = bmuOperationProgramValidationError(query.bmuOperationProgram);
+    if (queryProgramError !== null) {
+      throw new Error(`BMU v2 query '${query.id}' has missing/malformed bmuOperationProgram: ${queryProgramError}`);
+    }
+    validatedBmuQueryProgram = query.bmuOperationProgram as BmuOperationProgram;
+  }
   if (opts.bmuPublicPathBundle !== undefined) {
     const law = opts.bmuPublicPathBundle;
+    const queryProgram = validatedBmuQueryProgram!;
     if (!Number.isInteger(law.stage1SeedLimit) || law.stage1SeedLimit < 1 || law.stage1SeedLimit > 16) {
       throw new Error(`bmuPublicPathBundle.stage1SeedLimit must be an integer in [1, 16] (got ${String(law.stage1SeedLimit)})`);
     }
@@ -1234,7 +1248,7 @@ export async function scoreSubstrateAgainstQuery(
     for (const list of incoming.values()) list.sort((a, b) => codePointCompare(a.id, b.id));
     const queryKey = query.bmuOperationCue ? bmuOperationQueryKey(query.bmuOperationCue) : null;
     const matchingPrograms = queryKey === null ? [] : decoded.bmuPublicPathPrograms
-      .filter((program) => program.queryKey === queryKey)
+      .filter((program) => program.queryKey === queryKey && bmuOperationProgramsEqual(queryProgram, program))
       .slice(0, law.maxPrograms);
     const terminalRoutes = new Map<string, readonly string[]>();
     const initialFrontier = [...new Set(stage1Docs.slice(0, law.stage1SeedLimit).map((doc) => doc.eventId))]

@@ -91,6 +91,13 @@ function corpusFor(outgoingEdgeType, incomingEdgeType) {
     })),
   ];
   events[0].bmuOperationCue = 'refutation executable route';
+  events[0].bmuOperationProgram = {
+    branchLimit: 4,
+    steps: [
+      { direction: 'outgoing', edgeType: outgoingEdgeType },
+      { direction: 'incoming', edgeType: incomingEdgeType },
+    ],
+  };
   return {
     schemaVersion: 'coretex.production-corpus.v1', corpusEpoch: 0,
     corpusRoot: computeCorpusRoot(events), generatedAt: '2026-07-10T00:00:00.000Z',

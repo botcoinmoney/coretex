@@ -28,6 +28,8 @@ import {
   PATCH_TYPE,
   RANGES,
   CORETEX_PIPELINE_VERSION_BMU_V2,
+  BMU_V2_OPERATION_CLASS_BASIS,
+  bmuExecutableOperationClass,
   isBmuV2ScoringLaw,
 } from '../../dist/index.js';
 
@@ -48,6 +50,16 @@ function makeBmuEvent({ rid, fam, abstain = false, isProtected = false }) {
   const truthId = `${rid}-t`;
   const trapId = `${rid}-trap`;
   const fillId = `${rid}-fill`;
+  const bmuOperationCue = `unit operation ${rid.replaceAll('_', ' ')}`;
+  const bmuOperationProgram = {
+    branchLimit: 4,
+    steps: [{ direction: 'outgoing', edgeType: 'supports' }, { direction: 'incoming', edgeType: 'supports' }],
+  };
+  const operationStamp = {
+    operationLaw: 'public_path_program_v1',
+    operationClass: bmuExecutableOperationClass(bmuOperationCue, bmuOperationProgram),
+    operationClassBasis: BMU_V2_OPERATION_CLASS_BASIS,
+  };
   return {
     id: rid,
     family: fam.bucketed,
@@ -69,12 +81,16 @@ function makeBmuEvent({ rid, fam, abstain = false, isProtected = false }) {
     protected: isProtected,
     logicalFamily: fam.logical,
     subjectEntityId: `ent-${rid}`,
+    bmuOperationCue,
+    bmuOperationProgram,
     bmuTask: abstain
       ? {
+          ...operationStamp,
           family: fam.bmu, budgetB: 3, requiredEvidence: [], forbiddenEvidence: [trapId],
           abstain: true, motifGroupId: `mg-${rid}`, templateId: `tt-${rid}`,
         }
       : {
+          ...operationStamp,
           family: fam.bmu, budgetB: 3, requiredEvidence: [truthId], forbiddenEvidence: [trapId],
           answer: { id: truthId }, motifGroupId: `mg-${rid}`, templateId: `tt-${rid}`,
         },

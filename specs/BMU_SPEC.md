@@ -1935,7 +1935,12 @@ capacity, plus fallback/underfill-engagement telemetry.
    matching program and cannot admit those operation-caused terminals. One
    public four-word patch is sufficient for two I6-disjoint generated rows
    sharing a cue/program; load validation recomputes the exact operation class
-   and rejects any cue/program/class drift.
+   and rejects any cue/program/class drift. Runtime matching is conjunctive:
+   the decoded 56-bit cue query-key AND the complete validated program body
+   (`branchLimit` plus step count, order, directions, and edge types) MUST all
+   equal the row stamp. A cue-key hit with any other body is inert; a missing
+   or malformed v2 row program refuses scoring rather than falling back to
+   cue-only execution.
 2. **What executable class space exceeds capacity.** All four generators use
    the same enumerated 6×6 bank of 36 two-step programs:
    `outgoing:<edge-1>` then `incoming:<edge-2>` over the six public relation
@@ -1991,7 +1996,10 @@ family.
   path bundle before reranking. It starts from at most four stage-1 public
   seed events, applies two explicitly ordered edge/direction steps, and takes
   at most four codepoint-sorted public branches per event. Only terminal
-  branches are admitted (one document per terminal); intermediate traversal
+  branches are admitted (one document per terminal). The decoded state
+  program executes only when both its cue query-key and exact ordered body
+  match the validated public row program; missing/malformed bodies fail
+  closed and same-cue alternate bodies are inert. Intermediate traversal
   nodes are never candidates. The calculated terminal maximum
   (`seeds × branchLimit^steps`) MUST fit the pinned Qwen input cap. After the
   complete candidate pool is known, terminal branches plus every direct or

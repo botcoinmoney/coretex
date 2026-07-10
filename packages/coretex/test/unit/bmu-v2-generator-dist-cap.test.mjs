@@ -92,6 +92,13 @@ function corpusFor(plan, { amputateSeed = false } = {}) {
     ...Array.from({ length: 70 }, (_, i) => event({ id: `distractor-${String(i).padStart(2, '0')}`, text: `high-cosine distractor ${i}`, vector: high })),
   ];
   events[0].bmuOperationCue = CUE;
+  events[0].bmuOperationProgram = {
+    branchLimit: 4,
+    steps: [
+      { direction: 'outgoing', edgeType: plan.outgoingEdgeType },
+      { direction: 'incoming', edgeType: plan.incomingEdgeType },
+    ],
+  };
   return {
     schemaVersion: 'coretex.production-corpus.v1',
     corpusEpoch: 0,
@@ -141,9 +148,9 @@ for (const [family, plan] of [
   ['near-collision', NEARCOL_OPERATION_CLASSES.at(-1)],
 ]) {
   test(`compiled dist derives ${family} disjoint diamond membership at the real cap boundary`, async () => {
-    assert.ok(['causes', 'derived_from'].includes(plan.outgoingEdgeType));
-    assert.ok(['supports', 'supersedes', 'coreference_of', 'co_occurs_with'].includes(plan.incomingEdgeType));
-    assert.notEqual(plan.outgoingEdgeType, plan.incomingEdgeType);
+    const publicEdges = ['supports', 'supersedes', 'coreference_of', 'causes', 'derived_from', 'co_occurs_with'];
+    assert.ok(publicEdges.includes(plan.outgoingEdgeType));
+    assert.ok(publicEdges.includes(plan.incomingEdgeType));
 
     const intactCorpus = corpusFor(plan);
     const amputatedCorpus = corpusFor(plan, { amputateSeed: true });

@@ -95,7 +95,7 @@ describe('validateBmuTaskOnEvent (§4.1 fail-closed load rules)', () => {
     assert.ok(validateBmuTaskOnEvent(eventOf(V2_TASK_STAMP, {
       bmuOperationCue: V2_CUE,
       bmuOperationProgram: { branchLimit: 4, steps: [{ direction: 'outgoing', edgeType: 'answers' }] },
-    }), docIdExists).some((error) => /valid directed public-edge steps/.test(error)));
+    }), docIdExists).some((error) => /bmuOperationProgram is invalid/.test(error)));
     assert.deepEqual(validateBmuTaskOnEvent(eventOf(), docIdExists), [], 'historical v1 task stays loadable');
   });
 
