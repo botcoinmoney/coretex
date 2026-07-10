@@ -555,8 +555,24 @@ export function oracleSolvedMarginAudit(lane) {
       rowFindings.push({ rowId: row.id, reject: 'no_disjoint_class_pair_for_two_flip' });
       continue;
     }
-    rowFindings.push({ rowId: row.id, certified: true });
+    const chainStartDocId = cluster.publicPath?.seedId
+      ?? cluster.pathGroups?.find((group) => group.truthId !== null && group.truthId !== undefined)?.anchorId ?? null;
+    rowFindings.push({ rowId: row.id, certified: true, chainStartDocId });
   }
+  // BC2 (§17.19) activation-class census: every executable class present in the
+  // ACTIVATED frontier must carry >=2 I6-disjoint motif clusters, so the
+  // seed-independent block-digest class always yields a disjoint same-class
+  // confirm pair (the sparser post-exclusion pack still holds >=2 rows). This is
+  // the structural half; the launch-context census runs the same rule against
+  // the actual activated frontier at pin time.
+  const activationClassCensus = [...classMembers].map(([operationClass, members]) => {
+    const disjointClusters = members.filter((cluster) => members.some((other) => other !== cluster
+      && other.subjectEntityId !== cluster.subjectEntityId
+      && !(other.templateIds ?? []).some((id) => (cluster.templateIds ?? []).includes(id))));
+    return { operationClass, activeClusters: members.length, disjointClusters: disjointClusters.length,
+      wholeClassActivated: disjointClusters.length >= ORACLE_MARGIN_DENSITY_PINS.sparserSideRows };
+  });
+  const singleClusterClasses = activationClassCensus.filter((entry) => !entry.wholeClassActivated);
   const rejected = rowFindings.filter((finding) => finding.certified !== true);
   return {
     pins: ORACLE_MARGIN_DENSITY_PINS,
@@ -564,8 +580,18 @@ export function oracleSolvedMarginAudit(lane) {
     rows: rowFindings.length,
     certifiedRows: rowFindings.length - rejected.length,
     rejectedRows: rejected,
+    // BC1 (§17.19): each certified row's program chain-start (the outgoing-step
+    // seed). For all four families this is a query-similar doc by construction
+    // (conflict/temporal/near_collision: the forbidden query-echo trap; multi_hop:
+    // the hop-1 bridge carrying the query's anchor entity + topic). The real-Qwen
+    // margin run asserts `chain-start in top-4 stage-1` against the staged corpus's
+    // precomputed query embeddings (byte-deterministic per §17.17).
+    chainStartByRow: rowFindings.filter((f) => f.certified === true).map((f) => ({ rowId: f.rowId, chainStartDocId: f.chainStartDocId })),
+    activationClassCensus,
+    bc2WholeClassActivated: singleClusterClasses.length === 0,
+    singleClusterClasses,
     pass: arithmetic && rejected.length === 0,
-    scope: 'CPU-deterministic structural feasibility; real-Qwen >=3-grid-cell margins run on the emitted oracle-margin pair manifest',
+    scope: 'CPU-deterministic structural feasibility; real-Qwen >=3-grid-cell margins + BC1 chain-start top-4 run on the emitted oracle-margin pair manifest',
   };
 }
 
