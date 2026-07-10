@@ -1,6 +1,6 @@
 # BMU — Budgeted Memory Utility: versioned CoreTex scoring laws
 
-**Revision:** rev4.0 (BMU v2 public-path law; changelog in §17).
+**Revision:** rev4.1 (BMU v2 keyed opaque-id hardening; changelog in §17).
 **Status:** PRE-ARM implementation candidate. Code and offline evidence may
 accompany this document; nothing here arms, pins, or deploys anything.
 
@@ -462,10 +462,20 @@ the hard cap 8 is law — `budgetB > 8` fails corpus load):
   `observedAt` interval and the public structural `supersedes` relation, but
   MUST NOT publish `validity.supersededBy`: that field is an exact answer-doc
   pointer and therefore a proposer-visible shortcut, not validity semantics.
-- BMU-generated document ids MUST be deterministic opaque SHA-256-derived ids
-  with no family, subject, ordinal, answer/trap, or role suffix. Generator-side
-  docs MAY retain an internal `role` for construction/certification; the
-  production bridge does not publish that role. Public ids MUST NOT carry it.
+- BMU-generated document ids MUST be deterministic HMAC-SHA-256 ids under an
+  independent, random, nonzero bytes32 per-epoch `docIdKeyHex`, with domain
+  `coretex-bmu-doc-id-v2`. The MAC message commits the public generation seed,
+  epoch, motif id, and internal slot; the key MUST NOT be derived from the
+  generation seed, epoch secret, gate/confirm seed, blockhash, corpus/bundle
+  root, or any committed/public value. The key is a required generator input:
+  absent, zero, or malformed keys fail closed and there is no compatibility
+  fallback to the refuted seed-only SHA-256 formula. A private master MAY
+  derive compartmentalized epoch keys only through the pinned
+  `coretex-bmu-doc-id-epoch-key-v1` HMAC domain. Generation manifests MAY
+  publish only domain-separated SHA-256 epoch-key commitments, never a key.
+  Public ids carry no family, subject, ordinal, answer/trap, or role suffix.
+  Generator-side docs MAY retain an internal `role` for construction and
+  certification; the production bridge does not publish that role.
 - `band` (`:279`): unchanged; still generator difficulty metadata feeding
   band strata (`strataOf`, `src/eval/hidden-query-pack.ts:163-194`).
 - `logicalFamily` (`:293`): unchanged; consumed per the §5.6 namespace table.
@@ -1933,6 +1943,24 @@ capacity, plus fallback/underfill-engagement telemetry.
 ---
 
 ## 17. Changelog
+
+### rev4.0 → rev4.1 (known-seed identifier-inversion hardening; 2026-07-10)
+
+- Replaced seed-only SHA-256 document ids with required keyed HMAC-SHA-256
+  identities across all four generators. Security no longer relies on the
+  generation seed remaining private; certification and simulation artifacts
+  may continue to pin that seed. Only a key commitment may enter evidence.
+- Added a permanent known-seed generator-inversion lane to P2 and P6. The
+  attacker receives generator source conventions, seed, epoch, motif id, and
+  the complete bounded slot vocabulary, but not the HMAC key or hidden labels.
+  It tries both the refuted v1 formula and a public seed-derived key guess.
+  Passing requires zero public-id matches and zero judged successes in every
+  family; a correct-private-key positive control prevents a vacuous harness.
+- This lane is intentionally identifier-only. Exact-text, relation/metadata,
+  recency, selector, BGE, and Qwen shortcuts remain separate mandatory gates;
+  HMAC ids do not weaken or replace them. The miner-facing one-sentence
+  contract is unchanged: encode directed relational programs in substrate
+  state that route queries the base stack cannot route.
 
 ### rev3.4 → rev4.0 (BMU v2 replacement law; 2026-07-10)
 

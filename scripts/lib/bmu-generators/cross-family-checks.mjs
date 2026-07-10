@@ -47,6 +47,7 @@ import { generateNearCollisionAbstentionClusters, NEARCOL_FAMILY } from './near_
 import {
   createBmuActiveIndex, createEntityHoldoutIdentityStore, retireAgedClusters, m1Census,
   createM1Registry, makeCanonicalSplitOf,
+  deriveBmuEpochDocIdKeyHex,
   BMU_E_F_MIN, BMU_CLUSTER_SIZE_K,
 } from './common.mjs';
 import { sampleSubjectBank as temporalSubjectBank } from './emit-temporal-sample-bank.mjs';
@@ -92,7 +93,7 @@ const BUCKETED = Object.freeze({
 });
 
 // ─── Combined multi-epoch generation (shared mint-time m=1 structures) ───────
-export function buildCombinedSample(params = COMBINED_PARAMS) {
+export function buildCombinedSample(params = COMBINED_PARAMS, { docIdMasterKeyHex } = {}) {
   const laneSplit = (corpusEpoch) => makeCanonicalSplitOf({ splitForRecord, liveTailQueryId, corpusEpoch });
   const splitTemporalLane = laneSplit(params.corpusEpochPins.temporalLane);
   const splitConflictLane = laneSplit(params.corpusEpochPins.conflictLane);
@@ -127,10 +128,11 @@ export function buildCombinedSample(params = COMBINED_PARAMS) {
   };
 
   params.epochs.forEach((epoch, epochIdx) => {
+    const docIdKeyHex = deriveBmuEpochDocIdKeyHex(docIdMasterKeyHex, epoch);
     retireAgedClusters(activeIndex, epoch, params.maxAge);
 
     const t = generateTemporalClusters({
-      epoch, seed: params.seeds.temporal, subjects: temporalSubjectBank(),
+      epoch, seed: params.seeds.temporal, docIdKeyHex, subjects: temporalSubjectBank(),
       universe: params.universes.temporal,
       clusterCount: params.perFamilyClusters.temporal[epochIdx],
       splitOf: splitTemporalLane, activeIndex,
@@ -141,7 +143,7 @@ export function buildCombinedSample(params = COMBINED_PARAMS) {
     for (const c of t.clusters) { families.temporal.rows.push(...c.rows); families.temporal.docs.push(...c.docs); }
 
     const m = generateMultiHopClusters({
-      epoch, seed: params.seeds.multi_hop_relation, subjects: multihopSubjectBank(),
+        epoch, seed: params.seeds.multi_hop_relation, docIdKeyHex, subjects: multihopSubjectBank(),
       universe: params.universes.multi_hop_relation,
       clusterCount: params.perFamilyClusters.multi_hop_relation[epochIdx],
       splitOf: splitTemporalLane, activeIndex,
@@ -152,7 +154,7 @@ export function buildCombinedSample(params = COMBINED_PARAMS) {
     for (const c of m.clusters) { families.multi_hop_relation.rows.push(...c.rows); families.multi_hop_relation.docs.push(...c.docs); }
 
     const c = generateConflictLifecycleClusters({
-      epoch, seed: params.seeds.conflict_lifecycle, subjects: conflictSubjects,
+      epoch, seed: params.seeds.conflict_lifecycle, docIdKeyHex, subjects: conflictSubjects,
       registry, splitOf: splitConflictLane,
       clusterCount: params.perFamilyClusters.conflict_lifecycle[epochIdx],
       escalationLevel: epochIdx, ownerEntityId: params.ownerEntityId,
@@ -164,7 +166,7 @@ export function buildCombinedSample(params = COMBINED_PARAMS) {
     families.conflict_lifecycle.docs.push(...c.addedDocs);
 
     const n = generateNearCollisionAbstentionClusters({
-      epoch, seed: params.seeds.near_collision_abstention, subjects: nearcolSubjects,
+        epoch, seed: params.seeds.near_collision_abstention, docIdKeyHex, subjects: nearcolSubjects,
       registry, splitOf: splitConflictLane,
       clusterCount: params.perFamilyClusters.near_collision_abstention[epochIdx],
       escalationLevel: epochIdx, ownerEntityId: params.ownerEntityId,
@@ -420,7 +422,9 @@ if (isMain) {
   if (!outDir) { console.error('usage: cross-family-checks.mjs <outDir> [--pack-law-dist <dist>]'); process.exit(1); }
   mkdirSync(outDir, { recursive: true });
 
-  const { params, families, mintTimeM1 } = buildCombinedSample();
+  const { params, families, mintTimeM1 } = buildCombinedSample(COMBINED_PARAMS, {
+    docIdMasterKeyHex: process.env.CORETEX_BMU_DOC_ID_KEY_HEX,
+  });
   const census = globalM1Census(families);
   const dedup = crossFamilyDedup(families);
   const schema = schemaLevelCompositionCheck(families);

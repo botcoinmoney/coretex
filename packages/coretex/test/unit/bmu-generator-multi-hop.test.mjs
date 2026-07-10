@@ -34,6 +34,7 @@ import {
 } from '../../../../scripts/lib/bmu-generators/common.mjs';
 
 const CORPUS_EPOCH = 138;
+const DOC_ID_KEY = `0x${'22'.repeat(32)}`;
 /** Canonical split composition — exactly the evolve wiring (coretex-epoch-evolve.mjs:583). */
 const canonicalSplitOf = (logicalQueryId, liveUpdateEpoch) => splitForRecord(
   liveUpdateEpoch !== undefined && liveUpdateEpoch !== null
@@ -55,6 +56,7 @@ function subjectBank(n = 40) {
 const baseOpts = (over = {}) => ({
   epoch: 150,
   seed: 'bmu-p2-multihop-test-v1',
+  docIdKeyHex: DOC_ID_KEY,
   subjects: subjectBank(),
   universe: 'user_scope_bmu_mh_test',
   clusterCount: 4,
@@ -407,8 +409,8 @@ test('topic rotation: deterministic grid walk with series suffix past a full cyc
 
 test('sample bank: deterministic, certification-sized, m=1-clean', async () => {
   const { buildMultiHopSampleBank } = await import('../../../../scripts/lib/bmu-generators/emit-multi-hop-sample-bank.mjs');
-  const a = buildMultiHopSampleBank();
-  const b = buildMultiHopSampleBank();
+  const a = buildMultiHopSampleBank(undefined, { docIdMasterKeyHex: DOC_ID_KEY });
+  const b = buildMultiHopSampleBank(undefined, { docIdMasterKeyHex: DOC_ID_KEY });
   assert.deepEqual(JSON.parse(JSON.stringify(a.clusters)), JSON.parse(JSON.stringify(b.clusters)), 'bank is deterministic');
   assert.ok(a.clusters.length >= 22, `>= 22 clusters (got ${a.clusters.length})`);
   const rows = a.clusters.reduce((n, c) => n + c.rows.length, 0);

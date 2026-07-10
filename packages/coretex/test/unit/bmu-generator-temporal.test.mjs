@@ -38,6 +38,7 @@ import {
 import { generateConflictLifecycleClusters } from '../../../../scripts/lib/bmu-generators/conflict_lifecycle.mjs';
 
 const CORPUS_EPOCH = 138;
+const DOC_ID_KEY = `0x${'11'.repeat(32)}`;
 /** Canonical split composition — exactly the evolve wiring (coretex-epoch-evolve.mjs:583). */
 const canonicalSplitOf = (logicalQueryId, liveUpdateEpoch) => splitForRecord(
   liveUpdateEpoch !== undefined && liveUpdateEpoch !== null
@@ -59,6 +60,7 @@ function subjectBank(n = 40) {
 const baseOpts = (over = {}) => ({
   epoch: 150,
   seed: 'bmu-p2-temporal-test-v1',
+  docIdKeyHex: DOC_ID_KEY,
   subjects: subjectBank(),
   universe: 'user_scope_bmu_test',
   clusterCount: 3,
@@ -277,6 +279,7 @@ test('alias m=1 is shared across the active-index and registry generator APIs be
   assert.throws(() => generateConflictLifecycleClusters({
     epoch: 150,
     seed: 'cross-api-alias-m1',
+    docIdKeyHex: DOC_ID_KEY,
     subjects: [{ id: 'different-conflict-id', canonicalName: 'Shared Alias' }],
     registry,
     splitOf: canonicalSplitOf,
@@ -497,8 +500,8 @@ test('sample bank: deterministic, certification-sized (≥16 clusters / ≥80 ro
   const { buildTemporalSampleBank, SAMPLE_BANK_PARAMS } = await import(
     '../../../../scripts/lib/bmu-generators/emit-temporal-sample-bank.mjs'
   );
-  const a = buildTemporalSampleBank(SAMPLE_BANK_PARAMS);
-  const b = buildTemporalSampleBank(SAMPLE_BANK_PARAMS);
+  const a = buildTemporalSampleBank(SAMPLE_BANK_PARAMS, { docIdMasterKeyHex: DOC_ID_KEY });
+  const b = buildTemporalSampleBank(SAMPLE_BANK_PARAMS, { docIdMasterKeyHex: DOC_ID_KEY });
   assert.equal(JSON.stringify(a.clusters), JSON.stringify(b.clusters), 'bank replays byte-identically');
   assert.ok(new Set(a.clusters.map((c) => c.epoch)).size >= 3);
   assert.ok(a.clusters.length >= 16);

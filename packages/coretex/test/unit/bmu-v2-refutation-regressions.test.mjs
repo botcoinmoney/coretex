@@ -176,11 +176,13 @@ function attackerRanking(allDocIds, preferredIds, forbiddenIds) {
   ].map((docId, index) => ({ docId, score: -index }));
 }
 
-test('refutation: known public generator seed reverses multi-hop answer/trap ids and solves every row', () => {
+test('regression: known public generator seed cannot reverse keyed multi-hop answer/trap ids', () => {
   const seed = 'known-generator-seed-multi';
+  const docIdKeyHex = `0x${'c1'.repeat(32)}`;
+  const attackerKeyHex = `0x${'d2'.repeat(32)}`;
   const epoch = 152;
   const out = generateMultiHopClusters({
-    epoch, seed,
+    epoch, seed, docIdKeyHex,
     subjects: [{ id: 'e_public_multi_subject', canonicalName: 'Public Multi Subject', aliases: ['PMS'] }],
     universe: 'e_public_universe', clusterCount: 1, splitOf,
     // Escalation 2 mints a second balanced path group, leaving enough safe
@@ -194,24 +196,36 @@ test('refutation: known public generator seed reverses multi-hop answer/trap ids
   const ordinal = Number(ordinalToken[1]);
   const subjectEntityId = cluster.rows[0].subjectEntityId;
   const motifGroupId = `mg_e${epoch}_multi_hop_${String(ordinal).padStart(4, '0')}_${subjectEntityId}`;
-  const id = (slot) => opaqueBmuDocId({ seed, epoch, motifGroupId, slot });
-  const required = [id('chain_hop1'), id('chain_answer')];
-  const forbidden = [
-    id('offpath_decoy'), id('near_bridge_decoy'),
-    id('offpath_shadow:0'), id('offpath_shadow:1'),
-    id('path_balance_decoy:0'), id('path_balance_decoy:1'),
+  const attackerId = (slot) => opaqueBmuDocId({ docIdKeyHex: attackerKeyHex, seed, epoch, motifGroupId, slot });
+  const attackerRequired = [attackerId('chain_hop1'), attackerId('chain_answer')];
+  const attackerForbidden = [
+    attackerId('offpath_decoy'), attackerId('near_bridge_decoy'),
+    attackerId('offpath_shadow:0'), attackerId('offpath_shadow:1'),
+    attackerId('path_balance_decoy:0'), attackerId('path_balance_decoy:1'),
   ];
-  const ranking = attackerRanking(docs.map((doc) => doc.id), required, forbidden);
-  assert.ok(cluster.rows.every((row) => judgeTopB(ranking, row.bmuTask).judgeSuccess));
+  const ranking = attackerRanking(docs.map((doc) => doc.id), attackerRequired, attackerForbidden);
+  assert.ok(cluster.rows.every((row) => !judgeTopB(ranking, row.bmuTask).judgeSuccess));
+  assert.ok([...attackerRequired, ...attackerForbidden].every((id) => !docs.some((doc) => doc.id === id)));
+  const privateId = (slot) => opaqueBmuDocId({ docIdKeyHex, seed, epoch, motifGroupId, slot });
+  const required = [privateId('chain_hop1'), privateId('chain_answer')];
+  const forbidden = [
+    privateId('offpath_decoy'), privateId('near_bridge_decoy'),
+    privateId('offpath_shadow:0'), privateId('offpath_shadow:1'),
+    privateId('path_balance_decoy:0'), privateId('path_balance_decoy:1'),
+  ];
+  const positive = attackerRanking(docs.map((doc) => doc.id), required, forbidden);
+  assert.ok(cluster.rows.every((row) => judgeTopB(positive, row.bmuTask).judgeSuccess), 'private-key positive control');
   assert.deepEqual(new Set(required), new Set(cluster.rows[0].bmuTask.requiredEvidence));
   assert.deepEqual(new Set(forbidden), new Set(cluster.rows[0].bmuTask.forbiddenEvidence));
 });
 
-test('refutation: known public generator seed reverses near-collision identities and breaks the zero-success attacker gate', () => {
+test('regression: known public generator seed cannot reverse keyed near-collision identities', () => {
   const seed = 'known-generator-seed-near';
+  const docIdKeyHex = `0x${'e3'.repeat(32)}`;
+  const attackerKeyHex = `0x${'f4'.repeat(32)}`;
   const epoch = 152;
   const out = generateNearCollisionAbstentionClusters({
-    epoch, seed,
+    epoch, seed, docIdKeyHex,
     subjects: [{ id: 'e_public_near_subject', canonicalName: 'Public Near Subject', aliases: ['PNS'] }],
     registry: createM1Registry(), splitOf, clusterCount: 1, escalationLevel: 0,
     ownerEntityId: 'e_public_universe', rotationBaseEpoch: epoch,
@@ -224,13 +238,22 @@ test('refutation: known public generator seed reverses near-collision identities
   const publicEpoch = Number(pivot[1]);
   const clusterSlot = Number(pivot[2]);
   const motifGroupId = `mg_e${publicEpoch}_nearcol_${String(clusterSlot).padStart(4, '0')}`;
-  const id = (slot) => opaqueBmuDocId({ seed, epoch: publicEpoch, motifGroupId, slot });
-  const preferred = [id('exact_match'), id('disambiguation_record')];
-  const forbidden = [id('alias_collision_decoy:0'), id('attribute_lookalike_decoy:0'), id('scope_lookalike_decoy:0')];
-  const ranking = attackerRanking(docs.map((doc) => doc.id), preferred, forbidden);
+  const attackerId = (slot) => opaqueBmuDocId({ docIdKeyHex: attackerKeyHex, seed, epoch: publicEpoch, motifGroupId, slot });
+  const attackerPreferred = [attackerId('exact_match'), attackerId('disambiguation_record')];
+  const attackerForbidden = [attackerId('alias_collision_decoy:0'), attackerId('attribute_lookalike_decoy:0'), attackerId('scope_lookalike_decoy:0')];
+  const matchedAttackerIds = [...attackerPreferred, ...attackerForbidden]
+    .filter((id) => docs.some((doc) => doc.id === id));
+  const ranking = matchedAttackerIds.map((docId, index) => ({ docId, score: -index }));
   const answerableRows = out.addedQueries.filter((row) => row.bmuTask.abstain !== true);
   const successRate = answerableRows.filter((row) => judgeTopB(ranking, row.bmuTask).judgeSuccess).length / out.addedQueries.length;
-  assert.equal(successRate, 0.8, 'known-seed id-only attacker solves all four answerable rows (gate requires zero)');
+  assert.equal(successRate, 0, 'known-seed/wrong-key id attacker must solve zero rows');
+  assert.deepEqual(matchedAttackerIds, []);
+  const privateId = (slot) => opaqueBmuDocId({ docIdKeyHex, seed, epoch: publicEpoch, motifGroupId, slot });
+  const preferred = [privateId('exact_match'), privateId('disambiguation_record')];
+  const forbidden = [privateId('alias_collision_decoy:0'), privateId('attribute_lookalike_decoy:0'), privateId('scope_lookalike_decoy:0')];
+  const positive = attackerRanking(docs.map((doc) => doc.id), preferred, forbidden);
+  const positiveRate = answerableRows.filter((row) => judgeTopB(positive, row.bmuTask).judgeSuccess).length / out.addedQueries.length;
+  assert.equal(positiveRate, 0.8, 'private-key positive control solves all four answerable rows');
   assert.equal(preferred.includes(cluster.truthDocId), true);
   assert.ok(cluster.forbiddenEvidenceAnswerable.every((docId) => forbidden.includes(docId)));
 });

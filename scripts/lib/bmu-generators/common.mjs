@@ -49,7 +49,7 @@
  * time. `retireAgedClusters` is an OFFLINE age-window model for sample banks
  * and tests only — it is not the production retirement mechanism.
  */
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 
 // ─── Inherited verbatim (evolve-corpus.mjs:20-22) ────────────────────────────
 const h = (s) => createHash('sha256').update(s).digest();
@@ -72,20 +72,52 @@ export function slug(s) {
  * Deterministic document id for a BMU-generated document.  The serialized id
  * intentionally carries no family, cluster, subject, answer/trap role, or
  * ordinal suffix: those fields made the old ids a proposer-visible role
- * oracle.  `slot` remains an INTERNAL generator discriminator and is only
- * committed through SHA-256.
+ * oracle. `slot` remains an INTERNAL generator discriminator and is only
+ * committed through keyed HMAC-SHA-256.
  */
-export function opaqueBmuDocId({ seed, epoch, motifGroupId, slot }) {
+export function assertBmuDocIdKeyHex(docIdKeyHex) {
+  if (typeof docIdKeyHex !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(docIdKeyHex)) {
+    throw new Error('opaqueBmuDocId: docIdKeyHex must be canonical bytes32 hex');
+  }
+  if (/^0x0{64}$/i.test(docIdKeyHex)) {
+    throw new Error('opaqueBmuDocId: docIdKeyHex must not be zero');
+  }
+  return docIdKeyHex.toLowerCase();
+}
+
+/** Public commitment suitable for generation manifests. The key itself must
+ * never be serialized into a bank, corpus, evidence packet, or public API. */
+export function bmuDocIdKeyCommit(docIdKeyHex) {
+  const key = assertBmuDocIdKeyHex(docIdKeyHex);
+  return `0x${createHash('sha256')
+    .update('coretex-bmu-doc-id-key-commit-v1\0')
+    .update(Buffer.from(key.slice(2), 'hex'))
+    .digest('hex')}`;
+}
+
+/** Derive a compartmentalized per-epoch document-id key from an independently
+ * injected master. The master and derived keys are both private. */
+export function deriveBmuEpochDocIdKeyHex(docIdMasterKeyHex, epoch) {
+  const master = assertBmuDocIdKeyHex(docIdMasterKeyHex);
+  if (!Number.isInteger(epoch) || epoch < 0) throw new Error('deriveBmuEpochDocIdKeyHex: non-negative integer epoch required');
+  return `0x${createHmac('sha256', Buffer.from(master.slice(2), 'hex'))
+    .update('coretex-bmu-doc-id-epoch-key-v1\0')
+    .update(String(epoch))
+    .digest('hex')}`;
+}
+
+export function opaqueBmuDocId({ docIdKeyHex, seed, epoch, motifGroupId, slot }) {
+  const key = assertBmuDocIdKeyHex(docIdKeyHex);
   if (typeof seed !== 'string' || seed.length === 0) throw new Error('opaqueBmuDocId: non-empty seed required');
   if (!Number.isInteger(epoch) || epoch < 0) throw new Error('opaqueBmuDocId: non-negative integer epoch required');
   if (typeof motifGroupId !== 'string' || motifGroupId.length === 0) throw new Error('opaqueBmuDocId: non-empty motifGroupId required');
   if (typeof slot !== 'string' || slot.length === 0) throw new Error('opaqueBmuDocId: non-empty internal slot required');
-  const digest = createHash('sha256')
-    .update('coretex-bmu-doc-id-v1\0')
-    .update(seed).update('\0')
-    .update(String(epoch)).update('\0')
-    .update(motifGroupId).update('\0')
-    .update(slot)
+  const digest = createHmac('sha256', Buffer.from(key.slice(2), 'hex'))
+    .update('coretex-bmu-doc-id-v2\0')
+    // A JSON array is an unambiguous, order-pinned UTF-8 encoding. Keeping
+    // the public generation seed in the MAC message preserves the existing
+    // deterministic namespace without treating that seed as a secret.
+    .update(JSON.stringify([seed, epoch, motifGroupId, slot]))
     .digest('hex');
   return `d_bmu_${digest}`;
 }

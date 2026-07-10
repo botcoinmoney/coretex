@@ -118,6 +118,7 @@ const armCount = asInt('arm-count', 430);
 const marginClustersPerFamily = asInt('margin-clusters-per-family', 3);
 const clustersPerFamily = asInt('clusters-per-family', 6);
 const evalEpoch = asInt('eval-epoch', 153);
+const docIdMasterKeyHex = process.env.CORETEX_BMU_DOC_ID_KEY_HEX;
 
 mkdirSync(outDir, { recursive: true });
 mkdirSync(workDir, { recursive: true });
@@ -126,6 +127,7 @@ const bootstrap = runTransitionBootstrap({
   dist,
   workDir,
   simSeed,
+  docIdMasterKeyHex,
   armCount,
   marginClustersPerFamily,
 });

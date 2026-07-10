@@ -34,6 +34,7 @@ import {
 } from '../../../../scripts/lib/bmu-generators/certify.mjs';
 
 const CORPUS_EPOCH = 136;
+const DOC_ID_KEY = `0x${'55'.repeat(32)}`;
 const splitOf = makeCanonicalSplitOf({ splitForRecord, liveTailQueryId, corpusEpoch: CORPUS_EPOCH });
 
 function makeBank({ epochs = [137, 138], clustersPerEpoch = 3 } = {}) {
@@ -46,7 +47,7 @@ function makeBank({ epochs = [137, 138], clustersPerEpoch = 3 } = {}) {
   let operationSequenceOffset = 0;
   for (const epoch of epochs) {
     const out = generateConflictLifecycleClusters({
-      epoch, seed: 'bmu-certify-test', subjects, registry, splitOf,
+      epoch, seed: 'bmu-certify-test', docIdKeyHex: DOC_ID_KEY, subjects, registry, splitOf,
       clusterCount: clustersPerEpoch, escalationLevel: epoch - epochs[0],
       operationSequenceOffset,
     });

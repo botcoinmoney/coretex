@@ -12,6 +12,7 @@
 import { createHash } from 'node:crypto';
 import { judgeTopB, randomKRank, CERT_PINS } from './certify.mjs';
 import { subjectScopedRecencyLane, validityCurrencyLane } from './certify-lanes.mjs';
+import { opaqueBmuDocId } from './common.mjs';
 
 const normText = (value) => String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
 const compareId = (a, b) => a < b ? -1 : a > b ? 1 : 0;
@@ -132,6 +133,86 @@ export function idMetadataPathAttacker(row, lane, cluster) {
   });
   scored.sort((a, b) => b.inPath - a.inPath || a.signature.localeCompare(b.signature) || compareId(a.docId, b.docId));
   return scored.map(({ docId }) => ({ docId, score: 0 }));
+}
+
+const indexedSlots = (prefix, max = 64, start = 0) =>
+  Array.from({ length: max - start + 1 }, (_, index) => `${prefix}:${start + index}`);
+const boundedSinkSlots = (prefix) =>
+  Array.from({ length: 65 }, (_, group) => [0, 1].map((sink) => `${prefix}:${group}:${sink}`)).flat();
+
+/** Generator source is public, so the known-seed attacker may enumerate every
+ * internal slot spelling and a conservative superset of all bounded indices.
+ * Supplying motifGroupId directly is stronger than requiring the attacker to
+ * recover it from public epoch/subject/pivot text. */
+export const GENERATOR_INVERSION_SLOTS = Object.freeze({
+  temporal: Object.freeze([
+    'current', 'stale_trap', 'change_provenance', 'public_path_pivot',
+    ...indexedSlots('escalation_shadow'), ...indexedSlots('current_unrelated_attribute', 3),
+  ]),
+  conflict_lifecycle: Object.freeze([
+    'conflict_candidate_trap', 'conflict_resolved', 'resolution_record', 'public_path_pivot',
+    ...indexedSlots('scope_mismatch_decoy'),
+  ]),
+  multi_hop_relation: Object.freeze([
+    'chain_hop1', 'chain_hop2', 'chain_answer', 'offpath_decoy', 'near_bridge_decoy',
+    ...indexedSlots('chain_hop2_mirror', 64, 1), ...indexedSlots('offpath_shadow'),
+    ...indexedSlots('path_balance_decoy'), ...indexedSlots('path_anchor', 64, 1),
+    ...indexedSlots('path_truth_control', 64, 1),
+    ...boundedSinkSlots('path_sink'),
+  ]),
+  near_collision_abstention: Object.freeze([
+    'exact_match', 'disambiguation_record', 'scope_lookalike_decoy:0',
+    ...indexedSlots('alias_collision_decoy'), ...indexedSlots('attribute_lookalike_decoy'),
+    ...indexedSlots('public_path_anchor', 64, 1), ...indexedSlots('public_path_truth_control', 64, 1),
+    ...boundedSinkSlots('public_path_sink'),
+  ]),
+});
+
+function legacySeedOnlyDocId({ seed, epoch, motifGroupId, slot }) {
+  return `d_bmu_${createHash('sha256')
+    .update('coretex-bmu-doc-id-v1\0')
+    .update(seed).update('\0')
+    .update(String(epoch)).update('\0')
+    .update(motifGroupId).update('\0')
+    .update(slot)
+    .digest('hex')}`;
+}
+
+function knownSeedKeyGuess(seed) {
+  return `0x${createHash('sha256').update('coretex-bmu-known-seed-key-guess-v1\0').update(seed).digest('hex')}`;
+}
+
+/**
+ * PUBLIC known-seed identifier-inversion attacker. It receives the generator
+ * seed/source conventions and even the exact motif id, but never the hidden
+ * doc-id key, qrels, bmuTask, roles, answers, or text-to-role matching. It
+ * tries both the refuted v1 seed-only formula and an HMAC keyed by a public
+ * seed-derived guess. Any exact public-id match is a gate failure; the empty
+ * ranking on zero matches makes judge success impossible without a fallback
+ * shortcut (metadata/text/recency are covered by separate lanes).
+ */
+export function knownSeedGeneratorInversionAttacker(row, lane, cluster, {
+  attackerDocIdKeyHex = knownSeedKeyGuess(lane.params?.seed ?? ''),
+} = {}) {
+  const seed = lane.params?.seed;
+  const family = lane.family;
+  const slots = GENERATOR_INVERSION_SLOTS[family];
+  if (typeof seed !== 'string' || seed.length === 0 || !slots) {
+    return { ranking: [], matchedGuessedDocIds: [], guessedIdCount: 0, error: 'missing_seed_or_family_slot_registry' };
+  }
+  const actual = new Set(lane.docs.map((doc) => doc.id));
+  const guessed = [];
+  for (const slot of slots) {
+    guessed.push(legacySeedOnlyDocId({ seed, epoch: cluster.epoch, motifGroupId: cluster.motifGroupId, slot }));
+    guessed.push(opaqueBmuDocId({ docIdKeyHex: attackerDocIdKeyHex, seed, epoch: cluster.epoch, motifGroupId: cluster.motifGroupId, slot }));
+  }
+  const matchedGuessedDocIds = [...new Set(guessed.filter((id) => actual.has(id)))].sort(compareId);
+  return {
+    ranking: matchedGuessedDocIds.map((docId, index) => ({ docId, score: -index })),
+    matchedGuessedDocIds,
+    guessedIdCount: guessed.length,
+    error: null,
+  };
 }
 
 function hiddenOracleRank(row, docs) {
@@ -322,6 +403,10 @@ export function certifyV2Banks(rawBanks, {
     const clusterByMotif = new Map(lane.clusters.map((cluster) => [cluster.motifGroupId, cluster]));
     const randomResults = [];
     const metadataResults = [];
+    const inversionResults = [];
+    const inversionMatches = new Set();
+    const inversionErrors = new Set();
+    const inversionByMotif = new Map();
     const shortcutResults = Object.fromEntries(Object.keys(adapter.publicAttackers).map((name) => [name, []]));
     const hiddenResults = [];
     for (const row of lane.rows) {
@@ -329,6 +414,12 @@ export function certifyV2Banks(rawBanks, {
       if (!cluster) throw new Error(`${family}:${row.id}: no cluster for motif ${row.bmuTask?.motifGroupId}`);
       randomResults.push(judgeTopB(randomKRank(lane.docs, `${seed}|${family}|${row.id}`), row.bmuTask));
       metadataResults.push(judgeTopB(idMetadataPathAttacker(row, lane, cluster), row.bmuTask));
+      const inversion = inversionByMotif.get(cluster.motifGroupId)
+        ?? knownSeedGeneratorInversionAttacker(row, lane, cluster);
+      inversionByMotif.set(cluster.motifGroupId, inversion);
+      inversionResults.push(judgeTopB(inversion.ranking, row.bmuTask));
+      for (const id of inversion.matchedGuessedDocIds) inversionMatches.add(id);
+      if (inversion.error) inversionErrors.add(inversion.error);
       for (const [name, attacker] of Object.entries(adapter.publicAttackers)) {
         const ids = attacker(row, lane.docs);
         shortcutResults[name].push(judgeTopB(ids.map((docId) => ({ docId, score: 0 })), row.bmuTask));
@@ -353,6 +444,13 @@ export function certifyV2Banks(rawBanks, {
           chanceGoldFraction: goldFraction,
           pass: rate(metadataResults) === 0 && balanced.every((entry) => entry.pass)
             && opaqueIdGoldGuessRate <= goldFraction + 0.10,
+        },
+        generatorInversionAttacker: {
+          judgeSuccessRate: rate(inversionResults),
+          matchedGuessedDocIds: [...inversionMatches].sort(compareId),
+          errors: [...inversionErrors],
+          pass: rate(inversionResults) === 0 && inversionMatches.size === 0 && inversionErrors.size === 0,
+          rule: 'known generator seed/source plus exact motif inputs must match zero HMAC document ids and solve zero rows',
         },
         balancedTerminalBranches: { pass: balanced.every((entry) => entry.pass), failures: balanced.filter((entry) => !entry.pass) },
         operationClassCensus: operationClassCensus(lane, adapter.conservativeOperationCapacity, adapter.maxActiveEpochGap),

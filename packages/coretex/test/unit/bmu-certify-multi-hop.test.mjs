@@ -26,11 +26,13 @@ import {
 import { judgeTopB, buildBm25Index } from '../../../../scripts/lib/bmu-generators/certify-lanes.mjs';
 import { buildMultiHopSampleBank, SAMPLE_BANK_PARAMS } from '../../../../scripts/lib/bmu-generators/emit-multi-hop-sample-bank.mjs';
 
+const DOC_ID_KEY = `0x${'99'.repeat(32)}`;
+
 /** Small real bank: one epoch, four clusters (both hop shapes, both subject
  *  kinds under the block subject layout) — fast but end-to-end honest. */
 function smallBank() {
   const params = { ...SAMPLE_BANK_PARAMS, epochs: [150], clustersPerEpoch: 4 };
-  const { clusters } = buildMultiHopSampleBank(params);
+  const { clusters } = buildMultiHopSampleBank(params, { docIdMasterKeyHex: DOC_ID_KEY });
   return { kind: 'bmu-p2-sample-bank', family: 'multi_hop_relation', clusters };
 }
 
@@ -145,7 +147,7 @@ test('real-lane merge: a no-substrate solve is a rejection with reason, and §13
   // 8 clusters ⇒ >64 public docs, so the rerankerInputTopK=64 admission
   // boundary is BINDING (same regime as the emitted 204-doc bank).
   const params = { ...SAMPLE_BANK_PARAMS, epochs: [150], clustersPerEpoch: 8 };
-  const bank = { kind: 'bmu-p2-sample-bank', family: 'multi_hop_relation', clusters: buildMultiHopSampleBank(params).clusters };
+  const bank = { kind: 'bmu-p2-sample-bank', family: 'multi_hop_relation', clusters: buildMultiHopSampleBank(params, { docIdMasterKeyHex: DOC_ID_KEY }).clusters };
   assert.ok(bank.clusters.flatMap((c) => c.docs).length > 64);
   const cluster = bank.clusters[0];
   const row = cluster.rows[0];

@@ -14,7 +14,7 @@ import { execSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateNearCollisionAbstentionClusters, NEARCOL_FAMILY } from './near_collision_abstention.mjs';
-import { createM1Registry, m1CensusOverRows, makeCanonicalSplitOf, BMU_CLUSTER_SIZE_K } from './common.mjs';
+import { bmuDocIdKeyCommit, deriveBmuEpochDocIdKeyHex, createM1Registry, m1CensusOverRows, makeCanonicalSplitOf, BMU_CLUSTER_SIZE_K } from './common.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../..');
@@ -22,6 +22,7 @@ const { splitForRecord, liveTailQueryId } = await import(resolve(repoRoot, 'pack
 
 const outDir = process.argv[2];
 if (!outDir) { console.error('usage: emit-nearcol-sample-bank.mjs <outDir>'); process.exit(1); }
+const docIdMasterKeyHex = process.env.CORETEX_BMU_DOC_ID_KEY_HEX;
 
 // ─── Pinned generation parameters (the manifest's `params`) ─────────────────
 const PARAMS = {
@@ -56,7 +57,7 @@ const allClusters = [];
 let operationClassSlotOffset = 0;
 for (const spec of PARAMS.epochs) {
   const out = generateNearCollisionAbstentionClusters({
-    epoch: spec.epoch, seed: PARAMS.seed, subjects, registry, splitOf,
+    epoch: spec.epoch, seed: PARAMS.seed, docIdKeyHex: deriveBmuEpochDocIdKeyHex(docIdMasterKeyHex, spec.epoch), subjects, registry, splitOf,
     clusterCount: spec.clusterCount, escalationLevel: spec.escalationLevel,
     ownerEntityId: PARAMS.ownerEntityId,
     operationClassSlotOffset,
@@ -94,6 +95,9 @@ const bank = {
   schema: 'coretex.bmu-p2-sample-bank.v1',
   family: NEARCOL_FAMILY,
   params: PARAMS,
+  docIdKeyCommits: Object.fromEntries(PARAMS.epochs.map(({ epoch }) => [
+    epoch, bmuDocIdKeyCommit(deriveBmuEpochDocIdKeyHex(docIdMasterKeyHex, epoch)),
+  ])),
   counts: {
     clusters: allClusters.length, rows: allRows.length,
     answerableRows: allRows.length - abstainRows.length, abstainRows: abstainRows.length,

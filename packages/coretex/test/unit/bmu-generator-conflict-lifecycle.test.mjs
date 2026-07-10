@@ -40,6 +40,7 @@ import {
 } from '../../../../scripts/lib/bmu-generators/common.mjs';
 
 const CORPUS_EPOCH = 136;
+const DOC_ID_KEY = `0x${'33'.repeat(32)}`;
 const splitOf = makeCanonicalSplitOf({ splitForRecord, liveTailQueryId, corpusEpoch: CORPUS_EPOCH });
 
 const bank = (n) => Array.from({ length: n }, (_, i) => ({
@@ -48,7 +49,7 @@ const bank = (n) => Array.from({ length: n }, (_, i) => ({
 }));
 
 const gen = (over = {}) => generateConflictLifecycleClusters({
-  epoch: 137, seed: 'bmu-p2-test', subjects: bank(40), registry: createM1Registry(),
+  epoch: 137, seed: 'bmu-p2-test', docIdKeyHex: DOC_ID_KEY, subjects: bank(40), registry: createM1Registry(),
   splitOf, clusterCount: 4, escalationLevel: 1, operationSequenceOffset: 0, ...over,
 });
 
@@ -98,7 +99,7 @@ describe('v2 operation-general public path', () => {
     let operationSequenceOffset = 0;
     for (const spec of schedule) {
       const out = generateConflictLifecycleClusters({
-        epoch: spec.epoch, seed: 'bmu-v2-conflict-48-evolve', subjects, registry,
+        epoch: spec.epoch, seed: 'bmu-v2-conflict-48-evolve', docIdKeyHex: DOC_ID_KEY, subjects, registry,
         splitOf, clusterCount: spec.count, escalationLevel: spec.escalationLevel,
         operationSequenceOffset,
       });
@@ -193,7 +194,7 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
     let operationSequenceOffset = 0;
     for (const epoch of [137, 138, 139]) {
       const out = generateConflictLifecycleClusters({
-        epoch, seed: 'bmu-p2-census', subjects, registry, splitOf, clusterCount: 6, escalationLevel: 0,
+        epoch, seed: 'bmu-p2-census', docIdKeyHex: DOC_ID_KEY, subjects, registry, splitOf, clusterCount: 6, escalationLevel: 0,
         operationSequenceOffset,
       });
       operationSequenceOffset += 6;
@@ -214,7 +215,7 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
       registry.claimCluster({ subjectEntityId: s.id, templateIds: [`tt_other_${s.id}`], motifGroupId: `mg_other_${s.id}` });
     }
     const out = generateConflictLifecycleClusters({
-      epoch: 137, seed: 'bmu-p2-skip', subjects, registry, splitOf, clusterCount: 2, escalationLevel: 0,
+      epoch: 137, seed: 'bmu-p2-skip', docIdKeyHex: DOC_ID_KEY, subjects, registry, splitOf, clusterCount: 2, escalationLevel: 0,
       operationSequenceOffset: 0,
     });
     const used = new Set(out.clusters.map((c) => c.subjectEntityId));
@@ -222,7 +223,7 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
     // ...and released subjects become mintable again (retirement hook).
     registry.releaseCluster({ subjectEntityId: subjects[0].id, templateIds: [`tt_other_${subjects[0].id}`] });
     const out2 = generateConflictLifecycleClusters({
-      epoch: 138, seed: 'bmu-p2-skip', subjects, registry, splitOf, clusterCount: 1, escalationLevel: 0,
+      epoch: 138, seed: 'bmu-p2-skip', docIdKeyHex: DOC_ID_KEY, subjects, registry, splitOf, clusterCount: 1, escalationLevel: 0,
       operationSequenceOffset: 2,
     });
     assert.equal(out2.clusters[0].subjectEntityId, subjects[0].id);
@@ -235,7 +236,7 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
       { id: 'e_alias_c', canonicalName: 'Clean Name', aliases: ['Clean Alias'] },
     ];
     const out = generateConflictLifecycleClusters({
-      epoch: 137, seed: 'bmu-alias-m1', subjects, registry: createM1Registry(),
+      epoch: 137, seed: 'bmu-alias-m1', docIdKeyHex: DOC_ID_KEY, subjects, registry: createM1Registry(),
       splitOf, clusterCount: 2, escalationLevel: 0, operationSequenceOffset: 0,
     });
     assert.deepEqual(out.clusters.map((c) => c.subjectEntityId), ['e_alias_a', 'e_alias_c']);
@@ -246,7 +247,7 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
     const registry = createM1Registry();
     assert.throws(
       () => generateConflictLifecycleClusters({
-        epoch: 137, seed: 'bmu-p2-exhaust', subjects: bank(3), registry, splitOf, clusterCount: 5, escalationLevel: 0,
+        epoch: 137, seed: 'bmu-p2-exhaust', docIdKeyHex: DOC_ID_KEY, subjects: bank(3), registry, splitOf, clusterCount: 5, escalationLevel: 0,
         operationSequenceOffset: 0,
       }),
       /subject bank exhausted under GLOBAL m=1/,
@@ -260,7 +261,7 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
     registry.claimCluster({ subjectEntityId: 'e_elsewhere', templateIds: [takenTemplate], motifGroupId: 'mg_other' });
     assert.throws(
       () => generateConflictLifecycleClusters({
-        epoch: 137, seed: 'bmu-p2-test', subjects: bank(40), registry, splitOf, clusterCount: 4, escalationLevel: 1,
+        epoch: 137, seed: 'bmu-p2-test', docIdKeyHex: DOC_ID_KEY, subjects: bank(40), registry, splitOf, clusterCount: 4, escalationLevel: 1,
         operationSequenceOffset: 0,
       }),
       /m=1 violation: templateId/,
@@ -287,7 +288,7 @@ describe('template mint-partition law (§4.1 M7)', () => {
     let operationSequenceOffset = 0;
     for (const epoch of [137, 138, 139]) {
       const out = generateConflictLifecycleClusters({
-        epoch, seed: 'bmu-p2-tpl', subjects, registry, splitOf, clusterCount: 6, escalationLevel: 0,
+        epoch, seed: 'bmu-p2-tpl', docIdKeyHex: DOC_ID_KEY, subjects, registry, splitOf, clusterCount: 6, escalationLevel: 0,
         operationSequenceOffset,
       });
       operationSequenceOffset += 6;

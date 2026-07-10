@@ -23,6 +23,7 @@ import {
 } from '../../../../scripts/lib/bmu-generators/common.mjs';
 
 const splitOf = makeCanonicalSplitOf({ splitForRecord, liveTailQueryId, corpusEpoch: 136 });
+const DOC_ID_KEY = `0x${'77'.repeat(32)}`;
 const subjects = (prefix, name, n) => Array.from({ length: n }, (_, i) => ({
   id: `${prefix}${i}`,
   canonicalName: `${name} ${i}`,
@@ -112,7 +113,7 @@ test('48 exact P5 evolves expose semantic-label inflation despite repeat support
     assert.ok(counts.multi === 1 || counts.multi === 2);
 
     const multi = generateMultiHopClusters({
-      epoch, seed: 'bmu-v2-p5-class-census-multi', subjects: multiSubjects,
+      epoch, seed: 'bmu-v2-p5-class-census-multi', docIdKeyHex: DOC_ID_KEY, subjects: multiSubjects,
       universe: 'e_p5_multi_universe', clusterCount: counts.multi,
       splitOf, activeIndex: multiActive, escalation: { baseEpoch: epoch },
       operationClassSlotOffset: multiClassCursor,
@@ -134,7 +135,7 @@ test('48 exact P5 evolves expose semantic-label inflation despite repeat support
     }
 
     const near = generateNearCollisionAbstentionClusters({
-      epoch, seed: 'bmu-v2-p5-class-census-near', subjects: nearSubjects,
+      epoch, seed: 'bmu-v2-p5-class-census-near', docIdKeyHex: DOC_ID_KEY, subjects: nearSubjects,
       registry: nearRegistry, splitOf, clusterCount: counts.near,
       escalationLevel: evolve % 3, ownerEntityId: 'e_p5_near_universe',
       rotationBaseEpoch: armEpoch, operationClassSlotOffset: nearClassCursor,

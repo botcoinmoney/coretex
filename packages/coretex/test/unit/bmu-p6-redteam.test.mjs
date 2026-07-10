@@ -19,6 +19,13 @@ import {
 import {
   crossFamilyDedup,
 } from '../../../../scripts/lib/bmu-generators/cross-family-checks.mjs';
+import {
+  knownSeedGeneratorInversionAttacker,
+} from '../../../../scripts/lib/bmu-generators/certify-v2-bank.mjs';
+import {
+  bmuDocIdKeyCommit,
+  opaqueBmuDocId,
+} from '../../../../scripts/lib/bmu-generators/common.mjs';
 
 const FAMILIES = [
   { bmu: 'temporal', bucketed: 'temporal', logical: 'temporal_update' },
@@ -228,6 +235,36 @@ describe('P6 utility-law attacks', () => {
 });
 
 describe('P6 held-out and dedup attacks', () => {
+  test('known generator seed cannot invert HMAC document ids in any family', () => {
+    const secret = `0x${'a1'.repeat(32)}`;
+    const wrong = `0x${'b2'.repeat(32)}`;
+    const seed = 'public-known-generator-seed';
+    const epoch = 152;
+    const representativeSlots = {
+      temporal: ['current', 'stale_trap', 'public_path_pivot'],
+      conflict_lifecycle: ['conflict_candidate_trap', 'conflict_resolved', 'resolution_record'],
+      multi_hop_relation: ['chain_hop1', 'chain_answer', 'offpath_decoy'],
+      near_collision_abstention: ['exact_match', 'disambiguation_record', 'alias_collision_decoy:0'],
+    };
+    for (const [family, slots] of Object.entries(representativeSlots)) {
+      const motifGroupId = `mg_p6_hmac_${family}`;
+      const docs = slots.map((slot) => ({
+        id: opaqueBmuDocId({ docIdKeyHex: secret, seed, epoch, motifGroupId, slot }),
+        text: 'public text intentionally irrelevant to the id-inversion lane',
+      }));
+      const lane = { family, params: { seed }, docs };
+      const cluster = { epoch, motifGroupId };
+      const miss = knownSeedGeneratorInversionAttacker({}, lane, cluster, { attackerDocIdKeyHex: wrong });
+      assert.deepEqual(miss.matchedGuessedDocIds, [], family);
+      assert.deepEqual(miss.ranking, [], family);
+      const positive = knownSeedGeneratorInversionAttacker({}, lane, cluster, { attackerDocIdKeyHex: secret });
+      assert.equal(positive.matchedGuessedDocIds.length, docs.length, `${family}: positive control`);
+    }
+    assert.notEqual(bmuDocIdKeyCommit(secret), bmuDocIdKeyCommit(wrong));
+    assert.throws(() => opaqueBmuDocId({ seed, epoch, motifGroupId: 'mg', slot: 'current' }), /docIdKeyHex/);
+    assert.throws(() => opaqueBmuDocId({ docIdKeyHex: `0x${'00'.repeat(32)}`, seed, epoch, motifGroupId: 'mg', slot: 'current' }), /must not be zero/);
+  });
+
   test('cross-family entity/template/motif leakage is excluded from confirm', () => {
     const gate = row({
       id: 'gate_temporal',

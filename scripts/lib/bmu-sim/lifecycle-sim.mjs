@@ -35,7 +35,7 @@ import { generateTemporalClusters } from '../bmu-generators/temporal.mjs';
 import { generateMultiHopClusters } from '../bmu-generators/multi_hop_relation.mjs';
 import { generateConflictLifecycleClusters } from '../bmu-generators/conflict_lifecycle.mjs';
 import { generateNearCollisionAbstentionClusters } from '../bmu-generators/near_collision_abstention.mjs';
-import { createBmuActiveIndex, createEntityHoldoutIdentityStore, createM1Registry, makeCanonicalSplitOf, m1Census } from '../bmu-generators/common.mjs';
+import { assertBmuDocIdKeyHex, createBmuActiveIndex, createEntityHoldoutIdentityStore, createM1Registry, deriveBmuEpochDocIdKeyHex, makeCanonicalSplitOf, m1Census } from '../bmu-generators/common.mjs';
 import { packHeadroom, BMU_SIM_BASE_STACK_FLOORS } from './headroom-accounting.mjs';
 import { createFamilyConcentrationAlarm } from './family-concentration-alarm.mjs';
 
@@ -111,14 +111,15 @@ function makeSubjectBank(prefix, personaName, svcName, n) {
   }));
 }
 
-export function buildWorld({ dist, simSeed = 'bmu-p5-sim-v1', bankSize = 240 }) {
+export function buildWorld({ dist, simSeed = 'bmu-p5-sim-v1', bankSize = 240, docIdMasterKeyHex }) {
+  assertBmuDocIdKeyHex(docIdMasterKeyHex);
   const splitOf = makeCanonicalSplitOf({
     splitForRecord: dist.splitForRecord,
     liveTailQueryId: dist.liveTailQueryId,
     corpusEpoch: SIM_PINS.corpusEpochPin,
   });
   const identityStore = createEntityHoldoutIdentityStore();
-  return {
+  const world = {
     dist,
     simSeed,
     splitOf,
@@ -146,6 +147,10 @@ export function buildWorld({ dist, simSeed = 'bmu-p5-sim-v1', bankSize = 240 }) 
     // counts are irregular, so `(epoch*k+slot) mod bank` can alias forever.
     operationSequence: Object.fromEntries(FAMILIES.map((family) => [family, 0])),
   };
+  // Keep the injected master available to future evolves without making an
+  // accidental JSON serialization of the simulation world leak it.
+  Object.defineProperty(world, 'docIdMasterKeyHex', { value: docIdMasterKeyHex, enumerable: false });
+  return world;
 }
 
 export function resolveGeneratedOperationClass(cluster, rows) {
@@ -265,9 +270,10 @@ function makeLiveTailEvent(world, i, mintEpoch) {
  */
 export function mintEvolve(world, epoch, clusterCounts, { escalationLevel = 0 } = {}) {
   const minted = { rows: [], clusters: [], productionIds: [] };
+  const docIdKeyHex = deriveBmuEpochDocIdKeyHex(world.docIdMasterKeyHex, epoch);
   const lanes = [
     ['temporal', () => generateTemporalClusters({
-      epoch, seed: `${world.simSeed}:temporal`, subjects: world.banks.temporal,
+      epoch, seed: `${world.simSeed}:temporal`, docIdKeyHex, subjects: world.banks.temporal,
       universe: world.universes.temporal, clusterCount: clusterCounts.temporal,
       splitOf: world.splitOf, activeIndex: world.activeIndex,
       operationSequenceOffset: world.operationSequence.temporal,
@@ -275,7 +281,7 @@ export function mintEvolve(world, epoch, clusterCounts, { escalationLevel = 0 } 
     ['multi_hop_relation', () => {
       const count = clusterCounts.multi_hop_relation;
       const out = generateMultiHopClusters({
-        epoch, seed: `${world.simSeed}:multihop`, subjects: world.banks.multi_hop_relation,
+        epoch, seed: `${world.simSeed}:multihop`, docIdKeyHex, subjects: world.banks.multi_hop_relation,
         universe: world.universes.multi_hop_relation, clusterCount: count,
         splitOf: world.splitOf, activeIndex: world.activeIndex,
         operationClassSlotOffset: world.operationSequence.multi_hop_relation,
@@ -283,7 +289,7 @@ export function mintEvolve(world, epoch, clusterCounts, { escalationLevel = 0 } 
       return out;
     }, (out) => out.clusters.map((c) => ({ cluster: c, rows: c.rows, docs: c.docs, mechanism: 'index' }))],
     ['conflict_lifecycle', () => generateConflictLifecycleClusters({
-      epoch, seed: `${world.simSeed}:conflict`, subjects: world.banks.conflict_lifecycle,
+      epoch, seed: `${world.simSeed}:conflict`, docIdKeyHex, subjects: world.banks.conflict_lifecycle,
       registry: world.registry, splitOf: world.splitOf, clusterCount: clusterCounts.conflict_lifecycle,
       escalationLevel, ownerEntityId: world.ownerEntityId,
       operationSequenceOffset: world.operationSequence.conflict_lifecycle,
@@ -296,7 +302,7 @@ export function mintEvolve(world, epoch, clusterCounts, { escalationLevel = 0 } 
     ['near_collision_abstention', () => {
       const count = clusterCounts.near_collision_abstention;
       const out = generateNearCollisionAbstentionClusters({
-        epoch, seed: `${world.simSeed}:nearcol`, subjects: world.banks.near_collision_abstention,
+        epoch, seed: `${world.simSeed}:nearcol`, docIdKeyHex, subjects: world.banks.near_collision_abstention,
         registry: world.registry, splitOf: world.splitOf, clusterCount: count,
         escalationLevel, ownerEntityId: world.ownerEntityId,
         operationClassSlotOffset: world.operationSequence.near_collision_abstention,
@@ -429,9 +435,9 @@ export function deriveEpochDualPacks(world, corpus, activeIds, epoch) {
  * caller may re-run with margin — the exact-380 slack question is a P5
  * finding surface, not a hidden default).
  */
-export function runTransitionBootstrap({ dist, workDir, simSeed = 'bmu-p5-sim-v1', armCount = 380, genesisRetiredCount = 9300, liveTailCount = 19, marginClustersPerFamily = 1 }) {
+export function runTransitionBootstrap({ dist, workDir, simSeed = 'bmu-p5-sim-v1', armCount = 380, genesisRetiredCount = 9300, liveTailCount = 19, marginClustersPerFamily = 1, docIdMasterKeyHex }) {
   mkdirSync(workDir, { recursive: true });
-  const world = buildWorld({ dist, simSeed });
+  const world = buildWorld({ dist, simSeed, docIdMasterKeyHex });
   const record = { leg: 'transition-bootstrap', simSeed, armCount, marginClustersPerFamily, steps: [], findings: [] };
   // MEASURED FINDING (P5, first exact-ramp run): the §6.7c ramp arithmetic
   // (ceil(380/25) epochs) counts generator THROUGHPUT only. Pre-flip C3 churn

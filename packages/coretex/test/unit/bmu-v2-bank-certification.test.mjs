@@ -8,6 +8,7 @@ import {
   crossFamilyDedupAudit,
   DEFAULT_V2_BANK_ADAPTERS,
   idMetadataPathAttacker,
+  knownSeedGeneratorInversionAttacker,
   makeV2BankAdapter,
   normalizeV2Bank,
 } from '../../../../scripts/lib/bmu-generators/certify-v2-bank.mjs';
@@ -17,6 +18,7 @@ import { createBmuActiveIndex, createM1Registry, makeCanonicalSplitOf } from '..
 import { buildWorld, mintEvolve, resolveGeneratedOperationClass } from '../../../../scripts/lib/bmu-sim/lifecycle-sim.mjs';
 
 const splitOf = makeCanonicalSplitOf({ splitForRecord, liveTailQueryId, corpusEpoch: 138 });
+const DOC_ID_KEY = `0x${'01'.repeat(32)}`;
 const subjects = (prefix, name, count = 24) => Array.from({ length: count }, (_, i) => ({
   id: `${prefix}${i}`, canonicalName: `${name} ${i}`,
 }));
@@ -24,11 +26,11 @@ const subjects = (prefix, name, count = 24) => Array.from({ length: count }, (_,
 function fixtureBanks() {
   const activeIndex = createBmuActiveIndex();
   const t1 = generateTemporalClusters({
-    epoch: 150, seed: 'v2-cert-temporal', subjects: subjects('t_', 'Temporal Person'),
+    epoch: 150, seed: 'v2-cert-temporal', docIdKeyHex: DOC_ID_KEY, subjects: subjects('t_', 'Temporal Person'),
     universe: 'u_temporal', clusterCount: 2, splitOf, activeIndex, operationSequenceOffset: 0,
   });
   const t2 = generateTemporalClusters({
-    epoch: 158, seed: 'v2-cert-temporal', subjects: subjects('t_', 'Temporal Person'),
+    epoch: 158, seed: 'v2-cert-temporal', docIdKeyHex: DOC_ID_KEY, subjects: subjects('t_', 'Temporal Person'),
     universe: 'u_temporal', clusterCount: 2, splitOf, activeIndex, operationSequenceOffset: 32,
   });
   t1.clusters[0].docs.push(...Array.from({ length: 96 }, (_, i) => ({
@@ -40,11 +42,11 @@ function fixtureBanks() {
 
   const registry = createM1Registry();
   const c1 = generateConflictLifecycleClusters({
-    epoch: 150, seed: 'v2-cert-conflict', subjects: subjects('c_', 'Conflict Person'),
+    epoch: 150, seed: 'v2-cert-conflict', docIdKeyHex: DOC_ID_KEY, subjects: subjects('c_', 'Conflict Person'),
     registry, splitOf, clusterCount: 2, escalationLevel: 0, operationSequenceOffset: 0,
   });
   const c2 = generateConflictLifecycleClusters({
-    epoch: 158, seed: 'v2-cert-conflict', subjects: subjects('c_', 'Conflict Person'),
+    epoch: 158, seed: 'v2-cert-conflict', docIdKeyHex: DOC_ID_KEY, subjects: subjects('c_', 'Conflict Person'),
     registry, splitOf, clusterCount: 2, escalationLevel: 1, operationSequenceOffset: 40,
   });
   const conflict = {
@@ -102,6 +104,7 @@ test('generic v2 certification covers temporal/conflict cheap gates and separate
   for (const report of Object.values(pending.perFamily)) {
     assert.equal(report.gates.randomK.pass, true);
     assert.equal(report.gates.idMetadataPathAttacker.pass, true);
+    assert.equal(report.gates.generatorInversionAttacker.pass, true);
     assert.equal(report.gates.balancedTerminalBranches.pass, true);
     assert.equal(report.gates.operationClassCensus.pass, true);
     assert.equal(report.gates.roleRetirement.pass, true);
@@ -148,6 +151,18 @@ test('id/metadata/path attacker is invariant to hidden qrels and task labels', (
   assert.deepEqual(after, before);
 });
 
+test('known-seed generator inversion matches nothing with a public wrong-key guess and detects the private-key positive control', () => {
+  const lane = normalizeV2Bank(fixtureBanks()[0]);
+  const cluster = lane.clusters[0];
+  const row = cluster.rows[0];
+  const attack = knownSeedGeneratorInversionAttacker(row, lane, cluster);
+  assert.deepEqual(attack.matchedGuessedDocIds, []);
+  assert.deepEqual(attack.ranking, []);
+  const positive = knownSeedGeneratorInversionAttacker(row, lane, cluster, { attackerDocIdKeyHex: DOC_ID_KEY });
+  assert.ok(positive.matchedGuessedDocIds.length >= 4,
+    'correct-key control must recover the generated role ids');
+});
+
 test('cross-family dedup catches doc/query/publicIntent collisions', () => {
   const [a, b] = fixtureBanks().map(normalizeV2Bank);
   b.docs[0].id = a.docs[0].id;
@@ -169,7 +184,12 @@ test('adapter API accepts future multi-hop/near-collision descriptors without en
 });
 
 test('P5 lifecycle owns one monotone cursor and persists generated class identity fail-closed', () => {
-  const world = buildWorld({ dist, simSeed: 'v2-cert-cursor', bankSize: 32 });
+  assert.throws(() => buildWorld({ dist, simSeed: 'missing-private-doc-id-master', bankSize: 8 }), /docIdKeyHex/);
+  const world = buildWorld({
+    dist, simSeed: 'v2-cert-cursor', bankSize: 32,
+    docIdMasterKeyHex: `0x${'02'.repeat(32)}`,
+  });
+  assert.equal(Object.keys(world).includes('docIdMasterKeyHex'), false, 'private master must not serialize with world evidence');
   mintEvolve(world, 144, { temporal: 1, conflict_lifecycle: 1, multi_hop_relation: 0, near_collision_abstention: 0 });
   mintEvolve(world, 152, { temporal: 1, conflict_lifecycle: 2, multi_hop_relation: 0, near_collision_abstention: 0 });
   assert.equal(world.operationSequence.temporal, 2);

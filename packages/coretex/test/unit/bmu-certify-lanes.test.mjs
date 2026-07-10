@@ -35,10 +35,12 @@ import {
 } from '../../../../scripts/lib/bmu-generators/certify-lanes.mjs';
 import { buildTemporalSampleBank, SAMPLE_BANK_PARAMS } from '../../../../scripts/lib/bmu-generators/emit-temporal-sample-bank.mjs';
 
+const DOC_ID_KEY = `0x${'04'.repeat(32)}`;
+
 /** Small real bank: one epoch, two clusters — fast but end-to-end honest. */
 function smallBank() {
   const params = { ...SAMPLE_BANK_PARAMS, epochs: [150], clustersPerEpoch: 2 };
-  const { clusters } = buildTemporalSampleBank(params);
+  const { clusters } = buildTemporalSampleBank(params, { docIdMasterKeyHex: DOC_ID_KEY });
   return { kind: 'bmu-p2-sample-bank', family: 'temporal', clusters };
 }
 

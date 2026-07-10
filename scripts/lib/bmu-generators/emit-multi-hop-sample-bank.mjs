@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 
 import { generateMultiHopClusters } from './multi_hop_relation.mjs';
-import { createBmuActiveIndex, retireAgedClusters, m1Census } from './common.mjs';
+import { bmuDocIdKeyCommit, deriveBmuEpochDocIdKeyHex, createBmuActiveIndex, retireAgedClusters, m1Census } from './common.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgDist = resolve(here, '../../../packages/coretex/dist');
@@ -72,7 +72,7 @@ export function sampleSubjectBank() {
   return subjects;
 }
 
-export function buildMultiHopSampleBank(params = SAMPLE_BANK_PARAMS) {
+export function buildMultiHopSampleBank(params = SAMPLE_BANK_PARAMS, { docIdMasterKeyHex } = {}) {
   const splitOf = (logicalQueryId, liveUpdateEpoch) => splitForRecord(
     liveUpdateEpoch !== undefined && liveUpdateEpoch !== null
       ? liveTailQueryId(logicalQueryId, liveUpdateEpoch)
@@ -89,6 +89,7 @@ export function buildMultiHopSampleBank(params = SAMPLE_BANK_PARAMS) {
     const out = generateMultiHopClusters({
       epoch,
       seed: params.seed,
+      docIdKeyHex: deriveBmuEpochDocIdKeyHex(docIdMasterKeyHex, epoch),
       subjects,
       universe: params.universe,
       clusterCount: params.clustersPerEpoch,
@@ -111,12 +112,13 @@ function hashJsonStable(value) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
-export function emitMultiHopSampleBank(outDir, params = SAMPLE_BANK_PARAMS) {
-  const { subjects, clusters, perEpoch, census } = buildMultiHopSampleBank(params);
+export function emitMultiHopSampleBank(outDir, params = SAMPLE_BANK_PARAMS, { docIdMasterKeyHex } = {}) {
+  const { subjects, clusters, perEpoch, census } = buildMultiHopSampleBank(params, { docIdMasterKeyHex });
   mkdirSync(outDir, { recursive: true });
   const bank = {
     kind: 'bmu-p2-sample-bank',
     family: params.family,
+    params,
     generatedBySpec: params.spec,
     clusters,
   };
@@ -129,6 +131,9 @@ export function emitMultiHopSampleBank(outDir, params = SAMPLE_BANK_PARAMS) {
     kind: 'bmu-p2-sample-bank-manifest',
     family: params.family,
     generationParams: params,
+    docIdKeyCommits: Object.fromEntries(params.epochs.map((epoch) => [
+      epoch, bmuDocIdKeyCommit(deriveBmuEpochDocIdKeyHex(docIdMasterKeyHex, epoch)),
+    ])),
     subjectBank: subjects,
     counts: {
       epochs: params.epochs.length,
@@ -162,7 +167,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     console.error('usage: node emit-multi-hop-sample-bank.mjs <outDir>');
     process.exit(1);
   }
-  const { bankPath, manifestPath, manifest } = emitMultiHopSampleBank(resolve(outDir));
+  const { bankPath, manifestPath, manifest } = emitMultiHopSampleBank(resolve(outDir), SAMPLE_BANK_PARAMS, {
+    docIdMasterKeyHex: process.env.CORETEX_BMU_DOC_ID_KEY_HEX,
+  });
   console.log(`sample bank: ${bankPath}`);
   console.log(`manifest:    ${manifestPath}`);
   console.log(JSON.stringify(manifest.counts, null, 1));

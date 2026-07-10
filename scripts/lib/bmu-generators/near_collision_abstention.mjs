@@ -342,7 +342,7 @@ export function buildNearCollisionClusterSpec({
  * }} args
  */
 export function generateNearCollisionAbstentionClusters({
-  epoch, seed, subjects, registry, splitOf,
+  epoch, seed, docIdKeyHex, subjects, registry, splitOf,
   clusterCount = 2, escalationLevel = 0, clusterSlotOffset = 0,
   ownerEntityId = 'e_universe', rotationBaseEpoch = NEARCOL_ROTATION_BASE_EPOCH,
   operationClassSlotOffset = Math.max(0, (epoch - rotationBaseEpoch) * 2),
@@ -419,7 +419,7 @@ export function generateNearCollisionAbstentionClusters({
       : `void-${slug(attr)}-${epoch}-${clusterSlot}-${k}`;
 
     const idBase = `e${epoch}_${subj.id}_bn${clusterSlot}`;
-    const docId = (slot) => opaqueBmuDocId({ seed, epoch, motifGroupId, slot });
+    const docId = (slot) => opaqueBmuDocId({ docIdKeyHex, seed, epoch, motifGroupId, slot });
     const decoyCount = nearcolDecoyCount(escalationLevel);
     let decoys = [];
     let aliasCount = 0;

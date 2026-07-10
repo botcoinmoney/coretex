@@ -37,6 +37,7 @@ const simSeed = arg('seed', 'bmu-p5-sim-runner-v1');
 const evolves = asInt('evolves', 48);
 const marginClustersPerFamily = asInt('margin-clusters-per-family', 3);
 const armCount = asInt('arm-count', 430);
+const docIdMasterKeyHex = process.env.CORETEX_BMU_DOC_ID_KEY_HEX;
 
 mkdirSync(outDir, { recursive: true });
 mkdirSync(workDir, { recursive: true });
@@ -45,6 +46,7 @@ const exact = runTransitionBootstrap({
   dist,
   workDir: resolve(workDir, 'exact-nmin'),
   simSeed: `${simSeed}:exact-nmin`,
+  docIdMasterKeyHex,
   armCount: 380,
   marginClustersPerFamily: 1,
 });
@@ -62,6 +64,7 @@ const margin = runTransitionBootstrap({
   dist,
   workDir: resolve(workDir, `margin-${marginClustersPerFamily}-arm-${armCount}`),
   simSeed: `${simSeed}:margin`,
+  docIdMasterKeyHex,
   armCount,
   marginClustersPerFamily,
 });

@@ -380,6 +380,7 @@ function lintCluster({ rows, docs, chainDocIds, answerDocId, value, bridgeTokens
 export function generateMultiHopClusters({
   epoch,
   seed,
+  docIdKeyHex,
   subjects,
   universe,
   clusterCount = 2,
@@ -457,7 +458,7 @@ export function generateMultiHopClusters({
     if (indexHasMotifGroup(activeIndex, motifGroupId)) {
       throw new Error(`bmu multi_hop: motifGroupId collision '${motifGroupId}' — active index already holds it`);
     }
-    const docId = (slot) => opaqueBmuDocId({ seed, epoch, motifGroupId, slot });
+    const docId = (slot) => opaqueBmuDocId({ docIdKeyHex, seed, epoch, motifGroupId, slot });
     const b1Id = docId('chain_hop1');
     const b2Id = docId('chain_hop2');
     const primarySinkIds = [b2Id];

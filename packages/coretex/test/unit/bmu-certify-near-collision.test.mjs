@@ -39,6 +39,7 @@ import {
 } from '../../../../scripts/lib/bmu-generators/certify.mjs';
 
 const CORPUS_EPOCH = 136;
+const DOC_ID_KEY = `0x${'66'.repeat(32)}`;
 const splitOf = makeCanonicalSplitOf({ splitForRecord, liveTailQueryId, corpusEpoch: CORPUS_EPOCH });
 
 function makeBank({ epochs = [137, 138], clustersPerEpoch = 3 } = {}) {
@@ -50,7 +51,7 @@ function makeBank({ epochs = [137, 138], clustersPerEpoch = 3 } = {}) {
   const rows = []; const docs = []; const relations = []; const clusters = [];
   for (const epoch of epochs) {
     const out = generateNearCollisionAbstentionClusters({
-      epoch, seed: 'bmu-certify-nearcol-test', subjects, registry, splitOf,
+      epoch, seed: 'bmu-certify-nearcol-test', docIdKeyHex: DOC_ID_KEY, subjects, registry, splitOf,
       clusterCount: clustersPerEpoch, escalationLevel: epoch - epochs[0],
     });
     rows.push(...out.addedQueries); docs.push(...out.addedDocs);

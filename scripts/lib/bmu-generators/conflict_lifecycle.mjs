@@ -340,7 +340,7 @@ export function buildConflictLifecycleClusterSpec({
  * }} args
  */
 export function generateConflictLifecycleClusters({
-  epoch, seed, subjects, registry, splitOf,
+  epoch, seed, docIdKeyHex, subjects, registry, splitOf,
   clusterCount = 2, escalationLevel = 0, clusterSlotOffset = 0,
   operationSequenceOffset,
   ownerEntityId = 'e_universe', rotationBaseEpoch = CONFLICT_ROTATION_BASE_EPOCH,
@@ -416,7 +416,7 @@ export function generateConflictLifecycleClusters({
     }
 
     const idBase = `e${epoch}_${subj.id}_bc${clusterSlot}`;
-    const docId = (slot) => opaqueBmuDocId({ seed, epoch, motifGroupId, slot });
+    const docId = (slot) => opaqueBmuDocId({ docIdKeyHex, seed, epoch, motifGroupId, slot });
     const spec = buildConflictLifecycleClusterSpec({
       canonical, subjectId: subj.id, attr, scope, decoyScopes, valA, valB, decoyVals,
       tsDate, priorDate, subjectAliases: subj.aliases,

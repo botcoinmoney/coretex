@@ -46,6 +46,7 @@ import {
 } from '../../../../scripts/lib/bmu-generators/common.mjs';
 
 const CORPUS_EPOCH = 136;
+const DOC_ID_KEY = `0x${'44'.repeat(32)}`;
 const splitOf = makeCanonicalSplitOf({ splitForRecord, liveTailQueryId, corpusEpoch: CORPUS_EPOCH });
 
 const bank = (n) => Array.from({ length: n }, (_, i) => ({
@@ -54,7 +55,7 @@ const bank = (n) => Array.from({ length: n }, (_, i) => ({
 }));
 
 const gen = (over = {}) => generateNearCollisionAbstentionClusters({
-  epoch: 137, seed: 'bmu-p2-nearcol-test', subjects: bank(40), registry: createM1Registry(),
+  epoch: 137, seed: 'bmu-p2-nearcol-test', docIdKeyHex: DOC_ID_KEY, subjects: bank(40), registry: createM1Registry(),
   splitOf, clusterCount: 4, escalationLevel: 1, ...over,
 });
 
@@ -79,7 +80,7 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
     const rows = [];
     for (const epoch of [137, 138, 139]) {
       const out = generateNearCollisionAbstentionClusters({
-        epoch, seed: 'bmu-p2-nearcol-census', subjects, registry, splitOf, clusterCount: 6, escalationLevel: 0,
+        epoch, seed: 'bmu-p2-nearcol-census', docIdKeyHex: DOC_ID_KEY, subjects, registry, splitOf, clusterCount: 6, escalationLevel: 0,
       });
       rows.push(...out.addedQueries);
     }
@@ -98,14 +99,14 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
       registry.claimCluster({ subjectEntityId: s.id, templateIds: [`tt_other_${s.id}`], motifGroupId: `mg_other_${s.id}` });
     }
     const out = generateNearCollisionAbstentionClusters({
-      epoch: 137, seed: 'bmu-p2-nearcol-skip', subjects, registry, splitOf, clusterCount: 2, escalationLevel: 0,
+      epoch: 137, seed: 'bmu-p2-nearcol-skip', docIdKeyHex: DOC_ID_KEY, subjects, registry, splitOf, clusterCount: 2, escalationLevel: 0,
     });
     const used = new Set(out.clusters.map((c) => c.subjectEntityId));
     for (const s of subjects.slice(0, 3)) assert.ok(!used.has(s.id), `pre-claimed ${s.id} must be skipped`);
     // ...and released subjects become mintable again (retirement hook).
     registry.releaseCluster({ subjectEntityId: subjects[0].id, templateIds: [`tt_other_${subjects[0].id}`] });
     const out2 = generateNearCollisionAbstentionClusters({
-      epoch: 138, seed: 'bmu-p2-nearcol-skip', subjects, registry, splitOf, clusterCount: 1, escalationLevel: 0,
+      epoch: 138, seed: 'bmu-p2-nearcol-skip', docIdKeyHex: DOC_ID_KEY, subjects, registry, splitOf, clusterCount: 1, escalationLevel: 0,
     });
     assert.equal(out2.clusters[0].subjectEntityId, subjects[0].id);
   });
@@ -114,7 +115,7 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
     const registry = createM1Registry();
     assert.throws(
       () => generateNearCollisionAbstentionClusters({
-        epoch: 137, seed: 'bmu-p2-nearcol-exhaust', subjects: bank(3), registry, splitOf, clusterCount: 5, escalationLevel: 0,
+        epoch: 137, seed: 'bmu-p2-nearcol-exhaust', docIdKeyHex: DOC_ID_KEY, subjects: bank(3), registry, splitOf, clusterCount: 5, escalationLevel: 0,
       }),
       /subject bank exhausted under GLOBAL m=1/,
     );
@@ -127,7 +128,7 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
     registry.claimCluster({ subjectEntityId: 'e_elsewhere', templateIds: [takenTemplate], motifGroupId: 'mg_other' });
     assert.throws(
       () => generateNearCollisionAbstentionClusters({
-        epoch: 137, seed: 'bmu-p2-nearcol-test', subjects: bank(40), registry, splitOf, clusterCount: 4, escalationLevel: 1,
+        epoch: 137, seed: 'bmu-p2-nearcol-test', docIdKeyHex: DOC_ID_KEY, subjects: bank(40), registry, splitOf, clusterCount: 4, escalationLevel: 1,
       }),
       /m=1 violation: templateId/,
     );
@@ -166,7 +167,7 @@ describe('template mint-partition law (§4.1 M7)', () => {
     const all = new Set();
     for (const epoch of [137, 138, 139]) {
       const out = generateNearCollisionAbstentionClusters({
-        epoch, seed: 'bmu-p2-nearcol-tpl', subjects, registry, splitOf, clusterCount: 6, escalationLevel: 0,
+        epoch, seed: 'bmu-p2-nearcol-tpl', docIdKeyHex: DOC_ID_KEY, subjects, registry, splitOf, clusterCount: 6, escalationLevel: 0,
       });
       for (const c of out.clusters) for (const t of c.templateIds) {
         assert.ok(!all.has(t), `templateId ${t} reused across epochs`);

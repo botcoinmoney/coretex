@@ -322,6 +322,7 @@ function lintCluster({ rows, docs, currentValue, slotValues, goldDocIds }) {
 export function generateTemporalClusters({
   epoch,
   seed,
+  docIdKeyHex,
   subjects,
   universe,
   clusterCount = 2,
@@ -400,7 +401,7 @@ export function generateTemporalClusters({
     if (indexHasMotifGroup(activeIndex, motifGroupId)) {
       throw new Error(`bmu temporal: motifGroupId collision '${motifGroupId}' — active index already holds it`);
     }
-    const docId = (slot) => opaqueBmuDocId({ seed, epoch, motifGroupId, slot });
+    const docId = (slot) => opaqueBmuDocId({ docIdKeyHex, seed, epoch, motifGroupId, slot });
     const currentId = docId('current');
     const staleId = docId('stale_trap');
     const changeId = docId('change_provenance');
