@@ -34,6 +34,7 @@ import {
   createDeterministicBiEncoder,
   PATCH_TYPE,
 } from '../../dist/index.js';
+import { checkScorerJobPins } from '../../dist/scorer-server-cli.js';
 import { verifyScorerResult } from '../../dist/coordinator/remote-scorer-verify.js';
 import { policyAtomsModeFromManifest } from '../../dist/validator-sync-cli.js';
 import { fileURLToPath } from 'node:url';
@@ -213,16 +214,19 @@ describe('site 3/6/7 set-membership', () => {
     assert.equal(opts.pipelineVersion, 'coretex-bmu-v1-r5state');
   });
 
-  test('policyAtomsModeFromManifest: true for r5 AND bmu-v1, false for r4', () => {
+  test('policyAtomsModeFromManifest: true for r5 and both BMU laws, false for r4', () => {
     assert.equal(policyAtomsModeFromManifest({ evaluator: { profile: { pipelineVersion: 'coretex-retrieval-v2-policy-r5' } } }), true);
     assert.equal(policyAtomsModeFromManifest({ evaluator: { profile: { pipelineVersion: 'coretex-bmu-v1-r5state' } } }), true);
+    assert.equal(policyAtomsModeFromManifest({ evaluator: { profile: { pipelineVersion: 'coretex-bmu-v2-r5state' } } }), true);
     assert.equal(policyAtomsModeFromManifest({ evaluator: { profile: { pipelineVersion: 'coretex-retrieval-v2-lens-r4' } } }), false);
   });
 
   test('buildAllowedPatchTypes suppresses KEY/CODEBOOK/HEADER under BMU exactly like r5', () => {
     const bmu = buildAllowedPatchTypes({ pipelineVersion: 'coretex-bmu-v1-r5state' });
+    const bmuV2 = buildAllowedPatchTypes({ pipelineVersion: 'coretex-bmu-v2-r5state' });
     const r5 = buildAllowedPatchTypes({ pipelineVersion: 'coretex-retrieval-v2-policy-r5' });
     assert.deepEqual(bmu, r5, 'BMU state law must equal the r5 state law byte-for-byte');
+    assert.deepEqual(bmuV2, r5, 'BMU v2 state law must equal the r5 state law byte-for-byte');
     const bytes = new Set(bmu.map((t) => t.byte));
     for (const suppressed of [PATCH_TYPE.KEY_UPDATE, PATCH_TYPE.CODEBOOK_UPDATE, PATCH_TYPE.HEADER_UPDATE]) {
       assert.ok(!bytes.has(suppressed), `suppressed type ${suppressed} advertised under BMU`);
@@ -234,6 +238,21 @@ describe('site 3/6/7 set-membership', () => {
 });
 
 describe('§8.2/§8.3 proof-kind + artifact-version pairing', () => {
+  test('scorer loaded-law pin refuses missing and cross-version jobs in both directions', () => {
+    const pins = {
+      modelId: 'm', revision: 'r', promptTemplateHash: B32('ab'), bundleHash: B32('dd'),
+      corpusRoot: B32('cc'), coreVersionHash: B32('dd'), scoringPipelineVersion: 'coretex-bmu-v2-r5state',
+    };
+    const expectedScorerPins = {
+      modelId: 'm', revision: 'r', promptTemplateHash: B32('ab'), bundleHash: B32('dd'), corpusRoot: B32('cc'),
+    };
+    const base = { corpusRoot: B32('cc'), bundleHash: B32('dd'), coreVersionHash: B32('dd'), expectedScorerPins };
+    assert.equal(checkScorerJobPins({ ...base, scoringPipelineVersion: 'coretex-bmu-v2-r5state' }, pins), null);
+    assert.match(checkScorerJobPins(base, pins), /scoringPipelineVersion absent/);
+    assert.match(checkScorerJobPins({ ...base, scoringPipelineVersion: 'coretex-bmu-v1-r5state' }, pins), /bmu-v1-r5state.*bmu-v2-r5state/);
+    const { scoringPipelineVersion, ...unversioned } = pins;
+    assert.match(checkScorerJobPins({ ...base, scoringPipelineVersion: 'coretex-bmu-v2-r5state' }, unversioned), /unversioned bundle/);
+  });
   function minimalResult(over = {}) {
     return {
       jobId: 'job-1',
@@ -288,6 +307,7 @@ describe('§8.2/§8.3 proof-kind + artifact-version pairing', () => {
 
   test('expectedDualPackProofKind pairs kinds with the scoring law', () => {
     assert.equal(expectedDualPackProofKind('coretex-bmu-v1-r5state'), 'coretex-bmu-dual-pack-v1');
+    assert.equal(expectedDualPackProofKind('coretex-bmu-v2-r5state'), 'coretex-bmu-dual-pack-v1');
     assert.equal(expectedDualPackProofKind('coretex-retrieval-v2-policy-r5'), 'coretex-dual-pack-v1');
     assert.equal(expectedDualPackProofKind(undefined), 'coretex-dual-pack-v1');
   });
@@ -345,6 +365,16 @@ describe('§8.3 BMU artifact version + shape', () => {
     // the summary participates in the hash domain
     const without = buildPostRevealEvalReportArtifact(artifactBody('coretex-bmu-post-reveal-eval-report-v1'));
     assert.notEqual(without.artifactHash, artifact.artifactHash);
+  });
+
+  test('scoringPipelineVersion is an explicit artifact hash-domain pin', () => {
+    const v1 = buildPostRevealEvalReportArtifact(artifactBody('coretex-bmu-post-reveal-eval-report-v1', {
+      context: { ...artifactBody('coretex-bmu-post-reveal-eval-report-v1').context, scoringPipelineVersion: 'coretex-bmu-v1-r5state' },
+    }));
+    const v2 = buildPostRevealEvalReportArtifact(artifactBody('coretex-bmu-post-reveal-eval-report-v1', {
+      context: { ...artifactBody('coretex-bmu-post-reveal-eval-report-v1').context, scoringPipelineVersion: 'coretex-bmu-v2-r5state' },
+    }));
+    assert.notEqual(v1.artifactHash, v2.artifactHash);
   });
 
   test('r5 artifact hashing is byte-identical to before (no new fields injected)', () => {

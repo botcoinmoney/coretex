@@ -79,7 +79,7 @@ import {
 import { DEFAULT_PROFILE, scoringOptionsFromProfile, type CoreTexBundleManifest } from './bundle/index.js';
 import { buildCorpusRootLeafCache, computeCorpusRoot, loadProductionCorpus, type ProductionCorpus } from './eval/retrieval-corpus.js';
 import { deriveScoredQueryPack, type LiveEvalPackLaw } from './eval/hidden-query-pack.js';
-import { isBmuScoringLaw } from './pipeline-versions.js';
+import { isBmuScoringLaw, isBmuV2ScoringLaw } from './pipeline-versions.js';
 import { scoreBmuAgainstSeed } from './coordinator/production-evaluator.js';
 import { loadActiveFrontierIds } from './coordinator/epoch-frontier.js';
 import { computeAcceptanceThresholdPpm, evaluateRetrievalBenchmarkPatch } from './eval/retrieval-benchmark.js';
@@ -1490,6 +1490,18 @@ export function scorerForParent(
     throw new Error(
       `artifact version '${artifact.version}' does not pair with the loaded bundle's scoring law `
       + `('${ctx.profile.pipelineVersion ?? 'unpinned'}' expects '${expectedVersion}') — wrong bundle for this artifact, refusing to rescore`,
+    );
+  }
+  const artifactPipelineVersion = artifact.context.scoringPipelineVersion;
+  if (isBmuV2ScoringLaw(ctx.profile.pipelineVersion)) {
+    if (artifactPipelineVersion !== ctx.profile.pipelineVersion) {
+      throw new Error(
+        `BMU v2 artifact scoringPipelineVersion '${artifactPipelineVersion ?? 'absent'}' does not match loaded bundle '${ctx.profile.pipelineVersion}' — refusing cross-law replay`,
+      );
+    }
+  } else if (artifactPipelineVersion !== undefined && artifactPipelineVersion !== ctx.profile.pipelineVersion) {
+    throw new Error(
+      `artifact scoringPipelineVersion '${artifactPipelineVersion}' does not match loaded bundle '${ctx.profile.pipelineVersion ?? 'unpinned'}' — refusing cross-law replay`,
     );
   }
   // Overlay-law parity, FAIL-CLOSED both ways: an artifact pinning an

@@ -1033,6 +1033,7 @@ export async function evaluateBmuBaseline(
     compositeScore: scores[0]!,
     familyUtilitiesPpm,
     familyUtilitiesDigest: computeBmuFamilyUtilitiesDigest({
+      scoringPipelineVersion: scoringOpts.pipelineVersion!,
       epochId: pack.epochId,
       corpusRoot: pack.corpusRoot,
       baselineSeedHex: pack.evalSeedHex,
@@ -1055,18 +1056,23 @@ export async function evaluateBmuBaseline(
  * for authority, trusted for compute, same as the scalar itself).
  */
 export function computeBmuFamilyUtilitiesDigest(input: {
+  readonly scoringPipelineVersion: string;
   readonly epochId: number;
   readonly corpusRoot: string;
   readonly baselineSeedHex: string;
   readonly parentScorePpm: number;
   readonly familyUtilitiesPpm: Readonly<Record<string, number>>;
 }): string {
+  if (!isBmuScoringLaw(input.scoringPipelineVersion)) {
+    throw new Error(`computeBmuFamilyUtilitiesDigest: '${input.scoringPipelineVersion}' is not a BMU scoring law`);
+  }
   const canonical = JSON.stringify({
     baselineSeedHex: input.baselineSeedHex.toLowerCase(),
     corpusRoot: input.corpusRoot.toLowerCase(),
     epochId: input.epochId,
     familyUtilitiesPpm: Object.fromEntries(Object.entries(input.familyUtilitiesPpm).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))),
     parentScorePpm: input.parentScorePpm,
+    scoringPipelineVersion: input.scoringPipelineVersion,
   });
   return bytesToHex(keccak256(utf8.encode(canonical))).toLowerCase();
 }

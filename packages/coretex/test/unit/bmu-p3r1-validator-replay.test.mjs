@@ -159,7 +159,7 @@ const reranker = {
   },
 };
 
-function scoringOpts() {
+function scoringOpts(pipelineVersion = 'coretex-bmu-v1-r5state') {
   return {
     weights: { w_retrieval: 0.75, w_temporal: 0.08, w_relation_recall: 0.07, w_abstention: 0.05, w_structural_sanity: 0.05 },
     retrievalKeyLayout: LAYOUT,
@@ -169,7 +169,7 @@ function scoringOpts() {
     relationHopBudget: 2, abstentionThreshold: 0.001, rerankerTopK: 10, rerankerInputTopK: 128,
     firstStageTopK: 64, lensTopK: 36, lensWeight: 0.1, anchorWeight: 0.15, relationExpansionBudget: 50,
     temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1,
-    pipelineVersion: 'coretex-bmu-v1-r5state', policyAtomsMode: true,
+    pipelineVersion, policyAtomsMode: true,
   };
 }
 
@@ -182,7 +182,7 @@ function ctxFor(profile) {
   return {
     corpus,
     profile,
-    scoringOpts: scoringOpts(),
+    scoringOpts: scoringOpts(profile.pipelineVersion),
     thresholdPpm: 0,
     reranker: { model: 'unit-test-reranker' },
     activeFrontierIdsResolver: () => activeIds,
@@ -227,7 +227,7 @@ function seedsFor(patchBytes) {
   return { patchHash, gateSeed: deriveGateEvalSeed(seedInput), confirmSeed: deriveConfirmEvalSeed(seedInput) };
 }
 
-function artifactFor({ patchBytes, patchHash, gateSeed, confirmSeed, gateScorePpm, confirmScorePpm, version }) {
+function artifactFor({ patchBytes, patchHash, gateSeed, confirmSeed, gateScorePpm, confirmScorePpm, version, scoringPipelineVersion }) {
   const receipt = {
     patchHash, dedupKey: computeDedupKey(parentRoot, patchBytes), parentRoot, minerAddress: '0x' + '11'.repeat(20),
     epochId: EPOCH, receivedAtBlock: 10, targetBlock: 25, blockhash: BLOCKHASH,
@@ -250,6 +250,7 @@ function artifactFor({ patchBytes, patchHash, gateSeed, confirmSeed, gateScorePp
       hiddenSeedCommit: bytesToHex(keccak256(hexToBytes(EPOCH_SECRET))).toLowerCase(),
       replayTolerancePpm: 250,
       activeFrontierRoot: B32('08'),
+      ...(scoringPipelineVersion ? { scoringPipelineVersion } : {}),
     },
   });
 }
@@ -298,6 +299,25 @@ describe('MAJOR-2: validator score replay under the BMU law (§9 site 18)', () =
     assert.throws(
       () => scorerForParent(ctxFor(bmuProfile()), ZERO_STATE, r5Artifact),
       /does not pair with the loaded bundle's scoring law/,
+    );
+  });
+
+  test('BMU v2 replay binds the exact scoringPipelineVersion, not only the shared BMU artifact kind', () => {
+    const patchBytes = noopPatchBytes();
+    const { patchHash, gateSeed, confirmSeed } = seedsFor(patchBytes);
+    const make = (scoringPipelineVersion) => artifactFor({
+      patchBytes, patchHash, gateSeed, confirmSeed, gateScorePpm: 0, confirmScorePpm: 0,
+      version: 'coretex-bmu-post-reveal-eval-report-v1', scoringPipelineVersion,
+    });
+    const v2Profile = bmuProfile({ pipelineVersion: 'coretex-bmu-v2-r5state' });
+    assert.doesNotThrow(() => scorerForParent(ctxFor(v2Profile), ZERO_STATE, make('coretex-bmu-v2-r5state')));
+    assert.throws(
+      () => scorerForParent(ctxFor(v2Profile), ZERO_STATE, make('coretex-bmu-v1-r5state')),
+      /does not match loaded bundle/,
+    );
+    assert.throws(
+      () => scorerForParent(ctxFor(v2Profile), ZERO_STATE, make(undefined)),
+      /absent.*does not match loaded bundle/,
     );
   });
 
