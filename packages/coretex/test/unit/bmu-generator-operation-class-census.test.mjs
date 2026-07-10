@@ -64,7 +64,7 @@ function assertRepeatSupport(byClass, capacity) {
   }
 }
 
-test('48 exact P5 evolves exceed operation-class capacity with repeat support and balanced paths', () => {
+test('48 exact P5 evolves expose semantic-label inflation despite repeat support and balanced paths', () => {
   assert.equal(BMU_MULTI_HOP_OPERATION_CLASSES.length, 80, '80 > conservative multi-hop capacity 32');
   assert.equal(NEARCOL_OPERATION_CLASSES.length, 48, '48 > conservative near-collision capacity 8');
   const expectedPrograms = new Set(['causes', 'derived_from'].flatMap((outgoing) =>
@@ -93,6 +93,8 @@ test('48 exact P5 evolves exceed operation-class capacity with repeat support an
   const nearSubjects = subjects('e_p5_nc_', 'NearP5 Subject', 96);
   const multiByClass = new Map();
   const nearByClass = new Map();
+  const multiExecutableSignatures = new Set();
+  const nearExecutableSignatures = new Set();
   const allRows = [];
   let multiClassCursor = 0;
   let nearClassCursor = 0;
@@ -120,6 +122,7 @@ test('48 exact P5 evolves exceed operation-class capacity with repeat support an
       const plan = BMU_MULTI_HOP_OPERATION_CLASSES.find((candidate) => candidate.name === cluster.operationClass);
       const answerDoc = cluster.docs.find((doc) => doc.role === 'chain_answer');
       assert.ok(plan && answerDoc.text.includes(plan.truthKind), 'class semantic changes truthful public text');
+      multiExecutableSignatures.add(`${plan.outgoingEdgeType}/${plan.incomingEdgeType}/${plan.sinkMultiplicity}`);
       assert.ok(cluster.relations.filter((relation) => relation.label === 'public_path_seed').every((relation) => relation.type === plan.outgoingEdgeType));
       assert.ok(cluster.relations.filter((relation) => relation.label === 'public_path_branch').every((relation) => relation.type === plan.incomingEdgeType));
       assert.ok(cluster.pathGroups.every((group) => group.sinkIds.length === plan.sinkMultiplicity));
@@ -142,6 +145,7 @@ test('48 exact P5 evolves exceed operation-class capacity with repeat support an
     for (const cluster of near.clusters) {
       const plan = NEARCOL_OPERATION_CLASSES.find((candidate) => candidate.name === cluster.operationClass);
       assert.ok(plan);
+      nearExecutableSignatures.add(`${plan.outgoingEdgeType}/${plan.incomingEdgeType}/${plan.sinkMultiplicity}`);
       assert.equal(cluster.decoyKinds[0].kind, plan.primaryKind, 'semantic class changes primary truthful discrimination axis');
       assert.ok(nearRelByCluster(cluster).filter((relation) => relation.label === 'public_path_seed').every((relation) => relation.type === plan.outgoingEdgeType));
       assert.ok(nearRelByCluster(cluster).filter((relation) => relation.label === 'public_path_branch').every((relation) => relation.type === plan.incomingEdgeType));
@@ -158,6 +162,16 @@ test('48 exact P5 evolves exceed operation-class capacity with repeat support an
   assert.equal(nearClassCursor, 48, 'exact P5 near-collision 1/evolve cycle');
   assert.equal(multiByClass.size, 36, '72 paired clusters realize 36 distinct classes');
   assert.equal(nearByClass.size, 24, '48 paired slots realize 24 distinct classes');
+  // The capacity argument must count executable operations, not semantic text
+  // or primary-decoy labels. In this exact window the 36/24 advertised class
+  // labels collapse to only 8 real edge/topology programs apiece. Derived-from
+  // is not reached at all, so multi remains below 32 and near merely equals 8.
+  assert.equal(multiExecutableSignatures.size, 8);
+  assert.equal(nearExecutableSignatures.size, 8);
+  assert.ok([...multiExecutableSignatures].every((signature) => signature.startsWith('causes/')));
+  assert.ok([...nearExecutableSignatures].every((signature) => signature.startsWith('causes/')));
+  assert.ok(multiExecutableSignatures.size <= 32, 'multi executable census does not exceed capacity 32');
+  assert.ok(nearExecutableSignatures.size <= 8, 'near executable census does not exceed capacity 8');
   assertRepeatSupport(multiByClass, 32);
   assertRepeatSupport(nearByClass, 8);
   assert.deepEqual(m1CensusOverRows(allRows), [], 'global m=1 + alias-aware I6 census remains clean');
