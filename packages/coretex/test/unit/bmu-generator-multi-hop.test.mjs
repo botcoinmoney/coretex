@@ -230,12 +230,19 @@ test('trap law: off-path decoy out-ranks honestly; near-bridge decoy breaks the 
     for (const shadow of cluster.docs.filter((d) => d.role === 'offpath_shadow')) {
       for (const row of cluster.rows) assert.ok(row.bmuTask.forbiddenEvidence.includes(shadow.id));
     }
-    // Both traps occupy the same outgoing→incoming group as truth.
+    // Both traps occupy the primary group's depth-1 branch layer: they share
+    // the sink with the chain head but have no incoming continuation, so the
+    // deep-terminal walk can never route them. Truth hangs at terminal depth.
     const group = cluster.pathGroups.find((candidate) => candidate.decoyIds.includes(offpath.id));
     assert.ok(group && group.decoyIds.includes(nearBridge.id));
-    for (const id of [group.truthId, ...group.decoyIds]) {
+    for (const id of group.decoyIds) {
       assert.ok(cluster.relations.some((r) => r.src === id && r.dst === group.sinkId));
+      assert.ok(!cluster.relations.some((r) => r.dst === id), 'decoys are depth-1 dead ends');
     }
+    assert.ok(group.midIds.length >= 1, 'primary group walks through a neutral chain relay');
+    assert.ok(cluster.relations.some((r) => r.src === group.truthId && r.dst === group.midIds.at(-1)),
+      'the answer terminal hangs off the deepest chain relay, never the sink');
+    assert.ok(!cluster.relations.some((r) => r.src === group.truthId && r.dst === group.sinkId));
   }
 });
 
@@ -258,31 +265,52 @@ test('v2 operation classes are deterministic topology choices, with at least two
   assert.equal(Object.keys(telemetry.operationClassHistogram).length, classes.size);
 });
 
-test('v2 balanced branches defeat structural, recency, and metadata-only selectors', () => {
+test('v2 depth-1 branch layer is balanced and decoys are mutually indistinguishable dead ends', () => {
   const { clusters } = generateMultiHopClusters(baseOpts({ clusterCount: 6 }));
   const metadata = (doc) => Object.fromEntries(Object.entries(doc)
     .filter(([key]) => key !== 'id' && key !== 'text'));
   for (const cluster of clusters) {
     const docById = new Map(cluster.docs.map((doc) => [doc.id, doc]));
     for (const group of cluster.pathGroups) {
-      const branches = [group.truthId, ...group.decoyIds];
-      assert.equal(branches.length, 4, 'branchLimit=4 group is full and uniform');
-      const seedEdges = cluster.relations.filter((relation) => relation.src === group.anchorId);
+      const chainHead = group.midIds[0] ?? null;
+      const branches = [...(chainHead ? [chainHead] : []), ...group.decoyIds];
+      assert.equal(branches.length, 4, 'branchLimit=4 depth-1 layer is full');
+      const seedEdges = cluster.relations.filter((relation) => relation.src === group.anchorId
+        && relation.label === 'public_path_seed');
       assert.deepEqual(new Set(seedEdges.map((relation) => relation.dst)), new Set(group.sinkIds));
-      const signatures = branches.map((id) => {
-        const outgoing = cluster.relations.filter((relation) => relation.src === id);
-        const incoming = cluster.relations.filter((relation) => relation.dst === id);
-        assert.equal(outgoing.length, group.sinkIds.length);
-        assert.deepEqual(new Set(outgoing.map((relation) => relation.dst)), new Set(group.sinkIds));
-        return {
-          metadata: metadata(docById.get(id)),
-          path: { outDegree: outgoing.length, inDegree: incoming.length, types: [...new Set(outgoing.map((relation) => relation.type))], labels: [...new Set(outgoing.map((relation) => relation.label))] },
-        };
-      });
-      for (const decoyId of group.decoyIds) {
-        const truth = signatures[branches.indexOf(group.truthId)];
-        const decoy = signatures[branches.indexOf(decoyId)];
-        assert.deepEqual(decoy, truth, 'truth/decoy differ only in id and text consumed by Qwen');
+      // Every depth-1 branch (chain head AND decoys) shares one branch edge
+      // type/label into the primary sink, so branch-edge shape alone selects
+      // nothing.
+      for (const id of branches) {
+        const branchEdges = cluster.relations.filter((relation) => relation.src === id
+          && relation.label === 'public_path_branch');
+        assert.equal(branchEdges.length, 1);
+        assert.equal(branchEdges[0].dst, group.sinkId);
+      }
+      assert.equal(new Set(branches.map((id) => cluster.relations
+        .find((relation) => relation.src === id && relation.label === 'public_path_branch').type)).size, 1);
+      // Decoys are mutually indistinguishable dead ends: identical metadata,
+      // identical degree signature, zero incoming continuation.
+      const decoySignatures = group.decoyIds.map((id) => ({
+        metadata: metadata(docById.get(id)),
+        outLabels: [...new Set(cluster.relations.filter((r) => r.src === id).map((r) => r.label))].sort(),
+        inDegree: cluster.relations.filter((r) => r.dst === id).length,
+      }));
+      for (const signature of decoySignatures.slice(1)) {
+        assert.deepEqual(signature, decoySignatures[0], 'decoys differ only in id and text consumed by Qwen');
+      }
+      for (const signature of decoySignatures) assert.equal(signature.inDegree, 0);
+      // Only the terminal-free side groups route nothing; the primary group's
+      // executed terminal set is exactly its declared branchIds (the answer).
+      if (chainHead) {
+        assert.deepEqual(group.branchIds, [group.truthId]);
+        for (const goldId of group.branchIds) {
+          assert.ok(cluster.relations.some((r) => r.src === goldId && r.dst === group.midIds.at(-1)
+            && r.label === 'public_path_terminal'));
+        }
+      } else {
+        assert.deepEqual(group.branchIds, []);
+        assert.equal(group.truthId, null);
       }
     }
   }

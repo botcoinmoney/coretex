@@ -90,6 +90,7 @@ import {
 } from './common.mjs';
 import {
   BMU_EXECUTABLE_PROGRAM_BANK,
+  buildProgramPathTopology,
   executableOperationForFamilySlot,
   stampExecutableOperationTask,
 } from './operation-program.mjs';
@@ -466,8 +467,13 @@ export function generateMultiHopClusters({
     const offpathId = docId('offpath_decoy');
     const nearBridgeId = docId('near_bridge_decoy');
     const shadowIds = shadowVals.map((_, i) => docId(`offpath_shadow:${i}`));
+    // Deep-terminal decoy arithmetic: the primary group parks exactly 3
+    // depth-1 decoys beside the chain head (4 branches under the cap);
+    // overflow decoys fill terminal-free side groups of exactly 4.
     const unbalancedDecoyCount = 2 + shadowIds.length;
-    const balanceNeeded = (3 - (unbalancedDecoyCount % 3)) % 3;
+    const balanceNeeded = unbalancedDecoyCount <= 3
+      ? 3 - unbalancedDecoyCount
+      : (4 - ((unbalancedDecoyCount - 3) % 4)) % 4;
     const balanceIds = Array.from({ length: balanceNeeded }, (_, i) => docId(`path_balance_decoy:${i}`));
     const balanceVals = Array.from({ length: balanceNeeded }, (_, i) => `${hostAt()}-${valueSlug}-${epoch}z${ordinal}p${i}`);
 
@@ -532,50 +538,60 @@ export function generateMultiHopClusters({
       });
     }
 
-    // ── Relations: balanced outgoing→incoming shared-sink groups ───────────
-    // The v2 law follows anchor→sink using the disjoint first-step edge set,
-    // then enumerates truth/decoy→same-sink edges using the disjoint incoming
-    // edge set. Each incoming group is exactly truth + three decoys. Truth
-    // and decoys have the same edge type, label, degree, recency, and metadata.
+    // ── Relations: deep-terminal disjoint-partition topology (fix 2a) ──────
+    // The primary group routes the anchor→sink outgoing step, then walks the
+    // incoming chain through neutral mid relays; ONLY the answer terminal
+    // hangs at terminal depth, so the executed route set equals the row's
+    // operation-required answer terminal. Decoys sit at depth 1 (balanced
+    // against the chain head under the branch cap) with no incoming
+    // continuation — the decoder admits only TERMINAL branches, so no decoy
+    // or forbidden doc is ever routed. Overflow decoys park in terminal-free
+    // side groups (anchor→sink plus four depth-1 dead ends).
     const relations = [];
     const allDecoyIds = [offpathId, nearBridgeId, ...shadowIds, ...balanceIds];
     const pathGroups = [];
-    for (let i = 0; i < allDecoyIds.length; i += 3) {
-      const groupIndex = i / 3;
-      const anchorId = groupIndex === 0 ? b1Id : docId(`path_anchor:${groupIndex}`);
-      const sinkIds = groupIndex === 0 ? [...primarySinkIds] : [docId(`path_sink:${groupIndex}:0`)];
-      if (groupIndex > 0) {
-        for (let j = 1; j < operationPlan.sinkMultiplicity; j++) sinkIds.push(docId(`path_sink:${groupIndex}:${j}`));
-      }
-      const sinkId = sinkIds[0];
-      const truthId = groupIndex === 0 ? ansId : docId(`path_truth_control:${groupIndex}`);
-      if (groupIndex > 0) {
-        pushDoc({
-          id: anchorId, role: 'path_anchor',
-          text: `Comparison docket ${groupIndex + 1} for ${canonical}'s ${topic} groups another trio of ${targetAttr} filings for textual review.`,
-        });
-        for (let j = 0; j < sinkIds.length; j++) {
-          pushDoc({
-            id: sinkIds[j], role: 'path_pivot', grounding: 'distant',
-            text: `${j === 0 ? 'Neutral' : 'Mirrored'} comparison pivot ${ticket}-p${groupIndex}-${j} receives the class branches for a public-path check.`,
-          });
-        }
-        pushDoc({
-          id: truthId, role: 'path_truth_control', grounding: 'distant',
-          text: `The control filing on pivot ${ticket}-p${groupIndex} says its reviewed entry is ratified; competing provisional entries on the same pivot are not authoritative.`,
-        });
-      }
-      pathGroups.push({ anchorId, sinkId, sinkIds, truthId, decoyIds: allDecoyIds.slice(i, i + 3) });
+    const primaryDecoyIds = allDecoyIds.slice(0, 3);
+    const primaryTopology = buildProgramPathTopology({
+      program: operation.operationProgram,
+      seedId: b1Id,
+      sinkIds: primarySinkIds,
+      goldIds: [ansId],
+      decoyIds: primaryDecoyIds,
+      midIdFor: (level) => docId(`path_mid:0:${level}`),
+    });
+    relations.push(...primaryTopology.relations);
+    for (let level = 0; level < primaryTopology.midIds.length; level++) {
+      pushDoc({
+        id: primaryTopology.midIds[level], role: 'path_mid', grounding: 'distant',
+        text: `Neutral chain relay ${ticket}-m${level + 1} links the docket's terminal filings for a public-path check.`,
+      });
     }
-    for (const group of pathGroups) {
-      const branchIds = [group.truthId, ...group.decoyIds];
-      if (branchIds.length !== 4) throw new Error('bmu multi_hop: every public-path group must have exactly four balanced branches');
-      for (const sinkId of group.sinkIds) {
-        relations.push({ src: group.anchorId, dst: sinkId, type: operationPlan.outgoingEdgeType, label: 'public_path_seed' });
+    pathGroups.push({
+      anchorId: b1Id, sinkId: primarySinkIds[0], sinkIds: [...primarySinkIds],
+      midIds: [...primaryTopology.midIds], truthId: ansId,
+      branchIds: [...primaryTopology.terminalIds], decoyIds: primaryDecoyIds,
+    });
+    for (let i = 3; i < allDecoyIds.length; i += 4) {
+      const groupIndex = 1 + (i - 3) / 4;
+      const anchorId = docId(`path_anchor:${groupIndex}`);
+      const sinkId = docId(`path_sink:${groupIndex}:0`);
+      const groupDecoyIds = allDecoyIds.slice(i, i + 4);
+      pushDoc({
+        id: anchorId, role: 'path_anchor',
+        text: `Comparison docket ${groupIndex + 1} for ${canonical}'s ${topic} groups further ${targetAttr} filings for textual review.`,
+      });
+      pushDoc({
+        id: sinkId, role: 'path_pivot', grounding: 'distant',
+        text: `Neutral comparison pivot ${ticket}-p${groupIndex}-0 receives the class branches for a public-path check.`,
+      });
+      relations.push({ src: anchorId, dst: sinkId, type: operationPlan.outgoingEdgeType, label: 'public_path_seed' });
+      for (const src of groupDecoyIds) {
+        relations.push({ src, dst: sinkId, type: operationPlan.incomingEdgeType, label: 'public_path_branch' });
       }
-      for (const src of branchIds) {
-        for (const sinkId of group.sinkIds) relations.push({ src, dst: sinkId, type: operationPlan.incomingEdgeType, label: 'public_path_branch' });
-      }
+      pathGroups.push({
+        anchorId, sinkId, sinkIds: [sinkId], midIds: [], truthId: null,
+        branchIds: [], decoyIds: groupDecoyIds,
+      });
     }
 
     // ── Evidence law (§5.3): required = bridge + answer (not the full 3-hop set).
@@ -732,7 +748,10 @@ export function generateMultiHopClusters({
       entityHoldoutKeys: [...entityHoldoutKeys],
       docs,
       relations,
-      pathGroups: pathGroups.map((group) => ({ ...group, sinkIds: [...group.sinkIds], decoyIds: [...group.decoyIds] })),
+      pathGroups: pathGroups.map((group) => ({
+        ...group, sinkIds: [...group.sinkIds], decoyIds: [...group.decoyIds],
+        midIds: [...group.midIds], branchIds: [...group.branchIds],
+      })),
       rows,
     });
   }

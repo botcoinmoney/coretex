@@ -254,6 +254,7 @@ test('regression: known public generator seed cannot reverse keyed multi-hop ans
     attackerId('offpath_decoy'), attackerId('near_bridge_decoy'),
     attackerId('offpath_shadow:0'), attackerId('offpath_shadow:1'),
     attackerId('path_balance_decoy:0'), attackerId('path_balance_decoy:1'),
+    attackerId('path_balance_decoy:2'),
   ];
   const ranking = attackerRanking(docs.map((doc) => doc.id), attackerRequired, attackerForbidden);
   assert.ok(cluster.rows.every((row) => !judgeTopB(ranking, row.bmuTask).judgeSuccess));
@@ -264,6 +265,7 @@ test('regression: known public generator seed cannot reverse keyed multi-hop ans
     privateId('offpath_decoy'), privateId('near_bridge_decoy'),
     privateId('offpath_shadow:0'), privateId('offpath_shadow:1'),
     privateId('path_balance_decoy:0'), privateId('path_balance_decoy:1'),
+    privateId('path_balance_decoy:2'),
   ];
   const positive = attackerRanking(docs.map((doc) => doc.id), required, forbidden);
   assert.ok(cluster.rows.every((row) => judgeTopB(positive, row.bmuTask).judgeSuccess), 'private-key positive control');

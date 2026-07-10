@@ -160,7 +160,10 @@ test('legacy v1 certifyBank fails closed on a balanced BMU-v2 temporal bank', ()
   assert.equal(report.totals.oracleRate, 0);
   assert.equal(report.baselineRates.bm25.uRate, 0.2);
   assert.equal(report.baselineRates.firstK.uRate, 0);
-  assert.equal(report.baselineRates.randomK.uRate, 0);
+  // Deep-terminal mid relays enlarge the doc pool, shifting this fixed-seed
+  // random draw: one lucky 3-doc draw covers one row. randomK is a BANK-level
+  // rate gate; the pack still fails closed below.
+  assert.equal(report.baselineRates.randomK.uRate, 0.1);
   assert.equal(report.shortcutGates.requiredForFamily, true);
   assert.equal(report.shortcutGates.pass, true);
   assert.equal(report.shortcutGates.lanes.subjectScopedRecency.competitiveWithOracle, false);

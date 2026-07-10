@@ -72,6 +72,7 @@ import {
 } from './common.mjs';
 import {
   BMU_EXECUTABLE_PROGRAM_BANK,
+  buildProgramPathTopology,
   executableOperationForFamilySlot,
   stampExecutableOperationTask,
 } from './operation-program.mjs';
@@ -395,15 +396,20 @@ export function generateTemporalClusters({
     const operationFamily = operation.operationClass;
     const operationClass = operation.operationClass;
     const pathEdges = operationProfile.topology;
-    const terminalPathClause = {
+    const pathClauseFor = (edgeType) => ({
       supports: 'This finding supports the linked review conclusion.',
       supersedes: 'This branch finding supersedes the linked preliminary summary.',
       coreference_of: 'This finding refers to the same case as the linked case marker.',
       co_occurs_with: 'This finding is filed alongside the linked docket entry.',
       causes: 'This finding records the cause of the linked review conclusion.',
       derived_from: 'This finding is derived from the linked review conclusion.',
-    }[pathEdges.branch];
-    const withPathSemantics = (text) => `${text} ${terminalPathClause}`;
+    }[edgeType]);
+    // Terminal (gold) docs describe their actual terminal-depth edge; the
+    // depth-1 branch controls describe the branch edge — each clause matches
+    // the edge the doc really carries, so the clause is topology-consistent.
+    const terminalPathClause = pathClauseFor(operation.operationProgram.steps.at(-1).edgeType);
+    const branchPathClause = pathClauseFor(pathEdges.branch);
+    const withPathSemantics = (text, clause = terminalPathClause) => `${text} ${clause}`;
 
     const idBase = `e${epoch}_${subj.id}_bmu${ordinal}`;
     const motifGroupId = `mg_e${epoch}_temporal_${String(ordinal).padStart(4, '0')}_${subj.id}`;
@@ -431,21 +437,21 @@ export function generateTemporalClusters({
       if (operationProfile.semantic.id === 'revision_supersession') {
         if (role === 'current') return withPathSemantics(`Revision decision ${tsDate}: the authorized outcome is ${val}. Subject ${canonical}; field ${attr}. The earlier ${staleVal} entry was retired.`);
         if (role === 'change_provenance') return withPathSemantics(`Revision review ${tsDate} approved ${val} and closed the prior ${staleVal} proposal. Subject ${canonical}; field ${attr}.`);
-        return withPathSemantics(`Revision review ${tsDate} considered ${decoyValue}, but did not approve that proposal. Subject ${canonical}; field ${attr}.`);
+        return withPathSemantics(`Revision review ${tsDate} considered ${decoyValue}, but did not approve that proposal. Subject ${canonical}; field ${attr}.`, branchPathClause);
       }
       if (operationProfile.semantic.id === 'validity_renewal') {
         if (role === 'current') return withPathSemantics(`Validity notice ${tsDate}: scheduled verification confirmed ${val} for the next interval. Subject ${canonical}; field ${attr}.`);
         if (role === 'change_provenance') return withPathSemantics(`Validity review ${tsDate} renewed ${val}; the earlier ${staleVal} entry expired before renewal. Subject ${canonical}; field ${attr}.`);
-        return withPathSemantics(`Validity review ${tsDate} examined ${decoyValue}, but did not validate it for the next interval. Subject ${canonical}; field ${attr}.`);
+        return withPathSemantics(`Validity review ${tsDate} examined ${decoyValue}, but did not validate it for the next interval. Subject ${canonical}; field ${attr}.`, branchPathClause);
       }
       if (operationProfile.semantic.id === 'rollback_restoration') {
         if (role === 'current') return withPathSemantics(`Rollback decision ${tsDate}: controls restored ${val} as governing. Subject ${canonical}; field ${attr}. The interim ${staleVal} revision was invalid.`);
         if (role === 'change_provenance') return withPathSemantics(`Rollback audit ${tsDate} invalidated interim ${staleVal} and restored ${val}. Subject ${canonical}; field ${attr}.`);
-        return withPathSemantics(`Rollback audit ${tsDate} examined ${decoyValue}, but review did not restore that candidate. Subject ${canonical}; field ${attr}.`);
+        return withPathSemantics(`Rollback audit ${tsDate} examined ${decoyValue}, but review did not restore that candidate. Subject ${canonical}; field ${attr}.`, branchPathClause);
       }
       if (role === 'current') return withPathSemantics(`Handoff notice ${tsDate}: the effective transition activates ${val}. Subject ${canonical}; field ${attr}.`);
       if (role === 'change_provenance') return withPathSemantics(`Handoff record ${tsDate} closed ${staleVal} and activated successor ${val}. Subject ${canonical}; field ${attr}.`);
-      return withPathSemantics(`Handoff review ${tsDate} listed ${decoyValue}, but that candidate was not activated. Subject ${canonical}; field ${attr}.`);
+      return withPathSemantics(`Handoff review ${tsDate} listed ${decoyValue}, but that candidate was not activated. Subject ${canonical}; field ${attr}.`, branchPathClause);
     };
     // All terminal branches deliberately share the same public metadata. The
     // only gold/decoy discriminator is branch text seen by Qwen; ids, edge
@@ -508,21 +514,42 @@ export function generateTemporalClusters({
       Object.defineProperty(emitted, 'role', { value: 'shortcut_control', enumerable: false });
       docs.push(emitted);
     }
-    const terminalBranchIds = [currentId, changeId, shortcutControlIds[0], shortcutControlIds[1]];
-    const pathDecoyIds = shortcutControlIds.slice(0, 2);
+    const goldBranchIds = [currentId, changeId];
+    const pathDecoyIds = shortcutControlIds.slice(0, 3);
     // All same-recency/current control observations are forbidden. Leaving
-    // the two non-path controls neutral lets a public recency/currency sorter
+    // the non-path control neutral lets a public recency/currency sorter
     // place {gold + neutral controls} in top-B without ever touching a veto.
-    // They remain outside the four-branch diamond, but close that shortcut.
+    // It remains outside the depth-1 branch layer, but closes that shortcut.
     const shortcutForbiddenIds = [...shortcutControlIds];
+    // Deep-terminal disjoint-partition topology (fix 2a): stale lexical seed
+    // → pivot on the outgoing step; chain head + three balanced controls hold
+    // the depth-1 branch layer; ONLY the two gold terminals hang at terminal
+    // depth, so the executed route set equals the row's required evidence and
+    // no decoy/forbidden doc is ever routed.
+    const pathTopology = buildProgramPathTopology({
+      program: operation.operationProgram,
+      seedId: staleId,
+      sinkIds: [pathPivotId],
+      goldIds: goldBranchIds,
+      decoyIds: pathDecoyIds,
+      midIdFor: (level) => docId(`path_mid:${level}`),
+    });
+    for (let level = 0; level < pathTopology.midIds.length; level++) {
+      const midDoc = {
+        id: pathTopology.midIds[level], lane: 'deep', kind: 'bmu_public_record',
+        entityIds: [universe, subj.id],
+        text: `Neutral review relay ${tsDate}-m${level + 1} for ${canonical}'s ${attr} links the docket's decision filings for a public-path check.`,
+        shape: 'temporal_update_record', timestamp: `${tsDate}T12:00:00Z`, currentStaleFlag: true,
+        validity: { ...terminalValidity }, liveUpdateEpoch: epoch,
+      };
+      Object.defineProperty(midDoc, 'role', { value: 'path_mid', enumerable: false });
+      docs.push(midDoc);
+    }
     const relations = [
-      // Fixed v2 outgoing→incoming diamond: stale lexical seed → pivot;
-      // two truths + two balanced decoys → the same pivot.
-      { src: staleId, dst: pathPivotId, type: pathEdges.seed, label: 'public_path_seed' },
-      ...terminalBranchIds.map((src) => ({ src, dst: pathPivotId, type: pathEdges.branch, label: 'public_path_branch' })),
+      ...pathTopology.relations,
       // Preserve the public supersession relation without making it a gold
-      // topology oracle: every terminal branch has the identical edge.
-      ...terminalBranchIds.map((src) => ({ src, dst: staleId, type: 'supersedes', label: 'supersedes_candidate' })),
+      // topology oracle: golds and in-path controls carry the identical edge.
+      ...[...goldBranchIds, ...pathDecoyIds].map((src) => ({ src, dst: staleId, type: 'supersedes', label: 'supersedes_candidate' })),
     ];
 
     // ── k=5 rows: inherited qrels per type + template bank + bmuTask ────────
@@ -640,8 +667,10 @@ export function generateTemporalClusters({
         seedId: staleId,
         pivotId: pathPivotId,
         firstEdgeType: pathEdges.seed,
-        terminalEdgeType: pathEdges.branch,
-        terminalBranchIds: [...terminalBranchIds],
+        branchEdgeType: pathEdges.branch,
+        terminalEdgeType: operation.operationProgram.steps.at(-1).edgeType,
+        midIds: [...pathTopology.midIds],
+        terminalBranchIds: [...pathTopology.terminalIds],
         goldBranchIds: [currentId, changeId],
         decoyBranchIds: [...pathDecoyIds],
       },

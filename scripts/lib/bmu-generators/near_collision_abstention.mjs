@@ -99,6 +99,7 @@ import {
 } from './common.mjs';
 import {
   BMU_EXECUTABLE_PROGRAM_BANK,
+  buildProgramPathTopology,
   executableOperationForFamilySlot,
   stampExecutableOperationTask,
 } from './operation-program.mjs';
@@ -266,7 +267,14 @@ export function buildNearCollisionClusterSpec({
   const decoyQrels = decoys.map((d) => ({ docId: d.id, relevance: 0.0, role: `${d.kind}_lookalike` }));
   const decoyNegs = decoys.map((d) => ({ docId: d.id, category: categoryFor[d.kind] }));
   const forbiddenAnswerable = decoyIds;
-  const forbiddenAbstain = [exactId, ...decoyIds]; // §5.4: the answerable sibling is a plausible decoy for the absent variant
+  // §5.4: the answerable sibling stays a plausible decoy for the absent
+  // variant, but it is the cluster's ROUTED TERMINAL under the shared
+  // cue/program — a forbidden routed terminal makes the abstain row
+  // unsolvable by construction for exactly the state the law rewards
+  // (fix-2b hard contract). It therefore stays a hardNegative (below) and
+  // out of the veto set; the abstain law still binds via the required
+  // abstainSignal and the decoy veto.
+  const forbiddenAbstain = [...decoyIds];
 
   const entityHoldoutKeys = bmuEntityHoldoutKeysForSubject({ id: subjectId, canonicalName: canonical, aliases: subjectAliases });
   const stampTask = ({ requiredEvidence, answerId, answerValue, abstain, questionType, variant, templateScope }) => stampExecutableOperationTask({
@@ -481,47 +489,62 @@ export function generateNearCollisionAbstentionClusters({
       }
     }
 
-    // Overlay the actual BMU-v2 diamond. A lexical anchor reaches each sink
-    // through the first-step-only edge program; truth plus three decoys point
-    // to that sink through the second-step-only edge program. Thus the fixed
-    // outgoing→incoming law reaches every branch while truth/decoys remain
-    // indistinguishable by degree, direction, edge type, path, or metadata.
+    // Overlay the deep-terminal disjoint-partition topology (fix 2a). The
+    // primary group routes disambiguation-anchor → sink on the outgoing step,
+    // then walks the incoming chain through neutral registry relays; ONLY the
+    // exact-match terminal hangs at terminal depth, so the executed route set
+    // equals the answerable rows' required terminal and no decoy or forbidden
+    // doc is ever routed. Decoy trios are depth-1 dead ends (the primary trio
+    // balanced beside the chain head; overflow trios in terminal-free side
+    // groups).
     const exactId = spec.docs.find((doc) => doc.role === 'exact_match')?.id;
     const disambigId = spec.docs.find((doc) => doc.role === 'disambiguation_record')?.id;
     if (!exactId || !disambigId) throw new Error('near_collision_abstention: exact/disambiguation docs missing');
     if (decoys.length % 3 !== 0) throw new Error('near_collision_abstention: decoy bank must partition into triples');
     const pathDocs = [];
     const pathGroups = [];
+    const pathRelations = [];
     for (let i = 0; i < decoys.length; i += 3) {
       const groupIndex = i / 3;
       const trio = decoys.slice(i, i + 3);
       const sinkIds = [docId(`public_path_sink:${groupIndex}:0`)];
       for (let j = 1; j < operationPlan.sinkMultiplicity; j++) sinkIds.push(docId(`public_path_sink:${groupIndex}:${j}`));
       const sinkId = sinkIds[0];
-      const truthId = groupIndex === 0 ? exactId : docId(`public_path_truth_control:${groupIndex}`);
-      const anchorId = groupIndex === 0 ? disambigId : docId(`public_path_anchor:${groupIndex}`);
       pathDocs.push(
         ...sinkIds.map((id, j) => ({ id, role: 'path_pivot', text: `${j === 0 ? 'Neutral' : 'Mirrored'} registry pivot ${epoch}-${clusterSlot}-${groupIndex}-${j} receives the same independently filed collision branches under one docket.` })),
       );
-      if (groupIndex > 0) {
+      if (groupIndex === 0) {
+        const topology = buildProgramPathTopology({
+          program: operation.operationProgram,
+          seedId: disambigId,
+          sinkIds,
+          goldIds: [exactId],
+          decoyIds: trio.map((d) => d.id),
+          midIdFor: (level) => docId(`path_mid:${groupIndex}:${level}`),
+        });
+        pathRelations.push(...topology.relations);
+        pathDocs.push(...topology.midIds.map((id, level) => ({
+          id, role: 'path_mid',
+          text: `Neutral registry relay ${epoch}-${clusterSlot}-m${level + 1} links the docket's standing filings for a public-path check.`,
+        })));
+        pathGroups.push({
+          sinkId, sinkIds, truthId: exactId, decoyIds: trio.map((d) => d.id),
+          anchorId: disambigId, midIds: [...topology.midIds],
+          branchIds: [...topology.terminalIds],
+        });
+      } else {
+        const anchorId = docId(`public_path_anchor:${groupIndex}`);
         pathDocs.push(
-          { id: truthId, role: 'path_truth_control', text: `The reviewed control filing on pivot ${epoch}-${clusterSlot}-${groupIndex} says its own scope and holder match; neighboring lookalike filings do not.` },
           { id: anchorId, role: 'path_anchor', text: `Registry comparison for ${canonical}'s ${attr} groups another trio of near-collision filings for textual review.` },
         );
-      }
-      pathGroups.push({
-        sinkId, sinkIds, truthId, decoyIds: trio.map((d) => d.id), anchorId,
-        branchIds: [truthId, ...trio.map((d) => d.id)],
-      });
-    }
-    const pathRelations = [];
-    for (const group of pathGroups) {
-      if (group.branchIds.length !== 4) throw new Error('near_collision_abstention: every public-path group must have exactly four branches');
-      for (const sinkId of group.sinkIds) {
-        pathRelations.push({ src: group.anchorId, dst: sinkId, type: operationPlan.outgoingEdgeType, label: 'public_path_seed' });
-      }
-      for (const src of group.branchIds) {
-        for (const sinkId of group.sinkIds) pathRelations.push({ src, dst: sinkId, type: operationPlan.incomingEdgeType, label: 'public_path_branch' });
+        pathRelations.push({ src: anchorId, dst: sinkId, type: operationPlan.outgoingEdgeType, label: 'public_path_seed' });
+        for (const d of trio) {
+          pathRelations.push({ src: d.id, dst: sinkId, type: operationPlan.incomingEdgeType, label: 'public_path_branch' });
+        }
+        pathGroups.push({
+          sinkId, sinkIds, truthId: null, decoyIds: trio.map((d) => d.id),
+          anchorId, midIds: [], branchIds: [],
+        });
       }
     }
     const allDocs = [...spec.docs, ...pathDocs];
@@ -591,7 +614,10 @@ export function generateNearCollisionAbstentionClusters({
       disambiguationDocId: disambigId,
       decoyKinds: decoys.map((decoy) => ({ id: decoy.id, kind: decoy.kind })),
       docIds: allDocs.map((d) => d.id), rowIds, templateIds,
-      pathGroups: pathGroups.map((group) => ({ ...group, sinkIds: [...group.sinkIds], decoyIds: [...group.decoyIds], branchIds: [...group.branchIds] })),
+      pathGroups: pathGroups.map((group) => ({
+        ...group, sinkIds: [...group.sinkIds], decoyIds: [...group.decoyIds],
+        midIds: [...group.midIds], branchIds: [...group.branchIds],
+      })),
       entityHoldoutKeys: [...entityHoldoutKeys],
       questionTypes: [...new Set(spec.queryStubs.map((s) => s.questionType))],
       answerableRowCount: spec.queryStubs.filter((s) => !s.abstain).length,

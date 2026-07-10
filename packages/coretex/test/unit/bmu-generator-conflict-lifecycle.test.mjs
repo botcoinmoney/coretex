@@ -112,7 +112,8 @@ describe('v2 operation-general public path', () => {
       const profile = conflictOperationProfileForCluster(c.operationSequence, 0);
       assert.equal(profile.id, c.operationFamily);
       assert.equal(c.operationClass, c.operationFamily);
-      assert.equal(c.operationClass, `${c.bmuOperationCue}=>b4/outgoing:${c.publicPath.firstEdgeType}/incoming:${c.publicPath.terminalEdgeType}`);
+      assert.equal(c.operationClass, `${c.bmuOperationCue}=>b4/${c.bmuOperationProgram.steps
+        .map((step) => `${step.direction}:${step.edgeType}`).join('/')}`);
       assert.ok(CONFLICT_OPERATION_CLASS_BANK.some((candidate) => candidate.id === c.operationFamily));
       const topologyCue = {
         supports: /supports the linked review conclusion/,
@@ -149,31 +150,45 @@ describe('v2 operation-general public path', () => {
       const [a, b] = pair;
       assert.ok(b.epoch - a.epoch < 32, 'first instance remains active at second mint');
       const gold = docById.get(a.publicPath.goldBranchIds[0]);
-      behaviorSignatures.add(`${a.publicPath.firstEdgeType}|${a.publicPath.terminalEdgeType}|${gold.text.split(' ')[0]}`);
+      behaviorSignatures.add(`${a.bmuOperationProgram.steps.map((step) => step.edgeType).join('>')}|${gold.text.split(' ')[0]}`);
     }
     assert.equal(behaviorSignatures.size, byClass.size,
       'every class is uniquely realized by topology × semantic prose, not an epoch/ordinal label');
   });
 
-  test('balanced outgoing→incoming diamonds defeat structural/recency/metadata selectors', () => {
+  test('deep-terminal chain: only golds are routed, depth-1 layer is balanced, decoys are dead ends', () => {
     const out = gen({ clusterCount: 4, escalationLevel: 2 });
     const docById = new Map(out.addedDocs.map((doc) => [doc.id, doc]));
     for (const c of out.clusters) {
       const p = c.publicPath;
-      assert.equal(p.terminalBranchIds.length, 4);
+      assert.deepEqual(p.terminalBranchIds, p.goldBranchIds,
+        'the executed terminal set equals the required gold terminals');
       assert.equal(p.goldBranchIds.length, 2);
-      assert.equal(p.decoyBranchIds.length, 2);
+      assert.equal(p.decoyBranchIds.length, 3);
+      assert.ok(p.midIds.length >= 1);
       assert.ok(out.addedRelations.some((r) => r.src === p.seedId && r.dst === p.pivotId && r.type === p.firstEdgeType));
+      for (const goldId of p.goldBranchIds) {
+        assert.ok(out.addedRelations.some((r) => r.src === goldId && r.dst === p.midIds.at(-1) && r.type === p.terminalEdgeType));
+        assert.ok(!out.addedRelations.some((r) => r.src === goldId && r.dst === p.pivotId));
+      }
+      const depthOneBranches = [p.midIds[0], ...p.decoyBranchIds];
+      assert.equal(depthOneBranches.length, 4, 'branchLimit=4 depth-1 layer is full');
+      for (const branchId of depthOneBranches) {
+        assert.ok(out.addedRelations.some((r) => r.src === branchId && r.dst === p.pivotId
+          && r.type === p.branchEdgeType && r.label === 'public_path_branch'));
+      }
       const observable = (id) => {
         const { id: _id, text: _text, ...metadata } = JSON.parse(JSON.stringify(docById.get(id)));
         const topology = out.addedRelations
           .filter((r) => r.src === id)
           .map((r) => ({ dstClass: r.dst === p.pivotId ? 'pivot' : r.dst === p.seedId ? 'seed' : 'other', type: r.type, label: r.label }))
           .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-        return JSON.stringify({ metadata, topology });
+        return JSON.stringify({ metadata, topology, incoming: out.addedRelations.filter((r) => r.dst === id).length });
       };
-      assert.equal(new Set(p.terminalBranchIds.map(observable)).size, 1);
-      assert.equal(new Set(p.terminalBranchIds.map((id) => docById.get(id).text)).size, 4);
+      assert.equal(new Set(p.goldBranchIds.map(observable)).size, 1, 'golds are structurally identical');
+      assert.equal(new Set(p.decoyBranchIds.map(observable)).size, 1, 'decoys are mutually indistinguishable dead ends');
+      assert.ok(p.decoyBranchIds.every((id) => out.addedRelations.filter((r) => r.dst === id).length === 0));
+      assert.equal(new Set([...p.goldBranchIds, ...p.decoyBranchIds].map((id) => docById.get(id).text)).size, 5);
     }
   });
 

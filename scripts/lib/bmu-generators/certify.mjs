@@ -59,6 +59,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { unit, prng, lintNoAnswerLeak, lintTokens } from './common.mjs';
+import { executeProgramOverRelations } from './operation-program.mjs';
 
 // ─── Production pins (mirrors packages/coretex/src/bundle/index.ts; the
 //     real-lane driver re-asserts them; single-sourcing is a P7 merge item) ──
@@ -256,17 +257,21 @@ export function nearCollisionOracleRank(row, { docs, docById, relations, cluster
   if (!exactDoc || !disambigDoc) return null;
 
   const program = row.bmuOperationProgram;
-  if (!program || program.branchLimit !== 4 || !Array.isArray(program.steps) || program.steps.length !== 2
-      || program.steps[0]?.direction !== 'outgoing' || program.steps[1]?.direction !== 'incoming') return null;
-  const outgoingType = program.steps[0].edgeType;
-  const incomingType = program.steps[1].edgeType;
-  const anchorSinks = new Set(relations
-    .filter((rel) => rel.src === disambigDoc.id && rel.label === 'public_path_seed' && rel.type === outgoingType)
-    .map((rel) => rel.dst));
-  const truthSinks = new Set(relations
-    .filter((rel) => rel.src === exactDoc.id && rel.label === 'public_path_branch' && rel.type === incomingType)
-    .map((rel) => rel.dst));
-  if (anchorSinks.size === 0 || ![...anchorSinks].some((sink) => truthSinks.has(sink))) return null;
+  if (!program || program.branchLimit !== 4 || !Array.isArray(program.steps)) return null;
+  // Deep-terminal law: execute the row's actual public program from the
+  // disambiguation anchor and require the exact-match doc to be a routed
+  // TERMINAL — the same walk the compiled scorer runs.
+  let executed;
+  try {
+    executed = executeProgramOverRelations({
+      program,
+      relations: relations.filter((rel) => clusterIds.has(rel.src) || clusterIds.has(rel.dst)),
+      seedIds: [disambigDoc.id],
+    });
+  } catch {
+    return null;
+  }
+  if (!executed.terminalIds.includes(exactDoc.id)) return null;
 
   const neutral = []; const excluded = [];
   for (const d of docs) {

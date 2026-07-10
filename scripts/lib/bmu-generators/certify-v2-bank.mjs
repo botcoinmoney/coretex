@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { judgeTopB, randomKRank, CERT_PINS } from './certify.mjs';
 import { subjectScopedRecencyLane, validityCurrencyLane } from './certify-lanes.mjs';
 import { opaqueBmuDocId } from './common.mjs';
-import { executableOperationSignature, BMU_EXECUTABLE_PROGRAM_CAPACITY } from './operation-program.mjs';
+import { executableOperationSignature, executeProgramOverRelations, BMU_EXECUTABLE_PROGRAM_CAPACITY } from './operation-program.mjs';
 
 const normText = (value) => String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
 const compareId = (a, b) => a < b ? -1 : a > b ? 1 : 0;
@@ -23,7 +23,7 @@ const finite = (value) => typeof value === 'number' && Number.isFinite(value);
  * Every family's conservative operation capacity is the ONE shared executable
  * program capacity (BMU_EXECUTABLE_PROGRAM_CAPACITY). There are no per-family
  * capacity constants: the executable class bank is family-agnostic (the 6x6
- * directed two-step bytecode matrix), so the resident/certification capacity a
+ * disjoint-partition deep-terminal program bank), so the resident/certification capacity a
  * family must exceed is derived from that shared law, not hardcoded per family.
  * All four executable-era families ship a default certification adapter.
  */
@@ -114,27 +114,71 @@ function terminalTopology(cluster, docId) {
     .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 }
 
+/**
+ * Deep-terminal route-closure audit (fix 2a/2b hard contract). Executes the
+ * cluster's ACTUAL public program from its public seed over the cluster
+ * relations and requires:
+ *   (a) the executed terminal set equals the declared gold terminal set —
+ *       the program routes the operation-required answer terminal(s) and
+ *       NOTHING else (no decoy, no forbidden doc);
+ *   (b) golds are observationally identical to each other (metadata +
+ *       relation-shape), so nothing beyond the routed position separates
+ *       them;
+ *   (c) decoys are observationally identical to each other and are depth-1
+ *       dead ends (zero incoming continuation — never routable).
+ * The legacy "gold indistinguishable from decoys" balance is intentionally
+ * superseded: under the single-answer-terminal law the route itself is the
+ * public pointer at the answer; the reward channel is state execution, not
+ * secrecy of the answer position.
+ */
 export function balancedTerminalAudit(cluster) {
   const path = cluster.publicPath;
-  if (!path || !Array.isArray(path.terminalBranchIds) || path.terminalBranchIds.length < 2) {
+  if (!path || !Array.isArray(path.terminalBranchIds) || path.terminalBranchIds.length < 1) {
     return { pass: false, reason: 'missing_publicPath_terminal_branches' };
   }
   const docById = new Map(cluster.docs.map((doc) => [doc.id, doc]));
   const missing = path.terminalBranchIds.filter((id) => !docById.has(id));
   if (missing.length > 0) return { pass: false, reason: 'missing_terminal_docs', missing };
-  const signatures = path.terminalBranchIds.map((id) => JSON.stringify({
-    metadata: publicMetadata(docById.get(id)), topology: terminalTopology(cluster, id),
-  }));
   const gold = new Set(path.goldBranchIds ?? []);
   const decoy = new Set(path.decoyBranchIds ?? []);
-  const completePartition = path.terminalBranchIds.every((id) => gold.has(id) !== decoy.has(id));
+  const terminalsAreExactlyGold = path.terminalBranchIds.length === gold.size
+    && path.terminalBranchIds.every((id) => gold.has(id))
+    && path.terminalBranchIds.every((id) => !decoy.has(id));
+  let routeClosure = { pass: false, reason: 'route_execution_failed' };
+  try {
+    const executed = executeProgramOverRelations({
+      program: cluster.bmuOperationProgram,
+      relations: cluster.relations,
+      seedIds: [path.seedId],
+    });
+    const executedSet = new Set(executed.terminalIds);
+    routeClosure = {
+      pass: executedSet.size === gold.size && [...gold].every((id) => executedSet.has(id)),
+      executedTerminalIds: [...executedSet].sort(compareId),
+      routedDecoys: executed.terminalIds.filter((id) => decoy.has(id)),
+    };
+  } catch (error) {
+    routeClosure = { pass: false, reason: `route_execution_failed: ${String(error?.message ?? error)}` };
+  }
+  const signatureOf = (id) => JSON.stringify({
+    metadata: publicMetadata(docById.get(id)), topology: terminalTopology(cluster, id),
+    incoming: cluster.relations.filter((rel) => rel.dst === id).length,
+  });
+  const goldSignatures = new Set([...gold].map(signatureOf));
+  const decoySignatures = new Set([...decoy].map(signatureOf));
+  const decoysAreDeadEnds = [...decoy].every((id) =>
+    cluster.relations.filter((rel) => rel.dst === id).length === 0);
   return {
-    pass: new Set(signatures).size === 1 && completePartition && gold.size > 0 && decoy.size > 0,
-    observableClasses: new Set(signatures).size,
+    pass: terminalsAreExactlyGold && routeClosure.pass && gold.size > 0 && decoy.size > 0
+      && goldSignatures.size === 1 && decoySignatures.size === 1 && decoysAreDeadEnds,
+    terminalsAreExactlyGold,
+    routeClosure,
+    goldObservableClasses: goldSignatures.size,
+    decoyObservableClasses: decoySignatures.size,
+    decoysAreDeadEnds,
     terminalCount: path.terminalBranchIds.length,
     goldCount: gold.size,
     decoyCount: decoy.size,
-    completePartition,
   };
 }
 
@@ -152,6 +196,20 @@ export function idMetadataPathAttacker(row, lane, cluster) {
     return { docId: doc.id, inPath, signature };
   });
   scored.sort((a, b) => b.inPath - a.inPath || a.signature.localeCompare(b.signature) || compareId(a.docId, b.docId));
+  return scored.map(({ docId }) => ({ docId, score: 0 }));
+}
+
+/** PUBLIC attacker with the path channel REMOVED: opaque id + public metadata
+ * only. Under the deep-terminal law the routed-terminal position is public by
+ * design (the program points at the answer), so the hard blindness gate is
+ * that ids and metadata alone — without executing the public program — solve
+ * nothing. */
+export function idMetadataOnlyAttacker(row, lane) {
+  const scored = lane.docs.map((doc) => ({
+    docId: doc.id,
+    signature: JSON.stringify({ metadata: publicMetadata(doc) }),
+  }));
+  scored.sort((a, b) => a.signature.localeCompare(b.signature) || compareId(a.docId, b.docId));
   return scored.map(({ docId }) => ({ docId, score: 0 }));
 }
 
@@ -458,6 +516,7 @@ export function certifyV2Banks(rawBanks, {
     const clusterByMotif = new Map(lane.clusters.map((cluster) => [cluster.motifGroupId, cluster]));
     const randomResults = [];
     const metadataResults = [];
+    const pathAttackerResults = [];
     const inversionResults = [];
     const inversionMatches = new Set();
     const inversionErrors = new Set();
@@ -468,7 +527,8 @@ export function certifyV2Banks(rawBanks, {
       const cluster = clusterByMotif.get(row.bmuTask?.motifGroupId);
       if (!cluster) throw new Error(`${family}:${row.id}: no cluster for motif ${row.bmuTask?.motifGroupId}`);
       randomResults.push(judgeTopB(randomKRank(lane.docs, `${seed}|${family}|${row.id}`), row.bmuTask));
-      metadataResults.push(judgeTopB(idMetadataPathAttacker(row, lane, cluster), row.bmuTask));
+      metadataResults.push(judgeTopB(idMetadataOnlyAttacker(row, lane), row.bmuTask));
+      pathAttackerResults.push(judgeTopB(idMetadataPathAttacker(row, lane, cluster), row.bmuTask));
       const inversion = inversionByMotif.get(cluster.motifGroupId)
         ?? knownSeedGeneratorInversionAttacker(row, lane, cluster);
       inversionByMotif.set(cluster.motifGroupId, inversion);
@@ -494,7 +554,14 @@ export function certifyV2Banks(rawBanks, {
       gates: {
         randomK: { rate: rate(randomResults), max: 0.05, pass: rate(randomResults) <= 0.05 },
         idMetadataPathAttacker: {
+          // Blindness gate: ids + metadata WITHOUT the public-path channel
+          // must solve nothing. The path-walking variant succeeding is now
+          // EXPECTED under the deep-terminal law (the public program routes
+          // exactly the answer terminal) and is recorded as a diagnostic,
+          // not a failure — route soundness is gated by the route-closure
+          // audit in balancedTerminalBranches.
           judgeSuccessRate: rate(metadataResults),
+          pathExecutionEquivalentJudgeSuccessRate: rate(pathAttackerResults),
           opaqueIdGoldGuessRate,
           chanceGoldFraction: goldFraction,
           pass: rate(metadataResults) === 0 && balanced.every((entry) => entry.pass)

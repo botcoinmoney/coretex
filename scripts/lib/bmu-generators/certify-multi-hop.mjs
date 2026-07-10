@@ -42,6 +42,7 @@ import { createHash } from 'node:crypto';
 
 import { tokenize, containsValue, collapseSlots, sharedSkeletonNgrams } from './common.mjs';
 import { certifyBank, bm25Score } from './certify-lanes.mjs';
+import { executeProgramOverRelations } from './operation-program.mjs';
 
 export const MULTI_HOP_FAMILY = 'multi_hop_relation';
 
@@ -51,12 +52,21 @@ export function multiHopOracleLane(row, cluster, docs, budget) {
   const anchor = clusterDocs.find((doc) => /(?:delegation review|filed review memo|review memo)/i.test(doc.text));
   const truth = clusterDocs.find((doc) => /confirmed and in force/i.test(doc.text));
   if (!anchor || !truth) return { evidence: [], answerId: null, ranked: [] };
-  const outgoing = (id, label) => new Set((cluster.relations ?? [])
-    .filter((relation) => relation.src === id && relation.label === label)
-    .map((relation) => relation.dst));
-  const anchorSinks = outgoing(anchor.id, 'public_path_seed');
-  const truthSinks = outgoing(truth.id, 'public_path_branch');
-  if (anchorSinks.size === 0 || ![...anchorSinks].some((sink) => truthSinks.has(sink))) {
+  // Execute the row's actual public program from the anchor (deep-terminal
+  // law): the oracle certifies structure only when the executed terminal set
+  // contains the truth terminal — exactly what the scorer's walk admits.
+  const program = row.bmuOperationProgram ?? cluster.bmuOperationProgram;
+  let executed;
+  try {
+    executed = executeProgramOverRelations({
+      program,
+      relations: cluster.relations ?? [],
+      seedIds: [anchor.id],
+    });
+  } catch {
+    return { evidence: [], answerId: null, ranked: [] };
+  }
+  if (!executed.terminalIds.includes(truth.id)) {
     return { evidence: [], answerId: null, ranked: [] };
   }
   let answerId;

@@ -74,6 +74,7 @@ import {
 } from './common.mjs';
 import {
   BMU_EXECUTABLE_PROGRAM_BANK,
+  buildProgramPathTopology,
   executableOperationForFamilySlot,
   stampExecutableOperationTask,
 } from './operation-program.mjs';
@@ -176,6 +177,7 @@ export function buildConflictLifecycleClusterSpec({
   canonical, subjectId, attr, scope, decoyScopes, valA, valB, decoyVals,
   tsDate, priorDate, candidateId, resolvedId, resolutionId, decoyIds, motifGroupId,
   pivotId = `${candidateId}_pivot`, operationFamily = CONFLICT_OPERATION_FAMILIES[0],
+  midIdFor = (level) => `${candidateId}_mid${level}`,
   subjectAliases = [],
 }) {
   if (decoyIds.length !== decoyVals.length || decoyIds.length !== decoyScopes.length) {
@@ -214,17 +216,22 @@ export function buildConflictLifecycleClusterSpec({
       decoy: (i) => `Appeal finding ${tsDate}: ${decoyVals[i]} belongs to separate docket ${decoyScopes[i]}, not final scope ${scope}. Subject ${canonical}; field ${attr}.`,
     },
   }[operationProfile.semantic.id];
-  const terminalPathClause = {
+  const pathClauseFor = (edgeType) => ({
     supports: 'This finding supports the linked review conclusion.',
     supersedes: 'This branch finding supersedes the linked preliminary summary.',
     coreference_of: 'This finding refers to the same case as the linked case marker.',
     co_occurs_with: 'This finding is filed alongside the linked docket entry.',
     causes: 'This branch finding records the cause of the linked conclusion.',
     derived_from: 'This branch finding is derived from the linked conclusion.',
-  }[pathEdges.branch];
+  }[edgeType]);
+  // Golds describe their actual terminal-depth edge; the depth-1 decoy
+  // controls describe the branch edge — each clause matches the edge the doc
+  // really carries.
+  const terminalPathClause = pathClauseFor(operationProfile.operation.operationProgram.steps.at(-1).edgeType);
+  const branchPathClause = pathClauseFor(pathEdges.branch);
   const resolvedText = `${semanticText.resolved} ${terminalPathClause}`;
   const resolutionText = `${semanticText.resolution} ${terminalPathClause}`;
-  const decoyText = (i) => `${semanticText.decoy(i)} ${terminalPathClause}`;
+  const decoyText = (i) => `${semanticText.decoy(i)} ${branchPathClause}`;
 
   const docs = [
     { id: candidateId, kind: `conflict_${slug(attr)}`, role: 'conflict_candidate_trap',
@@ -253,14 +260,35 @@ export function buildConflictLifecycleClusterSpec({
       scope: { topicId: scope } },
   ];
 
-  const terminalBranchIds = [resolvedId, resolutionId, decoyIds[0], decoyIds[1]];
-  // Fixed outgoing→incoming diamond. Every terminal also receives identical
-  // legacy cross-type edges, preserving the old relation substrate without
-  // leaving B/R as structural gold oracles.
+  // Deep-terminal disjoint-partition topology (fix 2a): the candidate trap
+  // seeds the outgoing step into the pivot; the chain head plus up to three
+  // scope-mismatch decoys hold the depth-1 branch layer (dead ends with no
+  // incoming continuation); ONLY the two gold terminals hang at terminal
+  // depth, so the executed route set equals the row's required evidence.
+  const goldBranchIds = [resolvedId, resolutionId];
+  const pathDecoyIds = decoyIds.slice(0, Math.min(3, decoyIds.length));
+  const pathTopology = buildProgramPathTopology({
+    program: operationProfile.operation.operationProgram,
+    seedId: candidateId,
+    sinkIds: [pivotId],
+    goldIds: goldBranchIds,
+    decoyIds: pathDecoyIds,
+    midIdFor: (level) => midIdFor(level),
+  });
+  for (let level = 0; level < pathTopology.midIds.length; level++) {
+    docs.push({
+      id: pathTopology.midIds[level], kind: 'bmu_public_record', role: 'path_mid',
+      text: `Neutral review relay ${tsDate}-m${level + 1} for ${canonical}'s ${scope} ${attr} links the docket's decision filings for a public-path check.`,
+      timestamp: tsDate, currentStaleFlag: true, lifecycleState: 'path_mid', lifecycleScope: scope,
+      scope: { topicId: scope },
+    });
+  }
+  // Golds and balanced decoys also receive identical legacy cross-type edges,
+  // preserving the old relation substrate without leaving B/R as structural
+  // gold oracles.
   const relations = [
-    { src: candidateId, dst: pivotId, type: pathEdges.seed, label: 'public_path_seed' },
-    ...terminalBranchIds.map((src) => ({ src, dst: pivotId, type: pathEdges.branch, label: 'public_path_branch' })),
-    ...terminalBranchIds.flatMap((src) => [
+    ...pathTopology.relations,
+    ...[...goldBranchIds, ...pathDecoyIds].flatMap((src) => [
       { src, dst: candidateId, type: 'co_occurs_with', label: 'contradicts' },
       { src, dst: candidateId, type: 'derived_from', label: 'resolution_of' },
     ]),
@@ -326,9 +354,13 @@ export function buildConflictLifecycleClusterSpec({
     operationFamily,
     publicPath: {
       seedId: candidateId, pivotId,
-      firstEdgeType: pathEdges.seed, terminalEdgeType: pathEdges.branch,
-      terminalBranchIds, goldBranchIds: [resolvedId, resolutionId],
-      decoyBranchIds: decoyIds.slice(0, 2),
+      firstEdgeType: pathEdges.seed,
+      branchEdgeType: pathEdges.branch,
+      terminalEdgeType: operationProfile.operation.operationProgram.steps.at(-1).edgeType,
+      midIds: [...pathTopology.midIds],
+      terminalBranchIds: [...pathTopology.terminalIds],
+      goldBranchIds: [...goldBranchIds],
+      decoyBranchIds: [...pathDecoyIds],
     },
   };
 }
@@ -433,6 +465,7 @@ export function generateConflictLifecycleClusters({
       candidateId: docId('conflict_candidate_trap'), resolvedId: docId('conflict_resolved'),
       resolutionId: docId('resolution_record'),
       pivotId: docId('public_path_pivot'), operationFamily,
+      midIdFor: (level) => docId(`path_mid:${level}`),
       decoyIds: decoyVals.map((_, i) => docId(`scope_mismatch_decoy:${i}`)), motifGroupId,
     });
 

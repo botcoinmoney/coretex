@@ -198,7 +198,8 @@ test('48-evolve census rotates 36 executable classes (>32 capacity), each with d
     byClass.set(c.operationFamily, rows);
     const profile = temporalOperationProfileForCluster(c.operationSequence, 0);
     assert.equal(c.operationClass, c.operationFamily);
-    assert.equal(c.operationClass, `${c.bmuOperationCue}=>b4/outgoing:${c.publicPath.firstEdgeType}/incoming:${c.publicPath.terminalEdgeType}`);
+    assert.equal(c.operationClass, `${c.bmuOperationCue}=>b4/${c.bmuOperationProgram.steps
+      .map((step) => `${step.direction}:${step.edgeType}`).join('/')}`);
     assert.ok(TEMPORAL_OPERATION_CLASS_BANK.some((candidate) => candidate.id === c.operationFamily));
     assert.equal(profile.id, c.operationFamily);
     const docById = new Map(c.docs.map((doc) => [doc.id, doc]));
@@ -237,22 +238,34 @@ test('48-evolve census rotates 36 executable classes (>32 capacity), each with d
     const [a, b] = pair;
     assert.ok(b.epoch - a.epoch < 32, 'first instance remains active at second mint');
     const gold = a.docs.find((doc) => doc.id === a.publicPath.goldBranchIds[0]);
-    behaviorSignatures.add(`${a.publicPath.firstEdgeType}|${a.publicPath.terminalEdgeType}|${gold.text.split(' ')[0]}`);
+    behaviorSignatures.add(`${a.bmuOperationProgram.steps.map((step) => step.edgeType).join('>')}|${gold.text.split(' ')[0]}`);
   }
   assert.equal(behaviorSignatures.size, byClass.size,
     'every class is uniquely realized by topology × semantic prose, not an epoch/ordinal label');
 });
 
-test('v2 public path is a balanced outgoing→incoming diamond; metadata cannot select gold', () => {
+test('v2 public path is a deep-terminal chain; only golds are routed and decoys are balanced dead ends', () => {
   const { clusters } = generateTemporalClusters(baseOpts({ clusterCount: 4 }));
   for (const c of clusters) {
     const p = c.publicPath;
-    assert.equal(p.terminalBranchIds.length, 4);
+    assert.deepEqual(p.terminalBranchIds, p.goldBranchIds,
+      'the executed terminal set equals the required gold terminals — no decoy is ever routed');
     assert.equal(p.goldBranchIds.length, 2);
-    assert.equal(p.decoyBranchIds.length, 2);
+    assert.equal(p.decoyBranchIds.length, 3);
+    assert.ok(p.midIds.length >= 1);
     assert.ok(c.relations.some((r) => r.src === p.seedId && r.dst === p.pivotId && r.type === p.firstEdgeType));
-    for (const branchId of p.terminalBranchIds) {
-      assert.ok(c.relations.some((r) => r.src === branchId && r.dst === p.pivotId && r.type === p.terminalEdgeType));
+    // Golds hang off the deepest chain relay at terminal depth; never the pivot.
+    for (const branchId of p.goldBranchIds) {
+      assert.ok(c.relations.some((r) => r.src === branchId && r.dst === p.midIds.at(-1) && r.type === p.terminalEdgeType));
+      assert.ok(!c.relations.some((r) => r.src === branchId && r.dst === p.pivotId));
+    }
+    // The depth-1 branch layer (chain head + three controls) is full under the
+    // branch cap and shares one branch edge type/label into the pivot.
+    const depthOneBranches = [p.midIds[0], ...p.decoyBranchIds];
+    assert.equal(depthOneBranches.length, 4);
+    for (const branchId of depthOneBranches) {
+      assert.ok(c.relations.some((r) => r.src === branchId && r.dst === p.pivotId
+        && r.type === p.branchEdgeType && r.label === 'public_path_branch'));
     }
     const docById = new Map(c.docs.map((doc) => [doc.id, doc]));
     const observable = (id) => {
@@ -261,11 +274,13 @@ test('v2 public path is a balanced outgoing→incoming diamond; metadata cannot 
         .filter((r) => r.src === id)
         .map((r) => ({ dstClass: r.dst === p.pivotId ? 'pivot' : r.dst === p.seedId ? 'seed' : 'other', type: r.type, label: r.label }))
         .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-      return JSON.stringify({ metadata, topology });
+      return JSON.stringify({ metadata, topology, incoming: c.relations.filter((r) => r.dst === id).length });
     };
-    assert.equal(new Set(p.terminalBranchIds.map(observable)).size, 1,
-      'structural/recency/validity/metadata observables must be identical across gold and decoys');
-    assert.equal(new Set(p.terminalBranchIds.map((id) => docById.get(id).text)).size, 4,
+    assert.equal(new Set(p.goldBranchIds.map(observable)).size, 1,
+      'structural/recency/validity/metadata observables must be identical across golds');
+    assert.equal(new Set(p.decoyBranchIds.map(observable)).size, 1,
+      'decoys are mutually indistinguishable dead ends');
+    assert.equal(new Set([...p.goldBranchIds, ...p.decoyBranchIds].map((id) => docById.get(id).text)).size, 5,
       'only branch text remains available for Qwen discrimination');
   }
 });

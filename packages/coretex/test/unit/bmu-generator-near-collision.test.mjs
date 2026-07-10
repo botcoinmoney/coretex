@@ -193,7 +193,7 @@ describe('template mint-partition law (§4.1 M7)', () => {
 });
 
 describe('forbidden-trap construction (§5.4, §6.5) + answerable/abstain mix', () => {
-  test('answerable rows forbid the full sibling decoy set; abstain rows also forbid E', () => {
+  test('every row forbids the full sibling decoy set; the routed terminal E is never forbidden', () => {
     for (const escalationLevel of [0, 2]) {
       const out = gen({ escalationLevel });
       const docById = new Map(out.addedDocs.map((d) => [d.id, d]));
@@ -201,14 +201,16 @@ describe('forbidden-trap construction (§5.4, §6.5) + answerable/abstain mix', 
         const t = q.bmuTask;
         const cluster = out.clusters.find((candidate) => candidate.motifGroupId === t.motifGroupId);
         const primaryTrapId = cluster.decoyKinds[0].id;
+        assert.equal(t.forbiddenEvidence.length, nearcolDecoyCount(escalationLevel));
+        assert.ok(t.forbiddenEvidence.length >= 3, 'alias + attribute + scope lookalikes');
+        assert.equal(t.forbiddenEvidence[0], primaryTrapId, 'first forbidden = class-specific primary collision axis');
+        // Fix-2b hard contract: the cluster's routed terminal (E) must never
+        // be forbidden on ANY row sharing the cue/program — the abstain row
+        // keeps E as a hardNegative sibling decoy plus the abstainSignal law.
+        assert.ok(!t.forbiddenEvidence.includes(cluster.truthDocId));
         if (t.abstain) {
-          assert.equal(t.forbiddenEvidence.length, 1 + nearcolDecoyCount(escalationLevel));
-          assert.equal(t.forbiddenEvidence[0], cluster.truthDocId, 'abstain forbids answerable sibling E first');
-          assert.equal(t.forbiddenEvidence[1], primaryTrapId, 'then the class-specific primary trap');
-        } else {
-          assert.equal(t.forbiddenEvidence.length, nearcolDecoyCount(escalationLevel));
-          assert.ok(t.forbiddenEvidence.length >= 3, 'alias + attribute + scope lookalikes');
-          assert.equal(t.forbiddenEvidence[0], primaryTrapId, 'first forbidden = class-specific primary collision axis');
+          assert.ok(q.hardNegatives.some((negative) => negative.docId === cluster.truthDocId),
+            'abstain rows keep the answerable sibling as a hardNegative');
         }
         // The primary trap ECHOES the question skeleton and claims currency
         // (§2.2 "out-ranks honestly" — asserted via the lint at mint, spot-
@@ -240,22 +242,37 @@ describe('forbidden-trap construction (§5.4, §6.5) + answerable/abstain mix', 
       assert.notEqual(c.absentScope, c.scope);
     }
   });
-  test('cluster relations are balanced outgoing→incoming branches, not role labels', () => {
+  test('cluster relations form the deep-terminal chain; decoys are depth-1 dead ends', () => {
     const out = gen({ clusterCount: 6, escalationLevel: 3 });
     const docById = new Map(out.addedDocs.map((d) => [d.id, d]));
     for (const c of out.clusters) {
       const plan = NEARCOL_OPERATION_CLASSES.find((candidate) => candidate.name === c.operationClass);
       assert.ok(plan);
       for (const group of c.pathGroups) {
-        assert.equal(group.branchIds.length, 4);
-        const seedEdges = out.addedRelations.filter((relation) => relation.src === group.anchorId);
-        assert.ok(seedEdges.every((relation) => relation.type === plan.outgoingEdgeType && relation.label === 'public_path_seed'));
-        for (const id of group.branchIds) {
+        const seedEdges = out.addedRelations.filter((relation) => relation.src === group.anchorId
+          && relation.label === 'public_path_seed');
+        assert.ok(seedEdges.length >= 1);
+        assert.ok(seedEdges.every((relation) => relation.type === plan.outgoingEdgeType));
+        for (const id of group.decoyIds) {
           assert.ok(docById.has(id));
-          const outgoing = out.addedRelations.filter((relation) => relation.src === id);
-          assert.equal(outgoing.length, plan.sinkMultiplicity);
-          assert.deepEqual(new Set(outgoing.map((relation) => relation.dst)), new Set(group.sinkIds));
-          assert.ok(outgoing.every((relation) => relation.type === plan.incomingEdgeType && relation.label === 'public_path_branch'));
+          const branchEdges = out.addedRelations.filter((relation) => relation.src === id
+            && relation.label === 'public_path_branch');
+          assert.equal(branchEdges.length, 1);
+          assert.equal(branchEdges[0].dst, group.sinkId);
+          assert.equal(branchEdges[0].type, plan.incomingEdgeType);
+          assert.equal(out.addedRelations.filter((relation) => relation.dst === id).length, 0,
+            'decoys have no incoming continuation');
+        }
+        if (group.truthId !== null) {
+          assert.deepEqual(group.branchIds, [group.truthId], 'the executed terminal set is exactly E');
+          assert.ok(group.midIds.length >= 1);
+          assert.ok(out.addedRelations.some((relation) => relation.src === group.truthId
+            && relation.dst === group.midIds.at(-1) && relation.label === 'public_path_terminal'
+            && relation.type === c.bmuOperationProgram.steps.at(-1).edgeType));
+          assert.ok(!out.addedRelations.some((relation) => relation.src === group.truthId && relation.dst === group.sinkId));
+        } else {
+          assert.deepEqual(group.branchIds, []);
+          assert.deepEqual(group.midIds, []);
         }
       }
     }
@@ -276,11 +293,14 @@ describe('forbidden-trap construction (§5.4, §6.5) + answerable/abstain mix', 
           metadata: metadata(docById.get(id)),
           outgoing: out.addedRelations.filter((relation) => relation.src === id)
             .map(({ src: _src, dst: _dst, ...observable }) => observable),
+          incoming: out.addedRelations.filter((relation) => relation.dst === id).length,
         });
-        for (const decoyId of group.decoyIds) {
-          assert.deepEqual(signature(decoyId), signature(group.truthId),
-            'only Qwen-visible text/id differs between truth and same-path decoy');
+        const decoySignatures = group.decoyIds.map(signature);
+        for (const other of decoySignatures.slice(1)) {
+          assert.deepEqual(other, decoySignatures[0],
+            'only Qwen-visible text/id differs between same-path decoys');
         }
+        assert.ok(decoySignatures.every((entry) => entry.incoming === 0));
       }
     }
   });
@@ -289,7 +309,10 @@ describe('forbidden-trap construction (§5.4, §6.5) + answerable/abstain mix', 
     for (const q of out.addedQueries) {
       const t = q.bmuTask;
       assert.ok(t.entityHoldoutKeys.includes(`id:${q.subjectEntityId}`));
-      assert.ok(t.requiredEvidence.length + t.forbiddenEvidence.length > t.budgetB,
+      const abstainSiblingPressure = t.abstain
+        ? q.hardNegatives.filter((negative) => !t.forbiddenEvidence.includes(negative.docId)).length
+        : 0;
+      assert.ok(t.requiredEvidence.length + t.forbiddenEvidence.length + abstainSiblingPressure > t.budgetB,
         'cluster neighborhood must overflow top-B so admission is contested');
     }
   });
