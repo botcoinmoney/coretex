@@ -2101,6 +2101,24 @@ family.
   under the patched state), and the full-bank REAL-QWEN margin run is a BLOCKING
   gate (a deterministic-only certification is blind to forbidden admission — the
   §17.17 CPU/GPU divergence).
+- **§18.4 OFF-PATH suppression opcode (ROUND 5 — bytecode bit 0x40):** a SECOND,
+  mutually-exclusive suppress opcode for families whose on-route seed/intermediate
+  is REQUIRED evidence (multi_hop's hop-1 bridge). A NON-final step so marked
+  demotes (−1·UNIT, same clamp) ONLY the OFF-PATH dead-end nodes it produces —
+  produced nodes that are not on any promoted terminal's route — and triggers NO
+  on-route lineage/seed demotion (unlike 0x20). This evicts multi_hop's
+  query-similar off-path co-occurrence / near-bridge decoys (real-Qwen-admitted
+  per the §17.20 round-5 arbitration: 1/3 sampled installed-class rows scored
+  `forbidden_admitted` with the answer twins already promoted) while sparing the
+  required hop-1 bridge seed and promoting the answer terminal. The bit is inside
+  the checksummed bytecode word ⇒ candidate-state-causal + non-invertible; 0x80
+  stays reserved/fail-closed; a step carrying both 0x20 and 0x40 is malformed.
+  Signature marker `:offsuppress` (cue ` scoped`); `BMU_FAMILY_OFFPATH_SUPPRESS_STEPS`
+  = `{multi_hop_relation:[1]}` (all others empty ⇒ conflict/temporal/near_collision
+  byte-identical). The `oracleSolvedMargin` eviction contract also fires for an
+  off-path-suppress program (every graph-node forbidden must be demoted; required
+  seed + answer must survive/promote — CPU-validated at epoch 139: all 3 primary
+  forbidden decoys evicted, seed spared, answer promoted).
 - **§18 era-iteration fixes 2+3 (this tip):** (2a) the generators now mint the
   disjoint-partition deep-terminal bank above — the executed terminal set
   equals the operation-required answer terminal(s), enforced by the mint lint,

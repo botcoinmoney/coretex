@@ -492,7 +492,7 @@ export function oracleSolvedMarginAudit(lane) {
     if (executed.error) { rowFindings.push({ rowId: row.id, reject: `route_execution: ${executed.error}` }); continue; }
     const terminals = new Set(executed.terminalIds);
     const promoted = new Set(executed.promoteTerminalIds ?? executed.terminalIds);
-    const suppressed = new Set([...(executed.suppressLineageIds ?? []), ...(executed.suppressTerminalIds ?? [])]);
+    const suppressed = new Set([...(executed.suppressLineageIds ?? []), ...(executed.suppressTerminalIds ?? []), ...(executed.offPathSuppressedIds ?? [])]);
     const task = row.bmuTask;
     const routedForbidden = (task.forbiddenEvidence ?? []).filter((id) => terminals.has(id) && !suppressed.has(id));
     if (routedForbidden.length > 0) {
@@ -505,7 +505,7 @@ export function oracleSolvedMarginAudit(lane) {
     // demoted under the patched state — not merely "not routed as a terminal".
     // Off-graph forbidden docs (never a route node) are out of scope: they are
     // gated by BGE non-retrieval, not by the route bonus.
-    if (executed.programHasSuppress === true) {
+    if (executed.programHasSuppress === true || executed.programHasOffPathSuppress === true) {
       if (!oracleGraphNodesByMotif.has(cluster.motifGroupId)) {
         const nodes = new Set();
         for (const rel of cluster.relations ?? []) { nodes.add(rel.src); nodes.add(rel.dst ?? rel.other_id); }

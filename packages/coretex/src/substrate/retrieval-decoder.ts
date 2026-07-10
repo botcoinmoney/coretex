@@ -169,6 +169,18 @@ export interface BmuPublicPathProgramStep {
    * byte-identical to the pre-§18.3 promote-only encoding.
    */
   readonly suppress?: boolean;
+  /**
+   * BMU v2 §18.4 OFF-PATH suppression opcode flag (bytecode bit 0x40 of the
+   * step byte). A NON-final step so marked demotes (−1·UNIT, same clamp) ONLY
+   * the OFF-PATH dead-end nodes it produces — nodes that are not on any promoted
+   * terminal's route. Unlike the 0x20 opcode it triggers NO on-route
+   * seed/intermediate lineage demotion, so a family whose on-route seed is
+   * REQUIRED evidence (e.g. multi_hop's hop-1 bridge) keeps its required docs
+   * while its query-similar off-path co-occurrence decoys are evicted. Mutually
+   * exclusive with 0x20 on the same step. Part of the checksummed bytecode ⇒
+   * candidate-state-causal + non-invertible. Absent ⇒ false.
+   */
+  readonly offPathSuppress?: boolean;
 }
 
 export interface BmuPublicPathProgram {
@@ -900,10 +912,12 @@ export function decodeBmuPublicPathPrograms(state: CortexState): {
       const edgeType = BMU_PATH_EDGE_BY_BITS[opcode & 0x0f];
       const directionBits = (opcode >> 4) & 1;
       const suppressBits = (opcode >> 5) & 1;
-      // Bits 0x40/0x80 are reserved and MUST be zero (fail closed on any other
-      // high bit so a future opcode cannot be smuggled through this decoder).
-      const reservedHigh = opcode >> 6;
-      if (!edgeType || reservedHigh !== 0) {
+      const offPathSuppressBits = (opcode >> 6) & 1;
+      // Bit 0x80 is reserved and MUST be zero (fail closed so a future opcode
+      // cannot be smuggled through this decoder). The 0x20 (on-route suppress)
+      // and 0x40 (off-path suppress) opcodes are mutually exclusive on one step.
+      const reservedHigh = opcode >> 7;
+      if (!edgeType || reservedHigh !== 0 || (suppressBits === 1 && offPathSuppressBits === 1)) {
         malformed = true;
         continue;
       }
@@ -911,6 +925,7 @@ export function decodeBmuPublicPathPrograms(state: CortexState): {
         direction: directionBits === 1 ? 'incoming' : 'outgoing',
         edgeType,
         suppress: suppressBits === 1,
+        offPathSuppress: offPathSuppressBits === 1,
       });
     }
     if (malformed || steps.length !== stepCount) {
@@ -972,7 +987,11 @@ export function encodeBmuPublicPathProgramWords(program: BmuPublicPathProgram): 
     const direction = step.direction === 'incoming' ? 0x10 : step.direction === 'outgoing' ? 0 : -1;
     if (direction < 0) throw new Error('encodeBmuPublicPathProgramWords: bad direction');
     const suppress = step.suppress === true ? 0x20 : 0;
-    bytecode |= BigInt(direction | suppress | relationTypeToBits(step.edgeType)) << BigInt(24 - i * 8);
+    const offPathSuppress = step.offPathSuppress === true ? 0x40 : 0;
+    if (suppress !== 0 && offPathSuppress !== 0) {
+      throw new Error('encodeBmuPublicPathProgramWords: a step cannot carry both suppress (0x20) and offPathSuppress (0x40)');
+    }
+    bytecode |= BigInt(direction | suppress | offPathSuppress | relationTypeToBits(step.edgeType)) << BigInt(24 - i * 8);
   }
   const atomWord = (flags: number, budget: number, expiry: bigint): bigint => (
     (BigInt(BMU_PATH_PROGRAM_SELECTOR) << 248n)

@@ -80,6 +80,25 @@ export const BMU_FAMILY_SUPPRESS_STEPS = Object.freeze({
 });
 
 /**
+ * §18.4 — per-family OFF-PATH suppression plan (which non-final step indices
+ * carry the 0x40 off-path-suppress opcode). Distinct from the 0x20 plan above:
+ * a 0x40 step demotes ONLY the off-path dead-ends it produces and triggers NO
+ * on-route seed/intermediate lineage demotion. This is the ONLY suppression
+ * that is safe for multi_hop_relation, whose on-route hop-1 bridge (the seed)
+ * and intermediate are REQUIRED evidence — the 0x20 on-route lineage demotion
+ * would evict them (missing_required). The step-1 incoming branch produces both
+ * the on-path chain relay (spared, continues to the answer terminal) and the
+ * query-similar off-path co-occurrence / near-bridge decoys (demoted).
+ * A family may use the 0x20 plan OR the 0x40 plan on a given step, never both.
+ */
+export const BMU_FAMILY_OFFPATH_SUPPRESS_STEPS = Object.freeze({
+  temporal: Object.freeze([]),
+  conflict_lifecycle: Object.freeze([]),
+  multi_hop_relation: Object.freeze([1]),
+  near_collision_abstention: Object.freeze([]),
+});
+
+/**
  * Mint-time lint (fix 2a): every minted program must be a disjoint-partition
  * deep-terminal program — exactly one leading outgoing step over the causal
  * pair, then 1..3 incoming steps over the evidence quad. This is precisely
@@ -165,6 +184,7 @@ export function canonicalBmuOperationProgram(program) {
       direction: step.direction,
       edgeType: step.edgeType,
       ...(step.suppress === true ? { suppress: true } : {}),
+      ...(step.offPathSuppress === true ? { offPathSuppress: true } : {}),
     }))),
   });
 }
@@ -177,7 +197,7 @@ export function executableOperationSignature({ operationCue, operationProgram, s
   }
   const program = canonicalBmuOperationProgram(operationProgram ?? { branchLimit, steps });
   const executableSignature = `${operationCue}=>b${program.branchLimit}/${program.steps
-    .map((step) => `${step.direction}:${step.edgeType}${step.suppress === true ? ':suppress' : ''}`).join('/')}`;
+    .map((step) => `${step.direction}:${step.edgeType}${step.suppress === true ? ':suppress' : ''}${step.offPathSuppress === true ? ':offsuppress' : ''}`).join('/')}`;
   if (executableSignature.length > 256) throw new Error('executable operation signature exceeds 256 characters');
   return Object.freeze({
     operationCue,
@@ -204,18 +224,28 @@ export function executableOperationForFamilySlot(family, operationSequence, { er
   // A non-final suppress step must exist for the flag to be signature-bearing;
   // marking the final step is refused (that would demote the answer terminal).
   const suppressSteps = new Set(BMU_FAMILY_SUPPRESS_STEPS[family] ?? []);
+  const offPathSuppressSteps = new Set(BMU_FAMILY_OFFPATH_SUPPRESS_STEPS[family] ?? []);
   const lastIdx = plan.steps.length - 1;
   for (const idx of suppressSteps) {
     if (!Number.isInteger(idx) || idx < 1 || idx >= lastIdx) {
       throw new Error(`bmu suppress plan: family '${family}' suppress step ${idx} must be a non-final step in 1..${lastIdx - 1}`);
     }
   }
+  for (const idx of offPathSuppressSteps) {
+    if (!Number.isInteger(idx) || idx < 1 || idx >= lastIdx) {
+      throw new Error(`bmu off-path suppress plan: family '${family}' step ${idx} must be a non-final step in 1..${lastIdx - 1}`);
+    }
+    if (suppressSteps.has(idx)) {
+      throw new Error(`bmu suppress plan: family '${family}' step ${idx} cannot be both suppress (0x20) and offPathSuppress (0x40)`);
+    }
+  }
   const suppressedSteps = plan.steps.map((step, idx) => (
     suppressSteps.has(idx) ? { direction: step.direction, edgeType: step.edgeType, suppress: true }
-      : { direction: step.direction, edgeType: step.edgeType }
+      : offPathSuppressSteps.has(idx) ? { direction: step.direction, edgeType: step.edgeType, offPathSuppress: true }
+        : { direction: step.direction, edgeType: step.edgeType }
   ));
   const operationCue = `${familyCue} era ${era} route ${suppressedSteps
-    .map((step) => `${step.edgeType}${step.suppress === true ? ' guarded' : ''}`).join(' then ')}`;
+    .map((step) => `${step.edgeType}${step.suppress === true ? ' guarded' : ''}${step.offPathSuppress === true ? ' scoped' : ''}`).join(' then ')}`;
   return Object.freeze({
     ...plan,
     classOrdinal,
@@ -309,6 +339,10 @@ export function executeProgramOverRelations({ program, relations, seedIds, branc
   // §18.3: nodes produced by a NON-final suppress step (off-path dead-ends the
   // terminal-route lineage cannot reach).
   const suppressStepProducedIds = new Set();
+  // §18.4: nodes produced by a NON-final OFF-PATH suppress step (0x40). The
+  // on-route ones are subtracted after the walk so only off-path dead-ends are
+  // demoted; the on-route required seed/intermediates are spared.
+  const offPathStepProducedIds = new Set();
   for (let stepIdx = 0; stepIdx < canonical.steps.length; stepIdx++) {
     const step = canonical.steps[stepIdx];
     const isFinalStep = stepIdx === canonical.steps.length - 1;
@@ -332,6 +366,9 @@ export function executeProgramOverRelations({ program, relations, seedIds, branc
     if (step.suppress === true && !isFinalStep) {
       for (const producedId of next.keys()) suppressStepProducedIds.add(producedId);
     }
+    if (step.offPathSuppress === true && !isFinalStep) {
+      for (const producedId of next.keys()) offPathStepProducedIds.add(producedId);
+    }
     frontier = new Map([...next].sort(([a], [b]) => compare(a, b)));
     if (frontier.size === 0) break;
   }
@@ -341,6 +378,7 @@ export function executeProgramOverRelations({ program, relations, seedIds, branc
   // suppressed lineage, PLUS every node produced by a non-final suppress step
   // (off-path dead-ends). A pure promote program demotes nothing (byte-identical).
   const programHasSuppress = canonical.steps.some((s) => s.suppress === true);
+  const programHasOffPathSuppress = canonical.steps.some((s) => s.offPathSuppress === true);
   const terminalsSuppressed = canonical.steps[canonical.steps.length - 1]?.suppress === true;
   const suppressLineageIds = new Set(suppressStepProducedIds);
   if (programHasSuppress) {
@@ -348,6 +386,12 @@ export function executeProgramOverRelations({ program, relations, seedIds, branc
       for (let i = 0; i < route.length - 1; i++) suppressLineageIds.add(route[i]);
     }
   }
+  // §18.4: off-path suppression demotes produced nodes NOT on any terminal route
+  // (the on-route required seed/intermediates are spared — no lineage demotion).
+  const onRouteIds = new Set();
+  for (const route of frontier.values()) for (const id of route) onRouteIds.add(id);
+  const offPathSuppressedIds = new Set();
+  for (const id of offPathStepProducedIds) if (!onRouteIds.has(id)) offPathSuppressedIds.add(id);
   const terminalIds = [...frontier.keys()];
   return Object.freeze({
     terminalIds,
@@ -358,7 +402,10 @@ export function executeProgramOverRelations({ program, relations, seedIds, branc
     suppressTerminalIds: Object.freeze(terminalsSuppressed ? [...terminalIds] : []),
     /** Seed/intermediate lineage demoted (−1·UNIT) — never an answer terminal. */
     suppressLineageIds: Object.freeze([...suppressLineageIds]),
+    /** Off-path dead-ends demoted (−1·UNIT) by a 0x40 step — never an on-route node. */
+    offPathSuppressedIds: Object.freeze([...offPathSuppressedIds]),
     programHasSuppress,
+    programHasOffPathSuppress,
     terminalsSuppressed,
   });
 }

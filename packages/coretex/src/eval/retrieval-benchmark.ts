@@ -1276,6 +1276,10 @@ export async function scoreSubstrateAgainstQuery(
     // bytecode (candidate-state-causal + non-invertible).
     const suppressTerminalEventIds = new Set<string>();
     const suppressLineageEventIds = new Set<string>();
+    // §18.4: candidate nodes produced by an OFF-PATH suppress step (0x40). After
+    // all programs walk, the ones NOT on any promoted terminal route are demoted
+    // (the on-route seed + required intermediates are spared — the whole point).
+    const offPathSuppressProducedEventIds = new Set<string>();
     const initialFrontier = [...new Set(stage1Docs.slice(0, law.stage1SeedLimit).map((doc) => doc.eventId))]
       .sort(codePointCompare);
     for (const program of matchingPrograms) {
@@ -1321,6 +1325,13 @@ export async function scoreSubstrateAgainstQuery(
         // handled as terminal treatment below.
         if (step.suppress === true && !isFinalStep) {
           for (const producedEventId of next.keys()) suppressLineageEventIds.add(producedEventId);
+        }
+        // §18.4: a non-final OFF-PATH suppress step marks its produced nodes as
+        // candidates; the on-route ones are subtracted after the walk so only
+        // off-path dead-ends (e.g. multi_hop's query-similar co-occurrence
+        // decoys) are demoted, never the on-route required seed/intermediates.
+        if (step.offPathSuppress === true && !isFinalStep) {
+          for (const producedEventId of next.keys()) offPathSuppressProducedEventIds.add(producedEventId);
         }
         frontier = new Map([...next].sort(([a], [b]) => codePointCompare(a, b)));
         if (frontier.size === 0) break;
@@ -1377,6 +1388,15 @@ export async function scoreSubstrateAgainstQuery(
         if (suppressed) suppressBiasDocIds.add(docId);
         else publicPathBundleTextByDocId.set(docId, routeText);
       }
+    }
+    // §18.4: resolve off-path suppression. A node produced by an off-path
+    // suppress step is demoted iff it is NOT on any promoted terminal's route
+    // (the on-route seed + required intermediates are the spared exception that
+    // distinguishes 0x40 from the 0x20 on-route lineage demotion).
+    const onRouteEventIds = new Set<string>();
+    for (const route of terminalRoutes.values()) for (const eventId of route) onRouteEventIds.add(eventId);
+    for (const eventId of offPathSuppressProducedEventIds) {
+      if (!onRouteEventIds.has(eventId)) suppressLineageEventIds.add(eventId);
     }
     // Map every suppressed lineage EVENT to its admitted doc (truthDocuments[0],
     // the same doc addAtomEventDocs would pick) so the −UNIT demotion below
