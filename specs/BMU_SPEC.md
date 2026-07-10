@@ -504,12 +504,37 @@ design law proven in Stage 3-G1 (`buildTypedTemporalClusterSpec`,
 hidden tasks of DISTINCT question types, so one meaningful patch lifts
 multiple tasks and per-doc indexing lifts ~none.
 
+**v2 shared substrate law (supersedes the family-specific v1 surfaces below):**
+under `coretex-bmu-v2-r5state`, every family is mined through the same public
+four-word operation program. A generated row publishes a canonical cue and
+`{ branchLimit: 4, steps: [outgoing:<edge-1>, incoming:<edge-2>] }`; the miner
+encodes that exact cue→program mapping in state words 384–511. The scorer
+starts from public stage-1 seeds, follows the two directed steps as a simple
+path, and admits only terminal records to Qwen. Family-specific temporal,
+conflict, relation, and abstention atoms are disabled by the v2 profile; their
+descriptions below explain task semantics and traps, not alternate v2 reward
+surfaces.
+
+The executable bank is exactly the Cartesian 6×6 public-edge matrix (36
+classes) in every family. Semantic prose, sink multiplicity, question type,
+and generator labels are not class dimensions. A monotone per-family cursor
+mints adjacent I6-disjoint pairs with `floor(sequence/2) mod 36`. An operation
+era starts on an even cursor and alternates mint cycles
+`{temporal:2, conflict:2, multi-hop:1, near-collision:1}` and
+`{temporal:1, conflict:1, multi-hop:2, near-collision:2}` for 24 cycles:
+72 clusters = 36 supported executable signatures per family, margin `+4`
+over the shared resident capacity 32. Era transitions MUST preserve even
+alignment (or finish the dangling pair before census); a 72-mint census that
+starts on an odd cursor cannot claim adjacent repeat support for both boundary
+classes. Cue, uint56 query-key, encoded-program, and signature collisions are
+all fail-closed gates.
+
 ### 5.1 temporal (current / stale / supersession)
 
-- **Substrate must:** encode the supersession operation — anchor the stale
-  event revoked + anchor the current event + write the subject/attribute-
-  scoped temporal record (words 800-895), the proven ≤4-cell patch shape
-  (Stage 3-G1 evidence: 8/8 clusters, Δ 198k-304k ppm, controls 0).
+- **Substrate must:** encode the row's public two-step program so the lexical
+  stale/review seed reaches its neutral pivot and then the balanced current,
+  provenance, and decoy terminals. ZERO_STATE and an obsolete cue cannot
+  reach the operation-caused required terminals.
 - **Utility earned:** current-value, downstream-application,
   stale-verification, and change-provenance tasks (question types
   `scripts/lib/evolve-corpus.mjs:101-106`) resolve with the current record
@@ -532,45 +557,19 @@ multiple tasks and per-doc indexing lifts ~none.
   oracle. The rankers may read public intent, entity ids, timestamps, and
   validity intervals only; qrels, `bmuTask`, generator roles, and answer ids
   are forbidden inputs.
-- **v2 rotating operation bank (rev4.0):** four genuine temporal decisions
-  (revision supersession, validity renewal, rollback restoration, effective
-  handoff) cross eight concrete edge programs (`{derived_from,causes}` then
-  `{supports,supersedes,coreference_of,co_occurs_with}`) for **32 classes**,
-  eight above the conservative 24-operation temporal state capacity. A
-  monotone per-family operation cursor rotates this fixed bank in adjacent
-  pairs (`floor(sequence/2) mod 32`); epoch never selects a class, while local
-  mint order advances the cursor. Neither appears in its id. Pairing is load-bearing: at one temporal
-  cluster/evolve, a one-per-class rotation would repeat only after 32 evolves,
-  long after maxAge=32 epochs (four cadence-8 evolves) retired the first copy.
-  The selected semantic group changes the truth/decoy propositions and the
-  selected topology changes actual emitted relation types. Each class emits
-  four metadata-identical terminal branches (current + provenance truths, two
-  forbidden decoys). Terminal ids, edge shape, kind, entity ids, recency,
-  validity and flags are balanced within the class; only branch text tells
-  Qwen which revision/validity/rollback/handoff proposition is authoritative.
-  The per-instance substrate target retains the proven ≤4-word shape: a stale
-  seed anchor, a winning-terminal anchor, and the two-word subject/attribute
-  currency record. Class transfer therefore learns the semantic+edge operation
-  across held-out entities/templates rather than carrying instance ids.
-  The exact P5 schedule (bootstrap `8 + 11` at epochs 144/152 for margin 3,
-  then one temporal cluster at each of 48 cadence-8 evolves) mints 67 clusters.
-  It MUST realize all 32 classes and mint an entity/template-disjoint adjacent
-  pair per class with epoch gap `< maxAge`, so both copies are active at the
-  second mint. Epoch-derived rotation is forbidden: cadence 8 aliases
-  `(epoch*k+slot) mod 32` to only a small subset.
+- **v2 operation semantics:** revision supersession, validity renewal,
+  rollback restoration, and effective handoff rotate independently of the
+  shared 36-class executable bank. They change proposition text and therefore
+  Qwen's reading task, but never inflate the executable census. Every class
+  exposes four metadata-identical terminal branches; only branch text
+  identifies the authoritative temporal proposition.
 
 ### 5.2 conflict_lifecycle
 
-- **Substrate must:** perform the resolution operation: anchor the event
-  carrying the conflict motif and write a `conflict_lifecycle` policy atom
-  (words 512-639, actions boost/suppress —
-  `src/substrate/retrieval-decoder.ts:705-709`) that ADMITS the resolved
-  ("current/corrected/replaced-by") doc into the budget window and suppresses
-  the superseded candidate. Note the measured mechanics: conflict's lever is
-  retrieval-cap ADMISSION under distractor pressure, not rerank reordering
-  (unstall plan, Stage 3-G1-CONFLICT) — small-B budgets recreate exactly the
-  pressure that makes this family mineable, which fixture-scale r5 packs
-  could not.
+- **Substrate must:** encode the row's public two-step program so the lexical
+  conflict seed reaches its neutral pivot and then the balanced resolved,
+  resolution-record, and scope-decoy terminals. The program changes retrieval
+  admission under distractor pressure; it supplies no answer-shaped bonus.
 - **Utility earned:** current-for-scope, resolution-provenance, and
   downstream-for-scope tasks resolve with the resolved doc + resolution
   record in top-B.
@@ -579,35 +578,18 @@ multiple tasks and per-doc indexing lifts ~none.
   (same subject, different scope). Cluster shape per the Stage-3 design:
   candidate(A) / resolved(B) / resolution-record(R), `contradicts` B→A,
   `derived_from` R→A.
-- **v2 rotating operation bank (rev4.0):** five genuine resolution decisions
-  (claim reconciliation, authority override, quorum ratification, scope
-  precedence, appeal resolution) cross the same eight concrete edge programs
-  for **40 classes**, eight above the conservative 32-operation conflict state
-  capacity. Rotation labels no instance: the selected semantic profile changes
-  the propositions in truth/decoy text, while the topology profile changes
-  actual seed and terminal relation types. Each class has an
-  outgoing→incoming diamond with resolved/resolution truths and two
-  scope-lookalike decoys. Every terminal exposes identical public topology,
-  lifecycle scope, timestamp, flag, entity envelope and neutral
-  `bmu_public_record` kind. A class instance needs at most four one-word
-  MemoryIndex anchors (seed, pivot, resolved, resolution record); its repeated
-  held-out clusters test transfer of the resolution decision, not id storage.
-  The exact P5 schedule (bootstrap `11 + 14`, then the irregular `2/1/2/1`
-  conflict cycle across 48 cadence-8 evolves) mints 97 clusters. The unified
-  per-family cursor uses the same adjacent-pair law and MUST realize all 40
-  classes with an entity/template-disjoint pair concurrently active per class;
-  epoch arithmetic is forbidden.
+- **v2 operation semantics:** claim reconciliation, authority override,
+  quorum ratification, scope precedence, and appeal resolution rotate
+  independently of executable identity. Each shared-bank program has a
+  balanced outgoing→incoming diamond with resolved/resolution truths and
+  scope-lookalike decoys whose public topology and metadata tie.
 
 ### 5.3 multi_hop_relation (incl. bridge/coreference framing)
 
-- **Substrate must:** encode traversal structure: relation edges (words
-  672-799, domain-share-validated — `relationEdgeValid`,
-  `src/substrate/retrieval-decoder.ts:904-914`) and/or category lenses that
-  route from the query's subject through a BRIDGE doc (which names both
-  endpoints but not the answer) to a lexically-distant answer doc
-  (`grounding: 'distant'` rows, `src/eval/retrieval-corpus.ts:287`).
-  Coreference is framed INSIDE this family: an alias/role hop is one edge of
-  the path, not its own family.
+- **Substrate must:** encode the row's public two-step program so the lexical
+  route seed reaches one or more neutral sinks and then balanced incoming
+  terminal filings, including a lexically distant answer. Coreference remains
+  a public edge type inside this family, not a separate reward mechanism.
 - **Utility earned:** the task requires BOTH the bridge doc and the answer doc
   in top-B (`requiredEvidence` = bridge + answer) — pure answer-anchoring
   without the traversal evidence does not pay, which is what makes this
@@ -619,11 +601,11 @@ multiple tasks and per-doc indexing lifts ~none.
 
 ### 5.4 near_collision / abstention
 
-- **Substrate must:** sharpen discrimination — keep the right entity/attribute
-  variant retrievable at small B while near-collision decoys (alias
-  collisions, attribute lookalikes) stay out; for abstention variants, resist
-  admitting ANY plausible decoy when no answer exists AND express the
-  abstention policy (a `MISSING_EVIDENCE` abstention atom, words 640-671).
+- **Substrate must:** encode the row's public two-step program so the lexical
+  collision seed reaches balanced exact-match/disambiguation and lookalike
+  terminal filings. At small B, Qwen must retain the right variant and exclude
+  siblings; the abstention signal remains the separate deterministic policy
+  decision defined in §5.5.
 - **Utility earned:** answerable variant — the exact-match doc in top-B with
   all sibling decoys excluded and no false abstain; abstention variant — zero
   forbidden docs in top-B and the §5.5 abstention signal fires.
@@ -1964,7 +1946,9 @@ capacity, plus fallback/underfill-engagement telemetry.
    cycles. It therefore mints 72 clusters and exactly 36 paired executable
    signatures per family, each pair I6-disjoint, giving `36 − 32 = +4`
    resident-capacity margin. Cue, query-key, and executable-signature
-   collision censuses MUST all be zero.
+   collision censuses MUST all be zero. The era starts on an even per-family
+   cursor (or first completes a carried pair); otherwise a 72-mint window has
+   two unsupported boundary singletons and cannot claim 36 adjacent pairs.
 3. **What inversion and shortcut surfaces remain.** Program cues and bytecode
    are intentionally public; required/forbidden branch semantics are not.
    Truth and decoy terminals have the same branch structure, metadata, and
