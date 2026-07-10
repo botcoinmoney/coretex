@@ -14,6 +14,7 @@ import {
   DEFAULT_PROFILE,
   CORETEX_PIPELINE_VERSION_BMU_V2,
   bmuOperationQueryKey,
+  decodeBmuPublicPathPrograms,
   encodeBmuPublicPathProgramWords,
   encodeMemoryIndexSlot,
   evaluateRetrievalBenchmarkState,
@@ -23,6 +24,10 @@ import {
   liveTailQueryId,
 } from '../../dist/index.js';
 import { judgeTopB } from '../../../../scripts/lib/bmu-generators/certify.mjs';
+import { bmuJudgeTopB, bmuJudgeOrder } from '../../dist/eval/bmu-benchmark.js';
+
+// §13.2 default judge quantization grid (bmu-benchmark BMU_JUDGE_SCORE_GRID_DEFAULT).
+const JUDGE_GRID = 1e-3;
 import {
   generateMultiHopClusters,
 } from '../../../../scripts/lib/bmu-generators/multi_hop_relation.mjs';
@@ -310,4 +315,145 @@ test('regression: known public generator seed cannot reverse keyed near-collisio
   assert.equal(positiveRate, 0.8, 'private-key positive control solves all four answerable rows');
   assert.equal(preferred.includes(cluster.truthDocId), true);
   assert.ok(cluster.forbiddenEvidenceAnswerable.every((docId) => forbidden.includes(docId)));
+});
+
+// ─── §18.3 suppression-channel refutation controls (ROUND 3) ────────────────
+// The availability-only route bonus could not EVICT a query-similar forbidden
+// competitor a strong reranker ranks into a small topB on merit (ledger
+// §17.17). These controls pin the suppression channel: it must be
+// candidate-state-causal (ZERO_STATE demotes nothing) AND non-invertible (an
+// attacker cannot flip promote↔suppress by toggling the opcode bit — the
+// checksum fails and the program becomes inert).
+
+function suppressionCorpus() {
+  const query = [1, 0, 0, 0, 0, 0, 0, 0];
+  const low = [0.08, 0.997, 0, 0, 0, 0, 0, 0];
+  const events = [
+    event({
+      id: 'seed', text: 'review anchor', vector: query, queryVector: query,
+      relations: [{ other_id: 'pivot', edgeType: 'causes' }],
+    }),
+    event({ id: 'pivot', text: 'neutral comparison pivot', vector: low }),
+    // Forbidden rival: reached as the terminal of an incoming:supports step,
+    // held in topB ONLY by the reranker CEIL its text earns (filler-level
+    // vector, so the −1·UNIT demotion is not fought by a biCosine advantage —
+    // it cancels exactly the reranker edge and the suppress tie-loss evicts it).
+    event({
+      id: 'rival', text: 'the RIVAL forbidden competitor rides along in topB', vector: low,
+      relations: [{ other_id: 'pivot', edgeType: 'supports' }],
+    }),
+    ...Array.from({ length: 40 }, (_, i) => event({
+      id: `filler-${String(i).padStart(2, '0')}`, text: `mid-cosine filler ${i}`, vector: low,
+    })),
+  ];
+  events[0].bmuOperationCue = 'refutation suppress route';
+  return {
+    schemaVersion: 'coretex.production-corpus.v1', corpusEpoch: 0,
+    corpusRoot: computeCorpusRoot(events), generatedAt: '2026-07-10T00:00:00.000Z',
+    biEncoderModelId: MODEL_ID, biEncoderRevision: REVISION,
+    biEncoderRetrievalKeyLayout: LAYOUT, events,
+    splitRatios: { trainVisiblePct: 70, calibrationPct: 10, evalHiddenPct: 15, canaryPct: 5 },
+  };
+}
+
+function suppressScoringOptions() {
+  return {
+    ...scoringOptions(),
+    reranker: {
+      model: 'rival-lover',
+      // The adversary the availability-only law could not beat: the query-
+      // similar forbidden rival is scored the CEIL, everything else the FLOOR.
+      async score(pairs) { return pairs.map((pair) => (pair.document.includes('RIVAL forbidden competitor') ? 0.98 : 0.02)); },
+    },
+  };
+}
+
+const SUPPRESS_QUERY_KEY = bmuOperationQueryKey('refutation suppress route');
+
+test('regression §18.3: a suppress program EVICTS a forbidden rival the reranker ranks top; ZERO_STATE demotes nothing', async () => {
+  const corpus = suppressionCorpus();
+  const pack = { epochId: 0, evalSeedCommit: `0x${'71'.repeat(32)}`, events: [corpus.events[0]] };
+  const opts = suppressScoringOptions();
+  const budgetB = 4;
+  // The utility-determining path is the QUANTIZED §13.2 judge order (grid g),
+  // where the −1·UNIT demotion collapses the suppressed doc into the pool's
+  // quantized tie band and the suppress tie-loss then evicts it. (The raw
+  // production sort carries float residue below one grid cell.)
+  const entriesOf = (result) => result.perQuery[0].finalRankingFull.map((r) => ({
+    docId: r.docId, rerankerScore: r.rerankerScore, finalReorderingScore: r.finalReorderingScore,
+    routed: r.routed === true, suppressed: r.suppressed === true,
+  }));
+
+  // ZERO_STATE: no program => rival keeps the reranker-CEIL top slot in topB.
+  const parent = await evaluateRetrievalBenchmarkState(ZERO_STATE, corpus, pack, opts);
+  const pEntries = entriesOf(parent);
+  assert.equal(pEntries.find((e) => e.docId === 'rival-doc')?.suppressed, false,
+    'ZERO_STATE decodes no program => no suppression bias either direction');
+  const pTopB = bmuJudgeTopB(pEntries, budgetB, JUDGE_GRID);
+  assert.ok(pTopB.includes('rival-doc'), 'ZERO_STATE: forbidden rival rides in the budgetB=4 topB');
+  assert.equal(pTopB[0], 'rival-doc', 'ZERO_STATE: rival is rank 1 (reranker CEIL, no eviction)');
+
+  // Candidate state: a SUPPRESS program (final step suppress-marked) routes
+  // seed --causes--> pivot <--supports-- rival and demotes the rival terminal.
+  const candidateState = { words: new Array(1024).fill(0n) };
+  const words = encodeBmuPublicPathProgramWords({
+    programIndex: 0, queryKey: SUPPRESS_QUERY_KEY, branchLimit: 4,
+    validFromEpoch: 0n, expiryEpoch: 0n,
+    steps: [
+      { direction: 'outgoing', edgeType: 'causes' },
+      { direction: 'incoming', edgeType: 'supports', suppress: true },
+    ],
+  });
+  for (let i = 0; i < 4; i++) candidateState.words[RANGES.POLICY_EVIDENCE_START + i] = words[i];
+  const candidate = await evaluateRetrievalBenchmarkState(candidateState, corpus, pack, opts);
+  const cEntries = entriesOf(candidate);
+  const cRow = cEntries.find((e) => e.docId === 'rival-doc');
+  assert.ok(cRow, 'rival still admitted (mandatory) so it can be scored and demoted');
+  assert.equal(cRow.suppressed, true, 'candidate: rival flagged suppressed by the executed program');
+  const cJudge = bmuJudgeOrder(cEntries, JUDGE_GRID);
+  const cTopB = cJudge.slice(0, budgetB).map((e) => e.docId);
+  assert.ok(!cTopB.includes('rival-doc'),
+    `suppress program EVICTS rival from the budgetB=4 topB (judge topB: ${cTopB.join(', ')})`);
+  const cRank = cJudge.findIndex((e) => e.docId === 'rival-doc');
+  assert.ok(cRank >= budgetB, `rival demoted below the topB boundary (judge rank ${cRank + 1})`);
+});
+
+test('regression §18.3: encode/decode round-trips the suppress flag; a bit-flipped opcode fails the checksum and is inert', () => {
+  // Round-trip: promote vs suppress differ only in the opcode bit, and both
+  // decode back to the exact step directions/edges/suppress flags.
+  const mk = (suppress) => encodeBmuPublicPathProgramWords({
+    programIndex: 0, queryKey: SUPPRESS_QUERY_KEY, branchLimit: 4,
+    validFromEpoch: 0n, expiryEpoch: 0n,
+    steps: [
+      { direction: 'outgoing', edgeType: 'causes' },
+      { direction: 'incoming', edgeType: 'supports', suppress },
+    ],
+  });
+  const decodeAt = (words) => {
+    const state = { words: new Array(1024).fill(0n) };
+    for (let i = 0; i < 4; i++) state.words[RANGES.POLICY_EVIDENCE_START + i] = words[i];
+    return decodeBmuPublicPathPrograms(state);
+  };
+  const promoteWords = mk(false);
+  const suppressWords = mk(true);
+  const promoteDec = decodeAt(promoteWords);
+  const suppressDec = decodeAt(suppressWords);
+  assert.equal(promoteDec.programs.length, 1);
+  assert.equal(suppressDec.programs.length, 1);
+  assert.equal(promoteDec.programs[0].steps[1].suppress, false, 'promote round-trips suppress=false');
+  assert.equal(suppressDec.programs[0].steps[1].suppress, true, 'suppress round-trips suppress=true');
+  // The opcode bit is inside the checksummed bytecode word, so promote and
+  // suppress words differ (non-cosmetic) and the bytecode word is not equal.
+  assert.notEqual(promoteWords[2], suppressWords[2], 'suppress lives in the bytecode word');
+  assert.notEqual(promoteWords[3], suppressWords[3], 'checksum word differs (suppress is bound)');
+
+  // Non-invertibility: take the PROMOTE program and flip ONLY the suppress bit
+  // of the final step in the bytecode word (bytecode bit 16..23 for step 1;
+  // suppress = +5). Without recomputing the checksum the program fails closed.
+  const tampered = [...promoteWords];
+  const SUPPRESS_BIT_STEP1 = 112n + 16n + 5n; // bytecode field base (112) + step1 byte (16) + suppress bit (5)
+  tampered[2] = tampered[2] ^ (1n << SUPPRESS_BIT_STEP1);
+  const tamperedDec = decodeAt(tampered);
+  assert.equal(tamperedDec.programs.length, 0, 'checksum mismatch => tampered program dropped');
+  assert.ok(tamperedDec.failures >= 1, 'tamper is counted as a decode failure (fail-closed)');
 });
