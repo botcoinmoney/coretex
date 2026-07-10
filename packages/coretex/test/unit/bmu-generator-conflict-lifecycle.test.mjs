@@ -21,8 +21,10 @@ import {
   buildConflictLifecycleClusterSpec,
   conflictDecoyCount,
   CONFLICT_FAMILY,
+  CONFLICT_OPERATION_CLASS_BANK,
   CONFLICT_QUESTION_TYPES,
   CONFLICT_OPERATION_FAMILIES,
+  conflictOperationProfileForCluster,
   conflictOperationFamilyForCluster,
   generateConflictLifecycleClusters,
 } from '../../../../scripts/lib/bmu-generators/conflict_lifecycle.mjs';
@@ -67,14 +69,75 @@ describe('determinism', () => {
 describe('v2 operation-general public path', () => {
   test('multiple deterministic operation classes are exposed as P5 strata', () => {
     const out = gen({ clusterCount: 6 });
-    assert.deepEqual(new Set(out.clusters.map((c) => c.operationFamily)), new Set(CONFLICT_OPERATION_FAMILIES));
+    assert.ok(new Set(out.clusters.map((c) => c.operationFamily)).size > 1);
     for (const c of out.clusters) {
-      assert.equal(c.operationFamily, conflictOperationFamilyForCluster(c.clusterSlot));
+      assert.equal(c.operationFamily, conflictOperationFamilyForCluster(c.epoch, c.clusterSlot));
       assert.equal(c.operationClass, c.operationFamily);
       const rows = out.addedQueries.filter((q) => q.bmuTask.motifGroupId === c.motifGroupId);
       assert.ok(rows.every((q) => q.operationFamily === c.operationFamily && q.operationClass === c.operationFamily));
     }
-    assert.deepEqual(Object.keys(out.telemetry.operationFamilyHistogram).sort(), [...CONFLICT_OPERATION_FAMILIES].sort());
+    assert.deepEqual(Object.keys(out.telemetry.operationFamilyHistogram).sort(), [...new Set(out.clusters.map((c) => c.operationFamily))].sort());
+  });
+
+  test('48-evolve census rotates 40 real classes (>32 capacity), each repeated on I6-disjoint clusters', () => {
+    const registry = createM1Registry();
+    const subjects = bank(128);
+    const clusters = [];
+    const docs = [];
+    const relations = [];
+    for (let step = 0; step < 48; step++) {
+      const out = generateConflictLifecycleClusters({
+        epoch: 137 + step, seed: 'bmu-v2-conflict-48-evolve', subjects, registry,
+        splitOf, clusterCount: 2, escalationLevel: step % 3,
+      });
+      clusters.push(...out.clusters);
+      docs.push(...out.addedDocs);
+      relations.push(...out.addedRelations);
+    }
+    const docById = new Map(docs.map((doc) => [doc.id, doc]));
+    const byClass = new Map();
+    for (const c of clusters) {
+      const members = byClass.get(c.operationFamily) ?? [];
+      members.push(c);
+      byClass.set(c.operationFamily, members);
+      const profile = conflictOperationProfileForCluster(c.epoch, c.clusterSlot);
+      assert.equal(profile.id, c.operationFamily);
+      assert.equal(c.operationFamily, `conflict_${c.operationSemantic}__${c.publicPath.firstEdgeType}_then_${c.publicPath.terminalEdgeType}`);
+      assert.ok(CONFLICT_OPERATION_CLASS_BANK.some((candidate) => candidate.id === c.operationFamily));
+      const topologyCue = {
+        supports: /supports the linked review conclusion/,
+        supersedes: /supersedes the linked preliminary summary/,
+        coreference_of: /refers to the same case as the linked case marker/,
+        co_occurs_with: /filed alongside the linked docket entry/,
+      }[c.publicPath.terminalEdgeType];
+      assert.ok(c.publicPath.terminalBranchIds.every((id) => topologyCue.test(docById.get(id).text)),
+        `class ${c.operationFamily} must express its edge semantics in branch text`);
+      const observable = (id) => {
+        const { id: _id, text: _text, ...metadata } = JSON.parse(JSON.stringify(docById.get(id)));
+        const topology = relations.filter((r) => r.src === id).map((r) => `${r.type}:${r.label}:${r.dst === c.publicPath.pivotId ? 'pivot' : 'seed'}`).sort();
+        return JSON.stringify({ metadata, topology });
+      };
+      assert.equal(new Set(c.publicPath.terminalBranchIds.map(observable)).size, 1, `unbalanced class ${c.operationFamily}`);
+    }
+    assert.equal(byClass.size, CONFLICT_OPERATION_FAMILIES.length);
+    assert.equal(byClass.size, 40);
+    assert.ok(byClass.size > 32, 'class bank exceeds conservative conflict state capacity by eight');
+    assert.equal(new Set(clusters.slice(0, 40).map((c) => c.operationFamily)).size, 40,
+      'one 20-evolve active+future window already exposes every class');
+    const behaviorSignatures = new Set();
+    for (const [classId, members] of byClass) {
+      assert.ok(members.length >= 2, `${classId} must repeat for holdout transfer`);
+      const pair = members.flatMap((a, i) => members.slice(i + 1).map((b) => [a, b])).find(([a, b]) =>
+        a.subjectEntityId !== b.subjectEntityId
+        && !a.templateIds.some((id) => b.templateIds.includes(id))
+        && !a.entityHoldoutKeys.some((key) => b.entityHoldoutKeys.includes(key)));
+      assert.ok(pair, `${classId} needs an entity+template-disjoint repeat for I6 transfer`);
+      const [a] = pair;
+      const gold = docById.get(a.publicPath.goldBranchIds[0]);
+      behaviorSignatures.add(`${a.publicPath.firstEdgeType}|${a.publicPath.terminalEdgeType}|${gold.text.split(' ')[0]}`);
+    }
+    assert.equal(behaviorSignatures.size, byClass.size,
+      'every class is uniquely realized by topology × semantic prose, not an epoch/ordinal label');
   });
 
   test('balanced outgoing→incoming diamonds defeat structural/recency/metadata selectors', () => {

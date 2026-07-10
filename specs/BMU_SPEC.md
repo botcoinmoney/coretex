@@ -524,13 +524,24 @@ multiple tasks and per-doc indexing lifts ~none.
   oracle. The rankers may read public intent, entity ids, timestamps, and
   validity intervals only; qrels, `bmuTask`, generator roles, and answer ids
   are forbidden inputs.
-- **v2 operation classes (rev4.0):** cluster-slot parity deterministically
-  alternates `temporal_revision_supersession` and
-  `temporal_validity_renewal`. Each class emits an outgoing seed→pivot edge
-  and four metadata-identical incoming terminal branches (current +
-  provenance truths, two forbidden decoys). Terminal ids, edge shape, kind,
-  entity ids, recency, validity and flags are balanced; only branch text tells
-  Qwen whether a revision was authorized or a validity interval renewed.
+- **v2 rotating operation bank (rev4.0):** four genuine temporal decisions
+  (revision supersession, validity renewal, rollback restoration, effective
+  handoff) cross eight concrete edge programs (`{derived_from,causes}` then
+  `{supports,supersedes,coreference_of,co_occurs_with}`) for **32 classes**,
+  eight above the conservative 24-operation temporal state capacity. Epoch
+  and cluster slot only rotate this fixed bank; neither appears in a class id.
+  The selected semantic group changes the truth/decoy propositions and the
+  selected topology changes actual emitted relation types. Each class emits
+  four metadata-identical terminal branches (current + provenance truths, two
+  forbidden decoys). Terminal ids, edge shape, kind, entity ids, recency,
+  validity and flags are balanced within the class; only branch text tells
+  Qwen which revision/validity/rollback/handoff proposition is authoritative.
+  The per-instance substrate target retains the proven ≤4-word shape: a stale
+  seed anchor, a winning-terminal anchor, and the two-word subject/attribute
+  currency record. Class transfer therefore learns the semantic+edge operation
+  across held-out entities/templates rather than carrying instance ids.
+  A 48-evolve census MUST realize all 32 classes and at least two
+  entity/template-disjoint clusters per class.
 
 ### 5.2 conflict_lifecycle
 
@@ -552,14 +563,21 @@ multiple tasks and per-doc indexing lifts ~none.
   (same subject, different scope). Cluster shape per the Stage-3 design:
   candidate(A) / resolved(B) / resolution-record(R), `contradicts` B→A,
   `derived_from` R→A.
-- **v2 operation classes (rev4.0):** cluster-slot parity deterministically
-  alternates `conflict_claim_reconciliation` and
-  `conflict_authority_override`. Each has the same outgoing→incoming diamond
-  with resolved/resolution truths and two scope-lookalike decoys. Every
-  terminal exposes identical public topology, lifecycle scope, timestamp,
-  flag, entity envelope and neutral `bmu_public_record` kind. Reconciliation
-  versus authorization, and target versus lookalike scope, remain textual
-  operations for Qwen rather than metadata selectors.
+- **v2 rotating operation bank (rev4.0):** five genuine resolution decisions
+  (claim reconciliation, authority override, quorum ratification, scope
+  precedence, appeal resolution) cross the same eight concrete edge programs
+  for **40 classes**, eight above the conservative 32-operation conflict state
+  capacity. Rotation labels no instance: the selected semantic profile changes
+  the propositions in truth/decoy text, while the topology profile changes
+  actual seed and terminal relation types. Each class has an
+  outgoing→incoming diamond with resolved/resolution truths and two
+  scope-lookalike decoys. Every terminal exposes identical public topology,
+  lifecycle scope, timestamp, flag, entity envelope and neutral
+  `bmu_public_record` kind. A class instance needs at most four one-word
+  MemoryIndex anchors (seed, pivot, resolved, resolution record); its repeated
+  held-out clusters test transfer of the resolution decision, not id storage.
+  A 48-evolve census MUST realize all 40 classes and
+  at least two entity/template-disjoint clusters per class.
 
 ### 5.3 multi_hop_relation (incl. bridge/coreference framing)
 

@@ -77,23 +77,45 @@ export const CONFLICT_FAMILY = 'conflict_lifecycle';
 export const CONFLICT_BUDGET_B = BMU_DEFAULT_BUDGET_B.conflict_lifecycle; // 4
 export const CONFLICT_ROTATION_BASE_EPOCH = 137; // first BMU mint epoch (pre-flip inert stamping era)
 
-/** Deterministic v2 operation classes consumed as P5 strata. Both implement
- * the same balanced public diamond while requiring different text operations:
- * reconcile competing claims vs apply an authority override. */
-export const CONFLICT_OPERATION_FAMILIES = Object.freeze([
-  'conflict_claim_reconciliation',
-  'conflict_authority_override',
+/** Deterministic v2 operation classes consumed as P5 strata. The rotating
+ * bank changes both balanced-diamond edge program and the real resolution
+ * decision. A class instance remains representable in ≤4 state words: seed,
+ * pivot, resolved and resolution-record anchors; transfer means learning
+ * which terminal proposition wins, never remembering an entity/template. */
+export const CONFLICT_SEMANTIC_OPERATIONS = Object.freeze([
+  Object.freeze({ id: 'claim_reconciliation', decision: 'compare competing source claims' }),
+  Object.freeze({ id: 'authority_override', decision: 'apply a signed authority override' }),
+  Object.freeze({ id: 'quorum_ratification', decision: 'accept the value ratified by quorum' }),
+  Object.freeze({ id: 'scope_precedence', decision: 'apply the target-scope precedence rule' }),
+  Object.freeze({ id: 'appeal_resolution', decision: 'apply the final appeal disposition' }),
 ]);
 
-export function conflictOperationFamilyForCluster(clusterSlot) {
+export const CONFLICT_PATH_TOPOLOGIES = Object.freeze(
+  ['derived_from', 'causes'].flatMap((seed) =>
+    ['supports', 'supersedes', 'coreference_of', 'co_occurs_with'].map((branch) =>
+      Object.freeze({ id: `${seed}_then_${branch}`, seed, branch }))),
+);
+
+/** 5 real resolution decisions × 8 concrete edge programs = 40 transferable
+ * classes, eight above the conservative 32-operation state capacity. */
+export const CONFLICT_OPERATION_CLASS_BANK = Object.freeze(
+  CONFLICT_SEMANTIC_OPERATIONS.flatMap((semantic) =>
+    CONFLICT_PATH_TOPOLOGIES.map((topology) => Object.freeze({
+      id: `conflict_${semantic.id}__${topology.id}`, semantic, topology,
+    }))),
+);
+export const CONFLICT_OPERATION_FAMILIES = Object.freeze(CONFLICT_OPERATION_CLASS_BANK.map((profile) => profile.id));
+
+export function conflictOperationProfileForCluster(epoch, clusterSlot) {
+  if (!Number.isInteger(epoch)) throw new Error('conflict_lifecycle: integer epoch required for operation rotation');
   if (!Number.isInteger(clusterSlot) || clusterSlot < 0) throw new Error('conflict_lifecycle: non-negative integer clusterSlot required');
-  return CONFLICT_OPERATION_FAMILIES[clusterSlot % CONFLICT_OPERATION_FAMILIES.length];
+  const sequence = (epoch - CONFLICT_ROTATION_BASE_EPOCH) * 2 + clusterSlot;
+  return CONFLICT_OPERATION_CLASS_BANK[((sequence % CONFLICT_OPERATION_CLASS_BANK.length) + CONFLICT_OPERATION_CLASS_BANK.length) % CONFLICT_OPERATION_CLASS_BANK.length];
 }
 
-const CONFLICT_PATH_EDGES = Object.freeze({
-  conflict_claim_reconciliation: Object.freeze({ seed: 'derived_from', branch: 'co_occurs_with' }),
-  conflict_authority_override: Object.freeze({ seed: 'causes', branch: 'supports' }),
-});
+export function conflictOperationFamilyForCluster(epoch, clusterSlot) {
+  return conflictOperationProfileForCluster(epoch, clusterSlot).id;
+}
 
 /** §5.2 question types — four DISTINCT types, five rows (current_for_scope ×2 variants). */
 export const CONFLICT_QUESTION_TYPES = Object.freeze([
@@ -151,18 +173,46 @@ export function buildConflictLifecycleClusterSpec({
   }
   if (decoyIds.length < 2) throw new Error('buildConflictLifecycleClusterSpec: >=2 scope-mismatch decoys required (distractor-pressure floor)');
   if (valA === valB) throw new Error('buildConflictLifecycleClusterSpec: candidate and resolved values must differ');
-  if (!CONFLICT_OPERATION_FAMILIES.includes(operationFamily)) throw new Error(`buildConflictLifecycleClusterSpec: unknown operationFamily '${operationFamily}'`);
+  const operationProfile = CONFLICT_OPERATION_CLASS_BANK.find((profile) => profile.id === operationFamily);
+  if (!operationProfile) throw new Error(`buildConflictLifecycleClusterSpec: unknown operationFamily '${operationFamily}'`);
 
-  const pathEdges = CONFLICT_PATH_EDGES[operationFamily];
-  const resolvedText = operationFamily === 'conflict_claim_reconciliation'
-    ? `${canonical}'s ${attr} claims for ${scope} were compared in the ${tsDate} reconciliation; ${valB} matched the governing record while ${valA} did not.`
-    : `Authority notice ${tsDate} for ${canonical}'s ${scope} ${attr}: the signed override establishes ${valB}; the provisional ${valA} instruction has no standing.`;
-  const resolutionText = operationFamily === 'conflict_claim_reconciliation'
-    ? `Review minutes ${tsDate} for ${canonical}'s ${scope} ${attr}: source checks confirmed ${valB} and rejected the competing ${valA} intake claim.`
-    : `Override audit ${tsDate} for ${canonical}'s ${scope} ${attr}: authorization checks validate ${valB} and reject the provisional ${valA} instruction.`;
-  const decoyText = (i) => operationFamily === 'conflict_claim_reconciliation'
-    ? `Review finding ${tsDate} for ${canonical}'s ${scope} ${attr}: ${decoyVals[i]} came from the separate ${decoyScopes[i]} scope, so it does not govern this scope.`
-    : `Override finding ${tsDate} for ${canonical}'s ${scope} ${attr}: ${decoyVals[i]} authorizes only the separate ${decoyScopes[i]} scope, not this scope.`;
+  const pathEdges = operationProfile.topology;
+  const semanticText = {
+    claim_reconciliation: {
+      resolved: `Source comparison ${tsDate} for ${canonical}'s ${scope} ${attr} found ${valB} matched the governing record while ${valA} did not.`,
+      resolution: `Reconciliation minutes ${tsDate} confirmed ${valB} and rejected competing intake ${valA}. Subject ${canonical}; scope ${scope}; field ${attr}.`,
+      decoy: (i) => `Comparison finding ${tsDate}: ${decoyVals[i]} came from separate scope ${decoyScopes[i]}, so it does not govern ${scope}. Subject ${canonical}; field ${attr}.`,
+    },
+    authority_override: {
+      resolved: `Authority notice ${tsDate} for ${canonical}'s ${scope} ${attr}: signed override ${valB} supersedes provisional instruction ${valA}.`,
+      resolution: `Override audit ${tsDate} validated authorization for ${valB} and rejected provisional ${valA}. Subject ${canonical}; scope ${scope}; field ${attr}.`,
+      decoy: (i) => `Override finding ${tsDate}: ${decoyVals[i]} authorizes only separate scope ${decoyScopes[i]}, not ${scope}. Subject ${canonical}; field ${attr}.`,
+    },
+    quorum_ratification: {
+      resolved: `Quorum result ${tsDate} for ${canonical}'s ${scope} ${attr}: ratification reached ${valB}; proposal ${valA} lacked the votes.`,
+      resolution: `Ballot audit ${tsDate} recorded quorum for ${valB} and failure for ${valA}. Subject ${canonical}; scope ${scope}; field ${attr}.`,
+      decoy: (i) => `Ballot finding ${tsDate}: ${decoyVals[i]} was tallied for separate scope ${decoyScopes[i]}, not ${scope}. Subject ${canonical}; field ${attr}.`,
+    },
+    scope_precedence: {
+      resolved: `Precedence ruling ${tsDate} for ${canonical}: target scope ${scope} selects ${valB} for ${attr}; broader claim ${valA} yields.`,
+      resolution: `Scope audit ${tsDate} applied target precedence to ${valB} and displaced broader ${valA}. Subject ${canonical}; field ${attr}.`,
+      decoy: (i) => `Scope finding ${tsDate}: ${decoyVals[i]} governs ${decoyScopes[i]} but has no precedence in ${scope}. Subject ${canonical}; field ${attr}.`,
+    },
+    appeal_resolution: {
+      resolved: `Final appeal ${tsDate} for ${canonical}'s ${scope} ${attr} upheld ${valB} and vacated earlier ${valA}.`,
+      resolution: `Appeal docket ${tsDate} closed with ${valB} final and ${valA} vacated. Subject ${canonical}; scope ${scope}; field ${attr}.`,
+      decoy: (i) => `Appeal finding ${tsDate}: ${decoyVals[i]} belongs to separate docket ${decoyScopes[i]}, not final scope ${scope}. Subject ${canonical}; field ${attr}.`,
+    },
+  }[operationProfile.semantic.id];
+  const terminalPathClause = {
+    supports: 'This finding supports the linked review conclusion.',
+    supersedes: 'This branch finding supersedes the linked preliminary summary.',
+    coreference_of: 'This finding refers to the same case as the linked case marker.',
+    co_occurs_with: 'This finding is filed alongside the linked docket entry.',
+  }[pathEdges.branch];
+  const resolvedText = `${semanticText.resolved} ${terminalPathClause}`;
+  const resolutionText = `${semanticText.resolution} ${terminalPathClause}`;
+  const decoyText = (i) => `${semanticText.decoy(i)} ${terminalPathClause}`;
 
   const docs = [
     { id: candidateId, kind: `conflict_${slug(attr)}`, role: 'conflict_candidate_trap',
@@ -186,9 +236,9 @@ export function buildConflictLifecycleClusterSpec({
       lifecycleState: 'terminal_branch', lifecycleScope: scope,
       scope: { topicId: scope } })),
     { id: pivotId, kind: 'bmu_public_record', role: 'public_path_pivot',
-      text: operationFamily === 'conflict_claim_reconciliation'
-        ? `Claim-review docket ${tsDate} for ${canonical}'s ${scope} ${attr} links parallel findings for comparison.`
-        : `Authority-review docket ${tsDate} for ${canonical}'s ${scope} ${attr} links parallel findings for verification.`,
+      text: pathEdges.seed === 'causes'
+        ? `${operationProfile.semantic.decision}. Review docket ${tsDate} for ${canonical}'s ${scope} ${attr} was opened because the disputed claim required a decision.`
+        : `${operationProfile.semantic.decision}. Source dossier ${tsDate} for ${canonical}'s ${scope} ${attr} is the record from which the disputed claim was derived.`,
       timestamp: tsDate, currentStaleFlag: true, lifecycleState: 'path_pivot', lifecycleScope: scope,
       scope: { topicId: scope } },
   ];
@@ -337,7 +387,8 @@ export function generateConflictLifecycleClusters({
     const canonical = subj.canonicalName;
     const isProject = /-svc-/.test(canonical);
     const rnd = prng(`${seed}:bmu-conflict:${epoch}:${subj.id}:${clusterSlot}`);
-    const operationFamily = conflictOperationFamilyForCluster(clusterSlot);
+    const operationProfile = conflictOperationProfileForCluster(epoch, clusterSlot);
+    const operationFamily = operationProfile.id;
 
     const { attr, bank } = bmuAttributeForClusterSlot(epoch, clusterSlot, {
       qualifiers: CONFLICT_QUALIFIERS, bases: CONFLICT_BASES, baseEpoch: rotationBaseEpoch,
@@ -433,6 +484,8 @@ export function generateConflictLifecycleClusters({
       motifGroupId, family: CONFLICT_FAMILY, epoch, clusterSlot,
       subjectEntityId: subj.id, attribute: attr, scope,
       operationFamily, operationClass: operationFamily,
+      operationSemantic: operationProfile.semantic.id,
+      operationTopology: operationProfile.topology.id,
       escalationLevel, decoyCount, decoyScopes: [...decoyScopes],
       docIds: spec.docs.map((d) => d.id), rowIds, templateIds,
       entityHoldoutKeys: [...entityHoldoutKeys],

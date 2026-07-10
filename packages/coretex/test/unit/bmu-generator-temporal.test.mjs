@@ -20,7 +20,9 @@ import {
   BMU_TEMPORAL_BUDGET_B,
   BMU_TEMPORAL_CLUSTER_K,
   BMU_TEMPORAL_SHORTCUT_CONTROL_DOCS,
+  TEMPORAL_OPERATION_CLASS_BANK,
   TEMPORAL_OPERATION_FAMILIES,
+  temporalOperationProfileForCluster,
   temporalOperationFamilyForCluster,
   renderTemplate,
 } from '../../../../scripts/lib/bmu-generators/temporal.mjs';
@@ -159,14 +161,71 @@ test('v2 public envelopes contain neither a role oracle nor a role-correlated ki
 
 test('v2 operation classes are deterministic, multiple, and exposed to P5 on every row', () => {
   const { clusters, telemetry } = generateTemporalClusters(baseOpts({ clusterCount: 6 }));
-  assert.deepEqual(new Set(clusters.map((c) => c.operationFamily)), new Set(TEMPORAL_OPERATION_FAMILIES));
+  assert.ok(new Set(clusters.map((c) => c.operationFamily)).size > 1);
   for (let i = 0; i < clusters.length; i++) {
     const c = clusters[i];
-    assert.equal(c.operationFamily, temporalOperationFamilyForCluster(i));
+    assert.equal(c.operationFamily, temporalOperationFamilyForCluster(c.epoch, i));
     assert.equal(c.operationClass, c.operationFamily);
     assert.ok(c.rows.every((row) => row.operationFamily === c.operationFamily && row.operationClass === c.operationFamily));
   }
-  assert.deepEqual(Object.keys(telemetry.operationFamilyHistogram).sort(), [...TEMPORAL_OPERATION_FAMILIES].sort());
+  assert.deepEqual(Object.keys(telemetry.operationFamilyHistogram).sort(), [...new Set(clusters.map((c) => c.operationFamily))].sort());
+});
+
+test('48-evolve census rotates 32 real classes (>24 capacity), each with disjoint transfer support', () => {
+  const activeIndex = createBmuActiveIndex();
+  const subjects = subjectBank(256);
+  const clusters = [];
+  for (let step = 0; step < 48; step++) {
+    const epoch = 150 + step;
+    retireAgedClusters(activeIndex, epoch, 16);
+    clusters.push(...generateTemporalClusters(baseOpts({
+      epoch, subjects, clusterCount: 2, activeIndex,
+    })).clusters);
+  }
+  const byClass = new Map();
+  for (const c of clusters) {
+    const rows = byClass.get(c.operationFamily) ?? [];
+    rows.push(c);
+    byClass.set(c.operationFamily, rows);
+    const profile = temporalOperationProfileForCluster(c.epoch, c.clusterSlot);
+    assert.equal(c.operationFamily, `temporal_${c.operationSemantic}__${c.publicPath.firstEdgeType}_then_${c.publicPath.terminalEdgeType}`);
+    assert.ok(TEMPORAL_OPERATION_CLASS_BANK.some((candidate) => candidate.id === c.operationFamily));
+    assert.equal(profile.id, c.operationFamily);
+    const docById = new Map(c.docs.map((doc) => [doc.id, doc]));
+    const topologyCue = {
+      supports: /supports the linked review conclusion/,
+      supersedes: /supersedes the linked preliminary summary/,
+      coreference_of: /refers to the same case as the linked case marker/,
+      co_occurs_with: /filed alongside the linked docket entry/,
+    }[c.publicPath.terminalEdgeType];
+    assert.ok(c.publicPath.terminalBranchIds.every((id) => topologyCue.test(docById.get(id).text)),
+      `class ${c.operationFamily} must express its edge semantics in branch text`);
+    const observable = (id) => {
+      const { id: _id, text: _text, ...metadata } = JSON.parse(JSON.stringify(docById.get(id)));
+      const topology = c.relations.filter((r) => r.src === id).map((r) => `${r.type}:${r.label}:${r.dst === c.publicPath.pivotId ? 'pivot' : 'seed'}`).sort();
+      return JSON.stringify({ metadata, topology });
+    };
+    assert.equal(new Set(c.publicPath.terminalBranchIds.map(observable)).size, 1, `unbalanced class ${c.operationFamily}`);
+  }
+  assert.equal(byClass.size, TEMPORAL_OPERATION_FAMILIES.length);
+  assert.equal(byClass.size, 32);
+  assert.ok(byClass.size > 24, 'class bank exceeds conservative temporal state capacity by eight');
+  assert.equal(new Set(clusters.slice(0, 32).map((c) => c.operationFamily)).size, 32,
+    'one 16-evolve active+future window already exposes every class');
+  const behaviorSignatures = new Set();
+  for (const [classId, members] of byClass) {
+    assert.ok(members.length >= 2, `${classId} must repeat for holdout transfer`);
+    const pair = members.flatMap((a, i) => members.slice(i + 1).map((b) => [a, b])).find(([a, b]) =>
+      a.subjectEntityId !== b.subjectEntityId
+      && !a.templateIds.some((id) => b.templateIds.includes(id))
+      && !a.entityHoldoutKeys.some((key) => b.entityHoldoutKeys.includes(key)));
+    assert.ok(pair, `${classId} needs an entity+template-disjoint repeat for I6 transfer`);
+    const [a] = pair;
+    const gold = a.docs.find((doc) => doc.id === a.publicPath.goldBranchIds[0]);
+    behaviorSignatures.add(`${a.publicPath.firstEdgeType}|${a.publicPath.terminalEdgeType}|${gold.text.split(' ')[0]}`);
+  }
+  assert.equal(behaviorSignatures.size, byClass.size,
+    'every class is uniquely realized by topology × semantic prose, not an epoch/ordinal label');
 });
 
 test('v2 public path is a balanced outgoing→incoming diamond; metadata cannot select gold', () => {

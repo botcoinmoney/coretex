@@ -83,24 +83,49 @@ export const BMU_TEMPORAL_SHORTCUT_CONTROL_DOCS = 4;
 /**
  * BMU v2 operation classes. Cluster slot parity is the only selector: the
  * class is deterministic, independent of labels/qrels, and serialized on the
- * cluster/rows for P5 stratification. Both classes instantiate the same
- * bounded outgoing→incoming diamond, but ask Qwen to perform different
- * textual operations: revision adjudication vs validity renewal.
+ * cluster/rows for P5 stratification. The rotating bank instantiates bounded
+ * outgoing→incoming diamonds and changes both edge program and textual
+ * decision. Its transferable substrate target remains ≤4 words: stale-seed
+ * anchor, winning-terminal anchor, plus the inherited two-word
+ * subject/attribute currency record.
  */
-export const TEMPORAL_OPERATION_FAMILIES = Object.freeze([
-  'temporal_revision_supersession',
-  'temporal_validity_renewal',
+export const TEMPORAL_SEMANTIC_OPERATIONS = Object.freeze([
+  Object.freeze({ id: 'revision_supersession', decision: 'authorized revision replaces a retired value' }),
+  Object.freeze({ id: 'validity_renewal', decision: 'scheduled review renews one value past expiry' }),
+  Object.freeze({ id: 'rollback_restoration', decision: 'invalid interim revision rolls back to the governing value' }),
+  Object.freeze({ id: 'effective_handoff', decision: 'dated handoff activates the successor value' }),
 ]);
 
-export function temporalOperationFamilyForCluster(clusterSlot) {
+export const TEMPORAL_PATH_TOPOLOGIES = Object.freeze(
+  ['derived_from', 'causes'].flatMap((seed) =>
+    ['supports', 'supersedes', 'coreference_of', 'co_occurs_with'].map((branch) =>
+      Object.freeze({ id: `${seed}_then_${branch}`, seed, branch }))),
+);
+
+/** 4 real temporal decisions × 8 concrete edge programs = 32 transferable
+ * classes, eight above the conservative 24-operation state capacity. Class
+ * ids contain no epoch/entity/template token; the epoch/slot sequence merely
+ * rotates the bank, while the selected profile changes emitted prose and
+ * actual public relation types. */
+export const TEMPORAL_OPERATION_CLASS_BANK = Object.freeze(
+  TEMPORAL_SEMANTIC_OPERATIONS.flatMap((semantic) =>
+    TEMPORAL_PATH_TOPOLOGIES.map((topology) => Object.freeze({
+      id: `temporal_${semantic.id}__${topology.id}`, semantic, topology,
+    }))),
+);
+export const TEMPORAL_OPERATION_FAMILIES = Object.freeze(TEMPORAL_OPERATION_CLASS_BANK.map((profile) => profile.id));
+export const TEMPORAL_OPERATION_ROTATION_BASE_EPOCH = 137;
+
+export function temporalOperationProfileForCluster(epoch, clusterSlot) {
+  if (!Number.isInteger(epoch)) throw new Error('bmu temporal: integer epoch required for operation rotation');
   if (!Number.isInteger(clusterSlot) || clusterSlot < 0) throw new Error('bmu temporal: non-negative integer clusterSlot required');
-  return TEMPORAL_OPERATION_FAMILIES[clusterSlot % TEMPORAL_OPERATION_FAMILIES.length];
+  const sequence = (epoch - TEMPORAL_OPERATION_ROTATION_BASE_EPOCH) * 2 + clusterSlot;
+  return TEMPORAL_OPERATION_CLASS_BANK[((sequence % TEMPORAL_OPERATION_CLASS_BANK.length) + TEMPORAL_OPERATION_CLASS_BANK.length) % TEMPORAL_OPERATION_CLASS_BANK.length];
 }
 
-const TEMPORAL_PATH_EDGES = Object.freeze({
-  temporal_revision_supersession: Object.freeze({ seed: 'derived_from', branch: 'supersedes' }),
-  temporal_validity_renewal: Object.freeze({ seed: 'causes', branch: 'supports' }),
-});
+export function temporalOperationFamilyForCluster(epoch, clusterSlot) {
+  return temporalOperationProfileForCluster(epoch, clusterSlot).id;
+}
 
 /**
  * §4.1 template banks — surface-form grids per question type.
@@ -356,8 +381,16 @@ export function generateTemporalClusters({
       throw new Error(`bmu temporal: value bank cannot supply ${BMU_TEMPORAL_SHORTCUT_CONTROL_DOCS} distinct balanced decoys`);
     }
     const shadowDecoyVals = decoyVals.slice(0, escalationLevel);
-    const operationFamily = temporalOperationFamilyForCluster(ordinal);
-    const pathEdges = TEMPORAL_PATH_EDGES[operationFamily];
+    const operationProfile = temporalOperationProfileForCluster(epoch, ordinal);
+    const operationFamily = operationProfile.id;
+    const pathEdges = operationProfile.topology;
+    const terminalPathClause = {
+      supports: 'This finding supports the linked review conclusion.',
+      supersedes: 'This branch finding supersedes the linked preliminary summary.',
+      coreference_of: 'This finding refers to the same case as the linked case marker.',
+      co_occurs_with: 'This finding is filed alongside the linked docket entry.',
+    }[pathEdges.branch];
+    const withPathSemantics = (text) => `${text} ${terminalPathClause}`;
 
     const idBase = `e${epoch}_${subj.id}_bmu${ordinal}`;
     const motifGroupId = `mg_e${epoch}_temporal_${String(ordinal).padStart(4, '0')}_${subj.id}`;
@@ -382,14 +415,24 @@ export function generateTemporalClusters({
     });
 
     const terminalText = (role, decoyValue) => {
-      if (operationFamily === 'temporal_revision_supersession') {
-        if (role === 'current') return `Revision decision ${tsDate}: the authorized outcome is ${val}. Subject ${canonical}; field ${attr}. The earlier ${staleVal} entry was retired.`;
-        if (role === 'change_provenance') return `Revision review ${tsDate} approved ${val} and closed the prior ${staleVal} proposal. Subject ${canonical}; field ${attr}.`;
-        return `Revision review ${tsDate} considered ${decoyValue}, but did not approve that proposal. Subject ${canonical}; field ${attr}.`;
+      if (operationProfile.semantic.id === 'revision_supersession') {
+        if (role === 'current') return withPathSemantics(`Revision decision ${tsDate}: the authorized outcome is ${val}. Subject ${canonical}; field ${attr}. The earlier ${staleVal} entry was retired.`);
+        if (role === 'change_provenance') return withPathSemantics(`Revision review ${tsDate} approved ${val} and closed the prior ${staleVal} proposal. Subject ${canonical}; field ${attr}.`);
+        return withPathSemantics(`Revision review ${tsDate} considered ${decoyValue}, but did not approve that proposal. Subject ${canonical}; field ${attr}.`);
       }
-      if (role === 'current') return `Validity notice ${tsDate}: scheduled verification confirmed ${val} for the next interval. Subject ${canonical}; field ${attr}.`;
-      if (role === 'change_provenance') return `Validity review ${tsDate} renewed ${val}; the earlier ${staleVal} entry expired before renewal. Subject ${canonical}; field ${attr}.`;
-      return `Validity review ${tsDate} examined ${decoyValue}, but did not validate it for the next interval. Subject ${canonical}; field ${attr}.`;
+      if (operationProfile.semantic.id === 'validity_renewal') {
+        if (role === 'current') return withPathSemantics(`Validity notice ${tsDate}: scheduled verification confirmed ${val} for the next interval. Subject ${canonical}; field ${attr}.`);
+        if (role === 'change_provenance') return withPathSemantics(`Validity review ${tsDate} renewed ${val}; the earlier ${staleVal} entry expired before renewal. Subject ${canonical}; field ${attr}.`);
+        return withPathSemantics(`Validity review ${tsDate} examined ${decoyValue}, but did not validate it for the next interval. Subject ${canonical}; field ${attr}.`);
+      }
+      if (operationProfile.semantic.id === 'rollback_restoration') {
+        if (role === 'current') return withPathSemantics(`Rollback decision ${tsDate}: controls restored ${val} as governing. Subject ${canonical}; field ${attr}. The interim ${staleVal} revision was invalid.`);
+        if (role === 'change_provenance') return withPathSemantics(`Rollback audit ${tsDate} invalidated interim ${staleVal} and restored ${val}. Subject ${canonical}; field ${attr}.`);
+        return withPathSemantics(`Rollback audit ${tsDate} examined ${decoyValue}, but controls did not restore that candidate. Subject ${canonical}; field ${attr}.`);
+      }
+      if (role === 'current') return withPathSemantics(`Handoff notice ${tsDate}: the effective transition activates ${val}. Subject ${canonical}; field ${attr}.`);
+      if (role === 'change_provenance') return withPathSemantics(`Handoff record ${tsDate} closed ${staleVal} and activated successor ${val}. Subject ${canonical}; field ${attr}.`);
+      return withPathSemantics(`Handoff review ${tsDate} listed ${decoyValue}, but that candidate was not activated. Subject ${canonical}; field ${attr}.`);
     };
     // All terminal branches deliberately share the same public metadata. The
     // only gold/decoy discriminator is branch text seen by Qwen; ids, edge
@@ -425,9 +468,9 @@ export function generateTemporalClusters({
     });
     const pivot = {
       id: pathPivotId, lane: 'deep', kind: 'bmu_public_record', entityIds: [universe, subj.id],
-      text: operationFamily === 'temporal_revision_supersession'
-        ? `Revision docket ${tsDate} for ${canonical}'s ${attr} contains parallel candidate findings for adjudication.`
-        : `Validity docket ${tsDate} for ${canonical}'s ${attr} contains parallel renewal findings for verification.`,
+      text: pathEdges.seed === 'causes'
+        ? `${operationProfile.semantic.decision}. Review docket ${tsDate} for ${canonical}'s ${attr} was opened because the disputed seed required a decision.`
+        : `${operationProfile.semantic.decision}. Source dossier ${tsDate} for ${canonical}'s ${attr} is the record from which the disputed seed was derived.`,
       shape: 'temporal_update_record', timestamp: `${tsDate}T12:00:00Z`, currentStaleFlag: true,
       validity: { ...terminalValidity }, liveUpdateEpoch: epoch,
     };
@@ -550,6 +593,7 @@ export function generateTemporalClusters({
       family: BMU_TEMPORAL_FAMILY,
       logicalFamily: BMU_TEMPORAL_LOGICAL_FAMILY,
       epoch,
+      clusterSlot: ordinal,
       subjectEntityId: subj.id,
       canonicalName: canonical,
       attribute: attr,
@@ -559,6 +603,8 @@ export function generateTemporalClusters({
       escalationLevel,
       operationFamily,
       operationClass: operationFamily,
+      operationSemantic: operationProfile.semantic.id,
+      operationTopology: operationProfile.topology.id,
       templateIds: [...clusterTemplateIds],
       entityHoldoutKeys: [...entityHoldoutKeys],
       docs,
