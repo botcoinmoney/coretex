@@ -94,6 +94,52 @@ export const BMU_MULTI_HOP_LOGICAL_FAMILY = 'multi_session_bridge'; // corpus lo
 export const BMU_MULTI_HOP_BUDGET_B = 4;                          // §4.2 default
 export const BMU_MULTI_HOP_CLUSTER_K = 5;                         // spec cluster size law
 
+/**
+ * BMU v2 generator contract. These names describe the public topology that
+ * is actually minted; they are not scorer selectors. Every class builds the
+ * same bounded outgoing→incoming operation with a different truthful
+ * semantic and a different public edge vocabulary.
+ */
+export const BMU_MULTI_HOP_OPERATION_FAMILY = 'outgoing_incoming_shared_sink';
+const MULTI_HOP_SEMANTIC_PROFILES = Object.freeze([
+  Object.freeze({ key: 'endpoint', truthKind: 'confirmed endpoint' }),
+  Object.freeze({ key: 'authority', truthKind: 'ratified authority' }),
+  Object.freeze({ key: 'provenance', truthKind: 'verified provenance' }),
+  Object.freeze({ key: 'dependency', truthKind: 'active dependency' }),
+  Object.freeze({ key: 'custody', truthKind: 'accepted custody record' }),
+]);
+const MULTI_HOP_OUTGOING_EDGES = Object.freeze(['causes', 'derived_from']);
+const MULTI_HOP_INCOMING_EDGES = Object.freeze(['supports', 'supersedes', 'coreference_of', 'co_occurs_with']);
+const MULTI_HOP_EDGE_PROGRAMS = Object.freeze(MULTI_HOP_OUTGOING_EDGES.flatMap((outgoingEdgeType) =>
+  MULTI_HOP_INCOMING_EDGES.map((incomingEdgeType) => Object.freeze({ outgoingEdgeType, incomingEdgeType }))));
+const MULTI_HOP_TOPOLOGY_PROFILES = Object.freeze([
+  Object.freeze({ key: 'single_sink', sinkMultiplicity: 1 }),
+  Object.freeze({ key: 'dual_sink', sinkMultiplicity: 2 }),
+]);
+/** 5 semantics × (2 outgoing × 4 incoming) × 2 real sink topologies = 80. */
+export const BMU_MULTI_HOP_OPERATION_CLASSES = Object.freeze(
+  MULTI_HOP_EDGE_PROGRAMS.flatMap((edgeProgram) =>
+    MULTI_HOP_SEMANTIC_PROFILES.flatMap((semantic) =>
+      MULTI_HOP_TOPOLOGY_PROFILES.map((topology) => Object.freeze({
+        name: `shared_sink_${semantic.key}_${edgeProgram.outgoingEdgeType}_${edgeProgram.incomingEdgeType}_${topology.key}`,
+        semantic: semantic.key,
+        truthKind: semantic.truthKind,
+        outgoingEdgeType: edgeProgram.outgoingEdgeType,
+        incomingEdgeType: edgeProgram.incomingEdgeType,
+        topology: topology.key,
+        sinkMultiplicity: topology.sinkMultiplicity,
+      })))),
+);
+
+export function multiHopOperationClassForSlot(operationClassSlot) {
+  if (!Number.isInteger(operationClassSlot) || operationClassSlot < 0) {
+    throw new Error('multiHopOperationClassForSlot: non-negative integer slot required');
+  }
+  return BMU_MULTI_HOP_OPERATION_CLASSES[
+    Math.floor(operationClassSlot / 2) % BMU_MULTI_HOP_OPERATION_CLASSES.length
+  ];
+}
+
 /** Bridge-token vocabulary (ancestor API_HOSTS, evolve-corpus.mjs:34). */
 const HOSTS = ['atlas', 'beacon', 'cedar', 'delta', 'ember', 'falcon', 'granite', 'harbor'];
 
@@ -312,10 +358,11 @@ function lintCluster({ rows, docs, chainDocIds, answerDocId, value, bridgeTokens
  * epoch. PURE + DETERMINISTIC in (epoch, seed, subjects order, activeIndex
  * state, splitOf) — no Date.now / Math.random.
  *
- * Chain shapes (deterministic in ordinal parity — both shapes exercised):
- *   even ordinal → 2-hop: subject →(link)→ relay →(register)→ value
- *   odd ordinal  → 3-hop: subject →(memo, alias-framed for persons)→ ticket
- *                          →(routing)→ desk →(register)→ value
+ * Public path shapes are chosen by the rotating operation-class bank:
+ *   anchor --outgoing--> one|two neutral sinks <--incoming-- sibling branches.
+ * The hidden semantic chain remains subject/memo/answer-shaped for judge
+ * construction, while every public sink carries one truth and balanced
+ * textual decoys with identical structural observables.
  *
  * @param {object} opts
  * @param {number}   opts.epoch         synthetic/real epoch id
@@ -326,6 +373,8 @@ function lintCluster({ rows, docs, chainDocIds, answerDocId, value, bridgeTokens
  * @param {Function} opts.splitOf       (logicalQueryId, liveUpdateEpoch) => split — CANONICAL splitForRecord composition, injected (purity)
  * @param {object}   [opts.activeIndex] GLOBAL m=1 index (mutated: minted clusters are registered). Defaults to a fresh index.
  * @param {object}   [opts.escalation]  escalationLevelForEpoch overrides
+ * @param {number}   [opts.operationClassSlotOffset] persistent minted-cluster
+ *                   cursor; adjacent cursor slots deliberately repeat a class
  * @returns {{ clusters: Array, telemetry: object }}
  */
 export function generateMultiHopClusters({
@@ -337,6 +386,7 @@ export function generateMultiHopClusters({
   splitOf,
   activeIndex = createBmuActiveIndex(),
   escalation = {},
+  operationClassSlotOffset = Math.max(0, (epoch - TYPED_CLUSTER_ROTATION_BASE_EPOCH) * 2),
 }) {
   if (!Number.isInteger(epoch)) throw new Error('bmu multi_hop: epoch must be an integer');
   if (typeof seed !== 'string' || seed.length === 0) throw new Error('bmu multi_hop: seed required');
@@ -344,8 +394,9 @@ export function generateMultiHopClusters({
   if (!Array.isArray(subjects) || subjects.length === 0) throw new Error('bmu multi_hop: subjects bank required');
   if (typeof universe !== 'string' || universe.length === 0) throw new Error('bmu multi_hop: universe (ownerEntityId) required');
   if (!Number.isInteger(clusterCount) || clusterCount < 1) throw new Error('bmu multi_hop: clusterCount must be a positive integer');
+  if (!Number.isInteger(operationClassSlotOffset) || operationClassSlotOffset < 0) throw new Error('bmu multi_hop: operationClassSlotOffset must be a non-negative integer');
 
-  const { tsDate, priorDate } = datesForEpoch(epoch);
+  const { tsDate } = datesForEpoch(epoch);
   const escalationLevel = escalationLevelForEpoch(epoch, escalation);
   const usedTemplatesThisEpoch = new Set(); // §4.1 per-(family, epoch) disjoint partition
   const usedSubjectsThisRun = new Set();
@@ -382,13 +433,17 @@ export function generateMultiHopClusters({
     const rnd = prng(`${seed}:bmu-multihop:${epoch}:${subj.id}:${ordinal}`);
     const hostAt = () => HOSTS[Math.floor(rnd() * HOSTS.length)];
 
-    const hopCount = ordinal % 2 === 0 ? 2 : 3;
+    // Operation class is selected BEFORE document text/ids are built and
+    // controls the actual edge type of every branch. It is therefore a
+    // deterministic topology decision, not a label inferred from gold roles.
+    const operationPlan = multiHopOperationClassForSlot(operationClassSlotOffset + ordinal);
+    const operationFamily = BMU_MULTI_HOP_OPERATION_FAMILY;
+    const operationClass = operationPlan.name;
+    const hopCount = operationPlan.sinkMultiplicity === 1 ? 2 : 3;
     const corefFramed = hopCount === 3 && !isProject;
     const relayToken = `${hostAt()}-relay-${epoch}r${ordinal}`;
     const deskToken = `${hostAt()}-desk-${epoch}r${ordinal}`;
     const ticket = `dm-${epoch}r${ordinal}-${100 + Math.floor(rnd() * 900)}`;
-    const lastBridgeToken = hopCount === 2 ? relayToken : deskToken;
-    const wrongRelay = `${hostAt()}-relay-${epoch}x${ordinal}`;
 
     // Distinct-by-suffix value tokens (deterministic; hosts may repeat).
     const value = `${hostAt()}-${valueSlug}-${epoch}a${ordinal}`;
@@ -405,111 +460,133 @@ export function generateMultiHopClusters({
     const docId = (slot) => opaqueBmuDocId({ seed, epoch, motifGroupId, slot });
     const b1Id = docId('chain_hop1');
     const b2Id = docId('chain_hop2');
+    const primarySinkIds = [b2Id];
+    for (let i = 1; i < operationPlan.sinkMultiplicity; i++) primarySinkIds.push(docId(`chain_hop2_mirror:${i}`));
     const ansId = docId('chain_answer');
     const offpathId = docId('offpath_decoy');
     const nearBridgeId = docId('near_bridge_decoy');
     const shadowIds = shadowVals.map((_, i) => docId(`offpath_shadow:${i}`));
+    const unbalancedDecoyCount = 2 + shadowIds.length;
+    const balanceNeeded = (3 - (unbalancedDecoyCount % 3)) % 3;
+    const balanceIds = Array.from({ length: balanceNeeded }, (_, i) => docId(`path_balance_decoy:${i}`));
+    const balanceVals = Array.from({ length: balanceNeeded }, (_, i) => `${hostAt()}-${valueSlug}-${epoch}z${ordinal}p${i}`);
 
-    // ── Docs: the chain + the forbidden traps (deltas 2, 3) ─────────────────
+    // ── Docs: neutral public envelopes + text-only branch truth ─────────────
     const docs = [];
     const pushDoc = (doc) => {
-      // Roles and the old bridge_* kind vocabulary were a public path oracle.
-      // Keep them local to generator construction, then emit one neutral
-      // envelope; qrels/bmuTask remain the hidden judge contract.
-      const { role: _role, kind: _kind, ...publicDoc } = doc;
+      // `id` and `text` are the only enumerable per-document differences.
+      // Recency, entity tags, kind, shape, and stale flags are identical on
+      // truth and decoys, so metadata/recency selectors cannot solve a row.
       const emitted = {
-        lane: 'deep', shape: 'multi_session_bridge_record', timestamp: tsDate,
-        liveUpdateEpoch: epoch, kind: 'bmu_public_record', ...publicDoc,
+        id: doc.id,
+        lane: 'deep', shape: 'bmu_public_record', timestamp: tsDate,
+        liveUpdateEpoch: epoch, kind: 'bmu_public_record',
+        entityIds: [universe], currentStaleFlag: true, text: doc.text,
       };
-      Object.defineProperty(emitted, 'role', { value: _role, enumerable: false });
+      Object.defineProperty(emitted, 'role', { value: doc.role, enumerable: false });
+      if (doc.grounding !== undefined) {
+        Object.defineProperty(emitted, 'grounding', { value: doc.grounding, enumerable: false });
+      }
       docs.push(emitted);
     };
-    if (hopCount === 2) {
+    pushDoc({
+      id: b1Id, role: 'chain_hop1',
+      text: hopCount === 2
+        ? `Delegation review ${tsDate}: comparison docket ${relayToken} was opened for ${canonical}. Its delegated function is ${topic}; the filed branches must be read before choosing an endpoint.`
+        : (corefFramed
+          ? `${alias} filed review memo ${ticket} on ${tsDate} on behalf of ${canonical}. The memo concerns ${topic} and opens an authority comparison docket.`
+          : `Review memo ${ticket}, filed ${tsDate}, was opened for ${canonical}. Its subject is ${topic}, and it establishes an authority comparison docket.`),
+    });
+    pushDoc({
+      id: b2Id, role: hopCount === 3 ? 'chain_hop2' : 'path_pivot', grounding: 'distant',
+      text: `Comparison pivot ${hopCount === 2 ? relayToken : deskToken} receives independently filed branches under one neutral docket.`,
+    });
+    for (let i = 1; i < primarySinkIds.length; i++) {
       pushDoc({
-        id: b1Id, kind: 'bridge_link_record', role: 'chain_hop1',
-        entityIds: [universe, subj.id], currentStaleFlag: true,
-        text: `Delegation ledger entry ${tsDate}: ${canonical}'s ${topic} is handled through relay ${relayToken} under the standing assignment.`,
-      });
-    } else {
-      pushDoc({
-        id: b1Id, kind: 'bridge_link_record', role: 'chain_hop1',
-        entityIds: [universe, subj.id], currentStaleFlag: true,
-        text: corefFramed
-          ? `${alias} filed delegation memo ${ticket} on ${tsDate} taking charge of ${canonical}'s ${topic}, and the memo governs it going forward.`
-          : `Delegation memo ${ticket}, filed ${tsDate}, takes charge of ${canonical}'s ${topic} and governs it going forward.`,
-      });
-      pushDoc({
-        id: b2Id, kind: 'bridge_hop_record', role: 'chain_hop2', grounding: 'distant',
-        entityIds: [universe], currentStaleFlag: true,
-        text: `Routing sheet: memo ${ticket} sends its subject matter to desk ${deskToken} for handling and resolution.`,
+        id: primarySinkIds[i], role: 'path_pivot', grounding: 'distant',
+        text: `Mirrored comparison pivot ${hopCount === 2 ? relayToken : deskToken}-${i} receives the same independently filed branches for a second public-path check.`,
       });
     }
     pushDoc({
-      id: ansId, kind: 'bridge_target_record', role: 'chain_answer', grounding: 'distant',
-      entityIds: [universe], currentStaleFlag: true,
-      text: hopCount === 2
-        ? `Relay ${relayToken}'s duty register lists ${value} as the confirmed ${targetAttr}.`
-        : `Desk ${deskToken}'s duty register lists ${value} as the confirmed ${targetAttr}.`,
-    });
-    // Off-path traps stay lexically dominant over golds (BM25 certify / §6.5)
-    // via subject + topic + targetAttr + wrong value, but avoid the exact
-    // "working ${targetAttr}" query skeleton that caused cross-cluster op
-    // bleed under real Qwen. Linked by co_occurs_with noise edges.
-    pushDoc({
-      id: offpathId, kind: 'bridge_offpath_digest', role: 'offpath_decoy',
-      entityIds: [universe, subj.id], currentStaleFlag: false,
-      text: `Shared digest about ${canonical}'s ${topic} lists ${decoyVal} in the ${targetAttr} field next to relay ${wrongRelay}, without any standing assignment behind it.`,
+      id: ansId, role: 'chain_answer', grounding: 'distant',
+      text: `The ${operationPlan.truthKind} filing on pivot ${hopCount === 2 ? relayToken : deskToken} records ${value} as the ${targetAttr}; its body says the entry is confirmed and in force.`,
     });
     pushDoc({
-      id: nearBridgeId, kind: 'bridge_draft_note', role: 'near_bridge_decoy',
-      entityIds: [universe], currentStaleFlag: false,
-      text: `A draft planning note for ${hopCount === 2 ? 'relay' : 'desk'} ${lastBridgeToken} pencils in ${decoyVal2} as ${targetAttr}, pending confirmation and not yet entered anywhere.`,
+      id: offpathId, role: 'offpath_decoy',
+      text: `Shared digest about ${canonical}'s ${topic} repeats ${decoyVal} in the ${targetAttr} field for pivot ${hopCount === 2 ? relayToken : deskToken}, but its body says the entry was copied from an unapproved draft.`,
+    });
+    pushDoc({
+      id: nearBridgeId, role: 'near_bridge_decoy',
+      text: `A competing filing on pivot ${hopCount === 2 ? relayToken : deskToken} lists ${decoyVal2} as ${targetAttr}; its body says the proposal was rejected and never took effect.`,
     });
     for (let i = 0; i < shadowIds.length; i++) {
       pushDoc({
-        id: shadowIds[i], kind: 'bridge_offpath_digest', role: 'offpath_shadow',
-        entityIds: [universe, subj.id], currentStaleFlag: false,
-        text: `An older digest excerpt from ${priorDate} about ${canonical}'s ${topic} lists ${shadowVals[i]} in the ${targetAttr} field, without any assignment behind it.`,
+        id: shadowIds[i], role: 'offpath_shadow',
+        text: `A parallel ${targetAttr} filing about ${canonical}'s ${topic} lists ${shadowVals[i]}; the body marks it as superseded before ratification.`,
+      });
+    }
+    for (let i = 0; i < balanceIds.length; i++) {
+      pushDoc({
+        id: balanceIds[i], role: 'path_balance_decoy',
+        text: `A parallel ${targetAttr} filing about ${canonical}'s ${topic} lists ${balanceVals[i]}; the body marks it as a void test entry with no authority.`,
       });
     }
 
-    // ── Relations: the chain edges + the measured noise-edge hazard ─────────
+    // ── Relations: balanced outgoing→incoming shared-sink groups ───────────
+    // The v2 law follows anchor→sink using the disjoint first-step edge set,
+    // then enumerates truth/decoy→same-sink edges using the disjoint incoming
+    // edge set. Each incoming group is exactly truth + three decoys. Truth
+    // and decoys have the same edge type, label, degree, recency, and metadata.
     const relations = [];
-    if (hopCount === 2) {
-      relations.push({ src: b1Id, dst: ansId, type: 'supports', label: 'routes_to' });
-    } else {
-      relations.push({ src: b1Id, dst: b2Id, type: 'supports', label: 'delegates_to' });
-      relations.push({ src: b2Id, dst: ansId, type: 'supports', label: 'routes_to' });
+    const allDecoyIds = [offpathId, nearBridgeId, ...shadowIds, ...balanceIds];
+    const pathGroups = [];
+    for (let i = 0; i < allDecoyIds.length; i += 3) {
+      const groupIndex = i / 3;
+      const anchorId = groupIndex === 0 ? b1Id : docId(`path_anchor:${groupIndex}`);
+      const sinkIds = groupIndex === 0 ? [...primarySinkIds] : [docId(`path_sink:${groupIndex}:0`)];
+      if (groupIndex > 0) {
+        for (let j = 1; j < operationPlan.sinkMultiplicity; j++) sinkIds.push(docId(`path_sink:${groupIndex}:${j}`));
+      }
+      const sinkId = sinkIds[0];
+      const truthId = groupIndex === 0 ? ansId : docId(`path_truth_control:${groupIndex}`);
+      if (groupIndex > 0) {
+        pushDoc({
+          id: anchorId, role: 'path_anchor',
+          text: `Comparison docket ${groupIndex + 1} for ${canonical}'s ${topic} groups another trio of ${targetAttr} filings for textual review.`,
+        });
+        for (let j = 0; j < sinkIds.length; j++) {
+          pushDoc({
+            id: sinkIds[j], role: 'path_pivot', grounding: 'distant',
+            text: `${j === 0 ? 'Neutral' : 'Mirrored'} comparison pivot ${ticket}-p${groupIndex}-${j} receives the class branches for a public-path check.`,
+          });
+        }
+        pushDoc({
+          id: truthId, role: 'path_truth_control', grounding: 'distant',
+          text: `The control filing on pivot ${ticket}-p${groupIndex} says its reviewed entry is ratified; competing provisional entries on the same pivot are not authoritative.`,
+        });
+      }
+      pathGroups.push({ anchorId, sinkId, sinkIds, truthId, decoyIds: allDecoyIds.slice(i, i + 3) });
     }
-    // Bidirectional co_occurs_with so a public suppress atom on a chain
-    // anchor can demote off-path neighbors (and vice versa if the miner
-    // anchors the trap itself).
-    relations.push({ src: offpathId, dst: b1Id, type: 'co_occurs_with', label: 'co_mentioned' });
-    relations.push({ src: b1Id, dst: offpathId, type: 'co_occurs_with', label: 'co_mentioned' });
-    relations.push({ src: nearBridgeId, dst: ansId, type: 'co_occurs_with', label: 'draft_variant' });
-    relations.push({ src: ansId, dst: nearBridgeId, type: 'co_occurs_with', label: 'draft_variant' });
-    for (const shadowId of shadowIds) {
-      relations.push({ src: shadowId, dst: b1Id, type: 'co_occurs_with', label: 'digest_mention' });
-      relations.push({ src: b1Id, dst: shadowId, type: 'co_occurs_with', label: 'digest_mention' });
+    for (const group of pathGroups) {
+      const branchIds = [group.truthId, ...group.decoyIds];
+      if (branchIds.length !== 4) throw new Error('bmu multi_hop: every public-path group must have exactly four balanced branches');
+      for (const sinkId of group.sinkIds) {
+        relations.push({ src: group.anchorId, dst: sinkId, type: operationPlan.outgoingEdgeType, label: 'public_path_seed' });
+      }
+      for (const src of branchIds) {
+        for (const sinkId of group.sinkIds) relations.push({ src, dst: sinkId, type: operationPlan.incomingEdgeType, label: 'public_path_branch' });
+      }
     }
 
     // ── Evidence law (§5.3): required = bridge + answer (not the full 3-hop set).
     // Intermediate hop-2 stays graded support in qrels so routing still pays,
     // but B=4 top-B is not arithmetically over-subscribed by 3 required docs.
     const utilityRequired = [b1Id, ansId];
-    const fullChainDocIds = hopCount === 2 ? [b1Id, ansId] : [b1Id, b2Id, ansId];
-    const forbiddenEvidence = [offpathId, nearBridgeId, ...shadowIds];
-    const bridgeQrels = (hopCount === 2 ? [b1Id] : [b1Id, b2Id]).map((docId) => ({ docId, relevance: 0.6, role: 'bridge' }));
-    const decoyQrels = [
-      { docId: offpathId, relevance: 0.0, role: 'offpath_decoy' },
-      { docId: nearBridgeId, relevance: 0.0, role: 'near_bridge_decoy' },
-      ...shadowIds.map((docId) => ({ docId, relevance: 0.0, role: 'offpath_shadow' })),
-    ];
-    const hardNegatives = [
-      { docId: offpathId, category: 'co_occurrence_offpath_exact_terms' },
-      { docId: nearBridgeId, category: 'bridge_break_draft' },
-      ...shadowIds.map((docId) => ({ docId, category: 'co_occurrence_offpath' })),
-    ];
+    const fullChainDocIds = [b1Id, ...primarySinkIds, ansId];
+    const forbiddenEvidence = [offpathId, nearBridgeId, ...shadowIds, ...balanceIds];
+    const bridgeQrels = [b1Id, b2Id].map((docId) => ({ docId, relevance: 0.6, role: 'bridge' }));
+    const decoyQrels = forbiddenEvidence.map((docId) => ({ docId, relevance: 0.0, role: 'same_path_decoy' }));
+    const hardNegatives = forbiddenEvidence.map((docId) => ({ docId, category: 'same_path_textual_decoy' }));
     const evidenceForSlot = (qtype) => {
       switch (qtype) {
         case 'chain_endpoint_value':
@@ -570,7 +647,7 @@ export function generateMultiHopClusters({
         },
         questionType: qtype, capability: 'relation_traversal',
         band: escalationLevel > 0 ? 'very_hard' : 'hard',
-        operationFamily: 'multi_hop_relation_chain', liveUpdateEpoch: epoch,
+        operationFamily, operationClass, liveUpdateEpoch: epoch,
         bmuTask: {
           family: BMU_MULTI_HOP_FAMILY,
           budgetB: BMU_MULTI_HOP_BUDGET_B,
@@ -613,8 +690,8 @@ export function generateMultiHopClusters({
       bridgeTokens: [relayToken, deskToken, ticket].filter((t, i) => hopCount === 3 || i === 0),
       distantForbidden: [canonical, corefFramed ? alias : null, topic],
       slotValues: [
-        canonical, alias, topic, targetAttr, value, decoyVal, decoyVal2, ...shadowVals,
-        relayToken, deskToken, ticket, wrongRelay, subj.id, tsDate, priorDate,
+        canonical, alias, topic, targetAttr, value, decoyVal, decoyVal2, ...shadowVals, ...balanceVals,
+        relayToken, deskToken, ticket, subj.id, tsDate,
       ],
     });
 
@@ -633,16 +710,19 @@ export function generateMultiHopClusters({
       canonicalName: canonical,
       topic,
       targetAttribute: targetAttr,
+      operationFamily,
+      operationClass,
       hopCount,
       corefFramed,
       bridgeTokens: hopCount === 2 ? [relayToken] : [ticket, deskToken],
       answerValue: value,
-      decoyValues: [decoyVal, decoyVal2, ...shadowVals],
+      decoyValues: [decoyVal, decoyVal2, ...shadowVals, ...balanceVals],
       escalationLevel,
       templateIds: [...clusterTemplateIds],
       entityHoldoutKeys: [...entityHoldoutKeys],
       docs,
       relations,
+      pathGroups: pathGroups.map((group) => ({ ...group, sinkIds: [...group.sinkIds], decoyIds: [...group.decoyIds] })),
       rows,
     });
   }
@@ -660,6 +740,10 @@ export function generateMultiHopClusters({
         return histo;
       }, {}),
       corefFramedCount: clusters.filter((c) => c.corefFramed).length,
+      operationClassHistogram: clusters.reduce((histo, c) => {
+        histo[c.operationClass] = (histo[c.operationClass] ?? 0) + 1;
+        return histo;
+      }, {}),
       questionTypeHistogram: clusters.flatMap((c) => c.rows).reduce((histo, r) => {
         histo[r.questionType] = (histo[r.questionType] ?? 0) + 1;
         return histo;

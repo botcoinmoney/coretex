@@ -83,6 +83,7 @@ export function buildMultiHopSampleBank(params = SAMPLE_BANK_PARAMS) {
   const activeIndex = createBmuActiveIndex();
   const clusters = [];
   const perEpoch = [];
+  let operationClassSlotOffset = 0;
   for (const epoch of params.epochs) {
     retireAgedClusters(activeIndex, epoch, params.maxAge);
     const out = generateMultiHopClusters({
@@ -93,7 +94,9 @@ export function buildMultiHopSampleBank(params = SAMPLE_BANK_PARAMS) {
       clusterCount: params.clustersPerEpoch,
       splitOf,
       activeIndex,
+      operationClassSlotOffset,
     });
+    operationClassSlotOffset += params.clustersPerEpoch;
     clusters.push(...out.clusters);
     perEpoch.push(out.telemetry);
   }

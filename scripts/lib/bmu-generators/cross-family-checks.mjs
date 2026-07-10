@@ -119,6 +119,8 @@ export function buildCombinedSample(params = COMBINED_PARAMS) {
     multi_hop_relation: { clusters: [], rows: [], docs: [] },
     near_collision_abstention: { clusters: [], rows: [], docs: [] },
   };
+  let multiHopOperationClassSlotOffset = 0;
+  let nearcolOperationClassSlotOffset = 0;
 
   params.epochs.forEach((epoch, epochIdx) => {
     retireAgedClusters(activeIndex, epoch, params.maxAge);
@@ -137,7 +139,9 @@ export function buildCombinedSample(params = COMBINED_PARAMS) {
       universe: params.universes.multi_hop_relation,
       clusterCount: params.perFamilyClusters.multi_hop_relation[epochIdx],
       splitOf: splitTemporalLane, activeIndex,
+      operationClassSlotOffset: multiHopOperationClassSlotOffset,
     });
+    multiHopOperationClassSlotOffset += params.perFamilyClusters.multi_hop_relation[epochIdx];
     families.multi_hop_relation.clusters.push(...m.clusters);
     for (const c of m.clusters) { families.multi_hop_relation.rows.push(...c.rows); families.multi_hop_relation.docs.push(...c.docs); }
 
@@ -156,7 +160,9 @@ export function buildCombinedSample(params = COMBINED_PARAMS) {
       registry, splitOf: splitConflictLane,
       clusterCount: params.perFamilyClusters.near_collision_abstention[epochIdx],
       escalationLevel: epochIdx, ownerEntityId: params.ownerEntityId,
+      operationClassSlotOffset: nearcolOperationClassSlotOffset,
     });
+    nearcolOperationClassSlotOffset += params.perFamilyClusters.near_collision_abstention[epochIdx];
     families.near_collision_abstention.clusters.push(...n.clusters);
     families.near_collision_abstention.rows.push(...n.addedQueries);
     families.near_collision_abstention.docs.push(...n.addedDocs);

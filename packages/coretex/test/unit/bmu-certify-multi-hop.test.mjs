@@ -34,7 +34,7 @@ function smallBank() {
   return { kind: 'bmu-p2-sample-bank', family: 'multi_hop_relation', clusters };
 }
 
-test('oracle: reconstructs the chain from supports edges and judges u=1 on every row (2-hop and 3-hop)', () => {
+test('oracle: reconstructs the disjoint public-path diamond and judges u=1 on every row (2-hop and 3-hop)', () => {
   const bank = smallBank();
   const docs = bank.clusters.flatMap((c) => c.docs);
   assert.ok(bank.clusters.some((c) => c.hopCount === 2) && bank.clusters.some((c) => c.hopCount === 3));
@@ -66,11 +66,11 @@ test('oracle: answer doc is the chain TERMINAL for endpoint/rejection/routing an
   assert.deepEqual([...term.evidence].sort(), [...byType.chain_endpoint_value.bmuTask.requiredEvidence].sort());
 });
 
-test('oracle is structure-only: cutting one supports edge breaks it even though bmuTask labels are intact', () => {
+test('oracle is structure-only: cutting the public-path seed breaks it even though bmuTask labels are intact', () => {
   const bank = smallBank();
   const docs = bank.clusters.flatMap((c) => c.docs);
   const cluster = bank.clusters.find((c) => c.hopCount === 3);
-  const corrupted = { ...cluster, relations: cluster.relations.filter((r) => r.type !== 'supports' || r.label !== 'routes_to') };
+  const corrupted = { ...cluster, relations: cluster.relations.filter((r) => r.label !== 'public_path_seed') };
   const row = cluster.rows[0];
   const o = multiHopOracleLane(row, corrupted, docs, row.bmuTask.budgetB);
   assert.notDeepEqual([...o.evidence].sort(), [...row.bmuTask.requiredEvidence].sort());

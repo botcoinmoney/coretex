@@ -30,6 +30,8 @@ import {
   NEARCOL_LOGICAL_FAMILY_ABSTAIN,
   NEARCOL_LOGICAL_FAMILY_ANSWERABLE,
   NEARCOL_QUESTION_TYPES,
+  NEARCOL_OPERATION_FAMILY,
+  NEARCOL_OPERATION_CLASSES,
   generateNearCollisionAbstentionClusters,
 } from '../../../../scripts/lib/bmu-generators/near_collision_abstention.mjs';
 import {
@@ -131,16 +133,17 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
     );
   });
 
-  test('synthetic duplicate-entity ids are cluster-scoped, never bank subjects', () => {
+  test('alias-aware I6 keys remain hidden while public envelopes expose no duplicate identity selector', () => {
     const out = gen({ clusterCount: 6, escalationLevel: 3 });
-    const bankIds = new Set(bank(40).map((s) => s.id));
-    const aliasDecoyIds = new Set(out.addedRelations
-      .filter((r) => r.label === 'disambiguates_duplicate')
-      .map((r) => r.dst));
-    for (const doc of out.addedDocs.filter((d) => aliasDecoyIds.has(d.id))) {
-      const dupId = doc.entityIds[1];
-      assert.match(dupId, /^e_e137_.*_dup\d+$/);
-      assert.ok(!bankIds.has(dupId), 'duplicate entity must not be a bank subject');
+    for (const cluster of out.clusters) {
+      assert.ok(cluster.entityHoldoutKeys.includes(`id:${cluster.subjectEntityId}`));
+      assert.ok(cluster.entityHoldoutKeys.some((key) => key.startsWith('alias:')));
+    }
+    for (const doc of out.addedDocs) {
+      assert.deepEqual(doc.entityIds, ['e_universe']);
+      const serialized = JSON.parse(JSON.stringify(doc));
+      assert.equal('roleAliases' in serialized, false);
+      assert.equal('collisionScope' in serialized, false);
     }
   });
 });
@@ -189,27 +192,27 @@ describe('template mint-partition law (§4.1 M7)', () => {
 });
 
 describe('forbidden-trap construction (§5.4, §6.5) + answerable/abstain mix', () => {
-  test('answerable rows forbid the full sibling decoy set (alias trap first); abstain rows also forbid E', () => {
+  test('answerable rows forbid the full sibling decoy set; abstain rows also forbid E', () => {
     for (const escalationLevel of [0, 2]) {
       const out = gen({ escalationLevel });
       const docById = new Map(out.addedDocs.map((d) => [d.id, d]));
       for (const q of out.addedQueries) {
         const t = q.bmuTask;
+        const cluster = out.clusters.find((candidate) => candidate.motifGroupId === t.motifGroupId);
+        const primaryTrapId = cluster.decoyKinds[0].id;
         if (t.abstain) {
           assert.equal(t.forbiddenEvidence.length, 1 + nearcolDecoyCount(escalationLevel));
-          const disambiguates = out.addedRelations.find((r) => r.label === 'disambiguates' && r.dst === t.forbiddenEvidence[0]);
-          assert.ok(disambiguates, 'abstain row forbids the structurally disambiguated answerable sibling E first');
-          assert.ok(out.addedRelations.some((r) => r.label === 'disambiguates_duplicate' && r.dst === t.forbiddenEvidence[1]), 'then the alias primary trap');
+          assert.equal(t.forbiddenEvidence[0], cluster.truthDocId, 'abstain forbids answerable sibling E first');
+          assert.equal(t.forbiddenEvidence[1], primaryTrapId, 'then the class-specific primary trap');
         } else {
           assert.equal(t.forbiddenEvidence.length, nearcolDecoyCount(escalationLevel));
           assert.ok(t.forbiddenEvidence.length >= 3, 'alias + attribute + scope lookalikes');
-          assert.ok(out.addedRelations.some((r) => r.label === 'disambiguates_duplicate' && r.dst === t.forbiddenEvidence[0]), 'first forbidden = alias-collision primary trap');
+          assert.equal(t.forbiddenEvidence[0], primaryTrapId, 'first forbidden = class-specific primary collision axis');
         }
         // The primary trap ECHOES the question skeleton and claims currency
         // (§2.2 "out-ranks honestly" — asserted via the lint at mint, spot-
         // checked here on text shape).
-        const trapId = t.forbiddenEvidence.find((id) => out.addedRelations.some((r) => r.label === 'disambiguates_duplicate' && r.dst === id));
-        const trapDoc = out.addedDocs.find((d) => d.id === trapId);
+        const trapDoc = docById.get(primaryTrapId);
         assert.match(trapDoc.text, /^What .* did .* set for the .*\?/);
         assert.match(trapDoc.text, /remains the standing/);
         assert.equal('collisionRole' in trapDoc, false, 'public docs must not expose answer/trap role metadata');
@@ -236,17 +239,48 @@ describe('forbidden-trap construction (§5.4, §6.5) + answerable/abstain mix', 
       assert.notEqual(c.absentScope, c.scope);
     }
   });
-  test('cluster relations: disambiguation record disambiguates E and flags the duplicate', () => {
-    const out = gen({ clusterCount: 3 });
+  test('cluster relations are balanced outgoing→incoming branches, not role labels', () => {
+    const out = gen({ clusterCount: 6, escalationLevel: 3 });
     const docById = new Map(out.addedDocs.map((d) => [d.id, d]));
     for (const c of out.clusters) {
-      const rels = out.addedRelations.filter((r) => c.docIds.includes(r.src));
-      const derived = rels.find((r) => r.type === 'derived_from');
-      const flags = rels.find((r) => r.label === 'disambiguates_duplicate');
-      assert.ok(derived && docById.has(derived.src) && docById.has(derived.dst), 'derived_from D→E');
-      assert.equal(derived.label, 'disambiguates');
-      assert.ok(flags && flags.src === derived.src && docById.has(flags.dst), 'co_occurs_with D→trap');
-      assert.equal(flags.type, 'co_occurs_with'); // ancestor label encoding (evolve-corpus.mjs:446)
+      const plan = NEARCOL_OPERATION_CLASSES.find((candidate) => candidate.name === c.operationClass);
+      assert.ok(plan);
+      for (const group of c.pathGroups) {
+        assert.equal(group.branchIds.length, 4);
+        const seedEdges = out.addedRelations.filter((relation) => relation.src === group.anchorId);
+        assert.ok(seedEdges.every((relation) => relation.type === plan.outgoingEdgeType && relation.label === 'public_path_seed'));
+        for (const id of group.branchIds) {
+          assert.ok(docById.has(id));
+          const outgoing = out.addedRelations.filter((relation) => relation.src === id);
+          assert.equal(outgoing.length, plan.sinkMultiplicity);
+          assert.deepEqual(new Set(outgoing.map((relation) => relation.dst)), new Set(group.sinkIds));
+          assert.ok(outgoing.every((relation) => relation.type === plan.incomingEdgeType && relation.label === 'public_path_branch'));
+        }
+      }
+    }
+  });
+  test('operation class is topology-owned and metadata/recency selectors tie truth with every same-path decoy', () => {
+    const out = gen({ clusterCount: 8, escalationLevel: 4 });
+    const docById = new Map(out.addedDocs.map((doc) => [doc.id, doc]));
+    const metadata = (doc) => Object.fromEntries(Object.entries(doc)
+      .filter(([key]) => key !== 'id' && key !== 'text'));
+    assert.ok(new Set(out.clusters.map((cluster) => cluster.operationClass)).size >= 2);
+    for (const cluster of out.clusters) {
+      assert.equal(cluster.operationFamily, NEARCOL_OPERATION_FAMILY);
+      assert.ok(out.addedQueries
+        .filter((row) => row.bmuTask.motifGroupId === cluster.motifGroupId)
+        .every((row) => row.operationFamily === cluster.operationFamily && row.operationClass === cluster.operationClass));
+      for (const group of cluster.pathGroups) {
+        const signature = (id) => ({
+          metadata: metadata(docById.get(id)),
+          outgoing: out.addedRelations.filter((relation) => relation.src === id)
+            .map(({ src: _src, dst: _dst, ...observable }) => observable),
+        });
+        for (const decoyId of group.decoyIds) {
+          assert.deepEqual(signature(decoyId), signature(group.truthId),
+            'only Qwen-visible text/id differs between truth and same-path decoy');
+        }
+      }
     }
   });
   test('distractor pressure at B=3: forbidden+required neighborhood exceeds the budget on EVERY row', () => {
@@ -346,8 +380,7 @@ describe('no-answer-leak lint', () => {
     for (const q of out.addedQueries) {
       const t = q.bmuTask;
       const cluster = out.clusters.find((c) => c.motifGroupId === t.motifGroupId);
-      const exactId = out.addedRelations.find((r) => r.label === 'disambiguates' && cluster.docIds.includes(r.src))?.dst;
-      const exactDoc = docText.get(exactId);
+      const exactDoc = docText.get(cluster.truthDocId);
       const exactValue = / to (\S+) in the registry/.exec(exactDoc)?.[1];
       assert.ok(exactValue, 'exact-match value recoverable from E');
       assert.ok(!q.queryText.includes(exactValue), 'the cluster secret never appears in any question');

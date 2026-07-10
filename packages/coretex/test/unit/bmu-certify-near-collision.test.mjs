@@ -112,6 +112,8 @@ describe('structural oracle (G-B2, qrels-blind)', () => {
     docs: bank.publicDocs,
     docById: new Map(bank.publicDocs.map((d) => [d.id, d])),
     relations: bank.relations,
+    clusterByRowId: new Map(bank.clusters.flatMap((cluster) =>
+      cluster.rowIds.map((rowId) => [rowId, cluster]))),
   };
   test('solves every generated row; abstain rows via structural abstainSignal', () => {
     for (const row of bank.rows) {
@@ -122,9 +124,9 @@ describe('structural oracle (G-B2, qrels-blind)', () => {
       assert.equal(j.judgeSuccess, true, `oracle judge failed on ${row.id}: ${JSON.stringify(j)}`);
     }
   });
-  test('fails closed (null) when the disambiguates edge is amputated', () => {
+  test('fails closed (null) when the public-path seed is amputated', () => {
     const row = bank.rows[0];
-    const amputated = { ...ctx, relations: ctx.relations.filter((r) => r.label !== 'disambiguates') };
+    const amputated = { ...ctx, relations: ctx.relations.filter((r) => r.label !== 'public_path_seed') };
     assert.equal(nearCollisionOracleRank(row, amputated), null);
   });
 });
@@ -180,7 +182,7 @@ describe('certifyBank end-to-end', () => {
   test('a cluster whose oracle structure is broken is rejected, not dropped', () => {
     const bank = makeBank();
     const victimCluster = bank.clusters[0];
-    bank.relations = bank.relations.filter((r) => !(r.label === 'disambiguates' && victimCluster.docIds.includes(r.src)));
+    bank.relations = bank.relations.filter((r) => !(r.label === 'public_path_seed' && victimCluster.docIds.includes(r.src)));
     const report = certifyBank(bank, { realClusters: 2 });
     for (const rowId of victimCluster.rowIds) {
       const rej = report.rejected.find((r) => r.rowId === rowId);

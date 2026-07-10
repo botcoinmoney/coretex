@@ -9,7 +9,7 @@
  *   E   exact-match doc: subject S (canonical name C, primary role R) holds
  *       attribute A for scope σ with value V — the §5.4 "right entity/
  *       attribute variant" that must stay retrievable at small B;
- *   Na  alias-collision decoy (PRIMARY TRAP): a DIFFERENT entity with the
+ *   Na  alias-collision decoy: a DIFFERENT entity with the
  *       SAME canonical name C, claiming the same role in text, asserting a
  *       different value V1 for A/σ — phrased to ECHO the question skeleton
  *       and to claim currency ("remains the standing …"), so it out-ranks
@@ -24,9 +24,10 @@
  *   D   disambiguation record: documents which filing is standing and that
  *       the duplicate belongs to a distinct holder (the memory-structure
  *       payload a discriminating substrate can anchor).
- * Escalation adds decoys (+1/level, alternating alias-collision and
- * attribute-lookalike) — the near-collision analog of the ancestor's
- * escalation shadows (evolve-corpus.mjs:199-215).
+ * Escalation adds complete three-decoy incoming groups (alias/scope/
+ * attribute coverage first, then alternating alias/attribute controls) —
+ * the near-collision analog of the ancestor's escalation shadows
+ * (evolve-corpus.mjs:199-215), rounded so every public-path group is full.
  *
  * FIVE eval_hidden rows per cluster (k=5) across FOUR DISTINCT question
  * types; the §5.4 answerable/abstain mix is 4:1 per cluster (~80% answerable,
@@ -42,7 +43,8 @@
  * answerable sibling E IS a plausible decoy for the absent variant, and
  * u(t)=1 requires zero forbidden admitted AND the §5.5 policy-atom
  * MISSING_EVIDENCE signal to fire.
- * Forbidden (answerable rows) = [Na, Nt, Ns, ...extras] — the sibling decoy
+ * Forbidden (answerable rows) = a class-rotated primary axis followed by the
+ * remaining [Na, Nt, Ns, ...extras] sibling decoy set — the
  * set itself (§5.4). Label knowledge earns nothing: evicting near-collisions
  * at B=3 with required+forbidden > B demands the discrimination operation,
  * not anchoring (§2.2, §6.5 part 1).
@@ -101,6 +103,43 @@ export const NEARCOL_BUDGET_B = BMU_DEFAULT_BUDGET_B.near_collision_abstention; 
 export const NEARCOL_ROTATION_BASE_EPOCH = 137; // first BMU mint epoch (pre-flip inert stamping era)
 export const NEARCOL_LOGICAL_FAMILY_ANSWERABLE = 'entity_resolution_atom'; // §5.6 → bucketed near_collision
 export const NEARCOL_LOGICAL_FAMILY_ABSTAIN = 'abstention_missing';        // §5.6 → bucketed near_collision
+export const NEARCOL_OPERATION_FAMILY = 'outgoing_incoming_shared_sink';
+const NEARCOL_SEMANTIC_PROFILES = Object.freeze([
+  Object.freeze({ key: 'duplicate_holder', primaryKind: 'alias' }),
+  Object.freeze({ key: 'variant_scope', primaryKind: 'scope' }),
+  Object.freeze({ key: 'variant_attribute', primaryKind: 'attribute' }),
+]);
+const NEARCOL_OUTGOING_EDGES = Object.freeze(['causes', 'derived_from']);
+const NEARCOL_INCOMING_EDGES = Object.freeze(['supports', 'supersedes', 'coreference_of', 'co_occurs_with']);
+const NEARCOL_EDGE_PROGRAMS = Object.freeze(NEARCOL_OUTGOING_EDGES.flatMap((outgoingEdgeType) =>
+  NEARCOL_INCOMING_EDGES.map((incomingEdgeType) => Object.freeze({ outgoingEdgeType, incomingEdgeType }))));
+const NEARCOL_TOPOLOGY_PROFILES = Object.freeze([
+  Object.freeze({ key: 'single_sink', sinkMultiplicity: 1 }),
+  Object.freeze({ key: 'dual_sink', sinkMultiplicity: 2 }),
+]);
+/** 3 collision semantics × (2 outgoing × 4 incoming) × 2 sink topologies = 48. */
+export const NEARCOL_OPERATION_CLASSES = Object.freeze(
+  NEARCOL_EDGE_PROGRAMS.flatMap((edgeProgram) =>
+    NEARCOL_TOPOLOGY_PROFILES.flatMap((topology) =>
+      NEARCOL_SEMANTIC_PROFILES.map((semantic) => Object.freeze({
+        name: `shared_sink_${semantic.key}_${edgeProgram.outgoingEdgeType}_${edgeProgram.incomingEdgeType}_${topology.key}`,
+        semantic: semantic.key,
+        primaryKind: semantic.primaryKind,
+        outgoingEdgeType: edgeProgram.outgoingEdgeType,
+        incomingEdgeType: edgeProgram.incomingEdgeType,
+        topology: topology.key,
+        sinkMultiplicity: topology.sinkMultiplicity,
+      })))),
+);
+
+export function nearcolOperationClassForSlot(operationClassSlot) {
+  if (!Number.isInteger(operationClassSlot) || operationClassSlot < 0) {
+    throw new Error('nearcolOperationClassForSlot: non-negative integer slot required');
+  }
+  return NEARCOL_OPERATION_CLASSES[
+    Math.floor(operationClassSlot / 2) % NEARCOL_OPERATION_CLASSES.length
+  ];
+}
 
 /** §5.4 question types — four DISTINCT types, five rows (exact_variant_lookup ×2 variants). */
 export const NEARCOL_QUESTION_TYPES = Object.freeze([
@@ -141,10 +180,11 @@ const SCOPES_PROJECT = Object.freeze(['ingest-line', 'replay-line', 'export-line
 /**
  * Deterministic decoy count: near-collision floor of 3 (alias + attribute +
  * scope lookalike — the §5.4 "sibling decoy set" needs all three collision
- * axes), +1 per escalation level (alternating alias/attribute extras).
+ * axes), plus escalation rounded up to complete three-decoy incoming groups.
  */
 export function nearcolDecoyCount(escalationLevel) {
-  return 3 + Math.max(0, Math.min(4, escalationLevel | 0));
+  const raw = 3 + Math.max(0, Math.min(4, escalationLevel | 0));
+  return Math.ceil(raw / 3) * 3;
 }
 
 export function nearcolTemplateId(questionType, variant, attr, scope) {
@@ -165,11 +205,16 @@ export function nearcolTemplateId(questionType, variant, attr, scope) {
 export function buildNearCollisionClusterSpec({
   canonical, subjectId, attr, scope, absentScope, role, value,
   decoys, tsDate, exactId, disambigId, motifGroupId, subjectAliases = [],
+  operationClass = NEARCOL_OPERATION_CLASSES[0].name,
 }) {
   if (!Array.isArray(decoys) || decoys.length < 3) {
     throw new Error('buildNearCollisionClusterSpec: >=3 sibling decoys required (alias + attribute + scope collision axes)');
   }
-  if (decoys[0].kind !== 'alias') throw new Error('buildNearCollisionClusterSpec: decoys[0] must be the alias-collision primary trap');
+  const operationPlan = Object.values(NEARCOL_OPERATION_CLASSES).find((plan) => plan.name === operationClass);
+  if (!operationPlan) throw new Error(`buildNearCollisionClusterSpec: unknown operationClass '${operationClass}'`);
+  if (decoys[0].kind !== operationPlan.primaryKind) {
+    throw new Error(`buildNearCollisionClusterSpec: decoys[0] must be the ${operationPlan.primaryKind}-collision primary trap for ${operationClass}`);
+  }
   if (decoys.some((d) => d.value === value)) throw new Error('buildNearCollisionClusterSpec: decoy values must differ from the exact-match value');
   if (absentScope === scope || decoys.some((d) => d.kind === 'scope' && d.scope === absentScope)) {
     throw new Error('buildNearCollisionClusterSpec: absentScope must be covered by NO doc (neither the exact scope nor any scope-lookalike)');
@@ -186,37 +231,37 @@ export function buildNearCollisionClusterSpec({
         // Duplicate-name collision claiming the exact question vocabulary AND
         // currency — the trap must out-rank honestly (§2.2).
         return { id: d.id, kind: `nearcol_${slug(attr)}`, role: 'alias_collision_decoy',
-          text: `What ${attr} did ${canonical} the ${role} set for the ${scope}? The ${attr} ${canonical} set for the ${scope} was noted as ${d.value} in the duplicate ledger filings under the name ${canonical}, and ${d.value} remains the standing ${attr} for the ${scope}.`,
+          text: `What ${attr} did ${canonical} the ${role} set for the ${scope}? The overlapping ${attr} ${canonical} set for the ${scope} was noted as ${d.value} in the duplicate ledger filings under the name ${canonical}, and ${d.value} remains the standing ${attr} for the ${scope}.`,
           timestamp: tsDate, currentStaleFlag: true, subjectKey: d.entityId,
           collisionRole: 'alias_collision_decoy', collisionScope: scope, roleAliases: [d.role, role] };
       }
       if (d.kind === 'attribute') {
         return { id: d.id, kind: `nearcol_${slug(d.lookalikeAttr)}`, role: 'attribute_lookalike_decoy',
-          text: `${canonical}'s ${d.lookalikeAttr} for the ${scope} is ${d.value}, per the standing filing kept beside the ${attr} entries.`,
+          text: `What ${attr} did ${canonical} the ${role} set for the ${scope}? This overlapping filing does not record the ${attr}; it records the ${d.lookalikeAttr} as ${d.value} and is kept beside the standing entries.`,
           timestamp: tsDate, currentStaleFlag: true, subjectKey: subjectId,
           collisionRole: 'attribute_lookalike_decoy', collisionScope: scope, roleAliases: [role] };
       }
       if (d.kind === 'scope') {
         return { id: d.id, kind: `nearcol_${slug(attr)}`, role: 'scope_lookalike_decoy',
-          text: `What ${attr} did ${canonical} the ${role} set for the ${d.scope}? The ${attr} for the ${d.scope} was noted as ${d.value}, and ${d.value} remains the standing ${attr} for the ${d.scope}.`,
+          text: `What ${attr} did ${canonical} the ${role} set for the ${scope}? This overlapping filing explicitly does not cover the ${scope}; it covers the ${d.scope}, where ${d.value} remains the standing ${attr}.`,
           timestamp: tsDate, currentStaleFlag: true, subjectKey: subjectId,
           collisionRole: 'scope_lookalike_decoy', collisionScope: d.scope, roleAliases: [role] };
       }
       throw new Error(`buildNearCollisionClusterSpec: unknown decoy kind '${d.kind}' at index ${i}`);
     }),
     { id: disambigId, kind: `nearcol_${slug(attr)}_disambiguation`, role: 'disambiguation_record',
-      text: `Registry disambiguation ${tsDate}: two ${attr} filings under the name ${canonical} were reviewed — the ${role} filing covering the ${scope} is the standing one, while the duplicate filing belongs to a distinct ${primaryTrap.role} and the ${decoys.find((d) => d.kind === 'attribute')?.lookalikeAttr ?? 'lookalike'} filing tracks a separate measure.`,
+      text: operationPlan.primaryKind === 'alias'
+        ? `Registry review ${tsDate}: overlapping ${attr} filings under the name ${canonical} were compared — the ${role} filing covering the ${scope} is standing, while the duplicate holder and lookalike measure are separate records.`
+        : `Registry review ${tsDate}: overlapping ${attr} scope variants for ${canonical} were compared — the ${role} filing covering the ${scope} is standing, while the neighboring scope and lookalike measure are separate records.`,
       timestamp: tsDate, currentStaleFlag: true, subjectKey: subjectId,
       collisionRole: 'disambiguation_record', collisionScope: scope, roleAliases: [role] },
   ];
 
-  // D disambiguates E (derived_from) and flags the duplicate (co_occurs_with
-  // + label — the ancestor's out-of-vocabulary label encoding,
-  // evolve-corpus.mjs:446 convention).
-  const relations = [
-    { src: disambigId, dst: exactId, type: 'derived_from', label: 'disambiguates' },
-    { src: disambigId, dst: primaryTrap.id, type: 'co_occurs_with', label: 'disambiguates_duplicate' },
-  ];
+  // Public-path relations are overlaid by the epoch generator after it has
+  // opaque ids for every sink/control branch. Keeping this semantic
+  // constructor relation-free prevents legacy role labels from becoming a
+  // structural answer oracle.
+  const relations = [];
 
   const decoyIds = decoys.map((d) => d.id);
   const categoryFor = { alias: 'duplicate_name_alias_collision', attribute: 'attribute_lookalike_near_collision', scope: 'wrong_scope_near_collision' };
@@ -256,7 +301,9 @@ export function buildNearCollisionClusterSpec({
       // Vocabulary discipline: 'duplicate', 'filings', 'under', 'name' all
       // appear in the primary trap; 'among'/'covers' appear in NO required
       // doc (D says 'covering') — nothing here is gold-only.
-      queryText: `Among the duplicate ${attr} filings under the name ${canonical}, which entry covers the ${scope}?`,
+      queryText: operationPlan.primaryKind === 'alias'
+        ? `Among the overlapping ${attr} filings under the name ${canonical}, which entry covers the ${scope}?`
+        : `Among ${canonical}'s overlapping ${attr} filings, which entry covers the ${scope}?`,
       qrels: [{ docId: exactId, relevance: 1.0, role: 'direct' }, { docId: disambigId, relevance: 0.6, role: 'disambiguation_bridge' }, ...decoyQrels],
       hardNegatives,
       bmuTask: stampTask({ requiredEvidence: [exactId, disambigId], answerId: exactId, answerValue: value, abstain: false, questionType: 'duplicate_discrimination', variant: 0 }) },
@@ -267,7 +314,7 @@ export function buildNearCollisionClusterSpec({
       queryText: `Is ${primaryTrap.value} still the standing ${attr} for ${canonical}'s ${scope}?`,
       qrels: [{ docId: disambigId, relevance: 1.0, role: 'direct' }, { docId: exactId, relevance: 0.6, role: 'exact_support' }, ...decoyQrels],
       hardNegatives,
-      bmuTask: stampTask({ requiredEvidence: [disambigId, exactId], answerId: disambigId, answerValue: `no — ${primaryTrap.value} is the duplicate filing's value, not ${canonical}'s standing ${attr}`, abstain: false, questionType: 'lookalike_status_verification', variant: 0 }) },
+      bmuTask: stampTask({ requiredEvidence: [disambigId, exactId], answerId: disambigId, answerValue: `no — ${primaryTrap.value} belongs to a competing near-collision filing, not ${canonical}'s standing ${attr}`, abstain: false, questionType: 'lookalike_status_verification', variant: 0 }) },
     { questionType: 'missing_variant_abstain', variant: 0, abstain: true,
       queryText: `For ${canonical}'s ${absentScope}, which ${attr} is on record?`,
       qrels: [], // genuinely unanswerable — abstain is the correct behavior (§5.4/§5.5)
@@ -291,12 +338,14 @@ export function buildNearCollisionClusterSpec({
  *   clusterCount?: number, escalationLevel?: number,
  *   clusterSlotOffset?: number, ownerEntityId?: string,
  *   rotationBaseEpoch?: number,
+ *   operationClassSlotOffset?: number,
  * }} args
  */
 export function generateNearCollisionAbstentionClusters({
   epoch, seed, subjects, registry, splitOf,
   clusterCount = 2, escalationLevel = 0, clusterSlotOffset = 0,
   ownerEntityId = 'e_universe', rotationBaseEpoch = NEARCOL_ROTATION_BASE_EPOCH,
+  operationClassSlotOffset = Math.max(0, (epoch - rotationBaseEpoch) * 2),
 }) {
   if (!Number.isInteger(epoch) || epoch < 0) throw new Error('generateNearCollisionAbstentionClusters: non-negative integer epoch required');
   if (typeof seed !== 'string' || !seed) throw new Error('generateNearCollisionAbstentionClusters: seed required');
@@ -306,6 +355,7 @@ export function generateNearCollisionAbstentionClusters({
     throw new Error('generateNearCollisionAbstentionClusters: alias-aware m=1 registry required');
   }
   if (!Number.isInteger(clusterCount) || clusterCount < 1) throw new Error('generateNearCollisionAbstentionClusters: clusterCount >= 1');
+  if (!Number.isInteger(operationClassSlotOffset) || operationClassSlotOffset < 0) throw new Error('generateNearCollisionAbstentionClusters: operationClassSlotOffset must be a non-negative integer');
 
   // Same deterministic date derivation as the ancestor (evolve-corpus.mjs:376-377).
   const tsDate = new Date(new Date('2024-01-01').getTime() + (40 + epoch) * 30 * 86400000).toISOString().slice(0, 10);
@@ -342,6 +392,12 @@ export function generateNearCollisionAbstentionClusters({
     const canonical = subj.canonicalName;
     const isProject = /-svc-/.test(canonical);
     const rnd = prng(`${seed}:bmu-nearcol:${epoch}:${subj.id}:${clusterSlot}`);
+    // Class choice controls both the primary collision axis and every public
+    // branch edge. It is selected from cluster topology, never inferred from
+    // a qrel/role label after generation.
+    const operationPlan = nearcolOperationClassForSlot(operationClassSlotOffset + c);
+    const operationFamily = NEARCOL_OPERATION_FAMILY;
+    const operationClass = operationPlan.name;
 
     const { attr, bank } = bmuAttributeForClusterSlot(epoch, clusterSlot, {
       qualifiers: NEARCOL_QUALIFIERS, bases: NEARCOL_BASES, baseEpoch: rotationBaseEpoch,
@@ -355,14 +411,17 @@ export function generateNearCollisionAbstentionClusters({
     const role = ROLES_PRIMARY[Math.floor(rnd() * ROLES_PRIMARY.length)];
     const valueIdx = Math.floor(rnd() * bank.length);
     const value = bank[valueIdx];
-    // Decoy values walk the bank from the exact value (never colliding with
-    // it; bank size 8 ≥ 1 + max decoys 7).
-    const decoyValue = (k) => bank[(valueIdx + 1 + k) % bank.length];
+    // Decoy values walk the finite bank from the exact value, then use
+    // deterministic void tokens for the full escalation group (never
+    // colliding with the exact value or another decoy).
+    const decoyValue = (k) => k < bank.length - 1
+      ? bank[(valueIdx + 1 + k) % bank.length]
+      : `void-${slug(attr)}-${epoch}-${clusterSlot}-${k}`;
 
     const idBase = `e${epoch}_${subj.id}_bn${clusterSlot}`;
     const docId = (slot) => opaqueBmuDocId({ seed, epoch, motifGroupId, slot });
     const decoyCount = nearcolDecoyCount(escalationLevel);
-    const decoys = [];
+    let decoys = [];
     let aliasCount = 0;
     let attrCount = 0;
     const pushAlias = () => {
@@ -380,11 +439,22 @@ export function generateNearCollisionAbstentionClusters({
     pushAttr();
     decoys.push({ kind: 'scope', id: docId('scope_lookalike_decoy:0'), value: decoyValue(decoys.length), scope: scopeDecoyScope });
     for (let i = 3; i < decoyCount; i++) (i % 2 === 1 ? pushAlias : pushAttr)(); // extras alternate alias/attr
+    if (operationPlan.primaryKind !== 'alias') {
+      const primary = decoys.find((d) => d.kind === operationPlan.primaryKind);
+      const firstAlias = decoys.find((d) => d.kind === 'alias');
+      const firstAttr = decoys.find((d) => d.kind === 'attribute');
+      const firstScope = decoys.find((d) => d.kind === 'scope');
+      const orderedFirst = [primary, firstAlias, firstAttr, firstScope].filter((value, index, all) =>
+        value !== undefined && all.indexOf(value) === index);
+      const first = new Set(orderedFirst);
+      decoys = [...orderedFirst, ...decoys.filter((d) => !first.has(d))];
+    }
 
     const spec = buildNearCollisionClusterSpec({
       canonical, subjectId: subj.id, attr, scope, absentScope, role, value,
       decoys, tsDate, subjectAliases: subj.aliases,
       exactId: docId('exact_match'), disambigId: docId('disambiguation_record'), motifGroupId,
+      operationClass,
     });
 
     // Mint-time no-answer-leak lint (fail-closed). answerValue passed is the
@@ -412,23 +482,74 @@ export function generateNearCollisionAbstentionClusters({
       }
     }
 
+    // Overlay the actual BMU-v2 diamond. A lexical anchor reaches each sink
+    // through the first-step-only edge program; truth plus three decoys point
+    // to that sink through the second-step-only edge program. Thus the fixed
+    // outgoing→incoming law reaches every branch while truth/decoys remain
+    // indistinguishable by degree, direction, edge type, path, or metadata.
+    const exactId = spec.docs.find((doc) => doc.role === 'exact_match')?.id;
+    const disambigId = spec.docs.find((doc) => doc.role === 'disambiguation_record')?.id;
+    if (!exactId || !disambigId) throw new Error('near_collision_abstention: exact/disambiguation docs missing');
+    if (decoys.length % 3 !== 0) throw new Error('near_collision_abstention: decoy bank must partition into triples');
+    const pathDocs = [];
+    const pathGroups = [];
+    for (let i = 0; i < decoys.length; i += 3) {
+      const groupIndex = i / 3;
+      const trio = decoys.slice(i, i + 3);
+      const sinkIds = [docId(`public_path_sink:${groupIndex}:0`)];
+      for (let j = 1; j < operationPlan.sinkMultiplicity; j++) sinkIds.push(docId(`public_path_sink:${groupIndex}:${j}`));
+      const sinkId = sinkIds[0];
+      const truthId = groupIndex === 0 ? exactId : docId(`public_path_truth_control:${groupIndex}`);
+      const anchorId = groupIndex === 0 ? disambigId : docId(`public_path_anchor:${groupIndex}`);
+      pathDocs.push(
+        ...sinkIds.map((id, j) => ({ id, role: 'path_pivot', text: `${j === 0 ? 'Neutral' : 'Mirrored'} registry pivot ${epoch}-${clusterSlot}-${groupIndex}-${j} receives the same independently filed collision branches under one docket.` })),
+      );
+      if (groupIndex > 0) {
+        pathDocs.push(
+          { id: truthId, role: 'path_truth_control', text: `The reviewed control filing on pivot ${epoch}-${clusterSlot}-${groupIndex} says its own scope and holder match; neighboring lookalike filings do not.` },
+          { id: anchorId, role: 'path_anchor', text: `Registry comparison for ${canonical}'s ${attr} groups another trio of near-collision filings for textual review.` },
+        );
+      }
+      pathGroups.push({
+        sinkId, sinkIds, truthId, decoyIds: trio.map((d) => d.id), anchorId,
+        branchIds: [truthId, ...trio.map((d) => d.id)],
+      });
+    }
+    const pathRelations = [];
+    for (const group of pathGroups) {
+      if (group.branchIds.length !== 4) throw new Error('near_collision_abstention: every public-path group must have exactly four branches');
+      for (const sinkId of group.sinkIds) {
+        pathRelations.push({ src: group.anchorId, dst: sinkId, type: operationPlan.outgoingEdgeType, label: 'public_path_seed' });
+      }
+      for (const src of group.branchIds) {
+        for (const sinkId of group.sinkIds) pathRelations.push({ src, dst: sinkId, type: operationPlan.incomingEdgeType, label: 'public_path_branch' });
+      }
+    }
+    const allDocs = [...spec.docs, ...pathDocs];
+
     // Claim GLOBAL m=1 keys BEFORE emitting (fail-closed; throws on collision).
     const templateIds = spec.queryStubs.map((s) => s.bmuTask.templateId);
     registry.claimCluster({ subjectEntityId: subj.id, templateIds, entityHoldoutKeys, motifGroupId });
     usedSubjectsThisRun.add(subj.id);
     for (const key of entityHoldoutKeys) usedEntityHoldoutKeysThisRun.add(key);
 
-    for (const doc of spec.docs) {
-      addedDocs.push({
-        id: doc.id, lane: 'deep', kind: doc.kind,
-        entityIds: [ownerEntityId, doc.subjectKey],
-        roleAliases: doc.roleAliases,
-        text: doc.text, shape: 'near_collision_record', timestamp: doc.timestamp,
-        currentStaleFlag: doc.currentStaleFlag,
-        collisionScope: doc.collisionScope, liveUpdateEpoch: epoch,
-      });
+    for (const doc of allDocs) {
+      // The public envelope is deliberately uniform. Internal roles/scopes
+      // remain non-enumerable for generator audits but disappear from JSON,
+      // corpus serialization, and proposer-visible metadata.
+      const emitted = {
+        id: doc.id, lane: 'deep', kind: 'bmu_public_record',
+        entityIds: [ownerEntityId], text: doc.text,
+        shape: 'bmu_public_record', timestamp: tsDate,
+        currentStaleFlag: true, liveUpdateEpoch: epoch,
+      };
+      Object.defineProperty(emitted, 'role', { value: doc.role, enumerable: false });
+      if (doc.collisionScope !== undefined) {
+        Object.defineProperty(emitted, 'collisionScope', { value: doc.collisionScope, enumerable: false });
+      }
+      addedDocs.push(emitted);
     }
-    for (const rel of spec.relations) addedRelations.push(rel);
+    for (const rel of pathRelations) addedRelations.push(rel);
 
     const rowIds = [];
     for (let stubIndex = 0; stubIndex < spec.queryStubs.length; stubIndex++) {
@@ -446,7 +567,7 @@ export function generateNearCollisionAbstentionClusters({
           selector: `qtype_${stub.questionType}_v${stub.variant}` },
         questionType: stub.questionType,
         band: escalationLevel > 0 ? 'very_hard' : 'hard',
-        operationFamily: 'near_collision_cluster_typed', liveUpdateEpoch: epoch,
+        operationFamily, operationClass, liveUpdateEpoch: epoch,
         bmuTask: stub.bmuTask,
       });
       rowIds.push(qid);
@@ -455,8 +576,13 @@ export function generateNearCollisionAbstentionClusters({
     clusters.push({
       motifGroupId, family: NEARCOL_FAMILY, epoch, clusterSlot,
       subjectEntityId: subj.id, attribute: attr, scope, absentScope, role,
+      operationFamily, operationClass,
       escalationLevel, decoyCount,
-      docIds: spec.docs.map((d) => d.id), rowIds, templateIds,
+      truthDocId: exactId,
+      disambiguationDocId: disambigId,
+      decoyKinds: decoys.map((decoy) => ({ id: decoy.id, kind: decoy.kind })),
+      docIds: allDocs.map((d) => d.id), rowIds, templateIds,
+      pathGroups: pathGroups.map((group) => ({ ...group, sinkIds: [...group.sinkIds], decoyIds: [...group.decoyIds], branchIds: [...group.branchIds] })),
       entityHoldoutKeys: [...entityHoldoutKeys],
       questionTypes: [...new Set(spec.queryStubs.map((s) => s.questionType))],
       answerableRowCount: spec.queryStubs.filter((s) => !s.abstain).length,
@@ -478,6 +604,10 @@ export function generateNearCollisionAbstentionClusters({
       answerableRowCount: addedQueries.filter((q) => !q.bmuTask.abstain).length,
       abstainRowCount: addedQueries.filter((q) => q.bmuTask.abstain).length,
       escalationLevel, questionTypeHistogram,
+      operationClassHistogram: clusters.reduce((histo, cluster) => {
+        histo[cluster.operationClass] = (histo[cluster.operationClass] ?? 0) + 1;
+        return histo;
+      }, {}),
       mintedSubjectEntityIds: clusters.map((c) => c.subjectEntityId),
       mintedTemplateIds: clusters.flatMap((c) => c.templateIds),
     },

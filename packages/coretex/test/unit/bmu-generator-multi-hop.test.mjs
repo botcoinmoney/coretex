@@ -22,6 +22,8 @@ import {
   MULTI_HOP_ROW_SLOTS,
   BMU_MULTI_HOP_BUDGET_B,
   BMU_MULTI_HOP_CLUSTER_K,
+  BMU_MULTI_HOP_OPERATION_FAMILY,
+  BMU_MULTI_HOP_OPERATION_CLASSES,
   renderTemplate,
 } from '../../../../scripts/lib/bmu-generators/multi_hop_relation.mjs';
 import {
@@ -226,9 +228,61 @@ test('trap law: off-path decoy out-ranks honestly; near-bridge decoy breaks the 
     for (const shadow of cluster.docs.filter((d) => d.role === 'offpath_shadow')) {
       for (const row of cluster.rows) assert.ok(row.bmuTask.forbiddenEvidence.includes(shadow.id));
     }
-    // noise-edge hazard made explicit: decoys hang off co_occurs_with edges
-    assert.ok(cluster.relations.some((r) => r.src === offpath.id && r.type === 'co_occurs_with'));
-    assert.ok(cluster.relations.some((r) => r.src === nearBridge.id && r.type === 'co_occurs_with'));
+    // Both traps occupy the same outgoing→incoming group as truth.
+    const group = cluster.pathGroups.find((candidate) => candidate.decoyIds.includes(offpath.id));
+    assert.ok(group && group.decoyIds.includes(nearBridge.id));
+    for (const id of [group.truthId, ...group.decoyIds]) {
+      assert.ok(cluster.relations.some((r) => r.src === id && r.dst === group.sinkId));
+    }
+  }
+});
+
+test('v2 operation classes are deterministic topology choices, with at least two truthful semantics', () => {
+  const { clusters, telemetry } = generateMultiHopClusters(baseOpts({ clusterCount: 8 }));
+  const classes = new Set(clusters.map((cluster) => cluster.operationClass));
+  assert.ok(classes.size >= 2);
+  for (const cluster of clusters) {
+    assert.equal(cluster.operationFamily, BMU_MULTI_HOP_OPERATION_FAMILY);
+    assert.ok(cluster.rows.every((row) => row.operationFamily === cluster.operationFamily));
+    assert.ok(cluster.rows.every((row) => row.operationClass === cluster.operationClass));
+    const plan = BMU_MULTI_HOP_OPERATION_CLASSES.find((candidate) => candidate.name === cluster.operationClass);
+    assert.ok(plan);
+    assert.ok(cluster.relations.length > 0);
+    assert.ok(cluster.relations.filter((relation) => relation.label === 'public_path_seed')
+      .every((relation) => relation.type === plan.outgoingEdgeType));
+    assert.ok(cluster.relations.filter((relation) => relation.label === 'public_path_branch')
+      .every((relation) => relation.type === plan.incomingEdgeType));
+  }
+  assert.equal(Object.keys(telemetry.operationClassHistogram).length, classes.size);
+});
+
+test('v2 balanced branches defeat structural, recency, and metadata-only selectors', () => {
+  const { clusters } = generateMultiHopClusters(baseOpts({ clusterCount: 6 }));
+  const metadata = (doc) => Object.fromEntries(Object.entries(doc)
+    .filter(([key]) => key !== 'id' && key !== 'text'));
+  for (const cluster of clusters) {
+    const docById = new Map(cluster.docs.map((doc) => [doc.id, doc]));
+    for (const group of cluster.pathGroups) {
+      const branches = [group.truthId, ...group.decoyIds];
+      assert.equal(branches.length, 4, 'branchLimit=4 group is full and uniform');
+      const seedEdges = cluster.relations.filter((relation) => relation.src === group.anchorId);
+      assert.deepEqual(new Set(seedEdges.map((relation) => relation.dst)), new Set(group.sinkIds));
+      const signatures = branches.map((id) => {
+        const outgoing = cluster.relations.filter((relation) => relation.src === id);
+        const incoming = cluster.relations.filter((relation) => relation.dst === id);
+        assert.equal(outgoing.length, group.sinkIds.length);
+        assert.deepEqual(new Set(outgoing.map((relation) => relation.dst)), new Set(group.sinkIds));
+        return {
+          metadata: metadata(docById.get(id)),
+          path: { outDegree: outgoing.length, inDegree: incoming.length, types: [...new Set(outgoing.map((relation) => relation.type))], labels: [...new Set(outgoing.map((relation) => relation.label))] },
+        };
+      });
+      for (const decoyId of group.decoyIds) {
+        const truth = signatures[branches.indexOf(group.truthId)];
+        const decoy = signatures[branches.indexOf(decoyId)];
+        assert.deepEqual(decoy, truth, 'truth/decoy differ only in id and text consumed by Qwen');
+      }
+    }
   }
 });
 

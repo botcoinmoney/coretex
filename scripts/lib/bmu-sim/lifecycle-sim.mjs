@@ -140,6 +140,7 @@ export function buildWorld({ dist, simSeed = 'bmu-p5-sim-v1', bankSize = 240 }) 
     docsById: new Map(),        // public doc id -> doc (text universe for legs 3/4)
     clusters: new Map(),        // motifGroupId -> bookkeeping record
     familyOfId: new Map(),      // production row id -> logicalFamily (frontier interleave key)
+    operationClassCursors: { multi_hop_relation: 0, near_collision_abstention: 0 },
     mintLog: [],
   };
 }
@@ -246,11 +247,17 @@ export function mintEvolve(world, epoch, clusterCounts, { escalationLevel = 0 } 
       universe: world.universes.temporal, clusterCount: clusterCounts.temporal,
       splitOf: world.splitOf, activeIndex: world.activeIndex,
     }), (out) => out.clusters.map((c) => ({ cluster: c, rows: c.rows, docs: c.docs, mechanism: 'index' }))],
-    ['multi_hop_relation', () => generateMultiHopClusters({
-      epoch, seed: `${world.simSeed}:multihop`, subjects: world.banks.multi_hop_relation,
-      universe: world.universes.multi_hop_relation, clusterCount: clusterCounts.multi_hop_relation,
-      splitOf: world.splitOf, activeIndex: world.activeIndex,
-    }), (out) => out.clusters.map((c) => ({ cluster: c, rows: c.rows, docs: c.docs, mechanism: 'index' }))],
+    ['multi_hop_relation', () => {
+      const count = clusterCounts.multi_hop_relation;
+      const out = generateMultiHopClusters({
+        epoch, seed: `${world.simSeed}:multihop`, subjects: world.banks.multi_hop_relation,
+        universe: world.universes.multi_hop_relation, clusterCount: count,
+        splitOf: world.splitOf, activeIndex: world.activeIndex,
+        operationClassSlotOffset: world.operationClassCursors.multi_hop_relation,
+      });
+      world.operationClassCursors.multi_hop_relation += count;
+      return out;
+    }, (out) => out.clusters.map((c) => ({ cluster: c, rows: c.rows, docs: c.docs, mechanism: 'index' }))],
     ['conflict_lifecycle', () => generateConflictLifecycleClusters({
       epoch, seed: `${world.simSeed}:conflict`, subjects: world.banks.conflict_lifecycle,
       registry: world.registry, splitOf: world.splitOf, clusterCount: clusterCounts.conflict_lifecycle,
@@ -261,11 +268,17 @@ export function mintEvolve(world, epoch, clusterCounts, { escalationLevel = 0 } 
       docs: out.addedDocs.filter((d) => c.docIds.includes(d.id)),
       mechanism: 'registry',
     }))],
-    ['near_collision_abstention', () => generateNearCollisionAbstentionClusters({
-      epoch, seed: `${world.simSeed}:nearcol`, subjects: world.banks.near_collision_abstention,
-      registry: world.registry, splitOf: world.splitOf, clusterCount: clusterCounts.near_collision_abstention,
-      escalationLevel, ownerEntityId: world.ownerEntityId,
-    }), (out) => out.clusters.map((c) => ({
+    ['near_collision_abstention', () => {
+      const count = clusterCounts.near_collision_abstention;
+      const out = generateNearCollisionAbstentionClusters({
+        epoch, seed: `${world.simSeed}:nearcol`, subjects: world.banks.near_collision_abstention,
+        registry: world.registry, splitOf: world.splitOf, clusterCount: count,
+        escalationLevel, ownerEntityId: world.ownerEntityId,
+        operationClassSlotOffset: world.operationClassCursors.near_collision_abstention,
+      });
+      world.operationClassCursors.near_collision_abstention += count;
+      return out;
+    }, (out) => out.clusters.map((c) => ({
       cluster: c,
       rows: out.addedQueries.filter((r) => r.bmuTask.motifGroupId === c.motifGroupId),
       docs: out.addedDocs.filter((d) => c.docIds.includes(d.id)),

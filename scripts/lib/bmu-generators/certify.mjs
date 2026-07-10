@@ -58,7 +58,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { unit, prng, lintNoAnswerLeak, lintTokens, slug } from './common.mjs';
+import { unit, prng, lintNoAnswerLeak, lintTokens } from './common.mjs';
 
 // ─── Production pins (mirrors packages/coretex/src/bundle/index.ts; the
 //     real-lane driver re-asserts them; single-sourcing is a P7 merge item) ──
@@ -232,15 +232,11 @@ function conflictLeakSensitiveValue(row, { rowsByMotif }) {
 
 /**
  * near_collision_abstention oracle: the real memory operation per spec §5.4 —
- * DISCRIMINATION via the disambiguation structure. Structure-only inputs:
- * the `disambiguates` (derived_from D→E) relation names the standing filing,
- * doc metadata (`kind` = nearcol_<attr-slug>, `collisionScope`, `entityIds`)
- * delimits the collision neighborhood, and the queried (attribute, scope)
- * come from the row's PUBLIC intent. Never reads qrels/bmuTask.
- *
- * Neighborhood N = same-subject docs (E, D, attribute/scope lookalikes) ∪
- * same-`kind` docs (duplicate-name alias partners share E's window-unique
- * attribute kind but carry synthetic per-cluster subject ids).
+ * DISCRIMINATION over the bounded v2 public-path bundle. The cluster manifest
+ * supplies only the bounded document ids. Public text identifies the registry
+ * review anchor and standing filing; the relation graph must then prove the
+ * disjoint diamond D --outgoing--> pivot <--incoming-- E. The queried scope
+ * comes from PUBLIC intent. Never reads qrels/bmuTask or hidden doc metadata.
  *
  * ANSWERABLE (standing filing E covers the queried scope): rank [E, D] first
  * (covers required sets [E], [E,D], [D,E] at B=3), neutral docs next, the
@@ -249,45 +245,44 @@ function conflictLeakSensitiveValue(row, { rowsByMotif }) {
  * decision fires structurally — rank neutral docs first, D (not forbidden)
  * next, the rest of N (forbidden = E + decoys) LAST, abstainSignal: true.
  */
-export function nearCollisionOracleRank(row, { docs, docById, relations }) {
-  const subj = row.subjectEntityId;
-  const attr = row.publicIntent?.attribute;
+export function nearCollisionOracleRank(row, { docs, docById, relations, clusterByRowId }) {
   const scopeQ = row.publicIntent?.collisionScope;
-  if (!attr || !scopeQ) return null;
-  const attrKind = `nearcol_${slug(attr)}`;
-  const isSubject = (d) => Array.isArray(d.entityIds) && d.entityIds.includes(subj);
+  const cluster = clusterByRowId?.get(row.id);
+  if (!scopeQ || !cluster) return null;
+  const clusterIds = new Set(cluster.docIds);
+  const clusterDocs = cluster.docIds.map((id) => docById.get(id)).filter(Boolean);
+  const exactDoc = clusterDocs.find((doc) => / in the registry workspace filing\.$/i.test(doc.text));
+  const disambigDoc = clusterDocs.find((doc) => /^Registry review /i.test(doc.text));
+  if (!exactDoc || !disambigDoc) return null;
 
-  // The disambiguation structure: D --derived_from/'disambiguates'--> E.
-  let disambig = null; let exact = null;
-  for (const rel of relations) {
-    if (rel.label !== 'disambiguates') continue;
-    const src = docById.get(rel.src); const dst = docById.get(rel.dst);
-    if (!src || !dst || !isSubject(src) || !isSubject(dst)) continue;
-    if (dst.kind !== attrKind) continue;
-    disambig = src.id; exact = dst.id; break;
-  }
-  if (!disambig || !exact) return null;
+  const outgoingTypes = new Set(['causes', 'derived_from']);
+  const incomingTypes = new Set(['supports', 'supersedes', 'coreference_of', 'co_occurs_with']);
+  const anchorSinks = new Set(relations
+    .filter((rel) => rel.src === disambigDoc.id && rel.label === 'public_path_seed' && outgoingTypes.has(rel.type))
+    .map((rel) => rel.dst));
+  const truthSinks = new Set(relations
+    .filter((rel) => rel.src === exactDoc.id && rel.label === 'public_path_branch' && incomingTypes.has(rel.type))
+    .map((rel) => rel.dst));
+  if (anchorSinks.size === 0 || ![...anchorSinks].some((sink) => truthSinks.has(sink))) return null;
 
-  const inNeighborhood = (d) => isSubject(d) || d.kind === attrKind;
   const neutral = []; const excluded = [];
   for (const d of docs) {
-    if (d.id === exact || d.id === disambig) continue;
-    if (inNeighborhood(d)) excluded.push(d.id);
+    if (d.id === exactDoc.id || d.id === disambigDoc.id) continue;
+    if (clusterIds.has(d.id)) excluded.push(d.id);
     else neutral.push(d.id);
   }
   neutral.sort(); excluded.sort();
 
-  const exactDoc = docById.get(exact);
-  if (exactDoc.collisionScope === scopeQ) {
+  const exactCoversScope = exactDoc.text.toLowerCase().includes(`for the ${String(scopeQ).toLowerCase()} to `);
+  if (exactCoversScope) {
     // Standing filing covers the queried variant — answerable; no abstain.
-    return { ranked: [exact, disambig, ...neutral, ...excluded].map((docId, i) => ({ docId, score: -i })), abstainSignal: false };
+    return { ranked: [exactDoc.id, disambigDoc.id, ...neutral, ...excluded].map((docId, i) => ({ docId, score: -i })), abstainSignal: false };
   }
-  // Queried variant covered by NO neighborhood doc? (scope lookalikes cover
-  // their own decoy scope; if one covered scopeQ the row would be answerable
-  // by a doc outside the disambiguated pair — no structural solution.)
-  const covering = docs.filter((d) => inNeighborhood(d) && d.collisionScope === scopeQ && d.id !== disambig);
-  if (covering.length > 0) return null;
-  return { ranked: [...neutral, disambig, exact, ...excluded].map((docId, i) => ({ docId, score: -i })), abstainSignal: true };
+  // An uncovered scope is a structural missing-evidence decision. Reject an
+  // ambiguous bank if some other standing-filing text claims that exact scope.
+  const coverageNeedle = `for the ${String(scopeQ).toLowerCase()} to `;
+  if (clusterDocs.some((doc) => doc.id !== exactDoc.id && doc.text.toLowerCase().includes(coverageNeedle))) return null;
+  return { ranked: [...neutral, disambigDoc.id, exactDoc.id, ...excluded].map((docId, i) => ({ docId, score: -i })), abstainSignal: true };
 }
 
 /**
@@ -296,20 +291,7 @@ export function nearCollisionOracleRank(row, { docs, docById, relations }) {
  * answerable sibling E (§5.4: E is itself the plausible decoy for the
  * absent variant).
  */
-function nearCollisionPrimaryTrapDocId(row, { docById, relations }) {
-  const forbidden = new Set(row.bmuTask.forbiddenEvidence);
-  const disambiguates = relations.find((rel) => rel.label === 'disambiguates');
-  const exact = disambiguates ? docById.get(disambiguates.dst) : null;
-  if (row.bmuTask.abstain === true && exact && forbidden.has(exact.id)) return exact.id;
-  if (exact) {
-    for (const id of row.bmuTask.forbiddenEvidence) {
-      const doc = docById.get(id);
-      const isSameKind = doc?.kind === exact.kind;
-      const isDifferentSubject = Array.isArray(doc?.entityIds)
-        && !doc.entityIds.includes(row.subjectEntityId);
-      if (isSameKind && isDifferentSubject) return id;
-    }
-  }
+function nearCollisionPrimaryTrapDocId(row) {
   return row.bmuTask.forbiddenEvidence[0];
 }
 
@@ -436,7 +418,9 @@ export function certifyBank(bank, { realLaneScores = null, realClusters = 2, pin
     list.push(row);
     rowsByMotif.set(row.bmuTask?.motifGroupId, list);
   }
-  const ctx = { docs, docById, relations, rowsByMotif };
+  const clusterByRowId = new Map(bank.clusters.flatMap((cluster) =>
+    cluster.rowIds.map((rowId) => [rowId, cluster])));
+  const ctx = { docs, docById, relations, rowsByMotif, clusterByRowId };
 
   // Fail-closed input recheck.
   const bankErrors = [];

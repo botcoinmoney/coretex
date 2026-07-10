@@ -53,12 +53,15 @@ const allRows = [];
 const allDocs = [];
 const allRelations = [];
 const allClusters = [];
+let operationClassSlotOffset = 0;
 for (const spec of PARAMS.epochs) {
   const out = generateNearCollisionAbstentionClusters({
     epoch: spec.epoch, seed: PARAMS.seed, subjects, registry, splitOf,
     clusterCount: spec.clusterCount, escalationLevel: spec.escalationLevel,
     ownerEntityId: PARAMS.ownerEntityId,
+    operationClassSlotOffset,
   });
+  operationClassSlotOffset += spec.clusterCount;
   perEpoch.push({ epoch: spec.epoch, telemetry: out.telemetry });
   allRows.push(...out.addedQueries);
   allDocs.push(...out.addedDocs);

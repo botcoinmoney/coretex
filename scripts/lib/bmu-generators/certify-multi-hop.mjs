@@ -14,18 +14,12 @@
  * traversal evidence must pay, answer-anchoring alone must not), §6.5
  * (forbidden-trap law), §13 / G-B1..G-B3 (gates), §2.2 (judge).
  *
- * ORACLE (G-B2 — hidden STRUCTURE only, never bmuTask labels / qrels):
- *   The chain is reconstructed from the cluster's `supports` relation edges
- *   alone — hop docs and the answer doc form the unique supports-path
- *   (head = a supports-src that is never a supports-dst); every decoy hangs
- *   off `co_occurs_with` edges (§6.5 noise-edge hazard) and is therefore
- *   structurally excluded without reading forbiddenEvidence. Per question
- *   type the answer doc is the chain TERMINAL (endpoint/rejection/routing)
- *   or the chain HEAD (provenance); evidence = bridge + answer (head +
- *   terminal) so B=4 top-B is not over-subscribed on 3-hop rows while
- *   intermediate hops stay graded support in qrels. Oracle success
- *   therefore doubles as a mint-consistency check between generator
- *   labels and minted structure.
+ * ORACLE (G-B2 — qrels/task-label blind): v2 intentionally makes truth and
+ * decoys structurally identical. The oracle first proves that a lexical
+ * anchor and a textual truth branch share a public outgoing→incoming sink,
+ * then distinguishes the truth from rejected/provisional siblings by the
+ * branch assertion itself. This is a semantic-text oracle, not the removed
+ * v1 edge/role selector.
  *
  * LEAK SCREEN (NoLiMa anti-lexical-shortcut, full-scale independent re-run
  * over the emitted bank bytes — the mint-time lint in multi_hop_relation.mjs
@@ -53,31 +47,33 @@ export const MULTI_HOP_FAMILY = 'multi_hop_relation';
 
 // ── Oracle structural solver (G-B2) ─────────────────────────────────────────
 export function multiHopOracleLane(row, cluster, docs, budget) {
-  const supports = (cluster.relations ?? []).filter((r) => r.type === 'supports');
-  const dsts = new Set(supports.map((r) => r.dst));
-  const heads = [...new Set(supports.map((r) => r.src))].filter((s) => !dsts.has(s));
-  if (heads.length !== 1) return { evidence: [], answerId: null, ranked: [] };
-  const next = new Map(supports.map((r) => [r.src, r.dst]));
-  const chain = [heads[0]];
-  while (next.has(chain[chain.length - 1]) && chain.length <= cluster.docs.length) {
-    chain.push(next.get(chain[chain.length - 1]));
+  const clusterDocs = cluster.docs ?? [];
+  const anchor = clusterDocs.find((doc) => /(?:delegation review|filed review memo|review memo)/i.test(doc.text));
+  const truth = clusterDocs.find((doc) => /confirmed and in force/i.test(doc.text));
+  if (!anchor || !truth) return { evidence: [], answerId: null, ranked: [] };
+  const outgoing = (id, label) => new Set((cluster.relations ?? [])
+    .filter((relation) => relation.src === id && relation.label === label)
+    .map((relation) => relation.dst));
+  const anchorSinks = outgoing(anchor.id, 'public_path_seed');
+  const truthSinks = outgoing(truth.id, 'public_path_branch');
+  if (anchorSinks.size === 0 || ![...anchorSinks].some((sink) => truthSinks.has(sink))) {
+    return { evidence: [], answerId: null, ranked: [] };
   }
-  if (chain.length > cluster.docs.length) return { evidence: [], answerId: null, ranked: [] }; // cycle guard
   let answerId;
   switch (row.questionType) {
     case 'chain_endpoint_value':
     case 'offpath_rejection':
     case 'downstream_routing':
-      answerId = chain[chain.length - 1]; break; // duty-register terminal
+      answerId = truth.id; break;
     case 'chain_provenance':
-      answerId = chain[0]; break;                // filed arrangement = chain head
+      answerId = anchor.id; break;
     default:
       return { evidence: [], answerId: null, ranked: [] };
   }
   // §5.3 utility required = chain head + terminal (bridge + answer). Intermediate
   // hop-2 remains on the supports path for structure checks but is not required
   // evidence (matches generator requiredEvidence / B=4 budget arithmetic).
-  const evidence = chain.length >= 2 ? [chain[0], chain[chain.length - 1]] : [...chain];
+  const evidence = [anchor.id, truth.id];
   const clusterIds = new Set(cluster.docs.map((d) => d.id));
   const filler = docs.map((d) => d.id).filter((id) => !clusterIds.has(id)).sort();
   const ranked = [...evidence, ...filler.slice(0, Math.max(0, budget - evidence.length))];
