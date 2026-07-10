@@ -13,6 +13,14 @@ import { createHash } from 'node:crypto';
 import { judgeTopB, randomKRank, CERT_PINS } from './certify.mjs';
 import { subjectScopedRecencyLane, validityCurrencyLane } from './certify-lanes.mjs';
 import { opaqueBmuDocId } from './common.mjs';
+import {
+  BMU_V2_OPERATION_BRANCH_LIMIT,
+  BMU_V2_OPERATION_CLASS_BASIS,
+  BMU_V2_OPERATION_EDGE_TYPES,
+  bmuExecutableOperationClass,
+  bmuOperationQueryKey,
+  encodeBmuPublicPathProgramWords,
+} from '../../../packages/coretex/dist/index.js';
 
 const normText = (value) => String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
 const compareId = (a, b) => a < b ? -1 : a > b ? 1 : 0;
@@ -20,7 +28,7 @@ const finite = (value) => typeof value === 'number' && Number.isFinite(value);
 
 export const DEFAULT_V2_BANK_ADAPTERS = Object.freeze({
   temporal: Object.freeze({
-    conservativeOperationCapacity: 24,
+    conservativeOperationCapacity: 32,
     maxActiveEpochGap: 32,
     publicAttackers: Object.freeze({
       subjectScopedRecency: (row, docs) => subjectScopedRecencyLane(row, docs),
@@ -28,6 +36,16 @@ export const DEFAULT_V2_BANK_ADAPTERS = Object.freeze({
     }),
   }),
   conflict_lifecycle: Object.freeze({
+    conservativeOperationCapacity: 32,
+    maxActiveEpochGap: 32,
+    publicAttackers: Object.freeze({}),
+  }),
+  multi_hop_relation: Object.freeze({
+    conservativeOperationCapacity: 32,
+    maxActiveEpochGap: 32,
+    publicAttackers: Object.freeze({}),
+  }),
+  near_collision_abstention: Object.freeze({
     conservativeOperationCapacity: 32,
     maxActiveEpochGap: 32,
     publicAttackers: Object.freeze({}),
@@ -239,25 +257,177 @@ function disjointRepeat(members, maxActiveEpochGap) {
   return null;
 }
 
+const OPERATION_DIRECTIONS = new Set(['outgoing', 'incoming']);
+const OPERATION_EDGES = new Set(BMU_V2_OPERATION_EDGE_TYPES);
+
+function executableProgramIdentity(carrier, ref, errors) {
+  const cue = carrier?.bmuOperationCue;
+  const program = carrier?.bmuOperationProgram;
+  const canonicalCue = typeof cue === 'string'
+    ? cue.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ')
+    : '';
+  if (typeof cue !== 'string' || cue.length < 4 || cue.length > 160
+      || cue !== canonicalCue || !/^[a-z0-9][a-z0-9 _-]*$/.test(cue)) {
+    errors.push(`${ref}: missing or non-canonical bmuOperationCue`);
+    return null;
+  }
+  if (!program || program.branchLimit !== BMU_V2_OPERATION_BRANCH_LIMIT
+      || !Array.isArray(program.steps) || program.steps.length !== 2
+      || program.steps[0]?.direction !== 'outgoing' || program.steps[1]?.direction !== 'incoming'
+      || program.steps.some((step) => !step || !OPERATION_DIRECTIONS.has(step.direction)
+        || !OPERATION_EDGES.has(step.edgeType))) {
+    errors.push(`${ref}: bmuOperationProgram must be the canonical branchLimit=4 outgoing→incoming two-step program`);
+    return null;
+  }
+  try {
+    const operationClass = bmuExecutableOperationClass(cue, program);
+    const queryKey = bmuOperationQueryKey(cue);
+    const encodedWords = encodeBmuPublicPathProgramWords({
+      programIndex: 0,
+      queryKey,
+      branchLimit: program.branchLimit,
+      validFromEpoch: 0n,
+      expiryEpoch: 0n,
+      steps: program.steps,
+    });
+    return {
+      operationCue: cue,
+      operationProgram: {
+        branchLimit: program.branchLimit,
+        steps: program.steps.map((step) => ({ direction: step.direction, edgeType: step.edgeType })),
+      },
+      operationClass,
+      queryKey: `0x${queryKey.toString(16).padStart(14, '0')}`,
+      encodedProgramIdentity: encodedWords
+        .map((word) => word.toString(16).padStart(64, '0')).join(''),
+    };
+  } catch (error) {
+    errors.push(`${ref}: executable identity recomputation failed: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+function requireOperationStamps(carrier, identity, ref, errors) {
+  if (carrier?.operationLaw !== 'public_path_program_v1') {
+    errors.push(`${ref}: operationLaw must equal public_path_program_v1`);
+  }
+  if (carrier?.operationClassBasis !== BMU_V2_OPERATION_CLASS_BASIS) {
+    errors.push(`${ref}: operationClassBasis must equal ${BMU_V2_OPERATION_CLASS_BASIS}`);
+  }
+  if (carrier?.operationClass !== identity.operationClass) {
+    errors.push(`${ref}: forged/drifted operationClass '${String(carrier?.operationClass)}' != recomputed '${identity.operationClass}'`);
+  }
+}
+
+function collisionAudit(classes) {
+  const dimensions = {
+    operationCue: new Map(),
+    queryKey: new Map(),
+    encodedProgramIdentity: new Map(),
+  };
+  for (const entry of classes) {
+    for (const [dimension, index] of Object.entries(dimensions)) {
+      const key = entry[dimension];
+      const refs = index.get(key) ?? [];
+      refs.push(entry.operationClass);
+      index.set(key, refs);
+    }
+  }
+  const collisions = Object.fromEntries(Object.entries(dimensions).map(([dimension, index]) => [
+    dimension,
+    [...index.entries()].filter(([, refs]) => refs.length > 1).map(([value, operationClasses]) => ({ value, operationClasses })),
+  ]));
+  return { pass: Object.values(collisions).every((entries) => entries.length === 0), collisions };
+}
+
+/**
+ * G-B17 executable-class census. Generator labels are evidence to validate,
+ * never the grouping authority: identity is recomputed from the public cue,
+ * canonical program, uint56 query key, and exact four encoded state words.
+ */
 export function operationClassCensus(lane, capacity, maxActiveEpochGap = 32) {
+  const errors = [];
   const byClass = new Map();
   for (const cluster of lane.clusters) {
-    const operationClass = cluster.operationClass ?? cluster.operationFamily;
-    const members = byClass.get(operationClass) ?? [];
-    members.push(cluster);
-    byClass.set(operationClass, members);
+    const ref = `${lane.family ?? 'unknown'}:${cluster.motifGroupId ?? '<missing-motif>'}`;
+    const identity = executableProgramIdentity(cluster, ref, errors);
+    if (!identity) continue;
+    requireOperationStamps(cluster, identity, ref, errors);
+    const rows = cluster.rows ?? [];
+    if (!Array.isArray(rows) || rows.length === 0) errors.push(`${ref}: executable cluster has no rows`);
+    for (const row of rows) {
+      const rowRef = `${ref}:${row.id ?? '<missing-row-id>'}`;
+      const rowIdentity = executableProgramIdentity(row, rowRef, errors);
+      if (!rowIdentity) continue;
+      requireOperationStamps(row, rowIdentity, rowRef, errors);
+      if (rowIdentity.operationClass !== identity.operationClass
+          || rowIdentity.queryKey !== identity.queryKey
+          || rowIdentity.encodedProgramIdentity !== identity.encodedProgramIdentity) {
+        errors.push(`${rowRef}: row executable identity disagrees with cluster`);
+      }
+      const task = row.bmuTask;
+      if (!task) {
+        errors.push(`${rowRef}: missing bmuTask executable stamp`);
+      } else {
+        requireOperationStamps(task, rowIdentity, `${rowRef}:bmuTask`, errors);
+        if (task.motifGroupId !== cluster.motifGroupId) {
+          errors.push(`${rowRef}: bmuTask.motifGroupId '${String(task.motifGroupId)}' != cluster '${String(cluster.motifGroupId)}'`);
+        }
+      }
+    }
+    const members = byClass.get(identity.operationClass) ?? { identity, clusters: [] };
+    members.clusters.push(cluster);
+    byClass.set(identity.operationClass, members);
   }
-  const classes = [...byClass].map(([operationClass, members]) => ({
-    operationClass,
-    clusters: members.length,
-    disjointRepeat: disjointRepeat(members, maxActiveEpochGap),
+  const classes = [...byClass.values()].map(({ identity, clusters }) => ({
+    ...identity,
+    clusters: clusters.length,
+    disjointRepeat: disjointRepeat(clusters, maxActiveEpochGap),
   }));
+  const collisionGate = collisionAudit(classes);
+  const identityPass = errors.length === 0 && collisionGate.pass;
+  const capacityPass = byClass.size > capacity;
+  const repeatPass = classes.length > 0
+    && classes.every((entry) => entry.clusters >= 2 && entry.disjointRepeat !== null);
   return {
     capacity,
     distinctClasses: byClass.size,
     margin: byClass.size - capacity,
     classes,
-    pass: byClass.size > capacity && classes.every((entry) => entry.clusters >= 2 && entry.disjointRepeat !== null),
+    identityPass,
+    capacityPass,
+    repeatPass,
+    errors,
+    ...collisionGate,
+    pass: identityPass && capacityPass && repeatPass,
+  };
+}
+
+export function globalExecutableIdentityCollisionAudit(operationCensuses) {
+  const dimensions = {
+    operationCue: new Map(),
+    queryKey: new Map(),
+    encodedProgramIdentity: new Map(),
+    operationClass: new Map(),
+  };
+  for (const [family, census] of Object.entries(operationCensuses)) {
+    for (const entry of census.classes ?? []) {
+      for (const [dimension, index] of Object.entries(dimensions)) {
+        const key = entry[dimension];
+        const refs = index.get(key) ?? [];
+        refs.push(`${family}:${entry.operationClass}`);
+        index.set(key, refs);
+      }
+    }
+  }
+  const collisions = Object.fromEntries(Object.entries(dimensions).map(([dimension, index]) => [
+    dimension,
+    [...index.entries()].filter(([, refs]) => refs.length > 1).map(([value, refs]) => ({ value, refs })),
+  ]));
+  return {
+    pass: Object.values(operationCensuses).every((census) => census.identityPass === true)
+      && Object.values(collisions).every((entries) => entries.length === 0),
+    collisions,
   };
 }
 
@@ -398,6 +568,7 @@ export function certifyV2Banks(rawBanks, {
     families[lane.family] = lane;
   }
   const perFamily = {};
+  const operationCensuses = {};
   for (const [family, lane] of Object.entries(families)) {
     const adapter = adapters[family];
     const clusterByMotif = new Map(lane.clusters.map((cluster) => [cluster.motifGroupId, cluster]));
@@ -435,6 +606,8 @@ export function certifyV2Banks(rawBanks, {
     const goldFraction = lane.clusters.reduce((sum, cluster) =>
       sum + cluster.publicPath.goldBranchIds.length / cluster.publicPath.terminalBranchIds.length, 0) / lane.clusters.length;
     const opaqueIdGoldGuessRate = metadataIdGuesses.filter(Boolean).length / metadataIdGuesses.length;
+    const operationCensus = operationClassCensus(lane, adapter.conservativeOperationCapacity, adapter.maxActiveEpochGap);
+    operationCensuses[family] = operationCensus;
     perFamily[family] = {
       gates: {
         randomK: { rate: rate(randomResults), max: 0.05, pass: rate(randomResults) <= 0.05 },
@@ -453,7 +626,7 @@ export function certifyV2Banks(rawBanks, {
           rule: 'known generator seed/source plus exact motif inputs must match zero HMAC document ids and solve zero rows',
         },
         balancedTerminalBranches: { pass: balanced.every((entry) => entry.pass), failures: balanced.filter((entry) => !entry.pass) },
-        operationClassCensus: operationClassCensus(lane, adapter.conservativeOperationCapacity, adapter.maxActiveEpochGap),
+        operationClassCensus: operationCensus,
         roleRetirement: roleRetirementAudit(lane),
         ...Object.fromEntries(Object.entries(shortcutResults).map(([name, results]) => [name, {
           judgeSuccessRate: rate(results), pass: rate(results) === 0,
@@ -467,6 +640,7 @@ export function certifyV2Banks(rawBanks, {
   const globalGates = {
     crossFamilyDedup: crossFamilyDedupAudit(families),
     globalAliasM1: globalAliasM1Audit(families),
+    executableIdentityCollisions: globalExecutableIdentityCollisionAudit(operationCensuses),
   };
   const noSubstrateJob = buildNoSubstrateScoringJob(families, { sourceCheckout });
   const rowById = new Map(Object.values(families).flatMap((lane) => lane.rows).map((row) => [row.id, row]));

@@ -17,7 +17,9 @@ import {
   packQuotaCoverage,
 } from '../../dist/index.js';
 import {
+  buildCombinedSample,
   crossFamilyDedup,
+  p2ExecutableAndInversionCheck,
 } from '../../../../scripts/lib/bmu-generators/cross-family-checks.mjs';
 import {
   knownSeedGeneratorInversionAttacker,
@@ -263,6 +265,24 @@ describe('P6 held-out and dedup attacks', () => {
     assert.notEqual(bmuDocIdKeyCommit(secret), bmuDocIdKeyCommit(wrong));
     assert.throws(() => opaqueBmuDocId({ seed, epoch, motifGroupId: 'mg', slot: 'current' }), /docIdKeyHex/);
     assert.throws(() => opaqueBmuDocId({ docIdKeyHex: `0x${'00'.repeat(32)}`, seed, epoch, motifGroupId: 'mg', slot: 'current' }), /must not be zero/);
+  });
+
+  test('real combined P2 caller recomputes all-family executable stamps and runs inversion without claiming later gates', () => {
+    const { params, families } = buildCombinedSample(undefined, {
+      docIdMasterKeyHex: `0x${'c3'.repeat(32)}`,
+    });
+    const report = p2ExecutableAndInversionCheck(families, params);
+    assert.equal(report.ok, true, JSON.stringify(report, null, 2));
+    assert.equal(report.identityPass, true);
+    assert.equal(report.inversionPass, true);
+    assert.equal(report.globalExecutableCollisions.pass, true);
+    assert.equal(report.scope.eraCapacityClaimed, false);
+    assert.equal(report.scope.noSubstrateHardnessClaimed, false);
+    for (const entry of Object.values(report.perFamily)) {
+      assert.equal(entry.executable.identityPass, true);
+      assert.equal(entry.executable.capacityPass, false, 'N_min sample is not mislabeled as the 48-evolve era proof');
+      assert.equal(entry.inversion.pass, true);
+    }
   });
 
   test('cross-family entity/template/motif leakage is excluded from confirm', () => {

@@ -529,6 +529,17 @@ starts on an odd cursor cannot claim adjacent repeat support for both boundary
 classes. Cue, uint56 query-key, encoded-program, and signature collisions are
 all fail-closed gates.
 
+P2 certification MUST treat generator class fields as stamps to validate, not
+as census authority. For every cluster and every row, it independently
+recomputes the canonical signature, uint56 query key, and exact four encoded
+words from the public cue/program; checks the cluster, row, and `bmuTask`
+law/basis/class stamps against that result; and groups only by the recomputed
+identity. Missing fields, forged labels, row/cluster drift, and cue, query-key,
+encoded-program, or signature collisions fail the gate. The ordinary N_min
+cross-family bank runs this identity check and the known-seed/wrong-key
+inversion screen but does not claim the separate 48-evolve capacity proof or
+fresh no-substrate BGE→Qwen hardness result.
+
 ### 5.1 temporal (current / stale / supersession)
 
 - **Substrate must:** encode the row's public two-step program so the lexical

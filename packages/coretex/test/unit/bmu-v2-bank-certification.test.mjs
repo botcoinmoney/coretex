@@ -176,7 +176,14 @@ test('cross-family dedup catches doc/query/publicIntent collisions', () => {
   assert.ok(audit.collisions.publicIntent.length > 0);
 });
 
-test('adapter API accepts future multi-hop/near-collision descriptors without engine changes', () => {
+test('default adapters bind every family to the one shared 32-program capacity', () => {
+  assert.deepEqual(Object.keys(DEFAULT_V2_BANK_ADAPTERS).sort(), [
+    'conflict_lifecycle', 'multi_hop_relation', 'near_collision_abstention', 'temporal',
+  ]);
+  for (const adapter of Object.values(DEFAULT_V2_BANK_ADAPTERS)) {
+    assert.equal(adapter.conservativeOperationCapacity, 32);
+    assert.equal(adapter.maxActiveEpochGap, 32);
+  }
   assert.deepEqual(makeV2BankAdapter({ conservativeOperationCapacity: 24 }), {
     conservativeOperationCapacity: 24, maxActiveEpochGap: 32, publicAttackers: {},
   });

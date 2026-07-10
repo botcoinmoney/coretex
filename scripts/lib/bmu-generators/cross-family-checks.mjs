@@ -52,6 +52,13 @@ import {
 } from './common.mjs';
 import { sampleSubjectBank as temporalSubjectBank } from './emit-temporal-sample-bank.mjs';
 import { sampleSubjectBank as multihopSubjectBank } from './emit-multi-hop-sample-bank.mjs';
+import {
+  DEFAULT_V2_BANK_ADAPTERS,
+  globalExecutableIdentityCollisionAudit,
+  knownSeedGeneratorInversionAttacker,
+  normalizeV2Bank,
+  operationClassCensus,
+} from './certify-v2-bank.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgDist = resolve(here, '../../../packages/coretex/dist');
@@ -341,6 +348,68 @@ export function schemaLevelCompositionCheck(families) {
   return { level: 'schema', errors, ok: errors.length === 0, perFamily, totalRows: total };
 }
 
+/**
+ * Real P2 cheap caller for the G-B17 identity and known-seed inversion screens.
+ * This N_min bank is deliberately smaller than the exact 48-evolve era bank,
+ * so it validates every executable stamp/collision surface without claiming
+ * the separate 36>32 era-capacity proof or the pending BGE→Qwen hardness lane.
+ */
+export function p2ExecutableAndInversionCheck(families, params = COMBINED_PARAMS) {
+  const perFamily = {};
+  const operationCensuses = {};
+  for (const [family, rawLane] of Object.entries(families)) {
+    const lane = normalizeV2Bank({
+      family,
+      params: { seed: params.seeds[family] },
+      clusters: rawLane.clusters,
+      publicDocs: rawLane.docs,
+      rows: rawLane.rows,
+      relations: rawLane.relations,
+    });
+    const adapter = DEFAULT_V2_BANK_ADAPTERS[family];
+    if (!adapter) throw new Error(`p2ExecutableAndInversionCheck: no default adapter for '${family}'`);
+    const executable = operationClassCensus(lane, adapter.conservativeOperationCapacity, adapter.maxActiveEpochGap);
+    operationCensuses[family] = executable;
+    const matches = new Set();
+    const errors = new Set();
+    let attackedClusters = 0;
+    for (const cluster of lane.clusters) {
+      const row = cluster.rows?.[0];
+      if (!row) { errors.add(`${cluster.motifGroupId}: missing row for inversion screen`); continue; }
+      const attack = knownSeedGeneratorInversionAttacker(row, lane, cluster);
+      attackedClusters++;
+      for (const id of attack.matchedGuessedDocIds) matches.add(id);
+      if (attack.error) errors.add(`${cluster.motifGroupId}: ${attack.error}`);
+    }
+    perFamily[family] = {
+      executable,
+      inversion: {
+        attackedClusters,
+        matchedGuessedDocIds: [...matches].sort(),
+        errors: [...errors].sort(),
+        pass: matches.size === 0 && errors.size === 0 && attackedClusters === lane.clusters.length,
+      },
+    };
+  }
+  const globalExecutableCollisions = globalExecutableIdentityCollisionAudit(operationCensuses);
+  const identityPass = Object.values(perFamily).every((entry) => entry.executable.identityPass)
+    && globalExecutableCollisions.pass;
+  const inversionPass = Object.values(perFamily).every((entry) => entry.inversion.pass);
+  return {
+    level: 'p2-cheap-executable-and-inversion',
+    identityPass,
+    inversionPass,
+    globalExecutableCollisions,
+    perFamily,
+    ok: identityPass && inversionPass,
+    scope: {
+      eraCapacityClaimed: false,
+      noSubstrateHardnessClaimed: false,
+      note: 'N_min combined bank checks executable stamps/collisions and known-seed inversion only; exact 48-evolve 36>32 margin and fresh BGE+Qwen remain separate gates.',
+    },
+  };
+}
+
 export async function packLawCompositionCheck(families, packLawDistPath) {
   const dist = await import(pathToFileURL(resolve(packLawDistPath, 'index.js')).href);
   const { deriveBmuDualPacks, computeCorpusRoot, packQuotaCoverage, bmuEventExcluded, bmuExclusionKeySetForPack } = dist;
@@ -440,6 +509,7 @@ if (isMain) {
   const census = globalM1Census(families);
   const dedup = crossFamilyDedup(families);
   const schema = schemaLevelCompositionCheck(families);
+  const executableAndInversion = p2ExecutableAndInversionCheck(families, params);
   const composition = args['pack-law-dist']
     ? await packLawCompositionCheck(families, args['pack-law-dist'])
     : { level: 'schema', note: 'no --pack-law-dist given: schema-level check only (see `schema`)' };
@@ -470,7 +540,9 @@ if (isMain) {
     check1_globalM1Census: census,
     check2_crossFamilyDedup: dedup,
     check3_composition: { schema, packLaw: composition },
-    ok: census.holds && dedup.clean && schema.ok && (composition.level !== 'full-pack-law' || composition.ok),
+    check4_p2ExecutableAndInversion: executableAndInversion,
+    ok: census.holds && dedup.clean && schema.ok && executableAndInversion.ok
+      && (composition.level !== 'full-pack-law' || composition.ok),
   };
   writeFileSync(resolve(outDir, 'cross-family-report.json'), JSON.stringify(report, null, 1));
   console.log(JSON.stringify({
@@ -478,6 +550,12 @@ if (isMain) {
     census: { holds: census.holds, ...census.counts, violations: census.violations.slice(0, 5) },
     dedup: { clean: dedup.clean },
     schema: { ok: schema.ok, totalRows: schema.totalRows, errors: schema.errors.slice(0, 5) },
+    executableAndInversion: {
+      ok: executableAndInversion.ok,
+      identityPass: executableAndInversion.identityPass,
+      inversionPass: executableAndInversion.inversionPass,
+      eraCapacityClaimed: executableAndInversion.scope.eraCapacityClaimed,
+    },
     composition: composition.level === 'full-pack-law'
       ? { level: composition.level, ok: composition.ok, errors: (composition.errors ?? []).slice(0, 8), gateSize: composition.gate?.size, confirmSize: composition.confirm?.size, exclusionKeyCount: composition.exclusionKeyCount, gateFreshPerFamily: composition.gateFreshPerFamily }
       : composition,
