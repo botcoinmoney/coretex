@@ -591,18 +591,28 @@ function quotaSafeLiveOverlay({
   maxEvents,
   quotas,
   isActiveLiveEval,
+  evictLiveBaseRows = false,
 }: {
   readonly baseEvents: readonly ProductionCorpusEvent[];
   readonly liveEvents: readonly ProductionCorpusEvent[];
   readonly maxEvents: number;
   readonly quotas: readonly PackQuota[];
   readonly isActiveLiveEval: (event: ProductionCorpusEvent) => boolean;
+  /** §6.4 slot law (BMU only): on an all-BMU active frontier EVERY base row
+   * is itself an active live row, so the legacy non-live-only eviction finds
+   * nothing and silently drops all slot draws — the slot law would be a
+   * permanent no-op exactly when it matters. Under the slot law the merge
+   * may therefore evict live base rows too (never a drawn candidate),
+   * ALWAYS preferring non-live rows first, so legacy mixed packs are
+   * byte-identical. */
+  readonly evictLiveBaseRows?: boolean;
 }): readonly ProductionCorpusEvent[] {
   if (!quotasSatisfied(baseEvents, quotas)) {
     throw new Error('admitActiveLiveEvalEvents: base hidden pack does not satisfy quotas');
   }
   const finalEvents = [...baseEvents];
   const ids = new Set(finalEvents.map((e) => e.id));
+  const candidateIds = new Set(liveEvents.map((e) => e.id));
   for (const candidate of liveEvents) {
     if (ids.has(candidate.id)) continue;
     if (finalEvents.length < maxEvents) {
@@ -612,19 +622,23 @@ function quotaSafeLiveOverlay({
       ids.add(candidate.id);
       continue;
     }
-    let accepted = false;
-    for (let i = finalEvents.length - 1; i >= 0; i--) {
-      if (isActiveLiveEval(finalEvents[i]!)) continue;
-      const trial = [candidate, ...finalEvents.slice(0, i), ...finalEvents.slice(i + 1)].slice(0, maxEvents);
-      if (!quotasSatisfied(trial, quotas)) continue;
-      ids.delete(finalEvents[i]!.id);
-      finalEvents.splice(i, 1);
-      finalEvents.splice(0, 0, candidate);
-      ids.add(candidate.id);
-      accepted = true;
-      break;
-    }
-    if (accepted) continue;
+    const tryEvict = (allowLive: boolean): boolean => {
+      for (let i = finalEvents.length - 1; i >= 0; i--) {
+        const evictee = finalEvents[i]!;
+        if (isActiveLiveEval(evictee) !== allowLive) continue;
+        if (allowLive && candidateIds.has(evictee.id)) continue; // never evict a slot draw
+        const trial = [candidate, ...finalEvents.slice(0, i), ...finalEvents.slice(i + 1)].slice(0, maxEvents);
+        if (!quotasSatisfied(trial, quotas)) continue;
+        ids.delete(evictee.id);
+        finalEvents.splice(i, 1);
+        finalEvents.splice(0, 0, candidate);
+        ids.add(candidate.id);
+        return true;
+      }
+      return false;
+    };
+    if (tryEvict(false)) continue;
+    if (evictLiveBaseRows && tryEvict(true)) continue;
   }
   return finalEvents;
 }
@@ -895,6 +909,7 @@ function admitBmuFamilySlotOverlay(
         maxEvents,
         quotas,
         isActiveLiveEval: isBmuActiveLiveEval,
+        evictLiveBaseRows: true,
       });
   const familyCounts: Record<string, number> = {};
   for (const e of finalEvents) {
