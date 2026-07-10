@@ -1254,7 +1254,16 @@ export async function scoreSubstrateAgainstQuery(
             : (incoming.get(eventId) ?? []).filter((candidate) =>
               (candidate.relations ?? []).some((relation) => relation.other_id === eventId && relation.edgeType === step.edgeType),
             );
-          for (const target of neighbors.sort((a, b) => codePointCompare(a.id, b.id)).slice(0, Math.min(law.branchLimit, program.branchLimit))) {
+          // A directed operation is a simple path. In particular, diagonal
+          // outgoing:X/incoming:X programs must not spend one of their four
+          // branch slots walking straight back to the seed they just left.
+          // Apply the branch cap after excluding every event already present
+          // in this route so all four fresh terminal branches remain usable.
+          const visited = new Set(route);
+          const freshNeighbors = neighbors
+            .sort((a, b) => codePointCompare(a.id, b.id))
+            .filter((target) => !visited.has(target.id));
+          for (const target of freshNeighbors.slice(0, Math.min(law.branchLimit, program.branchLimit))) {
             const candidateRoute = [...route, target.id];
             const priorRoute = next.get(target.id);
             if (priorRoute && priorRoute.join('\0') !== candidateRoute.join('\0')) {

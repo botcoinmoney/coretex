@@ -115,10 +115,10 @@ export function buildCombinedSample(params = COMBINED_PARAMS, { docIdMasterKeyHe
   }));
 
   const families = {
-    temporal: { clusters: [], rows: [], docs: [] },
-    conflict_lifecycle: { clusters: [], rows: [], docs: [] },
-    multi_hop_relation: { clusters: [], rows: [], docs: [] },
-    near_collision_abstention: { clusters: [], rows: [], docs: [] },
+    temporal: { clusters: [], rows: [], docs: [], relations: [] },
+    conflict_lifecycle: { clusters: [], rows: [], docs: [], relations: [] },
+    multi_hop_relation: { clusters: [], rows: [], docs: [], relations: [] },
+    near_collision_abstention: { clusters: [], rows: [], docs: [], relations: [] },
   };
   const operationSequence = {
     temporal: 0,
@@ -140,7 +140,11 @@ export function buildCombinedSample(params = COMBINED_PARAMS, { docIdMasterKeyHe
     });
     operationSequence.temporal += params.perFamilyClusters.temporal[epochIdx];
     families.temporal.clusters.push(...t.clusters);
-    for (const c of t.clusters) { families.temporal.rows.push(...c.rows); families.temporal.docs.push(...c.docs); }
+    for (const c of t.clusters) {
+      families.temporal.rows.push(...c.rows);
+      families.temporal.docs.push(...c.docs);
+      families.temporal.relations.push(...c.relations);
+    }
 
     const m = generateMultiHopClusters({
         epoch, seed: params.seeds.multi_hop_relation, docIdKeyHex, subjects: multihopSubjectBank(),
@@ -151,7 +155,11 @@ export function buildCombinedSample(params = COMBINED_PARAMS, { docIdMasterKeyHe
     });
     operationSequence.multi_hop_relation += params.perFamilyClusters.multi_hop_relation[epochIdx];
     families.multi_hop_relation.clusters.push(...m.clusters);
-    for (const c of m.clusters) { families.multi_hop_relation.rows.push(...c.rows); families.multi_hop_relation.docs.push(...c.docs); }
+    for (const c of m.clusters) {
+      families.multi_hop_relation.rows.push(...c.rows);
+      families.multi_hop_relation.docs.push(...c.docs);
+      families.multi_hop_relation.relations.push(...c.relations);
+    }
 
     const c = generateConflictLifecycleClusters({
       epoch, seed: params.seeds.conflict_lifecycle, docIdKeyHex, subjects: conflictSubjects,
@@ -164,6 +172,7 @@ export function buildCombinedSample(params = COMBINED_PARAMS, { docIdMasterKeyHe
     families.conflict_lifecycle.clusters.push(...c.clusters);
     families.conflict_lifecycle.rows.push(...c.addedQueries);
     families.conflict_lifecycle.docs.push(...c.addedDocs);
+    families.conflict_lifecycle.relations.push(...c.addedRelations);
 
     const n = generateNearCollisionAbstentionClusters({
         epoch, seed: params.seeds.near_collision_abstention, docIdKeyHex, subjects: nearcolSubjects,
@@ -176,6 +185,7 @@ export function buildCombinedSample(params = COMBINED_PARAMS, { docIdMasterKeyHe
     families.near_collision_abstention.clusters.push(...n.clusters);
     families.near_collision_abstention.rows.push(...n.addedQueries);
     families.near_collision_abstention.docs.push(...n.addedDocs);
+    families.near_collision_abstention.relations.push(...n.addedRelations);
   });
 
   return { params, families, mintTimeM1: { activeIndexCensus: m1Census(activeIndex), registrySnapshot: registry.snapshot() } };
@@ -300,6 +310,8 @@ function rowToProductionEvent(row) {
     publicIntent: row.publicIntent,
     band: row.band,
     bmuTask: row.bmuTask,
+    ...(row.bmuOperationCue ? { bmuOperationCue: row.bmuOperationCue } : {}),
+    ...(row.bmuOperationProgram ? { bmuOperationProgram: row.bmuOperationProgram } : {}),
     provenance: { source: 'synthetic_challenge', sourceHash: `0x${'00'.repeat(32)}` },
   };
 }

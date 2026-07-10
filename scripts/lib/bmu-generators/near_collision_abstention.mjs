@@ -97,6 +97,11 @@ import {
   opaqueBmuDocId,
   bmuEntityHoldoutKeysForSubject,
 } from './common.mjs';
+import {
+  BMU_EXECUTABLE_PROGRAM_BANK,
+  executableOperationForFamilySlot,
+  stampExecutableOperationTask,
+} from './operation-program.mjs';
 
 export const NEARCOL_FAMILY = 'near_collision_abstention';
 export const NEARCOL_BUDGET_B = BMU_DEFAULT_BUDGET_B.near_collision_abstention; // 3
@@ -109,28 +114,21 @@ const NEARCOL_SEMANTIC_PROFILES = Object.freeze([
   Object.freeze({ key: 'variant_scope', primaryKind: 'scope' }),
   Object.freeze({ key: 'variant_attribute', primaryKind: 'attribute' }),
 ]);
-const NEARCOL_OUTGOING_EDGES = Object.freeze(['causes', 'derived_from']);
-const NEARCOL_INCOMING_EDGES = Object.freeze(['supports', 'supersedes', 'coreference_of', 'co_occurs_with']);
-const NEARCOL_EDGE_PROGRAMS = Object.freeze(NEARCOL_OUTGOING_EDGES.flatMap((outgoingEdgeType) =>
-  NEARCOL_INCOMING_EDGES.map((incomingEdgeType) => Object.freeze({ outgoingEdgeType, incomingEdgeType }))));
-const NEARCOL_TOPOLOGY_PROFILES = Object.freeze([
-  Object.freeze({ key: 'single_sink', sinkMultiplicity: 1 }),
-  Object.freeze({ key: 'dual_sink', sinkMultiplicity: 2 }),
-]);
-/** 3 collision semantics × (2 outgoing × 4 incoming) × 2 sink topologies = 48. */
-export const NEARCOL_OPERATION_CLASSES = Object.freeze(
-  NEARCOL_EDGE_PROGRAMS.flatMap((edgeProgram) =>
-    NEARCOL_TOPOLOGY_PROFILES.flatMap((topology) =>
-      NEARCOL_SEMANTIC_PROFILES.map((semantic) => Object.freeze({
-        name: `shared_sink_${semantic.key}_${edgeProgram.outgoingEdgeType}_${edgeProgram.incomingEdgeType}_${topology.key}`,
-        semantic: semantic.key,
-        primaryKind: semantic.primaryKind,
-        outgoingEdgeType: edgeProgram.outgoingEdgeType,
-        incomingEdgeType: edgeProgram.incomingEdgeType,
-        topology: topology.key,
-        sinkMultiplicity: topology.sinkMultiplicity,
-      })))),
-);
+/** Exactly 36 executable programs. Collision semantics rotate separately. */
+export const NEARCOL_OPERATION_CLASSES = Object.freeze(BMU_EXECUTABLE_PROGRAM_BANK.map((program, ordinal) => {
+  const semantic = NEARCOL_SEMANTIC_PROFILES[ordinal % NEARCOL_SEMANTIC_PROFILES.length];
+  const operation = executableOperationForFamilySlot(NEARCOL_FAMILY, ordinal * 2);
+  return Object.freeze({
+    name: operation.operationClass,
+    semantic: semantic.key,
+    primaryKind: semantic.primaryKind,
+    outgoingEdgeType: program.outgoingEdgeType,
+    incomingEdgeType: program.incomingEdgeType,
+    topology: 'single_sink',
+    sinkMultiplicity: 1,
+    operation,
+  });
+}));
 
 export function nearcolOperationClassForSlot(operationClassSlot) {
   if (!Number.isInteger(operationClassSlot) || operationClassSlot < 0) {
@@ -271,7 +269,7 @@ export function buildNearCollisionClusterSpec({
   const forbiddenAbstain = [exactId, ...decoyIds]; // §5.4: the answerable sibling is a plausible decoy for the absent variant
 
   const entityHoldoutKeys = bmuEntityHoldoutKeysForSubject({ id: subjectId, canonicalName: canonical, aliases: subjectAliases });
-  const stampTask = ({ requiredEvidence, answerId, answerValue, abstain, questionType, variant, templateScope }) => ({
+  const stampTask = ({ requiredEvidence, answerId, answerValue, abstain, questionType, variant, templateScope }) => stampExecutableOperationTask({
     family: NEARCOL_FAMILY,
     budgetB: NEARCOL_BUDGET_B,
     requiredEvidence,
@@ -281,7 +279,7 @@ export function buildNearCollisionClusterSpec({
     motifGroupId,
     templateId: nearcolTemplateId(questionType, variant, attr, templateScope ?? scope),
     entityHoldoutKeys,
-  });
+  }, operationPlan.operation);
 
   const hardNegatives = decoyNegs;
   const abstainHardNegatives = [{ docId: exactId, category: 'answerable_sibling_near_collision' }, ...decoyNegs];
@@ -396,8 +394,9 @@ export function generateNearCollisionAbstentionClusters({
     // branch edge. It is selected from cluster topology, never inferred from
     // a qrel/role label after generation.
     const operationPlan = nearcolOperationClassForSlot(operationClassSlotOffset + c);
+    const operation = operationPlan.operation;
     const operationFamily = NEARCOL_OPERATION_FAMILY;
-    const operationClass = operationPlan.name;
+    const operationClass = operation.operationClass;
 
     const { attr, bank } = bmuAttributeForClusterSlot(epoch, clusterSlot, {
       qualifiers: NEARCOL_QUALIFIERS, bases: NEARCOL_BASES, baseEpoch: rotationBaseEpoch,
@@ -567,7 +566,11 @@ export function generateNearCollisionAbstentionClusters({
           selector: `qtype_${stub.questionType}_v${stub.variant}` },
         questionType: stub.questionType,
         band: escalationLevel > 0 ? 'very_hard' : 'hard',
-        operationFamily, operationClass, liveUpdateEpoch: epoch,
+        operationFamily, operationClass, operationClassBasis: operation.operationClassBasis,
+        operationLaw: operation.operationLaw,
+        bmuOperationCue: operation.operationCue,
+        bmuOperationProgram: operation.operationProgram,
+        liveUpdateEpoch: epoch,
         bmuTask: stub.bmuTask,
       });
       rowIds.push(qid);
@@ -577,6 +580,12 @@ export function generateNearCollisionAbstentionClusters({
       motifGroupId, family: NEARCOL_FAMILY, epoch, clusterSlot,
       subjectEntityId: subj.id, attribute: attr, scope, absentScope, role,
       operationFamily, operationClass,
+      operationClassBasis: operation.operationClassBasis,
+      operationLaw: operation.operationLaw,
+      bmuOperationCue: operation.operationCue,
+      bmuOperationProgram: operation.operationProgram,
+      operationSemantic: operationPlan.semantic,
+      operationTopology: operationPlan.topology,
       escalationLevel, decoyCount,
       truthDocId: exactId,
       disambiguationDocId: disambigId,

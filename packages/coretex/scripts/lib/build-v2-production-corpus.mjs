@@ -98,6 +98,9 @@ export function buildV2ProductionCorpus({ corpusPath, embPath, bundlePath, junkE
         ...(q.subjectEntityId !== undefined ? { subjectEntityId: q.subjectEntityId } : {}),
         ...(q.scope ? { scope: q.scope } : {}),
         ...(q.publicIntent ? { publicIntent: q.publicIntent } : {}),
+        ...(q.bmuOperationCue ? { bmuOperationCue: q.bmuOperationCue } : {}),
+        ...(q.bmuOperationProgram ? { bmuOperationProgram: q.bmuOperationProgram } : {}),
+        ...(q.bmuTask ? { bmuTask: q.bmuTask } : {}),
         provenance: PROV, embeddings: mkEmb(qEmb.get(q.id), [], negs.map((n) => [n.id, docEmb.get(n.id)])) };
       events.push(ev); queryEvents.push(ev); continue;
     }
@@ -111,6 +114,9 @@ export function buildV2ProductionCorpus({ corpusPath, embPath, bundlePath, junkE
       ...(q.subjectEntityId !== undefined ? { subjectEntityId: q.subjectEntityId } : {}),
       ...(q.scope ? { scope: q.scope } : {}),
       ...(q.publicIntent ? { publicIntent: q.publicIntent } : {}),
+      ...(q.bmuOperationCue ? { bmuOperationCue: q.bmuOperationCue } : {}),
+      ...(q.bmuOperationProgram ? { bmuOperationProgram: q.bmuOperationProgram } : {}),
+      ...(q.bmuTask ? { bmuTask: q.bmuTask } : {}),
       provenance: PROV, embeddings: mkEmb(qEmb.get(q.id), truths.map((t) => [t.id, docEmb.get(t.id)]), negs.map((n) => [n.id, docEmb.get(n.id)])) };
     if (ev.family === 'temporal') ev.temporal = { validFromEpoch: 1, validUntilEpoch: Number.MAX_SAFE_INTEGER, currentStaleFlag: false };
     events.push(ev); queryEvents.push(ev);

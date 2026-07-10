@@ -64,6 +64,7 @@ export * from './eval/public-corpus-index.js';
 export * from './eval/retrieval-benchmark.js';
 export * from './pipeline-versions.js';
 export * from './eval/bmu-task.js';
+export * from './eval/bmu-operation-program.js';
 export * from './eval/bmu-benchmark.js';
 export * from './eval/memory-ir-render.js';
 export * from './eval/ir-metrics.js';

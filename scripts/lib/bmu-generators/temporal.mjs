@@ -70,6 +70,11 @@ import {
   opaqueBmuDocId,
   bmuEntityHoldoutKeysForSubject,
 } from './common.mjs';
+import {
+  BMU_EXECUTABLE_PROGRAM_BANK,
+  executableOperationForFamilySlot,
+  stampExecutableOperationTask,
+} from './operation-program.mjs';
 
 export const BMU_TEMPORAL_FAMILY = 'temporal';            // bmuTask.family / bucketed (§5.6)
 export const BMU_TEMPORAL_LOGICAL_FAMILY = 'temporal_update'; // corpus logicalFamily (§5.6)
@@ -96,23 +101,23 @@ export const TEMPORAL_SEMANTIC_OPERATIONS = Object.freeze([
   Object.freeze({ id: 'effective_handoff', decision: 'dated handoff activates the successor value' }),
 ]);
 
-export const TEMPORAL_PATH_TOPOLOGIES = Object.freeze(
-  ['derived_from', 'causes'].flatMap((seed) =>
-    ['supports', 'supersedes', 'coreference_of', 'co_occurs_with'].map((branch) =>
-      Object.freeze({ id: `${seed}_then_${branch}`, seed, branch }))),
-);
+export const TEMPORAL_PATH_TOPOLOGIES = Object.freeze(BMU_EXECUTABLE_PROGRAM_BANK.map((program) =>
+  Object.freeze({
+    id: `${program.outgoingEdgeType}_then_${program.incomingEdgeType}`,
+    seed: program.outgoingEdgeType,
+    branch: program.incomingEdgeType,
+  })));
 
-/** 4 real temporal decisions × 8 concrete edge programs = 32 transferable
- * classes, eight above the conservative 24-operation state capacity. Class
- * ids contain no epoch/entity/template token; the monotone family cursor
- * rotates the bank independently of irregular epoch mint counts, while the
- * selected profile changes emitted prose and actual public relation types. */
-export const TEMPORAL_OPERATION_CLASS_BANK = Object.freeze(
-  TEMPORAL_SEMANTIC_OPERATIONS.flatMap((semantic) =>
-    TEMPORAL_PATH_TOPOLOGIES.map((topology) => Object.freeze({
-      id: `temporal_${semantic.id}__${topology.id}`, semantic, topology,
-    }))),
-);
+/** Exactly 36 executable classes; semantic prose rotates independently. */
+export const TEMPORAL_OPERATION_CLASS_BANK = Object.freeze(BMU_EXECUTABLE_PROGRAM_BANK.map((program, ordinal) => {
+  const operation = executableOperationForFamilySlot(BMU_TEMPORAL_FAMILY, ordinal * 2);
+  return Object.freeze({
+    id: operation.operationClass,
+    semantic: TEMPORAL_SEMANTIC_OPERATIONS[ordinal % TEMPORAL_SEMANTIC_OPERATIONS.length],
+    topology: TEMPORAL_PATH_TOPOLOGIES[ordinal],
+    operation,
+  });
+}));
 export const TEMPORAL_OPERATION_FAMILIES = Object.freeze(TEMPORAL_OPERATION_CLASS_BANK.map((profile) => profile.id));
 export function temporalOperationProfileForCluster(operationSequenceOffset, clusterSlot) {
   if (!Number.isInteger(operationSequenceOffset) || operationSequenceOffset < 0) throw new Error('bmu temporal: non-negative integer operationSequenceOffset required');
@@ -386,13 +391,17 @@ export function generateTemporalClusters({
     }
     const shadowDecoyVals = decoyVals.slice(0, escalationLevel);
     const operationProfile = temporalOperationProfileForCluster(operationSequenceOffset, ordinal);
-    const operationFamily = operationProfile.id;
+    const operation = operationProfile.operation;
+    const operationFamily = operation.operationClass;
+    const operationClass = operation.operationClass;
     const pathEdges = operationProfile.topology;
     const terminalPathClause = {
       supports: 'This finding supports the linked review conclusion.',
       supersedes: 'This branch finding supersedes the linked preliminary summary.',
       coreference_of: 'This finding refers to the same case as the linked case marker.',
       co_occurs_with: 'This finding is filed alongside the linked docket entry.',
+      causes: 'This finding records the cause of the linked review conclusion.',
+      derived_from: 'This finding is derived from the linked review conclusion.',
     }[pathEdges.branch];
     const withPathSemantics = (text) => `${text} ${terminalPathClause}`;
 
@@ -557,8 +566,12 @@ export function generateTemporalClusters({
         },
         questionType: qtype, capability: 'temporal_supersession',
         band: escalationLevel > 0 ? 'very_hard' : 'hard',
-        operationFamily, operationClass: operationFamily, liveUpdateEpoch: epoch,
-        bmuTask: {
+        operationFamily, operationClass, operationClassBasis: operation.operationClassBasis,
+        operationLaw: operation.operationLaw,
+        bmuOperationCue: operation.operationCue,
+        bmuOperationProgram: operation.operationProgram,
+        liveUpdateEpoch: epoch,
+        bmuTask: stampExecutableOperationTask({
           family: BMU_TEMPORAL_FAMILY,
           budgetB: BMU_TEMPORAL_BUDGET_B,
           requiredEvidence,
@@ -568,7 +581,7 @@ export function generateTemporalClusters({
           motifGroupId,
           templateId: variant.templateId,
           entityHoldoutKeys,
-        },
+        }, operation),
       });
     }
 
@@ -611,7 +624,11 @@ export function generateTemporalClusters({
       decoyValues: [...decoyVals],
       escalationLevel,
       operationFamily,
-      operationClass: operationFamily,
+      operationClass,
+      operationClassBasis: operation.operationClassBasis,
+      operationLaw: operation.operationLaw,
+      bmuOperationCue: operation.operationCue,
+      bmuOperationProgram: operation.operationProgram,
       operationSemantic: operationProfile.semantic.id,
       operationTopology: operationProfile.topology.id,
       operationSequence: operationSequenceOffset + ordinal,

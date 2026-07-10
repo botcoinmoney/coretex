@@ -174,15 +174,15 @@ test('v2 operation classes are deterministic, multiple, and exposed to P5 on eve
   assert.deepEqual(Object.keys(telemetry.operationFamilyHistogram).sort(), [...new Set(clusters.map((c) => c.operationFamily))].sort());
 });
 
-test('48-evolve census rotates 32 real classes (>24 capacity), each with disjoint transfer support', () => {
+test('48-evolve census rotates 36 executable classes (>32 capacity), each with disjoint transfer support', () => {
   const activeIndex = createBmuActiveIndex();
   const subjects = subjectBank(256);
   const clusters = [];
-  const schedule = [
-    { epoch: 144, count: 8, phase: 'bootstrap-1' },
-    { epoch: 152, count: 11, phase: 'bootstrap-2-margin3' },
-    ...Array.from({ length: 48 }, (_, step) => ({ epoch: 152 + (step + 1) * 8, count: 1, phase: `steady-${step + 1}` })),
-  ];
+  const schedule = Array.from({ length: 48 }, (_, step) => ({
+    epoch: 152 + (step + 1) * 8,
+    count: step % 2 === 0 ? 2 : 1,
+    phase: `steady-${step + 1}`,
+  }));
   let operationSequenceOffset = 0;
   for (const { epoch, count } of schedule) {
     retireAgedClusters(activeIndex, epoch, 32);
@@ -197,7 +197,8 @@ test('48-evolve census rotates 32 real classes (>24 capacity), each with disjoin
     rows.push(c);
     byClass.set(c.operationFamily, rows);
     const profile = temporalOperationProfileForCluster(c.operationSequence, 0);
-    assert.equal(c.operationFamily, `temporal_${c.operationSemantic}__${c.publicPath.firstEdgeType}_then_${c.publicPath.terminalEdgeType}`);
+    assert.equal(c.operationClass, c.operationFamily);
+    assert.equal(c.operationClass, `${c.bmuOperationCue}=>b4/outgoing:${c.publicPath.firstEdgeType}/incoming:${c.publicPath.terminalEdgeType}`);
     assert.ok(TEMPORAL_OPERATION_CLASS_BANK.some((candidate) => candidate.id === c.operationFamily));
     assert.equal(profile.id, c.operationFamily);
     const docById = new Map(c.docs.map((doc) => [doc.id, doc]));
@@ -206,6 +207,8 @@ test('48-evolve census rotates 32 real classes (>24 capacity), each with disjoin
       supersedes: /supersedes the linked preliminary summary/,
       coreference_of: /refers to the same case as the linked case marker/,
       co_occurs_with: /filed alongside the linked docket entry/,
+      causes: /records the cause of the linked review conclusion/,
+      derived_from: /derived from the linked review conclusion/,
     }[c.publicPath.terminalEdgeType];
     assert.ok(c.publicPath.terminalBranchIds.every((id) => topologyCue.test(docById.get(id).text)),
       `class ${c.operationFamily} must express its edge semantics in branch text`);
@@ -217,10 +220,10 @@ test('48-evolve census rotates 32 real classes (>24 capacity), each with disjoin
     assert.equal(new Set(c.publicPath.terminalBranchIds.map(observable)).size, 1, `unbalanced class ${c.operationFamily}`);
   }
   assert.equal(byClass.size, TEMPORAL_OPERATION_FAMILIES.length);
-  assert.equal(byClass.size, 32);
-  assert.ok(byClass.size > 24, 'class bank exceeds conservative temporal state capacity by eight');
-  assert.equal(new Set(clusters.slice(0, 64).map((c) => c.operationFamily)).size, 32,
-    'bootstrap plus the exact cadence-8 steady schedule exposes every class without gcd aliasing');
+  assert.equal(byClass.size, 36);
+  assert.equal(byClass.size - 32, 4, 'class bank exceeds shared state capacity by four');
+  assert.equal(new Set(clusters.map((c) => c.operationFamily)).size, 36,
+    'the exact cadence-8 steady schedule exposes every executable class once as a pair');
   const behaviorSignatures = new Set();
   for (const [classId, members] of byClass) {
     assert.ok(members.length >= 2, `${classId} must repeat for holdout transfer`);

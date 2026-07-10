@@ -1,20 +1,16 @@
 # BMU — Budgeted Memory Utility: versioned CoreTex scoring laws
 
-**Revision:** rev4.1 (BMU v2 keyed opaque-id hardening; changelog in §17).
+**Revision:** rev4.1 (BMU v2 candidate-executable operation era and keyed opaque ids; changelog in §17).
 **Status:** PRE-ARM implementation candidate. Code and offline evidence may
 accompany this document; nothing here arms, pins, or deploys anything.
 
-**Hard stop:** rev3.4 closes opaque-id, alias-holdout, recency-control, and
-Rmax integrity defects, but BMU v1 is not armable. The operation-general P5
-lane proves that each current generator exposes only one effective operation
-class; all four families saturate within four epochs. A new versioned generic
-operation law with multiple truthful operation classes per family, fresh
-gate+excluded-confirm evidence, and a `GREEN_SUSTAINABLE` exact-commit
-attestation are required before operator ratification. v1 remains useful as a
-replay/evidence identity and MUST NOT be armed from this document. BMU v2 is
-the only successor candidate described here; it is also unarmable until the
-full v2 bank, real-Qwen gate/confirm, P5, variance, and margin proof chain is
-regenerated on one pinned context.
+**Hard stop:** BMU v1 remains useful as a replay/evidence identity and MUST
+NOT be armed from this document. rev4.1 defines the only successor candidate:
+a 36-program candidate-executable era with paired I6-disjoint transfer and
+four-program headroom over the 32-program resident region. This design is
+still unarmable until keyed document-id integration survives G-B17, and the
+full v2 bank, real-Qwen gate/confirm, P5, variance, margin, watermark,
+portability, and shadow proof chain is regenerated on one pinned context.
 
 **Pinned code baseline:** every `file:line` citation below is into THIS
 repository at commit `20412b5` (branch `coretex-c1-work-policy`), verified
@@ -1944,23 +1940,60 @@ capacity, plus fallback/underfill-engagement telemetry.
 
 ## 17. Changelog
 
-### rev4.0 → rev4.1 (known-seed identifier-inversion hardening; 2026-07-10)
+### rev4.0 → rev4.1 (candidate-executable operation era and keyed opaque ids; 2026-07-10)
 
-- Replaced seed-only SHA-256 document ids with required keyed HMAC-SHA-256
-  identities across all four generators. Security no longer relies on the
-  generation seed remaining private; certification and simulation artifacts
-  may continue to pin that seed. Only a key commitment may enter evidence.
-- Added a permanent known-seed generator-inversion lane to P2 and P6. The
+**Three-question decision (G-B17 design freeze):**
+
+1. **Where candidate state causally enters.** Every v2 row, task, and cluster
+   carries one canonical `bmuOperationCue` and one public
+   `bmuOperationProgram { branchLimit: 4, steps }`. The cue selects a decoded
+   four-word program in state words 384–511; the interpreter applies its
+   ordered directed steps to public stage-1 seeds and admits only fresh
+   terminal events to Qwen. ZERO_STATE and an obsolete-key parent have no
+   matching program and cannot admit those operation-caused terminals. One
+   public four-word patch is sufficient for two I6-disjoint generated rows
+   sharing a cue/program; load validation recomputes the exact operation class
+   and rejects any cue/program/class drift.
+2. **What executable class space exceeds capacity.** All four generators use
+   the same enumerated 6×6 bank of 36 two-step programs:
+   `outgoing:<edge-1>` then `incoming:<edge-2>` over the six public relation
+   types. Semantic prose, topology diagnostics, and row variants do not count
+   as class identity. The executable-era schedule alternates mint counts
+   A=`{temporal:2, conflict:2, multi-hop:1, near-collision:1}` and
+   B=`{temporal:1, conflict:1, multi-hop:2, near-collision:2}` for 24 A/B
+   cycles. It therefore mints 72 clusters and exactly 36 paired executable
+   signatures per family, each pair I6-disjoint, giving `36 − 32 = +4`
+   resident-capacity margin. Cue, query-key, and executable-signature
+   collision censuses MUST all be zero.
+3. **What inversion and shortcut surfaces remain.** Program cues and bytecode
+   are intentionally public; required/forbidden branch semantics are not.
+   Truth and decoy terminals have the same branch structure, metadata, and
+   recency distribution, so id/metadata/path selectors MUST fail while Qwen
+   judges the uniformly rendered lineage. Document ids MUST be generated from
+   a required independent keyed HMAC secret whose artifact exposes only a
+   commitment; known public seeds and wrong keys MUST fail the inversion gate.
+   Traversal is a simple path: already-visited events are removed before the
+   branch cap, preventing diagonal `outgoing:X`→`incoming:X` programs from
+   spending capacity by backtracking to their seed. G-B17 remains red until an
+   independent refuter confirms all three properties on the integrated tip.
+
+**Miner-facing simplicity sentence:** *Encode the public directed relation
+program in four state words so hidden queries can route balanced evidence that
+blank state cannot reach.*
+
+- Seed-only SHA-256 document ids are replaced by required keyed
+  HMAC-SHA-256 identities across all four generators. Security no longer
+  relies on the generation seed remaining private; certification and
+  simulation artifacts may continue to pin that seed. Only a key commitment
+  may enter evidence.
+- A permanent known-seed generator-inversion lane applies at P2 and P6. The
   attacker receives generator source conventions, seed, epoch, motif id, and
   the complete bounded slot vocabulary, but not the HMAC key or hidden labels.
   It tries both the refuted v1 formula and a public seed-derived key guess.
   Passing requires zero public-id matches and zero judged successes in every
   family; a correct-private-key positive control prevents a vacuous harness.
-- This lane is intentionally identifier-only. Exact-text, relation/metadata,
-  recency, selector, BGE, and Qwen shortcuts remain separate mandatory gates;
-  HMAC ids do not weaken or replace them. The miner-facing one-sentence
-  contract is unchanged: encode directed relational programs in substrate
-  state that route queries the base stack cannot route.
+- This identifier lane does not replace the exact-text, relation/metadata,
+  recency, selector, BGE, or Qwen shortcut gates. All remain mandatory.
 
 ### rev3.4 → rev4.0 (BMU v2 replacement law; 2026-07-10)
 

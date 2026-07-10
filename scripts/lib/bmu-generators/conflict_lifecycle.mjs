@@ -72,6 +72,11 @@ import {
   opaqueBmuDocId,
   bmuEntityHoldoutKeysForSubject,
 } from './common.mjs';
+import {
+  BMU_EXECUTABLE_PROGRAM_BANK,
+  executableOperationForFamilySlot,
+  stampExecutableOperationTask,
+} from './operation-program.mjs';
 
 export const CONFLICT_FAMILY = 'conflict_lifecycle';
 export const CONFLICT_BUDGET_B = BMU_DEFAULT_BUDGET_B.conflict_lifecycle; // 4
@@ -90,20 +95,23 @@ export const CONFLICT_SEMANTIC_OPERATIONS = Object.freeze([
   Object.freeze({ id: 'appeal_resolution', decision: 'apply the final appeal disposition' }),
 ]);
 
-export const CONFLICT_PATH_TOPOLOGIES = Object.freeze(
-  ['derived_from', 'causes'].flatMap((seed) =>
-    ['supports', 'supersedes', 'coreference_of', 'co_occurs_with'].map((branch) =>
-      Object.freeze({ id: `${seed}_then_${branch}`, seed, branch }))),
-);
+export const CONFLICT_PATH_TOPOLOGIES = Object.freeze(BMU_EXECUTABLE_PROGRAM_BANK.map((program) =>
+  Object.freeze({
+    id: `${program.outgoingEdgeType}_then_${program.incomingEdgeType}`,
+    seed: program.outgoingEdgeType,
+    branch: program.incomingEdgeType,
+  })));
 
-/** 5 real resolution decisions × 8 concrete edge programs = 40 transferable
- * classes, eight above the conservative 32-operation state capacity. */
-export const CONFLICT_OPERATION_CLASS_BANK = Object.freeze(
-  CONFLICT_SEMANTIC_OPERATIONS.flatMap((semantic) =>
-    CONFLICT_PATH_TOPOLOGIES.map((topology) => Object.freeze({
-      id: `conflict_${semantic.id}__${topology.id}`, semantic, topology,
-    }))),
-);
+/** Exactly 36 executable classes; resolution semantics are independent. */
+export const CONFLICT_OPERATION_CLASS_BANK = Object.freeze(BMU_EXECUTABLE_PROGRAM_BANK.map((program, ordinal) => {
+  const operation = executableOperationForFamilySlot(CONFLICT_FAMILY, ordinal * 2);
+  return Object.freeze({
+    id: operation.operationClass,
+    semantic: CONFLICT_SEMANTIC_OPERATIONS[ordinal % CONFLICT_SEMANTIC_OPERATIONS.length],
+    topology: CONFLICT_PATH_TOPOLOGIES[ordinal],
+    operation,
+  });
+}));
 export const CONFLICT_OPERATION_FAMILIES = Object.freeze(CONFLICT_OPERATION_CLASS_BANK.map((profile) => profile.id));
 
 export function conflictOperationProfileForCluster(operationSequenceOffset, clusterSlot) {
@@ -211,6 +219,8 @@ export function buildConflictLifecycleClusterSpec({
     supersedes: 'This branch finding supersedes the linked preliminary summary.',
     coreference_of: 'This finding refers to the same case as the linked case marker.',
     co_occurs_with: 'This finding is filed alongside the linked docket entry.',
+    causes: 'This branch finding records the cause of the linked conclusion.',
+    derived_from: 'This branch finding is derived from the linked conclusion.',
   }[pathEdges.branch];
   const resolvedText = `${semanticText.resolved} ${terminalPathClause}`;
   const resolutionText = `${semanticText.resolution} ${terminalPathClause}`;
@@ -238,9 +248,7 @@ export function buildConflictLifecycleClusterSpec({
       lifecycleState: 'terminal_branch', lifecycleScope: scope,
       scope: { topicId: scope } })),
     { id: pivotId, kind: 'bmu_public_record', role: 'public_path_pivot',
-      text: pathEdges.seed === 'causes'
-        ? `${operationProfile.semantic.decision}. Review docket ${tsDate} for ${canonical}'s ${scope} ${attr} was opened because the disputed claim required a decision.`
-        : `${operationProfile.semantic.decision}. Source dossier ${tsDate} for ${canonical}'s ${scope} ${attr} is the record from which the disputed claim was derived.`,
+      text: `${operationProfile.semantic.decision}. Neutral route marker ${tsDate} for ${canonical}'s ${scope} ${attr} records the ${pathEdges.seed} link used by the public review graph.`,
       timestamp: tsDate, currentStaleFlag: true, lifecycleState: 'path_pivot', lifecycleScope: scope,
       scope: { topicId: scope } },
   ];
@@ -265,7 +273,7 @@ export function buildConflictLifecycleClusterSpec({
   const forbiddenEvidence = [candidateId, ...decoyIds];
 
   const entityHoldoutKeys = bmuEntityHoldoutKeysForSubject({ id: subjectId, canonicalName: canonical, aliases: subjectAliases });
-  const stampTask = ({ requiredEvidence, answerId, answerValue, questionType, variant }) => ({
+  const stampTask = ({ requiredEvidence, answerId, answerValue, questionType, variant }) => stampExecutableOperationTask({
     family: CONFLICT_FAMILY,
     budgetB: CONFLICT_BUDGET_B,
     requiredEvidence,
@@ -275,7 +283,7 @@ export function buildConflictLifecycleClusterSpec({
     motifGroupId,
     templateId: conflictTemplateId(questionType, variant, attr, scope),
     entityHoldoutKeys,
-  });
+  }, operationProfile.operation);
 
   // §4.3 mint-time consistency: requiredEvidence ⊆ {qrels ≥ 0.5} — support
   // doc graded 0.6 (DELTA from the ancestor's 0.4 provenance bridge).
@@ -392,7 +400,9 @@ export function generateConflictLifecycleClusters({
     const isProject = /-svc-/.test(canonical);
     const rnd = prng(`${seed}:bmu-conflict:${epoch}:${subj.id}:${clusterSlot}`);
     const operationProfile = conflictOperationProfileForCluster(operationSequenceOffset, c);
+    const operation = operationProfile.operation;
     const operationFamily = operationProfile.id;
+    const operationClass = operation.operationClass;
 
     const { attr, bank } = bmuAttributeForClusterSlot(epoch, clusterSlot, {
       qualifiers: CONFLICT_QUALIFIERS, bases: CONFLICT_BASES, baseEpoch: rotationBaseEpoch,
@@ -478,7 +488,11 @@ export function generateConflictLifecycleClusters({
           lifecycleScope: scope, queryTime: tsDate, selector: `qtype_${stub.questionType}_v${stub.variant}` },
         questionType: stub.questionType,
         band: escalationLevel > 0 ? 'very_hard' : 'hard',
-        operationFamily, operationClass: operationFamily, liveUpdateEpoch: epoch,
+        operationFamily, operationClass, operationClassBasis: operation.operationClassBasis,
+        operationLaw: operation.operationLaw,
+        bmuOperationCue: operation.operationCue,
+        bmuOperationProgram: operation.operationProgram,
+        liveUpdateEpoch: epoch,
         bmuTask: stub.bmuTask,
       });
       rowIds.push(qid);
@@ -487,7 +501,11 @@ export function generateConflictLifecycleClusters({
     clusters.push({
       motifGroupId, family: CONFLICT_FAMILY, epoch, clusterSlot,
       subjectEntityId: subj.id, attribute: attr, scope,
-      operationFamily, operationClass: operationFamily,
+      operationFamily, operationClass,
+      operationClassBasis: operation.operationClassBasis,
+      operationLaw: operation.operationLaw,
+      bmuOperationCue: operation.operationCue,
+      bmuOperationProgram: operation.operationProgram,
       operationSemantic: operationProfile.semantic.id,
       operationTopology: operationProfile.topology.id,
       operationSequence: operationSequenceOffset + c,

@@ -69,13 +69,12 @@ export const SIM_PINS = Object.freeze({
   // {16,22,22,16}; mints LAND at evolve steps (the only time the corpus delta
   // lands and the frontier steps) at a rate equivalent to ~24-25 rows/epoch.
   bootstrapClusters: { temporal: 16, conflict_lifecycle: 22, multi_hop_relation: 22, near_collision_abstention: 16 },
-  // Long-horizon steady mint cycle (per 4 evolves; §2.3 composition ratio
-  // 0.20/0.30/0.30/0.20 exactly): 5 clusters = 25 rows per evolve.
+  // Executable-era cursor: alternating 6-cluster evolves give every family
+  // exactly 72 mints = 36 adjacent-paired executable programs in 48 evolves.
+  // Pack composition remains governed by the unchanged family quotas.
   steadyMintCycle: [
-    { temporal: 1, conflict_lifecycle: 2, multi_hop_relation: 1, near_collision_abstention: 1 },
-    { temporal: 1, conflict_lifecycle: 1, multi_hop_relation: 2, near_collision_abstention: 1 },
-    { temporal: 1, conflict_lifecycle: 2, multi_hop_relation: 1, near_collision_abstention: 1 },
-    { temporal: 1, conflict_lifecycle: 1, multi_hop_relation: 2, near_collision_abstention: 1 },
+    { temporal: 2, conflict_lifecycle: 2, multi_hop_relation: 1, near_collision_abstention: 1 },
+    { temporal: 1, conflict_lifecycle: 1, multi_hop_relation: 2, near_collision_abstention: 2 },
   ],
 });
 
@@ -202,6 +201,8 @@ function rowToProductionEvent(world, row) {
     logicalFamily: row.family,
     ...(row.operationClass !== undefined ? { operationClass: row.operationClass } : {}),
     ...(row.operationFamily !== undefined ? { operationFamily: row.operationFamily } : {}),
+    ...(row.operationClassBasis !== undefined ? { operationClassBasis: row.operationClassBasis } : {}),
+    ...(row.operationLaw !== undefined ? { operationLaw: row.operationLaw } : {}),
     domain: 'bmu_p5_sim',
     split: 'eval_hidden',
     queryText: row.queryText,
@@ -216,6 +217,7 @@ function rowToProductionEvent(world, row) {
     ...(row.band !== undefined ? { band: row.band } : {}),
     bmuTask: t,
     ...(row.bmuOperationCue ? { bmuOperationCue: row.bmuOperationCue } : {}),
+    ...(row.bmuOperationProgram ? { bmuOperationProgram: row.bmuOperationProgram } : {}),
     provenance: { source: 'synthetic_challenge', sourceHash: `0x${'00'.repeat(32)}` },
     embeddings: {
       modelId: 'bge-m3',
@@ -336,11 +338,17 @@ export function mintEvolve(world, epoch, clusterCounts, { escalationLevel = 0 } 
       world.clusters.set(cluster.motifGroupId, {
         motifGroupId: cluster.motifGroupId,
         family,
+        epoch: cluster.epoch,
+        operationSequence: cluster.operationSequence,
         subjectEntityId: cluster.subjectEntityId,
         templateIds: [...(cluster.templateIds ?? [])],
         entityHoldoutKeys: [...(cluster.entityHoldoutKeys ?? cluster.rows?.[0]?.bmuTask?.entityHoldoutKeys ?? [])],
         operationClass,
         operationFamily: cluster.operationFamily ?? operationClass,
+        operationClassBasis: cluster.operationClassBasis,
+        operationLaw: cluster.operationLaw,
+        bmuOperationCue: cluster.bmuOperationCue,
+        bmuOperationProgram: cluster.bmuOperationProgram,
         mechanism,
         mintEpoch: epoch,
         rowProductionIds,

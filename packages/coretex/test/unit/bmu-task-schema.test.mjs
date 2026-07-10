@@ -31,6 +31,20 @@ import {
 
 const DOC_IDS = new Set(['d1', 'd2', 'd3', 'trap1', 'trap2']);
 const docIdExists = (id) => DOC_IDS.has(id);
+const V2_CUE = 'revision review protocol 001';
+const V2_PROGRAM = Object.freeze({
+  branchLimit: 4,
+  steps: Object.freeze([
+    Object.freeze({ direction: 'outgoing', edgeType: 'derived_from' }),
+    Object.freeze({ direction: 'incoming', edgeType: 'supports' }),
+  ]),
+});
+const V2_CLASS = `${V2_CUE}=>b4/outgoing:derived_from/incoming:supports`;
+const V2_TASK_STAMP = Object.freeze({
+  operationLaw: 'public_path_program_v1',
+  operationClass: V2_CLASS,
+  operationClassBasis: BMU_V2_OPERATION_CLASS_BASIS,
+});
 
 function taskOf(overrides = {}) {
   return {
@@ -71,11 +85,17 @@ describe('validateBmuTaskOnEvent (§4.1 fail-closed load rules)', () => {
   });
 
   test('v2 operation cue is mandatory, canonical, and explicitly stamped while legacy v1 remains optional', () => {
-    const v2 = { operationLaw: 'public_path_program_v1', operationClass: 'cue=>outgoing:derived_from/incoming:supports', operationClassBasis: BMU_V2_OPERATION_CLASS_BASIS };
-    assert.deepEqual(validateBmuTaskOnEvent(eventOf(v2, { bmuOperationCue: 'revision review protocol 001' }), docIdExists), []);
+    assert.deepEqual(validateBmuTaskOnEvent(eventOf(V2_TASK_STAMP, { bmuOperationCue: V2_CUE, bmuOperationProgram: V2_PROGRAM }), docIdExists), []);
     for (const bad of [undefined, ' Revision  Review ', 'revision\nreview', 'révision review']) {
-      assert.ok(validateBmuTaskOnEvent(eventOf(v2, { ...(bad === undefined ? {} : { bmuOperationCue: bad }) }), docIdExists).length > 0);
+      assert.ok(validateBmuTaskOnEvent(eventOf(V2_TASK_STAMP, { bmuOperationProgram: V2_PROGRAM, ...(bad === undefined ? {} : { bmuOperationCue: bad }) }), docIdExists).length > 0);
     }
+    assert.ok(validateBmuTaskOnEvent(eventOf({ ...V2_TASK_STAMP, operationClass: 'semantic-label' }, {
+      bmuOperationCue: V2_CUE, bmuOperationProgram: V2_PROGRAM,
+    }), docIdExists).some((error) => /recomputed executable signature/.test(error)));
+    assert.ok(validateBmuTaskOnEvent(eventOf(V2_TASK_STAMP, {
+      bmuOperationCue: V2_CUE,
+      bmuOperationProgram: { branchLimit: 4, steps: [{ direction: 'outgoing', edgeType: 'answers' }] },
+    }), docIdExists).some((error) => /valid directed public-edge steps/.test(error)));
     assert.deepEqual(validateBmuTaskOnEvent(eventOf(), docIdExists), [], 'historical v1 task stays loadable');
   });
 
@@ -262,9 +282,10 @@ describe('bmuTask canonical hashing + serialization (§6.7a inert-minting premis
 
   test('serializeProductionCorpus round-trips bmuTask (allowlist trap closed)', () => {
     const stamped = fullEvent('e1', {
-      bmuOperationCue: 'temporal revision protocol 001',
+      bmuOperationCue: V2_CUE,
+      bmuOperationProgram: V2_PROGRAM,
       bmuTask: {
-        operationLaw: 'public_path_program_v1', operationClass: 'temporal cue=>outgoing:derived_from/incoming:supports', operationClassBasis: BMU_V2_OPERATION_CLASS_BASIS,
+        ...V2_TASK_STAMP,
         family: 'temporal', budgetB: 3, requiredEvidence: ['e1-t'], forbiddenEvidence: [],
         answer: { id: 'e1-t' }, motifGroupId: 'mg1', templateId: 'tt1',
         entityHoldoutKeys: ['id:ent_1', 'alias:entity one'],
@@ -284,6 +305,7 @@ describe('bmuTask canonical hashing + serialization (§6.7a inert-minting premis
     const onDisk = serializeProductionCorpus(corpus);
     assert.deepEqual(onDisk.events[0].bmuTask, stamped.bmuTask);
     assert.equal(onDisk.events[0].bmuOperationCue, stamped.bmuOperationCue);
+    assert.deepEqual(onDisk.events[0].bmuOperationProgram, stamped.bmuOperationProgram);
   });
 });
 
@@ -314,7 +336,7 @@ describe('logical-delta-bridge bmuTask pass-through (§6.7a prerequisite 1)', ()
       labelingModelRevision: 'lr',
     };
     const bmuTask = {
-      operationLaw: 'public_path_program_v1', operationClass: 'temporal cue=>outgoing:derived_from/incoming:supports', operationClassBasis: BMU_V2_OPERATION_CLASS_BASIS,
+      ...V2_TASK_STAMP,
       family: 'temporal', budgetB: 3, requiredEvidence: [docId], forbiddenEvidence: [],
       answer: { id: docId, value: 'v' }, motifGroupId: 'mg_e137_temporal_0001', templateId: 'tt_supersession_q1_v1',
       entityHoldoutKeys: ['id:ent_9', 'alias:entity nine'],
@@ -335,7 +357,8 @@ describe('logical-delta-bridge bmuTask pass-through (§6.7a prerequisite 1)', ()
           queryText: 'what is current?',
           qrels: [{ docId, relevance: 1 }],
           subjectEntityId: 'ent_9',
-          bmuOperationCue: 'temporal revision protocol 001',
+          bmuOperationCue: V2_CUE,
+          bmuOperationProgram: V2_PROGRAM,
           liveUpdateEpoch: epoch,
           bmuTask,
         }],
@@ -349,7 +372,8 @@ describe('logical-delta-bridge bmuTask pass-through (§6.7a prerequisite 1)', ()
     const qEvent = events.find((e) => e.id === prodId);
     assert.ok(qEvent, `bridged query event ${prodId} missing`);
     assert.deepEqual(qEvent.bmuTask, bmuTask);
-    assert.equal(qEvent.bmuOperationCue, 'temporal revision protocol 001');
+    assert.equal(qEvent.bmuOperationCue, V2_CUE);
+    assert.deepEqual(qEvent.bmuOperationProgram, V2_PROGRAM);
     assert.equal(qEvent.logicalFamily, 'temporal_update');
     // An unstamped query stays unstamped (no empty-object stamping).
     const events2 = bridgeLogicalDeltaToProductionEvents({

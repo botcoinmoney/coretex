@@ -196,10 +196,10 @@ test('P5 lifecycle owns one monotone cursor and persists generated class identit
   assert.equal(world.operationSequence.conflict_lifecycle, 3);
   const temporal = [...world.clusters.values()].filter((cluster) => cluster.family === 'temporal');
   const conflict = [...world.clusters.values()].filter((cluster) => cluster.family === 'conflict_lifecycle');
-  assert.deepEqual(temporal.map((cluster) => cluster.operationClass), [
-    'temporal_revision_supersession__derived_from_then_supports',
-    'temporal_revision_supersession__derived_from_then_supports',
-  ]);
+  assert.equal(temporal.length, 2);
+  assert.equal(new Set(temporal.map((cluster) => cluster.operationClass)).size, 1,
+    'adjacent temporal clusters share one exact executable class');
+  assert.ok(temporal[0].operationClass.startsWith('temporal era 1 route '));
   assert.equal(new Set(conflict.map((cluster) => cluster.operationClass)).size, 2);
   assert.ok([...world.clusters.values()].every((cluster) => cluster.operationFamily === cluster.operationClass));
   assert.throws(() => resolveGeneratedOperationClass(

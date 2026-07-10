@@ -80,22 +80,17 @@ describe('v2 operation-general public path', () => {
     assert.deepEqual(Object.keys(out.telemetry.operationFamilyHistogram).sort(), [...new Set(out.clusters.map((c) => c.operationFamily))].sort());
   });
 
-  test('48-evolve census rotates 40 real classes (>32 capacity), each repeated on I6-disjoint clusters', () => {
+  test('48-evolve census rotates 36 executable classes (>32 capacity), each repeated on I6-disjoint clusters', () => {
     const registry = createM1Registry();
     const subjects = bank(128);
     const clusters = [];
     const docs = [];
     const relations = [];
-    const steadyCounts = [2, 1, 2, 1];
-    const schedule = [
-      { epoch: 144, count: 11, escalationLevel: 0 },
-      { epoch: 152, count: 14, escalationLevel: 1 },
-      ...Array.from({ length: 48 }, (_, step) => ({
-        epoch: 152 + (step + 1) * 8,
-        count: steadyCounts[step % steadyCounts.length],
-        escalationLevel: step % 3,
-      })),
-    ];
+    const schedule = Array.from({ length: 48 }, (_, step) => ({
+      epoch: 152 + (step + 1) * 8,
+      count: step % 2 === 0 ? 2 : 1,
+      escalationLevel: step % 3,
+    }));
     let operationSequenceOffset = 0;
     for (const spec of schedule) {
       const out = generateConflictLifecycleClusters({
@@ -116,13 +111,16 @@ describe('v2 operation-general public path', () => {
       byClass.set(c.operationFamily, members);
       const profile = conflictOperationProfileForCluster(c.operationSequence, 0);
       assert.equal(profile.id, c.operationFamily);
-      assert.equal(c.operationFamily, `conflict_${c.operationSemantic}__${c.publicPath.firstEdgeType}_then_${c.publicPath.terminalEdgeType}`);
+      assert.equal(c.operationClass, c.operationFamily);
+      assert.equal(c.operationClass, `${c.bmuOperationCue}=>b4/outgoing:${c.publicPath.firstEdgeType}/incoming:${c.publicPath.terminalEdgeType}`);
       assert.ok(CONFLICT_OPERATION_CLASS_BANK.some((candidate) => candidate.id === c.operationFamily));
       const topologyCue = {
         supports: /supports the linked review conclusion/,
         supersedes: /supersedes the linked preliminary summary/,
         coreference_of: /refers to the same case as the linked case marker/,
         co_occurs_with: /filed alongside the linked docket entry/,
+        causes: /records the cause of the linked conclusion/,
+        derived_from: /derived from the linked conclusion/,
       }[c.publicPath.terminalEdgeType];
       assert.ok(c.publicPath.terminalBranchIds.every((id) => topologyCue.test(docById.get(id).text)),
         `class ${c.operationFamily} must express its edge semantics in branch text`);
@@ -134,10 +132,10 @@ describe('v2 operation-general public path', () => {
       assert.equal(new Set(c.publicPath.terminalBranchIds.map(observable)).size, 1, `unbalanced class ${c.operationFamily}`);
     }
     assert.equal(byClass.size, CONFLICT_OPERATION_FAMILIES.length);
-    assert.equal(byClass.size, 40);
-    assert.ok(byClass.size > 32, 'class bank exceeds conservative conflict state capacity by eight');
-    assert.equal(new Set(clusters.slice(0, 80).map((c) => c.operationFamily)).size, 40,
-      'bootstrap plus the exact cadence-8 irregular steady cycle exposes every class without gcd aliasing');
+    assert.equal(byClass.size, 36);
+    assert.equal(byClass.size - 32, 4, 'class bank exceeds shared state capacity by four');
+    assert.equal(new Set(clusters.map((c) => c.operationFamily)).size, 36,
+      'the exact cadence-8 steady schedule exposes every executable class once as a pair');
     const behaviorSignatures = new Set();
     for (const [classId, members] of byClass) {
       assert.ok(members.length >= 2, `${classId} must repeat for holdout transfer`);

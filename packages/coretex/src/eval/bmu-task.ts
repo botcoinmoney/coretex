@@ -87,6 +87,28 @@ export const BMU_TASK_MAX_BUDGET = 8;
  *  pack law (overlay slot draw) and the arm-gate census consume it. */
 export const BMU_FRESH_WINDOW_DEFAULT = 2;
 export const BMU_V2_OPERATION_CLASS_BASIS = 'shared-policy-evidence-384-511-4w-program-v1';
+export const BMU_V2_OPERATION_BRANCH_LIMIT = 4;
+export const BMU_V2_OPERATION_EDGE_TYPES = [
+  'supports', 'supersedes', 'coreference_of',
+  'causes', 'derived_from', 'co_occurs_with',
+] as const;
+
+export type BmuOperationEdgeType = typeof BMU_V2_OPERATION_EDGE_TYPES[number];
+export type BmuOperationDirection = 'outgoing' | 'incoming';
+export interface BmuOperationProgramStep {
+  readonly direction: BmuOperationDirection;
+  readonly edgeType: BmuOperationEdgeType;
+}
+export interface BmuOperationProgram {
+  readonly branchLimit: typeof BMU_V2_OPERATION_BRANCH_LIMIT;
+  readonly steps: readonly BmuOperationProgramStep[];
+}
+
+/** Exact executable equivalence-class law shared with the public generator. */
+export function bmuExecutableOperationClass(cue: string, program: BmuOperationProgram): string {
+  return `${cue}=>b${program.branchLimit}/${program.steps
+    .map((step) => `${step.direction}:${step.edgeType}`).join('/')}`;
+}
 
 /** BMU multi-hop retrieval law: a transferring boost operation raises score
  * inheritance to this floor. Kept in the leaf law module so the runtime and
@@ -144,6 +166,7 @@ export interface BmuTaskEventShape {
   readonly logicalFamily?: string;
   readonly subjectEntityId?: string;
   readonly bmuOperationCue?: string;
+  readonly bmuOperationProgram?: BmuOperationProgram;
   readonly bmuTask?: BmuTask;
 }
 
@@ -226,6 +249,7 @@ export function validateBmuTaskOnEvent(
   }
   if (t.operationLaw === 'public_path_program_v1') {
     const cue = event.bmuOperationCue;
+    const program = event.bmuOperationProgram;
     const canonical = typeof cue === 'string'
       ? cue.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ')
       : '';
@@ -237,11 +261,21 @@ export function validateBmuTaskOnEvent(
     if (typeof t.operationClass !== 'string' || t.operationClass.length < 4 || t.operationClass.length > 256 || CONTROL.test(t.operationClass)) {
       err('BMU v2 bmuTask.operationClass must be a printable string of length 4..256');
     }
+    const validDirections = new Set<BmuOperationDirection>(['outgoing', 'incoming']);
+    const validEdges = new Set<string>(BMU_V2_OPERATION_EDGE_TYPES);
+    if (!program || program.branchLimit !== BMU_V2_OPERATION_BRANCH_LIMIT
+        || !Array.isArray(program.steps) || program.steps.length < 1 || program.steps.length > 4
+        || program.steps.some((step) => !step || !validDirections.has(step.direction) || !validEdges.has(step.edgeType))) {
+      err(`BMU v2 bmuOperationProgram must carry branchLimit=${BMU_V2_OPERATION_BRANCH_LIMIT} and 1..4 valid directed public-edge steps`);
+    } else if (typeof cue === 'string' && t.operationClass !== bmuExecutableOperationClass(cue, program)) {
+      err(`BMU v2 bmuTask.operationClass must equal the recomputed executable signature '${bmuExecutableOperationClass(cue, program)}'`);
+    }
     if (t.operationClassBasis !== BMU_V2_OPERATION_CLASS_BASIS) {
       err(`BMU v2 bmuTask.operationClassBasis must equal '${BMU_V2_OPERATION_CLASS_BASIS}'`);
     }
-  } else if (event.bmuOperationCue !== undefined || t.operationClass !== undefined || t.operationClassBasis !== undefined) {
-    err('bmuOperationCue/operationClass/operationClassBasis require bmuTask.operationLaw=public_path_program_v1');
+  } else if (event.bmuOperationCue !== undefined || event.bmuOperationProgram !== undefined
+      || t.operationClass !== undefined || t.operationClassBasis !== undefined) {
+    err('bmuOperationCue/bmuOperationProgram/operationClass/operationClassBasis require bmuTask.operationLaw=public_path_program_v1');
   }
   // Control characters (incl. '\n') in the §6.3 exclusion-key fields would let
   // a crafted id smuggle bytes into the sorted-join exclusion-set DIGEST

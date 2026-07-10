@@ -14,7 +14,7 @@
  */
 import type { ProductionCorpus, ProductionCorpusEvent, ProductionCorpusFamily, CorpusSplit, RelationAnnotation, HardNegativeRecord, RelationEdgeType, HardNegativeCategory, PublicScopeMetadata, PublicValidityMetadata, PublicQueryIntent } from '../eval/retrieval-corpus.js';
 import { assertGradedRelevance, splitForRecord } from '../eval/retrieval-corpus.js';
-import { lintBmuTaskForMint, type BmuTask } from '../eval/bmu-task.js';
+import { lintBmuTaskForMint, type BmuOperationProgram, type BmuTask } from '../eval/bmu-task.js';
 
 export interface LogicalDeltaDoc {
   readonly id: string;
@@ -69,6 +69,7 @@ export interface LogicalDeltaQuery {
   readonly scope?: PublicScopeMetadata;
   readonly publicIntent?: PublicQueryIntent;
   readonly bmuOperationCue?: string;
+  readonly bmuOperationProgram?: BmuOperationProgram;
   readonly liveUpdateEpoch?: number;
   /** BMU v1 task fields stamped by the generator (BMU_SPEC.md §4.1/§6.7a).
    *  Pre-flip inert under the r5 law; validated fail-closed at corpus load. */
@@ -389,6 +390,7 @@ export function bridgeLogicalDeltaToProductionEvents(
       q.scope ? { scope: q.scope } : {},
       q.publicIntent ? { publicIntent: q.publicIntent } : {},
       q.bmuOperationCue !== undefined ? { bmuOperationCue: q.bmuOperationCue } : {},
+      q.bmuOperationProgram !== undefined ? { bmuOperationProgram: q.bmuOperationProgram } : {},
       // BMU §6.7a pass-through: this bridge constructs events from an EXPLICIT
       // field allowlist, so without this line an upstream-stamped bmuTask would
       // be silently DROPPED and the row could never be BMU-pack-eligible.

@@ -17,7 +17,12 @@ import { existsSync, readFileSync, openSync, readSync, closeSync, fstatSync } fr
 import { keccak256 } from '../state/keccak256.js';
 import { bytesToHex } from '../state/merkle.js';
 import { canonicalJson, bytesToBareHex as uint8ToHex } from '../canonical/json.js';
-import { validateBmuTaskOnEvent, validateBmuCorpusConsistency, type BmuTask } from './bmu-task.js';
+import {
+  validateBmuTaskOnEvent,
+  validateBmuCorpusConsistency,
+  type BmuOperationProgram,
+  type BmuTask,
+} from './bmu-task.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -255,6 +260,8 @@ export interface ProductionCorpusEvent {
   readonly subjectEntityId?: string;
   /** PUBLIC BMU-v2 query-local operation cue; never an answer/branch pointer. */
   readonly bmuOperationCue?: string;
+  /** PUBLIC executable program paired with the cue; contains no answer/doc id. */
+  readonly bmuOperationProgram?: BmuOperationProgram;
   readonly provenance: Provenance;
   readonly embeddings: EmbeddingPayload;
   /**
@@ -1008,6 +1015,7 @@ export function serializeProductionCorpus(corpus: ProductionCorpus): CorpusFileS
     ...(e.ownerScoped !== undefined ? { ownerScoped: e.ownerScoped } : {}),
     ...(e.subjectEntityId !== undefined ? { subjectEntityId: e.subjectEntityId } : {}),
     ...(e.bmuOperationCue !== undefined ? { bmuOperationCue: e.bmuOperationCue } : {}),
+    ...(e.bmuOperationProgram !== undefined ? { bmuOperationProgram: e.bmuOperationProgram } : {}),
     ...(e.causalDepth !== undefined ? { causalDepth: e.causalDepth } : {}),
     ...(e.relationHopDepth !== undefined ? { relationHopDepth: e.relationHopDepth } : {}),
     ...(e.band !== undefined ? { band: e.band } : {}),

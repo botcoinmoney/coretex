@@ -134,6 +134,42 @@ test('blank and obsolete parent fail while a four-word query-key program execute
   assert.equal(blankDocs.some((text) => text.startsWith('Path 0:')), false);
 });
 
+test('diagonal edge programs exclude seed backtracking before applying the four-branch cap', async () => {
+  const high = [1, 0, 0, 0, 0, 0, 0, 0];
+  const low = [0, 1, 0, 0, 0, 0, 0, 0];
+  const terminals = ['terminal-a', 'terminal-b', 'terminal-c', 'terminal-d'];
+  const events = [
+    event('diagonal-seed', 'diagonal seed', high, [{ other_id: 'diagonal-pivot', edgeType: 'supports' }]),
+    event('diagonal-pivot', 'diagonal pivot', low),
+    ...terminals.map((id) => event(id, `fresh ${id}`, low, [{ other_id: 'diagonal-pivot', edgeType: 'supports' }])),
+  ];
+  const corpus = {
+    events, byId: new Map(events.map((e) => [e.id, e])), corpusRoot: computeCorpusRoot(events), corpusEpoch: 0,
+    biEncoderModelId: MODEL_ID, biEncoderRevision: REVISION, biEncoderRetrievalKeyLayout: LAYOUT,
+    labelingModelId: 'test/qwen', labelingModelRevision: 'q'.repeat(40),
+  };
+  const query = { ...event('diagonal-query', 'execute diagonal route', high), split: 'eval_hidden', bmuOperationCue: CUE };
+  const capture = [];
+  const state = stateWithProgram([
+    { direction: 'outgoing', edgeType: 'supports' },
+    { direction: 'incoming', edgeType: 'supports' },
+  ]);
+  const score = await evaluateRetrievalBenchmarkState(
+    state,
+    corpus,
+    { epoch: 0, seed: `0x${'24'.repeat(32)}`, events: [query] },
+    { ...opts(CORETEX_PIPELINE_VERSION_BMU_V2, capture), firstStageTopK: 1, rerankerInputTopK: 8 },
+  );
+  const result = score.perQuery[0];
+  for (const id of terminals.map((terminal) => `${terminal}-doc`)) {
+    assert.ok(result.cappedDocIds.includes(id), `${id} survives the fresh-neighbor branch cap`);
+    assert.ok(result.cappedDocSources[result.cappedDocIds.indexOf(id)].includes('publicPath'));
+  }
+  assert.deepEqual(result.cappedDocSources[result.cappedDocIds.indexOf('diagonal-seed-doc')], ['stage1'],
+    'the route never loops back and labels its seed as a terminal');
+  assert.equal(capture.filter((document) => document.startsWith('Path 0:')).length, 4);
+});
+
 test('program is exactly one four-word patch; incomplete, duplicate-key, and occupied inert-anchor states fail closed', () => {
   const blank = { words: new Array(1024).fill(0n) };
   const candidate = stateWithProgram([{ direction: 'outgoing', edgeType: 'derived_from' }, { direction: 'incoming', edgeType: 'supports' }]);

@@ -88,6 +88,11 @@ import {
   opaqueBmuDocId,
   bmuEntityHoldoutKeysForSubject,
 } from './common.mjs';
+import {
+  BMU_EXECUTABLE_PROGRAM_BANK,
+  executableOperationForFamilySlot,
+  stampExecutableOperationTask,
+} from './operation-program.mjs';
 
 export const BMU_MULTI_HOP_FAMILY = 'multi_hop_relation';        // bmuTask.family / bucketed (§5.6)
 export const BMU_MULTI_HOP_LOGICAL_FAMILY = 'multi_session_bridge'; // corpus logicalFamily (§5.6 union member)
@@ -108,28 +113,21 @@ const MULTI_HOP_SEMANTIC_PROFILES = Object.freeze([
   Object.freeze({ key: 'dependency', truthKind: 'active dependency' }),
   Object.freeze({ key: 'custody', truthKind: 'accepted custody record' }),
 ]);
-const MULTI_HOP_OUTGOING_EDGES = Object.freeze(['causes', 'derived_from']);
-const MULTI_HOP_INCOMING_EDGES = Object.freeze(['supports', 'supersedes', 'coreference_of', 'co_occurs_with']);
-const MULTI_HOP_EDGE_PROGRAMS = Object.freeze(MULTI_HOP_OUTGOING_EDGES.flatMap((outgoingEdgeType) =>
-  MULTI_HOP_INCOMING_EDGES.map((incomingEdgeType) => Object.freeze({ outgoingEdgeType, incomingEdgeType }))));
-const MULTI_HOP_TOPOLOGY_PROFILES = Object.freeze([
-  Object.freeze({ key: 'single_sink', sinkMultiplicity: 1 }),
-  Object.freeze({ key: 'dual_sink', sinkMultiplicity: 2 }),
-]);
-/** 5 semantics × (2 outgoing × 4 incoming) × 2 real sink topologies = 80. */
-export const BMU_MULTI_HOP_OPERATION_CLASSES = Object.freeze(
-  MULTI_HOP_EDGE_PROGRAMS.flatMap((edgeProgram) =>
-    MULTI_HOP_SEMANTIC_PROFILES.flatMap((semantic) =>
-      MULTI_HOP_TOPOLOGY_PROFILES.map((topology) => Object.freeze({
-        name: `shared_sink_${semantic.key}_${edgeProgram.outgoingEdgeType}_${edgeProgram.incomingEdgeType}_${topology.key}`,
-        semantic: semantic.key,
-        truthKind: semantic.truthKind,
-        outgoingEdgeType: edgeProgram.outgoingEdgeType,
-        incomingEdgeType: edgeProgram.incomingEdgeType,
-        topology: topology.key,
-        sinkMultiplicity: topology.sinkMultiplicity,
-      })))),
-);
+/** Exactly 36 executable programs. Prose semantics rotate independently. */
+export const BMU_MULTI_HOP_OPERATION_CLASSES = Object.freeze(BMU_EXECUTABLE_PROGRAM_BANK.map((program, ordinal) => {
+  const semantic = MULTI_HOP_SEMANTIC_PROFILES[ordinal % MULTI_HOP_SEMANTIC_PROFILES.length];
+  const operation = executableOperationForFamilySlot(BMU_MULTI_HOP_FAMILY, ordinal * 2);
+  return Object.freeze({
+    name: operation.operationClass,
+    semantic: semantic.key,
+    truthKind: semantic.truthKind,
+    outgoingEdgeType: program.outgoingEdgeType,
+    incomingEdgeType: program.incomingEdgeType,
+    topology: ordinal % 2 === 0 ? 'single_sink' : 'dual_sink',
+    sinkMultiplicity: ordinal % 2 === 0 ? 1 : 2,
+    operation,
+  });
+}));
 
 export function multiHopOperationClassForSlot(operationClassSlot) {
   if (!Number.isInteger(operationClassSlot) || operationClassSlot < 0) {
@@ -438,8 +436,9 @@ export function generateMultiHopClusters({
     // controls the actual edge type of every branch. It is therefore a
     // deterministic topology decision, not a label inferred from gold roles.
     const operationPlan = multiHopOperationClassForSlot(operationClassSlotOffset + ordinal);
+    const operation = operationPlan.operation;
     const operationFamily = BMU_MULTI_HOP_OPERATION_FAMILY;
-    const operationClass = operationPlan.name;
+    const operationClass = operation.operationClass;
     const hopCount = operationPlan.sinkMultiplicity === 1 ? 2 : 3;
     const corefFramed = hopCount === 3 && !isProject;
     const relayToken = `${hostAt()}-relay-${epoch}r${ordinal}`;
@@ -648,8 +647,12 @@ export function generateMultiHopClusters({
         },
         questionType: qtype, capability: 'relation_traversal',
         band: escalationLevel > 0 ? 'very_hard' : 'hard',
-        operationFamily, operationClass, liveUpdateEpoch: epoch,
-        bmuTask: {
+        operationFamily, operationClass, operationClassBasis: operation.operationClassBasis,
+        operationLaw: operation.operationLaw,
+        bmuOperationCue: operation.operationCue,
+        bmuOperationProgram: operation.operationProgram,
+        liveUpdateEpoch: epoch,
+        bmuTask: stampExecutableOperationTask({
           family: BMU_MULTI_HOP_FAMILY,
           budgetB: BMU_MULTI_HOP_BUDGET_B,
           requiredEvidence,
@@ -659,7 +662,7 @@ export function generateMultiHopClusters({
           motifGroupId,
           templateId: variant.templateId,
           entityHoldoutKeys,
-        },
+        }, operation),
       });
     }
     if (rows.length !== BMU_MULTI_HOP_CLUSTER_K) {
@@ -713,6 +716,12 @@ export function generateMultiHopClusters({
       targetAttribute: targetAttr,
       operationFamily,
       operationClass,
+      operationClassBasis: operation.operationClassBasis,
+      operationLaw: operation.operationLaw,
+      bmuOperationCue: operation.operationCue,
+      bmuOperationProgram: operation.operationProgram,
+      operationSemantic: operationPlan.semantic,
+      operationTopology: operationPlan.topology,
       hopCount,
       corefFramed,
       bridgeTokens: hopCount === 2 ? [relayToken] : [ticket, deskToken],
