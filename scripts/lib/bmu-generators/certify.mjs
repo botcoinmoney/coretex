@@ -255,13 +255,16 @@ export function nearCollisionOracleRank(row, { docs, docById, relations, cluster
   const disambigDoc = clusterDocs.find((doc) => /^Registry review /i.test(doc.text));
   if (!exactDoc || !disambigDoc) return null;
 
-  const outgoingTypes = new Set(['causes', 'derived_from']);
-  const incomingTypes = new Set(['supports', 'supersedes', 'coreference_of', 'co_occurs_with']);
+  const program = row.bmuOperationProgram;
+  if (!program || program.branchLimit !== 4 || !Array.isArray(program.steps) || program.steps.length !== 2
+      || program.steps[0]?.direction !== 'outgoing' || program.steps[1]?.direction !== 'incoming') return null;
+  const outgoingType = program.steps[0].edgeType;
+  const incomingType = program.steps[1].edgeType;
   const anchorSinks = new Set(relations
-    .filter((rel) => rel.src === disambigDoc.id && rel.label === 'public_path_seed' && outgoingTypes.has(rel.type))
+    .filter((rel) => rel.src === disambigDoc.id && rel.label === 'public_path_seed' && rel.type === outgoingType)
     .map((rel) => rel.dst));
   const truthSinks = new Set(relations
-    .filter((rel) => rel.src === exactDoc.id && rel.label === 'public_path_branch' && incomingTypes.has(rel.type))
+    .filter((rel) => rel.src === exactDoc.id && rel.label === 'public_path_branch' && rel.type === incomingType)
     .map((rel) => rel.dst));
   if (anchorSinks.size === 0 || ![...anchorSinks].some((sink) => truthSinks.has(sink))) return null;
 
