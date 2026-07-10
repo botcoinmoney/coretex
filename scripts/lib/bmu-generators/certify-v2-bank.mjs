@@ -13,14 +13,24 @@ import { createHash } from 'node:crypto';
 import { judgeTopB, randomKRank, CERT_PINS } from './certify.mjs';
 import { subjectScopedRecencyLane, validityCurrencyLane } from './certify-lanes.mjs';
 import { opaqueBmuDocId } from './common.mjs';
+import { executableOperationSignature, BMU_EXECUTABLE_PROGRAM_CAPACITY } from './operation-program.mjs';
 
 const normText = (value) => String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
 const compareId = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const finite = (value) => typeof value === 'number' && Number.isFinite(value);
 
+/**
+ * Every family's conservative operation capacity is the ONE shared executable
+ * program capacity (BMU_EXECUTABLE_PROGRAM_CAPACITY). There are no per-family
+ * capacity constants: the executable class bank is family-agnostic (the 6x6
+ * directed two-step bytecode matrix), so the resident/certification capacity a
+ * family must exceed is derived from that shared law, not hardcoded per family.
+ * All four executable-era families ship a default certification adapter.
+ */
+const SHARED_OPERATION_CAPACITY = BMU_EXECUTABLE_PROGRAM_CAPACITY;
 export const DEFAULT_V2_BANK_ADAPTERS = Object.freeze({
   temporal: Object.freeze({
-    conservativeOperationCapacity: 24,
+    conservativeOperationCapacity: SHARED_OPERATION_CAPACITY,
     maxActiveEpochGap: 32,
     publicAttackers: Object.freeze({
       subjectScopedRecency: (row, docs) => subjectScopedRecencyLane(row, docs),
@@ -28,7 +38,17 @@ export const DEFAULT_V2_BANK_ADAPTERS = Object.freeze({
     }),
   }),
   conflict_lifecycle: Object.freeze({
-    conservativeOperationCapacity: 32,
+    conservativeOperationCapacity: SHARED_OPERATION_CAPACITY,
+    maxActiveEpochGap: 32,
+    publicAttackers: Object.freeze({}),
+  }),
+  multi_hop_relation: Object.freeze({
+    conservativeOperationCapacity: SHARED_OPERATION_CAPACITY,
+    maxActiveEpochGap: 32,
+    publicAttackers: Object.freeze({}),
+  }),
+  near_collision_abstention: Object.freeze({
+    conservativeOperationCapacity: SHARED_OPERATION_CAPACITY,
     maxActiveEpochGap: 32,
     publicAttackers: Object.freeze({}),
   }),
@@ -239,13 +259,46 @@ function disjointRepeat(members, maxActiveEpochGap) {
   return null;
 }
 
+/**
+ * §17.9/§18 doctrine: the census counts SIGNATURE-LEVEL executable classes that
+ * are DECODED from each cluster's actual public program bank (operationCue +
+ * operationProgram), never the generator/semantic label a cluster declares.
+ * A declared operationClass that disagrees with the decoded executable
+ * signature — or a program that will not decode — is a forgery and hard-fails
+ * certification. This makes forged semantic labels (many labels sharing one
+ * real cue/program) collapse to a single executable class below capacity, and
+ * makes any relabelled real cue/program pair a certification failure.
+ */
 export function operationClassCensus(lane, capacity, maxActiveEpochGap = 32) {
   const byClass = new Map();
+  const labelMismatches = [];
   for (const cluster of lane.clusters) {
-    const operationClass = cluster.operationClass ?? cluster.operationFamily;
-    const members = byClass.get(operationClass) ?? [];
+    let executableSignature;
+    try {
+      executableSignature = executableOperationSignature({
+        operationCue: cluster.bmuOperationCue,
+        operationProgram: cluster.bmuOperationProgram,
+      }).executableSignature;
+    } catch (error) {
+      labelMismatches.push({
+        motifGroupId: cluster.motifGroupId ?? null,
+        declared: cluster.operationClass ?? cluster.operationFamily ?? null,
+        reason: `undecodable_operation_program: ${String(error?.message ?? error)}`,
+      });
+      continue;
+    }
+    const declared = cluster.operationClass ?? cluster.operationFamily;
+    if (declared !== undefined && declared !== null && declared !== executableSignature) {
+      labelMismatches.push({
+        motifGroupId: cluster.motifGroupId ?? null,
+        declared,
+        executableSignature,
+        reason: 'declared_label_disagrees_with_executable_signature',
+      });
+    }
+    const members = byClass.get(executableSignature) ?? [];
     members.push(cluster);
-    byClass.set(operationClass, members);
+    byClass.set(executableSignature, members);
   }
   const classes = [...byClass].map(([operationClass, members]) => ({
     operationClass,
@@ -257,7 +310,9 @@ export function operationClassCensus(lane, capacity, maxActiveEpochGap = 32) {
     distinctClasses: byClass.size,
     margin: byClass.size - capacity,
     classes,
-    pass: byClass.size > capacity && classes.every((entry) => entry.clusters >= 2 && entry.disjointRepeat !== null),
+    labelMismatches,
+    pass: labelMismatches.length === 0 && byClass.size > capacity
+      && classes.every((entry) => entry.clusters >= 2 && entry.disjointRepeat !== null),
   };
 }
 
