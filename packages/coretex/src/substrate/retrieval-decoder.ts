@@ -147,6 +147,35 @@ export interface PolicyAtom {
   readonly expiryEpoch: bigint;        // atom expires at (0 = never); frontier-churn retirement hook
 }
 
+/**
+ * BMU v2 executable directed-path program.
+ *
+ * One program occupies four aligned, individually valid evidence-policy
+ * atoms. A complete tag+checksum group is reserved/inert under r5 rollback
+ * and executable only under v2. Programs
+ * carry only an ordered composition of public edge operations.  They cannot
+ * name an event, document, family, role, qrel, or generator class.
+ */
+export interface BmuPublicPathProgramStep {
+  readonly direction: 'outgoing' | 'incoming';
+  readonly edgeType: RelationEdgeType;
+}
+
+export interface BmuPublicPathProgram {
+  readonly programIndex: number;
+  /** 56-bit key of the public, query-local operation cue. */
+  readonly queryKey: bigint;
+  readonly branchLimit: number;
+  readonly validFromEpoch: bigint;
+  readonly expiryEpoch: bigint;
+  readonly steps: readonly BmuPublicPathProgramStep[];
+}
+
+export const BMU_PATH_PROGRAM_SELECTOR = POLICY_SELECTOR.RELATION_PATH_PRESENT;
+export const BMU_PATH_PROGRAM_EVIDENCE_FEATURE = POLICY_EVIDENCE_FEATURE.BRIDGE_HOP;
+export const BMU_PATH_PROGRAM_VERSION = 0x1;
+export const BMU_PATH_PROGRAM_INERT_TARGET_SLOT = 255;
+
 export const POLICY_TARGET_NONE = 0xffff;
 /**
  * Max addressable PolicyAtom anchor slot. MemoryIndex decodes 352 slots, but slot REFERENCES
@@ -184,6 +213,8 @@ export interface DecodedSubstrate {
   readonly evidenceBundleAtoms: ReadonlyArray<PolicyAtom>;
   readonly conflictLifecycleAtoms: ReadonlyArray<PolicyAtom>;
   readonly abstentionAtoms: ReadonlyArray<PolicyAtom>;
+  /** BMU-v2-only executable path programs; empty for every other law. */
+  readonly bmuPublicPathPrograms: ReadonlyArray<BmuPublicPathProgram>;
   /** Count of non-zero words in the reserved r5 policy region (896–991); >0 = invalid-for-reward. */
   readonly policyReservedNonZeroWords: number;
 }
@@ -197,6 +228,8 @@ export interface DecoderOptions {
    * effect) so r5 atoms cannot leak under r4. No silent reinterpretation.
    */
   readonly policyAtomsMode?: boolean;
+  /** Hard law pin for the BMU v2 program wire type. */
+  readonly bmuV2PathPrograms?: boolean;
   /**
    * Bundle-pinned bi-encoder model id hash (first 4 bytes of
    * keccak256(modelId || revision || mode), 0x-prefixed 8-hex).
@@ -294,6 +327,18 @@ function bytesToHex(bytes: Uint8Array): string {
   let hex = '0x';
   for (const b of bytes) hex += b.toString(16).padStart(2, '0');
   return hex;
+}
+
+function digestProgramWords(words: readonly bigint[]): bigint {
+  const bytes = new Uint8Array(words.length * 32);
+  for (const [wordIndex, word] of words.entries()) {
+    for (let b = 0; b < 32; b++) {
+      bytes[wordIndex * 32 + b] = Number((word >> BigInt((31 - b) * 8)) & 0xffn);
+    }
+  }
+  let out = 0n;
+  for (const byte of keccak256(bytes).slice(0, 7)) out = (out << 8n) | BigInt(byte);
+  return out;
 }
 
 function readFloat32BE(bytes: Uint8Array, offset: number): number {
@@ -715,7 +760,24 @@ export const POLICY_REGIONS: Record<PolicyAtomFamily, PolicyRegionSpec> = {
  * The atom carries NO answer/qrel reference; its effect set is reconstructed by the scorer
  * from PUBLIC edges out of `targetSlot` (answer-density = public structure, not answer id).
  */
-export function decodePolicyAtomRegion(state: CortexState, family: PolicyAtomFamily): {
+function isBmuPathProgramWord(word: bigint): boolean {
+  return Number(field(word, 248, MASK_8)) === BMU_PATH_PROGRAM_SELECTOR
+    && Number(field(word, 240, MASK_8)) === BMU_PATH_PROGRAM_EVIDENCE_FEATURE
+    && POLICY_ACTION_BY_BITS[Number(field(word, 236, MASK_4))] === 'bundle'
+    && POLICY_SCOPE_BY_BITS[Number(field(word, 232, MASK_4))] === 'relation_path'
+    && Number(field(word, 216, MASK_16)) === BMU_PATH_PROGRAM_INERT_TARGET_SLOT
+    && Number(field(word, 200, MASK_16)) === 0xb201
+    && Number(field(word, 192, MASK_8)) === 0xb0
+    && field(word, 152, MASK_40) === 0n
+    && field(word, 112, MASK_40) === 0n
+    && field(word, 0, MASK_112) === 0n;
+}
+
+export function decodePolicyAtomRegion(
+  state: CortexState,
+  family: PolicyAtomFamily,
+  ignoreBmuPathPrograms = false,
+): {
   atoms: ReadonlyArray<PolicyAtom>;
   attempts: number;
   failures: number;
@@ -724,9 +786,13 @@ export function decodePolicyAtomRegion(state: CortexState, family: PolicyAtomFam
   const atoms: PolicyAtom[] = [];
   let attempts = 0;
   let failures = 0;
+  const ignoredProgramWords = ignoreBmuPathPrograms
+    ? new Set(decodeBmuPublicPathPrograms(state).completeProgramWordIndices)
+    : new Set<number>();
   for (let k = 0; k < reg.count; k++) {
     const w0 = state.words[reg.start + k] ?? 0n;
     if (w0 === 0n) continue;
+    if (family === 'evidence_bundle' && ignoredProgramWords.has(k)) continue;
     attempts++;
     const selector = Number(field(w0, 248, MASK_8));
     const evidenceFeature = Number(field(w0, 240, MASK_8));
@@ -750,6 +816,160 @@ export function decodePolicyAtomRegion(state: CortexState, family: PolicyAtomFam
     atoms.push({ atomIndex: k, family, selector, evidenceFeature, action, scope, targetSlot, budget, flags, validFromEpoch, expiryEpoch });
   }
   return { atoms, attempts, failures };
+}
+
+const BMU_PATH_EDGE_BY_BITS: Record<number, RelationEdgeType> = {
+  0x1: 'supports',
+  0x2: 'supersedes',
+  0x3: 'coreference_of',
+  0x4: 'causes',
+  0x5: 'derived_from',
+  0x6: 'co_occurs_with',
+};
+
+/**
+ * Decode the evidence-region BMU v2 bytecode.  Invalid tagged words are
+ * failures, not inert padding.  Untagged policy atoms are ignored here and
+ * continue through the normal PolicyAtom decoder.
+ */
+export function decodeBmuPublicPathPrograms(state: CortexState): {
+  programs: ReadonlyArray<BmuPublicPathProgram>;
+  completeProgramWordIndices: ReadonlyArray<number>;
+  attempts: number;
+  failures: number;
+} {
+  const programs: BmuPublicPathProgram[] = [];
+  let attempts = 0;
+  let failures = 0;
+  const completeProgramWordIndices: number[] = [];
+  const reg = POLICY_REGIONS.evidence_bundle;
+  // A header is legal only at a four-word boundary.  This prevents overlap
+  // tricks where one valid r5 atom is made to bind two v2 programs.
+  for (let k = 0; k < reg.count; k++) {
+    const word = state.words[reg.start + k] ?? 0n;
+    if (isBmuPathProgramWord(word) && k % 4 !== 0) { attempts++; failures++; }
+  }
+  for (let k = 0; k < reg.count; k += 4) {
+    const word = state.words[reg.start + k] ?? 0n;
+    const keyWord = state.words[reg.start + k + 1] ?? 0n;
+    const bytecodeWord = state.words[reg.start + k + 2] ?? 0n;
+    const checksumWord = state.words[reg.start + k + 3] ?? 0n;
+    if (word === 0n && keyWord === 0n && bytecodeWord === 0n && checksumWord === 0n) continue;
+    if (!isBmuPathProgramWord(word)) continue;
+    attempts++;
+    const words = [word, keyWord, bytecodeWord, checksumWord];
+    const tagsOk = words.every((candidate, i) =>
+      Number(field(candidate, 248, MASK_8)) === BMU_PATH_PROGRAM_SELECTOR
+      && Number(field(candidate, 240, MASK_8)) === BMU_PATH_PROGRAM_EVIDENCE_FEATURE
+      && POLICY_ACTION_BY_BITS[Number(field(candidate, 236, MASK_4))] === 'bundle'
+      && POLICY_SCOPE_BY_BITS[Number(field(candidate, 232, MASK_4))] === 'relation_path'
+      && Number(field(candidate, 216, MASK_16)) === BMU_PATH_PROGRAM_INERT_TARGET_SLOT
+      && Number(field(candidate, 192, MASK_8)) === 0xb0 + i
+      && field(candidate, 152, MASK_40) === 0n
+      && field(candidate, 0, MASK_112) === 0n,
+    );
+    const queryKey = (field(keyWord, 200, MASK_16) << 40n) | field(keyWord, 112, MASK_40);
+    const branchLimit = Number(field(bytecodeWord, 200, MASK_16) >> 8n);
+    const stepCount = Number(field(bytecodeWord, 200, MASK_16) & 0xffn);
+    const bytecode = field(bytecodeWord, 112, MASK_40);
+    const checksum = (field(checksumWord, 200, MASK_16) << 40n) | field(checksumWord, 112, MASK_40);
+    if (!tagsOk || queryKey === 0n || branchLimit < 1 || branchLimit > 4
+      || stepCount < 1 || stepCount > 4 || bytecode >> 32n !== 0n
+      || checksum === 0n || checksum !== digestProgramWords([word, keyWord, bytecodeWord])) {
+      failures++;
+      continue;
+    }
+    const steps: BmuPublicPathProgramStep[] = [];
+    let malformed = false;
+    for (let i = 0; i < 4; i++) {
+      const opcode = Number(field(bytecode, 24 - i * 8, MASK_8));
+      if (i >= stepCount) {
+        if (opcode !== 0) malformed = true;
+        continue;
+      }
+      const edgeType = BMU_PATH_EDGE_BY_BITS[opcode & 0x0f];
+      const directionBits = opcode >> 4;
+      if (!edgeType || (directionBits !== 0 && directionBits !== 1)) {
+        malformed = true;
+        continue;
+      }
+      steps.push({ direction: directionBits === 1 ? 'incoming' : 'outgoing', edgeType });
+    }
+    if (malformed || steps.length !== stepCount) {
+      failures++;
+      continue;
+    }
+    completeProgramWordIndices.push(k, k + 1, k + 2, k + 3);
+    programs.push({ programIndex: k / 4, queryKey, branchLimit, validFromEpoch: 0n, expiryEpoch: 0n, steps });
+  }
+  const keyCounts = new Map<bigint, number>();
+  for (const program of programs) keyCounts.set(program.queryKey, (keyCounts.get(program.queryKey) ?? 0) + 1);
+  const unique = programs.filter((program) => keyCounts.get(program.queryKey) === 1);
+  failures += programs.length - unique.length;
+  return { programs: unique, completeProgramWordIndices, attempts, failures };
+}
+
+/** Encode one BMU v2 executable path program into one evidence-region word. */
+export function encodeBmuPublicPathProgram(program: BmuPublicPathProgram): bigint {
+  if (!Number.isInteger(program.branchLimit) || program.branchLimit < 1 || program.branchLimit > 4) {
+    throw new Error('encodeBmuPublicPathProgram: branchLimit must be in [1, 4]');
+  }
+  if (!Array.isArray(program.steps) || program.steps.length < 1 || program.steps.length > 4) {
+    throw new Error('encodeBmuPublicPathProgram: steps must contain 1..4 operations');
+  }
+  if (program.validFromEpoch !== 0n || program.expiryEpoch !== 0n) {
+    throw new Error('encodeBmuPublicPathProgram: v2 programs rotate by slot eviction, not atom epoch fields');
+  }
+  if (program.queryKey <= 0n || program.queryKey >> 56n !== 0n) {
+    throw new Error('encodeBmuPublicPathProgram: queryKey must be a non-zero uint56');
+  }
+  for (let i = 0; i < program.steps.length; i++) {
+    const step = program.steps[i]!;
+    const edgeBits = relationTypeToBits(step.edgeType);
+    const directionBits = step.direction === 'incoming' ? 0x10 : step.direction === 'outgoing' ? 0 : -1;
+    if (directionBits < 0) throw new Error('encodeBmuPublicPathProgram: bad direction');
+    if (edgeBits < 1 || edgeBits > 6) throw new Error('encodeBmuPublicPathProgram: bad edgeType');
+  }
+  return (
+    (BigInt(BMU_PATH_PROGRAM_SELECTOR) << 248n)
+    | (BigInt(BMU_PATH_PROGRAM_EVIDENCE_FEATURE) << 240n)
+    | (BigInt(POLICY_ACTION_TO_BITS.bundle) << 236n)
+    | (BigInt(POLICY_SCOPE_TO_BITS.relation_path) << 232n)
+    | (BigInt(BMU_PATH_PROGRAM_INERT_TARGET_SLOT) << 216n)
+    | (0xb201n << 200n)
+    | (0xb0n << 192n)
+  );
+}
+
+/**
+ * Four-word complete encoding.  The bound 56-bit checksum makes a partial
+ * write, overlap, or stale-tail replacement fail closed. Four words
+ * per program yields an honest resident capacity of 128/4 = 32 programs.
+ */
+export function encodeBmuPublicPathProgramWords(program: BmuPublicPathProgram): readonly [bigint, bigint, bigint, bigint] {
+  const header = encodeBmuPublicPathProgram(program);
+  let bytecode = 0n;
+  for (let i = 0; i < program.steps.length; i++) {
+    const step = program.steps[i]!;
+    const direction = step.direction === 'incoming' ? 0x10 : step.direction === 'outgoing' ? 0 : -1;
+    if (direction < 0) throw new Error('encodeBmuPublicPathProgramWords: bad direction');
+    bytecode |= BigInt(direction | relationTypeToBits(step.edgeType)) << BigInt(24 - i * 8);
+  }
+  const atomWord = (flags: number, budget: number, expiry: bigint): bigint => (
+    (BigInt(BMU_PATH_PROGRAM_SELECTOR) << 248n)
+    | (BigInt(BMU_PATH_PROGRAM_EVIDENCE_FEATURE) << 240n)
+    | (BigInt(POLICY_ACTION_TO_BITS.bundle) << 236n)
+    | (BigInt(POLICY_SCOPE_TO_BITS.relation_path) << 232n)
+    | (BigInt(BMU_PATH_PROGRAM_INERT_TARGET_SLOT) << 216n)
+    | (BigInt(budget) << 200n)
+    | (BigInt(flags) << 192n)
+    | (expiry << 112n)
+  );
+  const keyWord = atomWord(0xb1, Number(program.queryKey >> 40n), program.queryKey & MASK_40);
+  const bytecodeWord = atomWord(0xb2, (program.branchLimit << 8) | program.steps.length, bytecode);
+  const checksum = digestProgramWords([header, keyWord, bytecodeWord]);
+  const checksumWord = atomWord(0xb3, Number(checksum >> 40n), checksum & MASK_40);
+  return [header, keyWord, bytecodeWord, checksumWord];
 }
 
 /** Count non-zero words in the reserved r5 policy region (896–991). >0 ⇒ invalid-for-reward. */
@@ -928,20 +1148,28 @@ export function decodeSubstrate(state: CortexState, opts: DecoderOptions = {}): 
   let evidenceBundleAtoms: ReadonlyArray<PolicyAtom> = [];
   let conflictLifecycleAtoms: ReadonlyArray<PolicyAtom> = [];
   let abstentionAtoms: ReadonlyArray<PolicyAtom> = [];
+  let bmuPublicPathPrograms: ReadonlyArray<BmuPublicPathProgram> = [];
   let policyReservedNonZero = 0;
   let policyAttempts = 0;
   let policyFailures = 0;
   if (policyMode) {
-    const eb = decodePolicyAtomRegion(state, 'evidence_bundle');
+    const path = decodeBmuPublicPathPrograms(state);
+    // Complete groups are reserved/inert under every r5-state pipeline.  Only
+    // v2 exposes their executable interpretation; malformed groups contribute
+    // decode failures only under v2 and remain ordinary r5 atoms on rollback.
+    const eb = decodePolicyAtomRegion(state, 'evidence_bundle', true);
     const cl = decodePolicyAtomRegion(state, 'conflict_lifecycle');
     const ab = decodePolicyAtomRegion(state, 'abstention');
     evidenceBundleAtoms = eb.atoms;
     conflictLifecycleAtoms = cl.atoms;
     abstentionAtoms = ab.atoms;
+    bmuPublicPathPrograms = opts.bmuV2PathPrograms === true ? path.programs : [];
     policyReservedNonZero = policyReservedNonZeroWords(state);
     // reserved-region writes are decode failures (invalid-for-reward; not a miner surface).
-    policyAttempts = eb.attempts + cl.attempts + ab.attempts + policyReservedNonZero;
-    policyFailures = eb.failures + cl.failures + ab.failures + policyReservedNonZero;
+    policyAttempts = eb.attempts + cl.attempts + ab.attempts
+      + (opts.bmuV2PathPrograms === true ? path.attempts : 0) + policyReservedNonZero;
+    policyFailures = eb.failures + cl.failures + ab.failures
+      + (opts.bmuV2PathPrograms === true ? path.failures : 0) + policyReservedNonZero;
   }
 
   // Cross-region invariants:
@@ -1010,6 +1238,7 @@ export function decodeSubstrate(state: CortexState, opts: DecoderOptions = {}): 
     evidenceBundleAtoms,
     conflictLifecycleAtoms,
     abstentionAtoms,
+    bmuPublicPathPrograms,
     policyReservedNonZeroWords: policyReservedNonZero,
   };
 }

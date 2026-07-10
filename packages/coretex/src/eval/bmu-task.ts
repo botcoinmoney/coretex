@@ -86,6 +86,7 @@ export const BMU_TASK_MAX_BUDGET = 8;
  *  `liveEvalPack.freshWindow`. Lives in this leaf module because both the
  *  pack law (overlay slot draw) and the arm-gate census consume it. */
 export const BMU_FRESH_WINDOW_DEFAULT = 2;
+export const BMU_V2_OPERATION_CLASS_BASIS = 'shared evidence region: 128 words / 4 bound atoms = 32 resident key->program mappings';
 
 /** BMU multi-hop retrieval law: a transferring boost operation raises score
  * inheritance to this floor. Kept in the leaf law module so the runtime and
@@ -102,6 +103,11 @@ export interface BmuTaskAnswer {
 }
 
 export interface BmuTask {
+  /** Explicit v2 mint stamp; absent preserves historical v1 task loading. */
+  readonly operationLaw?: 'public_path_program_v1';
+  /** Exact executable key→program class, shared by the I6 paired repeat. */
+  readonly operationClass?: string;
+  readonly operationClassBasis?: typeof BMU_V2_OPERATION_CLASS_BASIS;
   readonly family: BmuFamily;
   /** Budget B: top-B evidence items (I4). Integer in [1, 8]. */
   readonly budgetB: number;
@@ -137,6 +143,7 @@ export interface BmuTaskEventShape {
   readonly split?: string;
   readonly logicalFamily?: string;
   readonly subjectEntityId?: string;
+  readonly bmuOperationCue?: string;
   readonly bmuTask?: BmuTask;
 }
 
@@ -205,6 +212,7 @@ export function validateBmuTaskOnEvent(
   }
   const strArray = (v: unknown): v is readonly string[] =>
     Array.isArray(v) && v.every((x) => typeof x === 'string' && x.length > 0);
+  const CONTROL = /[\u0000-\u001f\u007f]/;
   if (!strArray(t.requiredEvidence)) err('bmuTask.requiredEvidence must be an array of non-empty doc-id strings');
   if (!strArray(t.forbiddenEvidence)) err('bmuTask.forbiddenEvidence must be an array of non-empty doc-id strings');
   if (typeof t.motifGroupId !== 'string' || t.motifGroupId.length === 0) err('bmuTask.motifGroupId must be non-empty');
@@ -213,12 +221,33 @@ export function validateBmuTaskOnEvent(
       && (!strArray(t.entityHoldoutKeys) || t.entityHoldoutKeys.length === 0 || t.entityHoldoutKeys.length > 32)) {
     err('bmuTask.entityHoldoutKeys must be an array of 1..32 non-empty strings when present');
   }
+  if (t.operationLaw !== undefined && t.operationLaw !== 'public_path_program_v1') {
+    err(`unknown bmuTask.operationLaw '${String(t.operationLaw)}'`);
+  }
+  if (t.operationLaw === 'public_path_program_v1') {
+    const cue = event.bmuOperationCue;
+    const canonical = typeof cue === 'string'
+      ? cue.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ')
+      : '';
+    if (typeof cue !== 'string' || cue.length < 4 || cue.length > 160) {
+      err('BMU v2 bmuOperationCue must be a string of length 4..160');
+    } else if (!/^[a-z0-9][a-z0-9 _-]*$/.test(cue) || cue !== canonical) {
+      err('BMU v2 bmuOperationCue must already be canonical lowercase ASCII [a-z0-9 _-] with single spaces');
+    }
+    if (typeof t.operationClass !== 'string' || t.operationClass.length < 4 || t.operationClass.length > 256 || CONTROL.test(t.operationClass)) {
+      err('BMU v2 bmuTask.operationClass must be a printable string of length 4..256');
+    }
+    if (t.operationClassBasis !== BMU_V2_OPERATION_CLASS_BASIS) {
+      err(`BMU v2 bmuTask.operationClassBasis must equal '${BMU_V2_OPERATION_CLASS_BASIS}'`);
+    }
+  } else if (event.bmuOperationCue !== undefined || t.operationClass !== undefined || t.operationClassBasis !== undefined) {
+    err('bmuOperationCue/operationClass/operationClassBasis require bmuTask.operationLaw=public_path_program_v1');
+  }
   // Control characters (incl. '\n') in the §6.3 exclusion-key fields would let
   // a crafted id smuggle bytes into the sorted-join exclusion-set DIGEST
   // (§8.3 uses '\n' as the join separator) — refuse them at load, all three
   // key fields (motifGroupId / templateId / event subjectEntityId /
   // entityHoldoutKeys).
-  const CONTROL = /[\u0000-\u001f\u007f]/;
   if (typeof t.motifGroupId === 'string' && CONTROL.test(t.motifGroupId)) err('bmuTask.motifGroupId must not contain control characters');
   if (typeof t.templateId === 'string' && CONTROL.test(t.templateId)) err('bmuTask.templateId must not contain control characters');
   if (event.subjectEntityId !== undefined && CONTROL.test(event.subjectEntityId)) err('subjectEntityId must not contain control characters on a bmuTask row');
@@ -297,9 +326,16 @@ export function lintBmuTaskForMint(
 export function validateBmuCorpusConsistency(events: readonly BmuTaskEventShape[]): string[] {
   const errors: string[] = [];
   const familyByMotif = new Map<string, { family: BmuFamily; firstRow: string; holdoutSignature: string | null }>();
+  const operationClassByCue = new Map<string, string>();
   for (const e of events) {
     const t = e.bmuTask;
     if (!t || typeof t.motifGroupId !== 'string' || t.motifGroupId.length === 0) continue;
+    if (t.operationLaw === 'public_path_program_v1' && typeof e.bmuOperationCue === 'string' && typeof t.operationClass === 'string') {
+      const priorClass = operationClassByCue.get(e.bmuOperationCue);
+      if (priorClass !== undefined && priorClass !== t.operationClass) {
+        errors.push(`bmuOperationCue '${e.bmuOperationCue}' maps to conflicting operation classes '${priorClass}' and '${t.operationClass}'`);
+      } else operationClassByCue.set(e.bmuOperationCue, t.operationClass);
+    }
     const prior = familyByMotif.get(t.motifGroupId);
     const holdoutSignature = t.entityHoldoutKeys === undefined
       ? null

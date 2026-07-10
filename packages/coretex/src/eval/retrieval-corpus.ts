@@ -253,6 +253,8 @@ export interface ProductionCorpusEvent {
    * Optional/back-compat: absent → fail-closed name-text fallback.
    */
   readonly subjectEntityId?: string;
+  /** PUBLIC BMU-v2 query-local operation cue; never an answer/branch pointer. */
+  readonly bmuOperationCue?: string;
   readonly provenance: Provenance;
   readonly embeddings: EmbeddingPayload;
   /**
@@ -1005,6 +1007,7 @@ export function serializeProductionCorpus(corpus: ProductionCorpus): CorpusFileS
     ...(e.ownerEntityId !== undefined ? { ownerEntityId: e.ownerEntityId } : {}),
     ...(e.ownerScoped !== undefined ? { ownerScoped: e.ownerScoped } : {}),
     ...(e.subjectEntityId !== undefined ? { subjectEntityId: e.subjectEntityId } : {}),
+    ...(e.bmuOperationCue !== undefined ? { bmuOperationCue: e.bmuOperationCue } : {}),
     ...(e.causalDepth !== undefined ? { causalDepth: e.causalDepth } : {}),
     ...(e.relationHopDepth !== undefined ? { relationHopDepth: e.relationHopDepth } : {}),
     ...(e.band !== undefined ? { band: e.band } : {}),

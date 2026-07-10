@@ -158,6 +158,11 @@ export function resolveGeneratedOperationClass(cluster, rows) {
   if (typeof operationClass !== 'string' || operationClass.length === 0 || operationClass !== rowOperationClass) {
     throw new Error(`BMU operation-class mismatch in ${cluster.motifGroupId}: cluster=${String(operationClass)} rows=${String(rowOperationClass)}`);
   }
+  const rowBases = new Set(rows.map((row) => row.operationClassBasis).filter(Boolean));
+  if ((cluster.operationClassBasis !== undefined || rowBases.size > 0)
+      && (rowBases.size !== 1 || cluster.operationClassBasis !== [...rowBases][0])) {
+    throw new Error(`BMU operation-class basis mismatch in ${cluster.motifGroupId}: cluster=${String(cluster.operationClassBasis)} rows=${JSON.stringify([...rowBases])}`);
+  }
   return operationClass;
 }
 
@@ -205,6 +210,7 @@ function rowToProductionEvent(world, row) {
     ...(row.publicIntent !== undefined ? { publicIntent: row.publicIntent } : {}),
     ...(row.band !== undefined ? { band: row.band } : {}),
     bmuTask: t,
+    ...(row.bmuOperationCue ? { bmuOperationCue: row.bmuOperationCue } : {}),
     provenance: { source: 'synthetic_challenge', sourceHash: `0x${'00'.repeat(32)}` },
     embeddings: {
       modelId: 'bge-m3',

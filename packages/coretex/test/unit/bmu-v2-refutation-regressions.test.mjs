@@ -12,6 +12,9 @@ import { test } from 'node:test';
 import {
   computeCorpusRoot,
   DEFAULT_PROFILE,
+  CORETEX_PIPELINE_VERSION_BMU_V2,
+  bmuOperationQueryKey,
+  encodeBmuPublicPathProgramWords,
   encodeMemoryIndexSlot,
   evaluateRetrievalBenchmarkState,
   RANGES,
@@ -87,6 +90,7 @@ function corpusFor(outgoingEdgeType, incomingEdgeType) {
       text: `high-cosine distractor ${i}`, vector: high,
     })),
   ];
+  events[0].bmuOperationCue = 'refutation executable route';
   return {
     schemaVersion: 'coretex.production-corpus.v1', corpusEpoch: 0,
     corpusRoot: computeCorpusRoot(events), generatedAt: '2026-07-10T00:00:00.000Z',
@@ -111,12 +115,11 @@ function scoringOptions() {
     lensWeight: 0.1, anchorWeight: 0.15, relationExpansionBudget: 50,
     temporalCurrentBoost: 0.1, temporalStaleSuppression: 0.1,
     exposeFullRanking: true,
+    policyAtomsMode: true,
+    pipelineVersion: CORETEX_PIPELINE_VERSION_BMU_V2,
     bmuPublicPathBundle: {
       stage1SeedLimit: 4, branchLimit: 4,
-      steps: [
-        { direction: 'outgoing', edgeTypes: ['causes', 'derived_from'] },
-        { direction: 'incoming', edgeTypes: ['supports', 'supersedes', 'coreference_of', 'co_occurs_with'] },
-      ],
+      maxPrograms: 32, maxRenderedLineageChars: 8192,
     },
   };
 }
@@ -133,29 +136,30 @@ function candidateStateAnchoringDistractor() {
   return { words };
 }
 
-test('refutation: ZERO_STATE solves every public edge program and candidate state is causally unused by publicPath', async () => {
+test('regression: ZERO_STATE fails and exact candidate bytecode causally controls every public edge program', async () => {
   const programs = ['causes', 'derived_from'].flatMap((outgoing) =>
     ['supports', 'supersedes', 'coreference_of', 'co_occurs_with'].map((incoming) => [outgoing, incoming]));
   for (const [outgoing, incoming] of programs) {
     const corpus = corpusFor(outgoing, incoming);
     const pack = { epochId: 0, evalSeedCommit: `0x${'71'.repeat(32)}`, events: [corpus.events[0]] };
     const parent = await evaluateRetrievalBenchmarkState(ZERO_STATE, corpus, pack, scoringOptions());
-    const candidate = await evaluateRetrievalBenchmarkState(candidateStateAnchoringDistractor(), corpus, pack, scoringOptions());
+    const candidateState = { words: new Array(1024).fill(0n) };
+    const program = encodeBmuPublicPathProgramWords({
+      programIndex: 0, queryKey: bmuOperationQueryKey('refutation executable route'), branchLimit: 4,
+      validFromEpoch: 0n, expiryEpoch: 0n,
+      steps: [{ direction: 'outgoing', edgeType: outgoing }, { direction: 'incoming', edgeType: incoming }],
+    });
+    for (let i = 0; i < 4; i++) candidateState.words[RANGES.POLICY_EVIDENCE_START + i] = program[i];
+    const candidate = await evaluateRetrievalBenchmarkState(candidateState, corpus, pack, scoringOptions());
     const p = parent.perQuery[0];
     const c = candidate.perQuery[0];
     const parentTruthIndex = p.cappedDocIds.indexOf('truth-doc');
     const candidateTruthIndex = c.cappedDocIds.indexOf('truth-doc');
-    assert.notEqual(parentTruthIndex, -1, `${outgoing}/${incoming}: blank state admits truth`);
-    assert.notEqual(candidateTruthIndex, -1, `${outgoing}/${incoming}: candidate admits same truth`);
-    assert.ok(p.cappedDocSources[parentTruthIndex].includes('publicPath'));
+    assert.equal(parentTruthIndex, -1, `${outgoing}/${incoming}: blank state cannot execute the route`);
+    assert.notEqual(candidateTruthIndex, -1, `${outgoing}/${incoming}: candidate admits truth`);
     assert.ok(c.cappedDocSources[candidateTruthIndex].includes('publicPath'));
-    assert.equal(p.finalRankingTop20.find((row) => row.docId === 'truth-doc')?.rank, 1);
     assert.equal(c.finalRankingTop20.find((row) => row.docId === 'truth-doc')?.rank, 1);
-    assert.deepEqual(
-      p.cappedDocIds.filter((id, i) => p.cappedDocSources[i].includes('publicPath')).sort(),
-      c.cappedDocIds.filter((id, i) => c.cappedDocSources[i].includes('publicPath')).sort(),
-      `${outgoing}/${incoming}: changing decoded candidate state cannot change publicPath terminals`,
-    );
+    assert.equal(p.cappedDocSources.some((sources) => sources.includes('publicPath')), false);
   }
 });
 

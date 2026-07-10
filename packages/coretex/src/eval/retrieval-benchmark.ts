@@ -399,10 +399,10 @@ export interface ScoringOptions {
   readonly bmuPublicPathBundle?: {
     readonly stage1SeedLimit: number;
     readonly branchLimit: number;
-    readonly steps: readonly {
-      readonly direction: 'outgoing' | 'incoming';
-      readonly edgeTypes: readonly string[];
-    }[];
+    /** Maximum complete four-word programs decoded from candidate state. */
+    readonly maxPrograms: number;
+    /** Exact per-terminal rendered lineage bound; overflow refuses, never truncates. */
+    readonly maxRenderedLineageChars: number;
   };
   /**
    * §6.5 reranker-input cap (MemReranker semantics). Number of pool
@@ -577,6 +577,18 @@ export const CORETEX_PIPELINE_VERSIONS_SUPPORTED: ReadonlySet<string> = new Set(
   CORETEX_PIPELINE_VERSION_BMU_V1,
   CORETEX_PIPELINE_VERSION_BMU_V2,
 ]);
+
+/** Hash a public query-local operation cue into the v2 program key domain. */
+export function bmuOperationQueryKey(cue: string): bigint {
+  const normalized = cue.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (normalized.length < 4 || normalized.length > 160) {
+    throw new Error('bmuOperationQueryKey: normalized cue length must be in [4, 160]');
+  }
+  const digest = keccak256(new TextEncoder().encode(`coretex-bmu-v2-operation-cue\0${normalized}`));
+  let key = 0n;
+  for (let i = 0; i < 7; i++) key = (key << 8n) | BigInt(digest[i]!);
+  return key === 0n ? 1n : key;
+}
 
 /**
  * Category-B PUBLIC query relation-intent parser. Maps a natural-language query to the set of
@@ -1090,6 +1102,7 @@ export async function scoreSubstrateAgainstQuery(
     sources: Set<SourceTag>;
   };
   const pool = new Map<string, CandidateRecord>();
+  const publicPathBundleTextByDocId = new Map<string, string>();
   function addSource(record: CandidateRecord, src: SourceTag) {
     record.sources.add(src);
   }
@@ -1203,12 +1216,11 @@ export async function scoreSubstrateAgainstQuery(
     if (!Number.isInteger(law.branchLimit) || law.branchLimit < 1 || law.branchLimit > 8) {
       throw new Error(`bmuPublicPathBundle.branchLimit must be an integer in [1, 8] (got ${String(law.branchLimit)})`);
     }
-    if (!Array.isArray(law.steps) || law.steps.length < 1 || law.steps.length > 4) {
-      throw new Error('bmuPublicPathBundle.steps must contain 1..4 ordered steps');
+    if (!Number.isInteger(law.maxPrograms) || law.maxPrograms < 1 || law.maxPrograms > 32) {
+      throw new Error(`bmuPublicPathBundle.maxPrograms must be an integer in [1, 32] (got ${String(law.maxPrograms)})`);
     }
-    const maxBranchAdmissions = law.stage1SeedLimit * (law.branchLimit ** law.steps.length);
-    if (maxBranchAdmissions > opts.rerankerInputTopK) {
-      throw new Error(`bmuPublicPathBundle can admit up to ${maxBranchAdmissions} branches but rerankerInputTopK is ${opts.rerankerInputTopK}; refusing non-uniform Qwen admission`);
+    if (!Number.isInteger(law.maxRenderedLineageChars) || law.maxRenderedLineageChars < 256 || law.maxRenderedLineageChars > 32768) {
+      throw new Error(`bmuPublicPathBundle.maxRenderedLineageChars must be an integer in [256, 32768] (got ${String(law.maxRenderedLineageChars)})`);
     }
     const publicEvents = new Map(corpus.events.map((event) => [event.id, event]));
     const incoming = new Map<string, ProductionCorpusEvent[]>();
@@ -1220,43 +1232,67 @@ export async function scoreSubstrateAgainstQuery(
       }
     }
     for (const list of incoming.values()) list.sort((a, b) => codePointCompare(a.id, b.id));
-    let frontier = [...new Set(stage1Docs.slice(0, law.stage1SeedLimit).map((doc) => doc.eventId))]
+    const queryKey = query.bmuOperationCue ? bmuOperationQueryKey(query.bmuOperationCue) : null;
+    const matchingPrograms = queryKey === null ? [] : decoded.bmuPublicPathPrograms
+      .filter((program) => program.queryKey === queryKey)
+      .slice(0, law.maxPrograms);
+    const terminalRoutes = new Map<string, readonly string[]>();
+    const initialFrontier = [...new Set(stage1Docs.slice(0, law.stage1SeedLimit).map((doc) => doc.eventId))]
       .sort(codePointCompare);
-    for (let stepIndex = 0; stepIndex < law.steps.length; stepIndex++) {
-      const step = law.steps[stepIndex]!;
-      if ((step.direction !== 'outgoing' && step.direction !== 'incoming')
-          || !Array.isArray(step.edgeTypes) || step.edgeTypes.length === 0
-          || step.edgeTypes.some((edge: string) => typeof edge !== 'string' || edge.length === 0)) {
-        throw new Error('bmuPublicPathBundle step must declare direction and non-empty public edgeTypes');
-      }
-      const edgeTypes = new Set(step.edgeTypes);
-      const next = new Set<string>();
-      for (const eventId of frontier) {
-        const event = publicEvents.get(eventId);
-        if (!event) continue;
-        const neighbors = step.direction === 'outgoing'
-          ? (event.relations ?? [])
-            .filter((relation) => edgeTypes.has(relation.edgeType))
-            .map((relation) => publicEvents.get(relation.other_id))
-            .filter((candidate): candidate is ProductionCorpusEvent => candidate !== undefined)
-          : (incoming.get(eventId) ?? []).filter((candidate) =>
-            (candidate.relations ?? []).some((relation) => relation.other_id === eventId && edgeTypes.has(relation.edgeType)),
-          );
-        for (const target of neighbors.sort((a, b) => codePointCompare(a.id, b.id)).slice(0, law.branchLimit)) {
-          next.add(target.id);
+    for (const program of matchingPrograms) {
+      let frontier = new Map(initialFrontier.map((eventId) => [eventId, [eventId] as readonly string[]]));
+      for (const step of program.steps) {
+        const next = new Map<string, readonly string[]>();
+        for (const [eventId, route] of frontier) {
+          const event = publicEvents.get(eventId);
+          if (!event) continue;
+          const neighbors = step.direction === 'outgoing'
+            ? (event.relations ?? [])
+              .filter((relation) => relation.edgeType === step.edgeType)
+              .map((relation) => publicEvents.get(relation.other_id))
+              .filter((candidate): candidate is ProductionCorpusEvent => candidate !== undefined)
+            : (incoming.get(eventId) ?? []).filter((candidate) =>
+              (candidate.relations ?? []).some((relation) => relation.other_id === eventId && relation.edgeType === step.edgeType),
+            );
+          for (const target of neighbors.sort((a, b) => codePointCompare(a.id, b.id)).slice(0, Math.min(law.branchLimit, program.branchLimit))) {
+            const candidateRoute = [...route, target.id];
+            const priorRoute = next.get(target.id);
+            if (priorRoute && priorRoute.join('\0') !== candidateRoute.join('\0')) {
+              throw new Error(`bmuPublicPathBundle route collision at '${target.id}' — refusing ambiguous lineage`);
+            }
+            if (!priorRoute) next.set(target.id, candidateRoute);
+          }
         }
+        frontier = new Map([...next].sort(([a], [b]) => codePointCompare(a, b)));
+        if (frontier.size === 0) break;
       }
-      frontier = [...next].sort(codePointCompare);
-      if (frontier.length === 0) break;
+      for (const [eventId, route] of frontier) {
+        const priorRoute = terminalRoutes.get(eventId);
+        if (priorRoute && priorRoute.join('\0') !== route.join('\0')) {
+          throw new Error(`bmuPublicPathBundle terminal collision at '${eventId}' — refusing ambiguous lineage`);
+        }
+        if (!priorRoute) terminalRoutes.set(eventId, route);
+      }
     }
     // Exactly one public document per TERMINAL branch. Intermediate branches
     // are deliberately not admitted: admitting every level makes the two-step
     // 4×4 law consume 16+64=80 mandatory slots while the old proof counted
     // only 64. The exact mandatory-pool check below additionally accounts for
     // direct substrate anchors before any Qwen call is made.
-    for (const eventId of frontier) {
+    for (const eventId of [...terminalRoutes.keys()].sort(codePointCompare)) {
       const terminal = publicEvents.get(eventId);
-      if (terminal) addAtomEventDocs(terminal, 'publicPath', 1);
+      if (!terminal) continue;
+      const added = addAtomEventDocs(terminal, 'publicPath', 1);
+      const route = terminalRoutes.get(eventId)!;
+      const routeText = route.map((routeEventId, i) => {
+        const routeEvent = publicEvents.get(routeEventId);
+        const text = routeEvent?.truthDocuments[0]?.text ?? routeEvent?.queryText ?? '';
+        return `Path ${i}: ${text}`;
+      }).join('\n');
+      if (routeText.length > law.maxRenderedLineageChars) {
+        throw new Error(`bmuPublicPathBundle rendered lineage has ${routeText.length} chars, cap ${law.maxRenderedLineageChars}; refusing truncation`);
+      }
+      for (const docId of added) publicPathBundleTextByDocId.set(docId, routeText);
     }
   }
 
@@ -2183,6 +2219,8 @@ export async function scoreSubstrateAgainstQuery(
     for (const [ev] of bestByEvent) bestPeerTextByEvent.set(ev, bestByEvent.get(ev)!.text);
   }
   const bundleDoc = (c: typeof rerankerCandidates[number]): string => {
+    const publicPathBundle = publicPathBundleTextByDocId.get(c.record.docId);
+    if (publicPathBundle !== undefined) return publicPathBundle;
     if (!evidenceBundle || !c.record.sources.has('categoryLensBFS')) return c.record.text;
     const peers = lensPeerEvents.get(c.record.eventId);
     if (!peers || peers.size === 0) return c.record.text;
@@ -3444,6 +3482,7 @@ export async function evaluateRetrievalBenchmarkState(
     biEncoderModelIdHash: opts.biEncoderHash,
     retrievalKeyHeaderBytes: opts.retrievalKeyLayout.headerBytes,
     ...(opts.policyAtomsMode ? { policyAtomsMode: true } : {}),
+    ...(opts.bmuPublicPathBundle ? { bmuV2PathPrograms: true } : {}),
     ...(typeof opts.lensDiversityFloor === 'number'
       ? { lensDiversityFloor: opts.lensDiversityFloor, retrievalKeyLayout: opts.retrievalKeyLayout }
       : {}),

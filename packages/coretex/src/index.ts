@@ -101,14 +101,23 @@ export {
   type PolicyAtomFamily,
   type PolicyAction,
   type PolicyScope,
+  type BmuPublicPathProgram,
+  type BmuPublicPathProgramStep,
   decodePolicyAtomRegion,
+  decodeBmuPublicPathPrograms,
   encodePolicyAtom,
+  encodeBmuPublicPathProgram,
+  encodeBmuPublicPathProgramWords,
   policyReservedNonZeroWords,
   POLICY_REGIONS,
   POLICY_SELECTOR,
   POLICY_EVIDENCE_FEATURE,
   POLICY_FLAG,
   POLICY_TARGET_NONE,
+  BMU_PATH_PROGRAM_SELECTOR,
+  BMU_PATH_PROGRAM_EVIDENCE_FEATURE,
+  BMU_PATH_PROGRAM_VERSION,
+  BMU_PATH_PROGRAM_INERT_TARGET_SLOT,
 } from './substrate/retrieval-decoder.js';
 export { validatePolicyRegions, validateReservedBits, hasNonZeroReservedBits } from './state/validate.js';
 export type {

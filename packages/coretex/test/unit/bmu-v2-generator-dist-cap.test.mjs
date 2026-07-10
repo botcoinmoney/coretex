@@ -10,6 +10,10 @@ import { test } from 'node:test';
 import {
   computeCorpusRoot,
   DEFAULT_PROFILE,
+  CORETEX_PIPELINE_VERSION_BMU_V2,
+  RANGES,
+  bmuOperationQueryKey,
+  encodeBmuPublicPathProgramWords,
   evaluateRetrievalBenchmarkState,
   splitForRecord,
 } from '../../dist/index.js';
@@ -20,7 +24,18 @@ const LAYOUT = { dim: 8, headerBytes: 9, quantization: 'int8' };
 const MODEL_ID = 'test/bmu-v2-generator-cap';
 const REVISION = 'generator-dist-cap-v1';
 const MODEL_HASH = '0xb6d2cafe';
-const ZERO_STATE = { words: new Array(1024).fill(0n) };
+const CUE = 'generator dist executable operation';
+
+function stateFor(plan) {
+  const state = { words: new Array(1024).fill(0n) };
+  const words = encodeBmuPublicPathProgramWords({
+    programIndex: 0, queryKey: bmuOperationQueryKey(CUE), branchLimit: 4,
+    validFromEpoch: 0n, expiryEpoch: 0n,
+    steps: [{ direction: 'outgoing', edgeType: plan.outgoingEdgeType }, { direction: 'incoming', edgeType: plan.incomingEdgeType }],
+  });
+  for (let i = 0; i < 4; i++) state.words[RANGES.POLICY_EVIDENCE_START + i] = words[i];
+  return state;
+}
 
 function quantize(values) {
   const bytes = new Uint8Array(4 + values.length);
@@ -76,6 +91,7 @@ function corpusFor(plan, { amputateSeed = false } = {}) {
     branch('decoy-c', 'the reviewed entry was superseded before ratification'),
     ...Array.from({ length: 70 }, (_, i) => event({ id: `distractor-${String(i).padStart(2, '0')}`, text: `high-cosine distractor ${i}`, vector: high })),
   ];
+  events[0].bmuOperationCue = CUE;
   return {
     schemaVersion: 'coretex.production-corpus.v1',
     corpusEpoch: 0,
@@ -109,13 +125,13 @@ function opts() {
     temporalCurrentBoost: 0.1,
     temporalStaleSuppression: 0.1,
     exposeFullRanking: true,
+    policyAtomsMode: true,
+    pipelineVersion: CORETEX_PIPELINE_VERSION_BMU_V2,
     bmuPublicPathBundle: {
       stage1SeedLimit: 4,
       branchLimit: 4,
-      steps: [
-        { direction: 'outgoing', edgeTypes: ['causes', 'derived_from'] },
-        { direction: 'incoming', edgeTypes: ['supports', 'supersedes', 'coreference_of', 'co_occurs_with'] },
-      ],
+      maxPrograms: 32,
+      maxRenderedLineageChars: 8192,
     },
   };
 }
@@ -132,8 +148,8 @@ for (const [family, plan] of [
     const intactCorpus = corpusFor(plan);
     const amputatedCorpus = corpusFor(plan, { amputateSeed: true });
     const packFor = (corpus) => ({ epochId: 0, evalSeedCommit: `0x${'71'.repeat(32)}`, events: [corpus.events[0]] });
-    const intact = await evaluateRetrievalBenchmarkState(ZERO_STATE, intactCorpus, packFor(intactCorpus), opts());
-    const amputated = await evaluateRetrievalBenchmarkState(ZERO_STATE, amputatedCorpus, packFor(amputatedCorpus), opts());
+    const intact = await evaluateRetrievalBenchmarkState(stateFor(plan), intactCorpus, packFor(intactCorpus), opts());
+    const amputated = await evaluateRetrievalBenchmarkState(stateFor(plan), amputatedCorpus, packFor(amputatedCorpus), opts());
     const intactQuery = intact.perQuery[0];
     const amputatedQuery = amputated.perQuery[0];
 

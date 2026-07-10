@@ -68,6 +68,7 @@ export interface LogicalDeltaQuery {
   readonly ownerScoped?: boolean;
   readonly scope?: PublicScopeMetadata;
   readonly publicIntent?: PublicQueryIntent;
+  readonly bmuOperationCue?: string;
   readonly liveUpdateEpoch?: number;
   /** BMU v1 task fields stamped by the generator (BMU_SPEC.md §4.1/§6.7a).
    *  Pre-flip inert under the r5 law; validated fail-closed at corpus load. */
@@ -387,6 +388,7 @@ export function bridgeLogicalDeltaToProductionEvents(
       q.subjectEntityId !== undefined ? { subjectEntityId: q.subjectEntityId } : {},
       q.scope ? { scope: q.scope } : {},
       q.publicIntent ? { publicIntent: q.publicIntent } : {},
+      q.bmuOperationCue !== undefined ? { bmuOperationCue: q.bmuOperationCue } : {},
       // BMU §6.7a pass-through: this bridge constructs events from an EXPLICIT
       // field allowlist, so without this line an upstream-stamped bmuTask would
       // be silently DROPPED and the row could never be BMU-pack-eligible.

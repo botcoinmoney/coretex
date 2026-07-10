@@ -235,21 +235,18 @@ export interface BmuScoringContext {
 }
 
 /**
- * The v2 primitive is intentionally law-owned, rather than emitted by a
- * family generator. No task/family/role value participates in this routing.
- * The shape is small enough that every admitted branch fits the normal Qwen
- * cap (4 seeds × 4 branches × two ordered steps = 64 event admissions max).
+ * The v2 interpreter is law-owned, while miners supply complete four-word
+ * query-key→directed-program mappings in candidate state. No task/family/role
+ * value participates in routing. Runtime computes the exact terminal pool and
+ * refuses it before Qwen if the pinned cap cannot hold every branch.
  */
 export const BMU_V2_PUBLIC_PATH_BUNDLE = Object.freeze({
   stage1SeedLimit: 4,
   branchLimit: 4,
-  steps: Object.freeze([
-    // Keep the two edge vocabularies disjoint. Otherwise the outgoing seed is
-    // also an incoming neighbor of its pivot and consumes one of the four
-    // terminal branch slots for no semantic reason.
-    Object.freeze({ direction: 'outgoing' as const, edgeTypes: Object.freeze(['causes', 'derived_from']) }),
-    Object.freeze({ direction: 'incoming' as const, edgeTypes: Object.freeze(['supports', 'supersedes', 'coreference_of', 'co_occurs_with']) }),
-  ]),
+  // The evidence region is 128 words and every complete mapping consumes four
+  // bound words.  This is the physical resident capacity, not a simulator cap.
+  maxPrograms: 32,
+  maxRenderedLineageChars: 8192,
 });
 
 // ─── State evaluation (the LAW entrypoint) ────────────────────────────────────

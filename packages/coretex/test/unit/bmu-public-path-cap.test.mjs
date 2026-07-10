@@ -7,10 +7,13 @@ import assert from 'node:assert/strict';
 import {
   BMU_V2_PUBLIC_PATH_BUNDLE,
   CORETEX_PIPELINE_VERSION_BMU_V2,
+  RANGES,
+  bmuOperationQueryKey,
   biEncoderModelIdHash,
   computeCorpusRoot,
   createDeterministicBiEncoder,
   evaluateRetrievalBenchmarkState,
+  encodeBmuPublicPathProgramWords,
 } from '../../dist/index.js';
 
 const BI = { modelId: 'test/bge', revision: 'a'.repeat(40), mode: 'dense' };
@@ -57,6 +60,7 @@ function saturatedFixture() {
   const query = {
     id: 'q_saturated', family: 'generic', domain: 'test', split: 'eval_hidden',
     queryText: 'find the authoritative terminal branch',
+    bmuOperationCue: 'saturated directed bundle',
     truthDocuments: [{ id: terminalDocIds[0], text: 'answer', isCurrent: true }],
     hardNegatives: [], qrels: [{ documentId: terminalDocIds[0], relevance: 1 }],
     provenance: { source: 'synthetic_challenge', sourceHash: '0x' + '22'.repeat(32) },
@@ -71,8 +75,15 @@ function saturatedFixture() {
 test('all 64 terminal branches reach Qwen with no intermediate or doc-id truncation', async () => {
   const { corpus, query, terminalDocIds } = saturatedFixture();
   let rerankerDocuments = [];
+  const state = { words: new Array(1024).fill(0n) };
+  const program = encodeBmuPublicPathProgramWords({
+    programIndex: 0, queryKey: bmuOperationQueryKey('saturated directed bundle'), branchLimit: 4,
+    validFromEpoch: 0n, expiryEpoch: 0n,
+    steps: [{ direction: 'outgoing', edgeType: 'derived_from' }, { direction: 'incoming', edgeType: 'supports' }],
+  });
+  for (let i = 0; i < 4; i++) state.words[RANGES.POLICY_EVIDENCE_START + i] = program[i];
   const result = await evaluateRetrievalBenchmarkState(
-    { words: new Array(1024).fill(0n) }, corpus, { epoch: 1, seed: '0x' + '33'.repeat(32), events: [query] },
+    state, corpus, { epoch: 1, seed: '0x' + '33'.repeat(32), events: [query] },
     {
       weights: { w_retrieval: 0.75, w_temporal: 0.08, w_relation_recall: 0.07, w_abstention: 0.05, w_structural_sanity: 0.05 },
       retrievalKeyLayout: LAYOUT,

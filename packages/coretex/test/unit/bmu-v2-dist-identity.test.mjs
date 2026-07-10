@@ -22,9 +22,7 @@ test('compiled dist exports and identifies the BMU v2 public-path law', () => {
   assert.deepEqual(BMU_V2_PUBLIC_PATH_BUNDLE, {
     stage1SeedLimit: 4,
     branchLimit: 4,
-    steps: [
-      { direction: 'outgoing', edgeTypes: ['causes', 'derived_from'] },
-      { direction: 'incoming', edgeTypes: ['supports', 'supersedes', 'coreference_of', 'co_occurs_with'] },
-    ],
+    maxPrograms: 32,
+    maxRenderedLineageChars: 8192,
   });
 });
