@@ -514,20 +514,11 @@ export function generateNearCollisionAbstentionClusters({
         ...sinkIds.map((id, j) => ({ id, role: 'path_pivot', text: `${j === 0 ? 'Neutral' : 'Mirrored'} registry pivot ${epoch}-${clusterSlot}-${groupIndex}-${j} receives the same independently filed collision branches under one docket.` })),
       );
       if (groupIndex === 0) {
-        // §18.3 fix 2 near_collision restructure: BOTH answer docs — the exact
-        // match AND the disambiguation record (which is the answer for the
-        // lookalike_status_verification row and required for
-        // duplicate_discrimination) — are lifted to terminal depth so the
-        // depth-1 suppress step demotes the collision-competitor decoys WITHOUT
-        // demoting an answer. A neutral registry root seeds the outgoing step.
-        const pathRootId = docId(`public_path_root:${groupIndex}`);
-        pathDocs.push({ id: pathRootId, role: 'path_pivot',
-          text: `Neutral registry root ${epoch}-${clusterSlot}-${groupIndex} opens the standing-filing review graph for a public-path check.` });
         const topology = buildProgramPathTopology({
           program: operation.operationProgram,
-          seedId: pathRootId,
+          seedId: disambigId,
           sinkIds,
-          goldIds: [exactId, disambigId],
+          goldIds: [exactId],
           decoyIds: trio.map((d) => d.id),
           midIdFor: (level) => docId(`path_mid:${groupIndex}:${level}`),
         });
@@ -538,7 +529,7 @@ export function generateNearCollisionAbstentionClusters({
         })));
         pathGroups.push({
           sinkId, sinkIds, truthId: exactId, decoyIds: trio.map((d) => d.id),
-          anchorId: pathRootId, midIds: [...topology.midIds],
+          anchorId: disambigId, midIds: [...topology.midIds],
           branchIds: [...topology.terminalIds],
         });
       } else {

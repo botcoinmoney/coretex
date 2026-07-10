@@ -53,20 +53,24 @@ const FAMILY_CUE = Object.freeze({
  *    (missing_required). The off-path decoys are not query-similar enough to be
  *    Qwen-admitted, so a pure-promote program (byte-identical) is used and the
  *    real-Qwen margin run is the arbiter.
- *  - near_collision_abstention: suppress the depth-1 branch step (index 1). The
- *    collision-competitor decoys are the depth-1 step-produced forbidden set;
- *    both answer docs (exact match + disambiguation) are lifted to terminal
- *    depth by the generator so neither is demoted (abstain-path caveat honored:
- *    abstain rows carry no required evidence and only benefit from decoy eviction).
+ *  - near_collision_abstention: EMPTY (promote-only) for this tip. The clean
+ *    suppression design requires a DISTINCT query-similar forbidden seed-trap
+ *    doc (mirroring conflict's candidateId) so the depth-1 suppress step evicts
+ *    the collision competitors WITHOUT (a) demoting the disambiguation record
+ *    (which is simultaneously the lookalike answer and duplicate-discrim
+ *    required, so it must be a promoted terminal) or (b) unbalancing the 3
+ *    same-path decoys (structural indistinguishability). Seeding from a NEUTRAL
+ *    root instead starves the route (BC1: the seed is not stage-1 retrievable),
+ *    and seeding from one of the balanced decoys breaks decoy indistinguish-
+ *    ability. The distinct-seed-trap variant + the BC1 chain-start-retrievability
+ *    fix + the BC2 activation census are the next round; near_collision stays at
+ *    its proven f7dfbcb promote-only behaviour (73 P5 accepts) until then.
  */
 export const BMU_FAMILY_SUPPRESS_STEPS = Object.freeze({
   temporal: Object.freeze([1]),
   conflict_lifecycle: Object.freeze([1]),
   multi_hop_relation: Object.freeze([]),
-  // near_collision requires both answer docs (exact + disambiguation) lifted to
-  // terminal depth before its depth-1 branch step can be suppressed; enabled in
-  // the near_collision topology-restructure round below.
-  near_collision_abstention: Object.freeze([1]),
+  near_collision_abstention: Object.freeze([]),
 });
 
 /**

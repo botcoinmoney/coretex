@@ -258,26 +258,20 @@ export function nearCollisionOracleRank(row, { docs, docById, relations, cluster
 
   const program = row.bmuOperationProgram;
   if (!program || program.branchLimit !== 4 || !Array.isArray(program.steps)) return null;
-  // Deep-terminal law (§18.3 fix 2): execute the row's actual public program
-  // from the cluster's NEUTRAL registry-root seed and require BOTH answer docs —
-  // the exact match AND the disambiguation record — to be routed TERMINALS (the
-  // same walk the compiled scorer runs). Seeding from the disambiguation record
-  // itself no longer traverses the outgoing seed edge, which now originates at
-  // the neutral root so the depth-1 suppress step never demotes an answer.
-  const primaryGroup = (cluster.pathGroups ?? []).find((group) => group.truthId !== null && group.truthId !== undefined);
-  const seedId = primaryGroup?.anchorId;
-  if (!seedId) return null;
+  // Deep-terminal law: execute the row's actual public program from the
+  // disambiguation anchor and require the exact-match doc to be a routed
+  // TERMINAL — the same walk the compiled scorer runs.
   let executed;
   try {
     executed = executeProgramOverRelations({
       program,
       relations: relations.filter((rel) => clusterIds.has(rel.src) || clusterIds.has(rel.dst)),
-      seedIds: [seedId],
+      seedIds: [disambigDoc.id],
     });
   } catch {
     return null;
   }
-  if (!executed.terminalIds.includes(exactDoc.id) || !executed.terminalIds.includes(disambigDoc.id)) return null;
+  if (!executed.terminalIds.includes(exactDoc.id)) return null;
 
   const neutral = []; const excluded = [];
   for (const d of docs) {
