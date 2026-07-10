@@ -201,20 +201,30 @@ describe('forbidden-trap construction (§5.4, §6.5) + answerable/abstain mix', 
         const t = q.bmuTask;
         const cluster = out.clusters.find((candidate) => candidate.motifGroupId === t.motifGroupId);
         const primaryTrapId = cluster.decoyKinds[0].id;
-        assert.equal(t.forbiddenEvidence.length, nearcolDecoyCount(escalationLevel));
-        assert.ok(t.forbiddenEvidence.length >= 3, 'alias + attribute + scope lookalikes');
-        assert.equal(t.forbiddenEvidence[0], primaryTrapId, 'first forbidden = class-specific primary collision axis');
-        // Fix-2b hard contract: the cluster's routed terminal (E) must never
+        // ROUND 4: the distinct query-similar seed-trap leads the veto set;
+        // the class-specific primary collision axis decoy follows it.
+        const seedTrapId = t.forbiddenEvidence[0];
+        assert.equal(t.forbiddenEvidence.length, nearcolDecoyCount(escalationLevel) + 1);
+        assert.ok(t.forbiddenEvidence.length >= 4, 'seed-trap + alias + attribute + scope lookalikes');
+        assert.equal(t.forbiddenEvidence[1], primaryTrapId, 'second forbidden = class-specific primary collision axis');
+        assert.equal(seedTrapId, cluster.forbiddenEvidenceAnswerable[0], 'first forbidden = the query-similar seed-trap');
+        // Fix-2b hard contract: the cluster's routed terminals (E + D) must never
         // be forbidden on ANY row sharing the cue/program — the abstain row
         // keeps E as a hardNegative sibling decoy plus the abstainSignal law.
         assert.ok(!t.forbiddenEvidence.includes(cluster.truthDocId));
+        assert.ok(!t.forbiddenEvidence.includes(cluster.disambiguationDocId));
         if (t.abstain) {
           assert.ok(q.hardNegatives.some((negative) => negative.docId === cluster.truthDocId),
             'abstain rows keep the answerable sibling as a hardNegative');
         }
-        // The primary trap ECHOES the question skeleton and claims currency
-        // (§2.2 "out-ranks honestly" — asserted via the lint at mint, spot-
-        // checked here on text shape).
+        // Both the seed-trap and the primary decoy ECHO the question skeleton
+        // and claim currency (§2.2 "out-ranks honestly"; the seed-trap is the
+        // BC1-safe stage-1 chain-start). Asserted at mint via the lint; spot-
+        // checked here on text shape.
+        const seedTrapDoc = docById.get(seedTrapId);
+        assert.match(seedTrapDoc.text, /^What .* did .* set for the .*\?/);
+        assert.match(seedTrapDoc.text, /per the standing intake note/);
+        assert.equal('collisionRole' in seedTrapDoc, false, 'public docs must not expose answer/trap role metadata');
         const trapDoc = docById.get(primaryTrapId);
         assert.match(trapDoc.text, /^What .* did .* set for the .*\?/);
         assert.match(trapDoc.text, /remains the standing/);
@@ -264,12 +274,19 @@ describe('forbidden-trap construction (§5.4, §6.5) + answerable/abstain mix', 
             'decoys have no incoming continuation');
         }
         if (group.truthId !== null) {
-          assert.deepEqual(group.branchIds, [group.truthId], 'the executed terminal set is exactly E');
+          // ROUND 4: the executed terminal set is exactly {E, D} — both the
+          // exact-match answer and the disambiguation answer are promoted
+          // terminals; the seed-trap (anchorId) is the forbidden chain-start.
+          assert.deepEqual(new Set(group.branchIds), new Set([c.truthDocId, c.disambiguationDocId]),
+            'the executed terminal set is exactly {E, D}');
+          assert.equal(group.anchorId, c.forbiddenEvidenceAnswerable[0], 'the chain-start is the forbidden seed-trap');
           assert.ok(group.midIds.length >= 1);
-          assert.ok(out.addedRelations.some((relation) => relation.src === group.truthId
-            && relation.dst === group.midIds.at(-1) && relation.label === 'public_path_terminal'
-            && relation.type === c.bmuOperationProgram.steps.at(-1).edgeType));
-          assert.ok(!out.addedRelations.some((relation) => relation.src === group.truthId && relation.dst === group.sinkId));
+          for (const terminalId of [c.truthDocId, c.disambiguationDocId]) {
+            assert.ok(out.addedRelations.some((relation) => relation.src === terminalId
+              && relation.dst === group.midIds.at(-1) && relation.label === 'public_path_terminal'
+              && relation.type === c.bmuOperationProgram.steps.at(-1).edgeType));
+            assert.ok(!out.addedRelations.some((relation) => relation.src === terminalId && relation.dst === group.sinkId));
+          }
         } else {
           assert.deepEqual(group.branchIds, []);
           assert.deepEqual(group.midIds, []);
