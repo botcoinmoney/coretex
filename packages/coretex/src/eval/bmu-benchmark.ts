@@ -244,8 +244,11 @@ export const BMU_V2_PUBLIC_PATH_BUNDLE = Object.freeze({
   stage1SeedLimit: 4,
   branchLimit: 4,
   steps: Object.freeze([
-    Object.freeze({ direction: 'outgoing' as const, edgeTypes: Object.freeze(['supports', 'supersedes', 'coreference_of', 'causes', 'derived_from', 'co_occurs_with']) }),
-    Object.freeze({ direction: 'incoming' as const, edgeTypes: Object.freeze(['supports', 'supersedes', 'coreference_of', 'causes', 'derived_from', 'co_occurs_with']) }),
+    // Keep the two edge vocabularies disjoint. Otherwise the outgoing seed is
+    // also an incoming neighbor of its pivot and consumes one of the four
+    // terminal branch slots for no semantic reason.
+    Object.freeze({ direction: 'outgoing' as const, edgeTypes: Object.freeze(['causes', 'derived_from']) }),
+    Object.freeze({ direction: 'incoming' as const, edgeTypes: Object.freeze(['supports', 'supersedes', 'coreference_of', 'co_occurs_with']) }),
   ]),
 });
 

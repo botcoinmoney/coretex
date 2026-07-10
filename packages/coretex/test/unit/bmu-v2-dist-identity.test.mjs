@@ -23,8 +23,8 @@ test('compiled dist exports and identifies the BMU v2 public-path law', () => {
     stage1SeedLimit: 4,
     branchLimit: 4,
     steps: [
-      { direction: 'outgoing', edgeTypes: ['supports', 'supersedes', 'coreference_of', 'causes', 'derived_from', 'co_occurs_with'] },
-      { direction: 'incoming', edgeTypes: ['supports', 'supersedes', 'coreference_of', 'causes', 'derived_from', 'co_occurs_with'] },
+      { direction: 'outgoing', edgeTypes: ['causes', 'derived_from'] },
+      { direction: 'incoming', edgeTypes: ['supports', 'supersedes', 'coreference_of', 'co_occurs_with'] },
     ],
   });
 });

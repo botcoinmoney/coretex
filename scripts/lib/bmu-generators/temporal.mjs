@@ -81,6 +81,28 @@ export const BMU_TEMPORAL_CLUSTER_K = 5;                  // spec cluster size l
 export const BMU_TEMPORAL_SHORTCUT_CONTROL_DOCS = 4;
 
 /**
+ * BMU v2 operation classes. Cluster slot parity is the only selector: the
+ * class is deterministic, independent of labels/qrels, and serialized on the
+ * cluster/rows for P5 stratification. Both classes instantiate the same
+ * bounded outgoing→incoming diamond, but ask Qwen to perform different
+ * textual operations: revision adjudication vs validity renewal.
+ */
+export const TEMPORAL_OPERATION_FAMILIES = Object.freeze([
+  'temporal_revision_supersession',
+  'temporal_validity_renewal',
+]);
+
+export function temporalOperationFamilyForCluster(clusterSlot) {
+  if (!Number.isInteger(clusterSlot) || clusterSlot < 0) throw new Error('bmu temporal: non-negative integer clusterSlot required');
+  return TEMPORAL_OPERATION_FAMILIES[clusterSlot % TEMPORAL_OPERATION_FAMILIES.length];
+}
+
+const TEMPORAL_PATH_EDGES = Object.freeze({
+  temporal_revision_supersession: Object.freeze({ seed: 'derived_from', branch: 'supersedes' }),
+  temporal_validity_renewal: Object.freeze({ seed: 'causes', branch: 'supports' }),
+});
+
+/**
  * §4.1 template banks — surface-form grids per question type.
  * templateId = `tt_temporal_supersession_<qtype>_o<i>_f<j>` names ONE exact
  * skeleton (prefix i × form j); same id ⟺ same surface form, by construction.
@@ -326,10 +348,16 @@ export function generateTemporalClusters({
     let staleVal = bank[Math.floor(rnd() * bank.length)];
     if (staleVal === val) staleVal = bank[(bank.indexOf(val) + 1) % bank.length] ?? `${val}-prior`;
     const decoyVals = [];
-    for (let i = 0; decoyVals.length < escalationLevel && i < bank.length; i++) {
+    for (let i = 0; decoyVals.length < BMU_TEMPORAL_SHORTCUT_CONTROL_DOCS && i < bank.length * 2; i++) {
       const decoy = bank[(bank.indexOf(staleVal) + 1 + i) % bank.length];
-      if (decoy !== val && decoy !== staleVal) decoyVals.push(decoy);
+      if (decoy !== val && decoy !== staleVal && !decoyVals.includes(decoy)) decoyVals.push(decoy);
     }
+    if (decoyVals.length < BMU_TEMPORAL_SHORTCUT_CONTROL_DOCS) {
+      throw new Error(`bmu temporal: value bank cannot supply ${BMU_TEMPORAL_SHORTCUT_CONTROL_DOCS} distinct balanced decoys`);
+    }
+    const shadowDecoyVals = decoyVals.slice(0, escalationLevel);
+    const operationFamily = temporalOperationFamilyForCluster(ordinal);
+    const pathEdges = TEMPORAL_PATH_EDGES[operationFamily];
 
     const idBase = `e${epoch}_${subj.id}_bmu${ordinal}`;
     const motifGroupId = `mg_e${epoch}_temporal_${String(ordinal).padStart(4, '0')}_${subj.id}`;
@@ -340,7 +368,8 @@ export function generateTemporalClusters({
     const currentId = docId('current');
     const staleId = docId('stale_trap');
     const changeId = docId('change_provenance');
-    const shadowIds = decoyVals.map((_, i) => docId(`escalation_shadow:${i}`));
+    const pathPivotId = docId('public_path_pivot');
+    const shadowIds = shadowDecoyVals.map((_, i) => docId(`escalation_shadow:${i}`));
     const shortcutControlIds = Array.from(
       { length: BMU_TEMPORAL_SHORTCUT_CONTROL_DOCS },
       (_, i) => docId(`current_unrelated_attribute:${i}`),
@@ -349,8 +378,26 @@ export function generateTemporalClusters({
     // ── Inherited 3-doc memory structure + qrels (verbatim import) ──────────
     const spec = buildTypedTemporalClusterSpec({
       canonical, subjectId: subj.id, attr, val, staleVal, tsDate, priorDate,
-      currentId, staleId, changeId, shadowIds, decoyVals,
+      currentId, staleId, changeId, shadowIds, decoyVals: shadowDecoyVals,
     });
+
+    const terminalText = (role, decoyValue) => {
+      if (operationFamily === 'temporal_revision_supersession') {
+        if (role === 'current') return `Revision decision ${tsDate}: the authorized outcome is ${val}. Subject ${canonical}; field ${attr}. The earlier ${staleVal} entry was retired.`;
+        if (role === 'change_provenance') return `Revision review ${tsDate} approved ${val} and closed the prior ${staleVal} proposal. Subject ${canonical}; field ${attr}.`;
+        return `Revision review ${tsDate} considered ${decoyValue}, but did not approve that proposal. Subject ${canonical}; field ${attr}.`;
+      }
+      if (role === 'current') return `Validity notice ${tsDate}: scheduled verification confirmed ${val} for the next interval. Subject ${canonical}; field ${attr}.`;
+      if (role === 'change_provenance') return `Validity review ${tsDate} renewed ${val}; the earlier ${staleVal} entry expired before renewal. Subject ${canonical}; field ${attr}.`;
+      return `Validity review ${tsDate} examined ${decoyValue}, but did not validate it for the next interval. Subject ${canonical}; field ${attr}.`;
+    };
+    // All terminal branches deliberately share the same public metadata. The
+    // only gold/decoy discriminator is branch text seen by Qwen; ids, edge
+    // shape, recency, validity, entity ids, kind and flags are balanced.
+    const terminalValidity = {
+      subjectEntityId: subj.id, attribute: attr,
+      validFrom: priorDate, observedAt: `${tsDate}T12:00:00Z`,
+    };
 
     // Doc envelope exactly as the evolve minter stamps it (:749-753).
     const docs = spec.docs.map((doc) => {
@@ -359,18 +406,16 @@ export function generateTemporalClusters({
       // validUntil/observedAt semantics and the supersedes relation while
       // removing this one leaking field from generated documents.
       const { supersededBy: _exactAnswerPointer, ...validity } = doc.validity ?? {};
-      const text = doc.role === 'current'
-        ? `${canonical}'s ${attr} record effective ${tsDate} lists ${val}. It follows an earlier revision of the same field.`
-        : doc.role === 'change_provenance'
-          ? `Revision note ${tsDate}: ${canonical}'s ${attr} changed from ${staleVal} to ${val}; the prior record closed.`
-          : doc.text;
+      const isTerminal = doc.role === 'current' || doc.role === 'change_provenance';
+      const text = isTerminal ? terminalText(doc.role) : doc.text;
       const emitted = {
         // `role` and role-correlated `kind` are generator-internal only.
         // Emitting either lets an attacker classify a path position without
         // performing the public operation. v2 exposes one neutral envelope.
         id: doc.id, lane: 'deep', kind: 'bmu_public_record', entityIds: [universe, subj.id],
-        text, shape: 'temporal_update_record', timestamp: doc.timestamp,
-        currentStaleFlag: doc.currentStaleFlag, validity,
+        text, shape: 'temporal_update_record', timestamp: isTerminal ? `${tsDate}T12:00:00Z` : doc.timestamp,
+        currentStaleFlag: isTerminal ? true : doc.currentStaleFlag,
+        validity: isTerminal ? { ...terminalValidity } : validity,
         liveUpdateEpoch: epoch,
       };
       // Keep construction diagnostics available to the in-process generator
@@ -378,6 +423,16 @@ export function generateTemporalClusters({
       Object.defineProperty(emitted, 'role', { value: doc.role, enumerable: false });
       return emitted;
     });
+    const pivot = {
+      id: pathPivotId, lane: 'deep', kind: 'bmu_public_record', entityIds: [universe, subj.id],
+      text: operationFamily === 'temporal_revision_supersession'
+        ? `Revision docket ${tsDate} for ${canonical}'s ${attr} contains parallel candidate findings for adjudication.`
+        : `Validity docket ${tsDate} for ${canonical}'s ${attr} contains parallel renewal findings for verification.`,
+      shape: 'temporal_update_record', timestamp: `${tsDate}T12:00:00Z`, currentStaleFlag: true,
+      validity: { ...terminalValidity }, liveUpdateEpoch: epoch,
+    };
+    Object.defineProperty(pivot, 'role', { value: 'public_path_pivot', enumerable: false });
+    docs.push(pivot);
     // Benign current observations for the SAME attribute prevent even an
     // attribute-scoped latest/current metadata ranker from becoming an answer
     // selector. They are
@@ -385,29 +440,35 @@ export function generateTemporalClusters({
     // must scope by the public attribute and follow supersession structure.
     for (let i = 0; i < shortcutControlIds.length; i++) {
       const controlAttr = attr;
-      const observedAt = `${tsDate}T12:${String(i).padStart(2, '0')}:00Z`;
       const emitted = {
         id: shortcutControlIds[i], lane: 'deep', kind: 'bmu_public_record',
         entityIds: [universe, subj.id],
-        text: `${canonical}'s ${controlAttr} record effective ${tsDate} lists ${decoyVals[i % decoyVals.length]}. It follows an earlier revision of the same field.`,
-        shape: 'temporal_update_record', timestamp: observedAt,
+        text: terminalText('decoy', decoyVals[i]),
+        shape: 'temporal_update_record', timestamp: `${tsDate}T12:00:00Z`,
         currentStaleFlag: true,
-        validity: {
-          subjectEntityId: subj.id, attribute: controlAttr,
-          validFrom: priorDate, observedAt,
-        },
+        validity: { ...terminalValidity, attribute: controlAttr },
         liveUpdateEpoch: epoch,
       };
       Object.defineProperty(emitted, 'role', { value: 'shortcut_control', enumerable: false });
       docs.push(emitted);
     }
-    const relations = spec.relations.map((r) => ({ ...r }));
+    const terminalBranchIds = [currentId, changeId, shortcutControlIds[0], shortcutControlIds[1]];
+    const pathDecoyIds = shortcutControlIds.slice(0, 2);
+    const relations = [
+      // Fixed v2 outgoing→incoming diamond: stale lexical seed → pivot;
+      // two truths + two balanced decoys → the same pivot.
+      { src: staleId, dst: pathPivotId, type: pathEdges.seed, label: 'public_path_seed' },
+      ...terminalBranchIds.map((src) => ({ src, dst: pathPivotId, type: pathEdges.branch, label: 'public_path_branch' })),
+      // Preserve the public supersession relation without making it a gold
+      // topology oracle: every terminal branch has the identical edge.
+      ...terminalBranchIds.map((src) => ({ src, dst: staleId, type: 'supersedes', label: 'supersedes_candidate' })),
+    ];
 
     // ── k=5 rows: inherited qrels per type + template bank + bmuTask ────────
     if (spec.queryStubs.length !== BMU_TEMPORAL_CLUSTER_K) {
       throw new Error(`bmu temporal: ancestor spec emitted ${spec.queryStubs.length} stubs, expected k=${BMU_TEMPORAL_CLUSTER_K}`);
     }
-    const forbiddenEvidence = [staleId, ...shadowIds];
+    const forbiddenEvidence = [staleId, ...pathDecoyIds, ...shadowIds];
     const clusterTemplateIds = [];
     const rows = [];
     for (let slot = 0; slot < TEMPORAL_ROW_SLOTS.length; slot++) {
@@ -430,15 +491,21 @@ export function generateTemporalClusters({
       rows.push({
         id: rowId, ownerScoped: true, subjectEntityId: subj.id, ownerEntityId: universe,
         lane: 'deep', family: BMU_TEMPORAL_LOGICAL_FAMILY, queryText,
-        qrels: stub.qrels.map((r) => ({ ...r })),
-        hardNegatives: stub.hardNegatives.map((n) => ({ ...n })),
+        qrels: [
+          ...stub.qrels.map((r) => ({ ...r })),
+          ...pathDecoyIds.map((docId) => ({ docId, relevance: 0, role: 'balanced_public_path_decoy' })),
+        ],
+        hardNegatives: [
+          ...stub.hardNegatives.map((n) => ({ ...n })),
+          ...pathDecoyIds.map((docId) => ({ docId, category: 'balanced_public_path_decoy' })),
+        ],
         publicIntent: {
           atom: 'temporal_cluster', subjectEntityId: subj.id, attribute: attr,
           queryTime: `${tsDate}T23:59:59Z`, selector: `qtype_${qtype}_v${slot}`,
         },
         questionType: qtype, capability: 'temporal_supersession',
         band: escalationLevel > 0 ? 'very_hard' : 'hard',
-        operationFamily: 'temporal_cluster_typed', liveUpdateEpoch: epoch,
+        operationFamily, operationClass: operationFamily, liveUpdateEpoch: epoch,
         bmuTask: {
           family: BMU_TEMPORAL_FAMILY,
           budgetB: BMU_TEMPORAL_BUDGET_B,
@@ -490,10 +557,21 @@ export function generateTemporalClusters({
       staleValue: staleVal,
       decoyValues: [...decoyVals],
       escalationLevel,
+      operationFamily,
+      operationClass: operationFamily,
       templateIds: [...clusterTemplateIds],
       entityHoldoutKeys: [...entityHoldoutKeys],
       docs,
       relations,
+      publicPath: {
+        seedId: staleId,
+        pivotId: pathPivotId,
+        firstEdgeType: pathEdges.seed,
+        terminalEdgeType: pathEdges.branch,
+        terminalBranchIds: [...terminalBranchIds],
+        goldBranchIds: [currentId, changeId],
+        decoyBranchIds: [...pathDecoyIds],
+      },
       rows,
     });
   }
@@ -506,6 +584,10 @@ export function generateTemporalClusters({
       escalationLevel,
       clusterCount: clusters.length,
       rowCount: clusters.reduce((n, c) => n + c.rows.length, 0),
+      operationFamilyHistogram: clusters.reduce((histo, c) => {
+        histo[c.operationFamily] = (histo[c.operationFamily] ?? 0) + 1;
+        return histo;
+      }, {}),
       questionTypeHistogram: clusters.flatMap((c) => c.rows).reduce((histo, r) => {
         histo[r.questionType] = (histo[r.questionType] ?? 0) + 1;
         return histo;

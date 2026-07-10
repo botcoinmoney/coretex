@@ -524,6 +524,13 @@ multiple tasks and per-doc indexing lifts ~none.
   oracle. The rankers may read public intent, entity ids, timestamps, and
   validity intervals only; qrels, `bmuTask`, generator roles, and answer ids
   are forbidden inputs.
+- **v2 operation classes (rev4.0):** cluster-slot parity deterministically
+  alternates `temporal_revision_supersession` and
+  `temporal_validity_renewal`. Each class emits an outgoing seed→pivot edge
+  and four metadata-identical incoming terminal branches (current +
+  provenance truths, two forbidden decoys). Terminal ids, edge shape, kind,
+  entity ids, recency, validity and flags are balanced; only branch text tells
+  Qwen whether a revision was authorized or a validity interval renewed.
 
 ### 5.2 conflict_lifecycle
 
@@ -545,6 +552,14 @@ multiple tasks and per-doc indexing lifts ~none.
   (same subject, different scope). Cluster shape per the Stage-3 design:
   candidate(A) / resolved(B) / resolution-record(R), `contradicts` B→A,
   `derived_from` R→A.
+- **v2 operation classes (rev4.0):** cluster-slot parity deterministically
+  alternates `conflict_claim_reconciliation` and
+  `conflict_authority_override`. Each has the same outgoing→incoming diamond
+  with resolved/resolution truths and two scope-lookalike decoys. Every
+  terminal exposes identical public topology, lifecycle scope, timestamp,
+  flag, entity envelope and neutral `bmu_public_record` kind. Reconciliation
+  versus authorization, and target versus lookalike scope, remain textual
+  operations for Qwen rather than metadata selectors.
 
 ### 5.3 multi_hop_relation (incl. bridge/coreference framing)
 
@@ -1899,10 +1914,15 @@ family.
 - **One primitive, no family switch:** v2 admits a bounded directed public
   path bundle before reranking. It starts from at most four stage-1 public
   seed events, applies two explicitly ordered edge/direction steps, and takes
-  at most four codepoint-sorted public branches per event (one document per
-  branch). The calculated maximum (`seeds × branchLimit^steps`) MUST fit the
-  pinned Qwen input cap or bundle evaluation refuses; no admitted branch is
-  silently trimmed. The primitive reads
+  at most four codepoint-sorted public branches per event. Only terminal
+  branches are admitted (one document per terminal); intermediate traversal
+  nodes are never candidates. The calculated terminal maximum
+  (`seeds × branchLimit^steps`) MUST fit the pinned Qwen input cap. After the
+  complete candidate pool is known, terminal branches plus every direct or
+  otherwise mandatory routed anchor MUST also fit that cap or evaluation
+  refuses before Qwen; deterministic slicing is forbidden. This exact check
+  corrects the rejected 80-as-64 accounting (`16` intermediate + `64`
+  terminal docs) from the first v2 draft. The primitive reads
   neither qrels, `bmuTask`, family, role, timestamps, lifecycle metadata, nor
   `publicIntent`. Every admitted branch is sent to the existing Qwen cap as a
   normal candidate; it receives no additive final-score or answer promotion.

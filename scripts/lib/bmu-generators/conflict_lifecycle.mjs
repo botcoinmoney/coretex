@@ -77,6 +77,24 @@ export const CONFLICT_FAMILY = 'conflict_lifecycle';
 export const CONFLICT_BUDGET_B = BMU_DEFAULT_BUDGET_B.conflict_lifecycle; // 4
 export const CONFLICT_ROTATION_BASE_EPOCH = 137; // first BMU mint epoch (pre-flip inert stamping era)
 
+/** Deterministic v2 operation classes consumed as P5 strata. Both implement
+ * the same balanced public diamond while requiring different text operations:
+ * reconcile competing claims vs apply an authority override. */
+export const CONFLICT_OPERATION_FAMILIES = Object.freeze([
+  'conflict_claim_reconciliation',
+  'conflict_authority_override',
+]);
+
+export function conflictOperationFamilyForCluster(clusterSlot) {
+  if (!Number.isInteger(clusterSlot) || clusterSlot < 0) throw new Error('conflict_lifecycle: non-negative integer clusterSlot required');
+  return CONFLICT_OPERATION_FAMILIES[clusterSlot % CONFLICT_OPERATION_FAMILIES.length];
+}
+
+const CONFLICT_PATH_EDGES = Object.freeze({
+  conflict_claim_reconciliation: Object.freeze({ seed: 'derived_from', branch: 'co_occurs_with' }),
+  conflict_authority_override: Object.freeze({ seed: 'causes', branch: 'supports' }),
+});
+
 /** §5.2 question types — four DISTINCT types, five rows (current_for_scope ×2 variants). */
 export const CONFLICT_QUESTION_TYPES = Object.freeze([
   'current_for_scope',
@@ -125,6 +143,7 @@ export function conflictTemplateId(questionType, variant, attr, scope) {
 export function buildConflictLifecycleClusterSpec({
   canonical, subjectId, attr, scope, decoyScopes, valA, valB, decoyVals,
   tsDate, priorDate, candidateId, resolvedId, resolutionId, decoyIds, motifGroupId,
+  pivotId = `${candidateId}_pivot`, operationFamily = CONFLICT_OPERATION_FAMILIES[0],
   subjectAliases = [],
 }) {
   if (decoyIds.length !== decoyVals.length || decoyIds.length !== decoyScopes.length) {
@@ -132,6 +151,18 @@ export function buildConflictLifecycleClusterSpec({
   }
   if (decoyIds.length < 2) throw new Error('buildConflictLifecycleClusterSpec: >=2 scope-mismatch decoys required (distractor-pressure floor)');
   if (valA === valB) throw new Error('buildConflictLifecycleClusterSpec: candidate and resolved values must differ');
+  if (!CONFLICT_OPERATION_FAMILIES.includes(operationFamily)) throw new Error(`buildConflictLifecycleClusterSpec: unknown operationFamily '${operationFamily}'`);
+
+  const pathEdges = CONFLICT_PATH_EDGES[operationFamily];
+  const resolvedText = operationFamily === 'conflict_claim_reconciliation'
+    ? `${canonical}'s ${attr} claims for ${scope} were compared in the ${tsDate} reconciliation; ${valB} matched the governing record while ${valA} did not.`
+    : `Authority notice ${tsDate} for ${canonical}'s ${scope} ${attr}: the signed override establishes ${valB}; the provisional ${valA} instruction has no standing.`;
+  const resolutionText = operationFamily === 'conflict_claim_reconciliation'
+    ? `Review minutes ${tsDate} for ${canonical}'s ${scope} ${attr}: source checks confirmed ${valB} and rejected the competing ${valA} intake claim.`
+    : `Override audit ${tsDate} for ${canonical}'s ${scope} ${attr}: authorization checks validate ${valB} and reject the provisional ${valA} instruction.`;
+  const decoyText = (i) => operationFamily === 'conflict_claim_reconciliation'
+    ? `Review finding ${tsDate} for ${canonical}'s ${scope} ${attr}: ${decoyVals[i]} came from the separate ${decoyScopes[i]} scope, so it does not govern this scope.`
+    : `Override finding ${tsDate} for ${canonical}'s ${scope} ${attr}: ${decoyVals[i]} authorizes only the separate ${decoyScopes[i]} scope, not this scope.`;
 
   const docs = [
     { id: candidateId, kind: `conflict_${slug(attr)}`, role: 'conflict_candidate_trap',
@@ -139,27 +170,40 @@ export function buildConflictLifecycleClusterSpec({
       timestamp: priorDate, currentStaleFlag: false,
       lifecycleState: 'conflict_candidate', lifecycleScope: scope,
       scope: { topicId: scope } },
-    { id: resolvedId, kind: `conflict_${slug(attr)}`, role: 'conflict_resolved',
-      text: `${canonical}'s ${attr} assignment covering ${scope} was corrected to ${valB} in the reconciliation pass of ${tsDate}, superseding the conflicting intake claim.`,
+    { id: resolvedId, kind: 'bmu_public_record', role: 'conflict_resolved',
+      text: resolvedText,
       timestamp: tsDate, currentStaleFlag: true,
-      lifecycleState: 'conflict_resolved', lifecycleScope: scope,
+      lifecycleState: 'terminal_branch', lifecycleScope: scope,
       scope: { topicId: scope } },
-    { id: resolutionId, kind: `conflict_${slug(attr)}_resolution`, role: 'resolution_record',
-      text: `Resolution minutes ${tsDate}: the two conflicting ${attr} claims filed against ${canonical}'s ${scope} were reconciled — the intake claim ${valA} was rejected and ${valB} was confirmed as standing.`,
+    { id: resolutionId, kind: 'bmu_public_record', role: 'resolution_record',
+      text: resolutionText,
       timestamp: tsDate, currentStaleFlag: true,
-      lifecycleState: 'resolution_record', lifecycleScope: scope,
+      lifecycleState: 'terminal_branch', lifecycleScope: scope,
       scope: { topicId: scope } },
-    ...decoyIds.map((decoyId, i) => ({ id: decoyId, kind: `conflict_${slug(attr)}`, role: 'scope_mismatch_decoy',
-      text: `What is ${canonical}'s current ${attr} for ${decoyScopes[i]}? The current ${attr} for ${decoyScopes[i]} is ${decoyVals[i]}, per the standing note for ${decoyScopes[i]}, and new sessions should keep applying ${decoyVals[i]}.`,
+    ...decoyIds.map((decoyId, i) => ({ id: decoyId, kind: 'bmu_public_record', role: 'scope_mismatch_decoy',
+      text: decoyText(i),
       timestamp: tsDate, currentStaleFlag: true,
-      lifecycleState: 'scope_mismatch', lifecycleScope: decoyScopes[i],
-      scope: { topicId: decoyScopes[i] } })),
+      lifecycleState: 'terminal_branch', lifecycleScope: scope,
+      scope: { topicId: scope } })),
+    { id: pivotId, kind: 'bmu_public_record', role: 'public_path_pivot',
+      text: operationFamily === 'conflict_claim_reconciliation'
+        ? `Claim-review docket ${tsDate} for ${canonical}'s ${scope} ${attr} links parallel findings for comparison.`
+        : `Authority-review docket ${tsDate} for ${canonical}'s ${scope} ${attr} links parallel findings for verification.`,
+      timestamp: tsDate, currentStaleFlag: true, lifecycleState: 'path_pivot', lifecycleScope: scope,
+      scope: { topicId: scope } },
   ];
 
-  // Stage 3-G1-CONFLICT cross-type shape: contradicts B→A, derived_from R→A.
+  const terminalBranchIds = [resolvedId, resolutionId, decoyIds[0], decoyIds[1]];
+  // Fixed outgoing→incoming diamond. Every terminal also receives identical
+  // legacy cross-type edges, preserving the old relation substrate without
+  // leaving B/R as structural gold oracles.
   const relations = [
-    { src: resolvedId, dst: candidateId, type: 'co_occurs_with', label: 'contradicts' },
-    { src: resolutionId, dst: candidateId, type: 'derived_from', label: 'resolution_of' },
+    { src: candidateId, dst: pivotId, type: pathEdges.seed, label: 'public_path_seed' },
+    ...terminalBranchIds.map((src) => ({ src, dst: pivotId, type: pathEdges.branch, label: 'public_path_branch' })),
+    ...terminalBranchIds.flatMap((src) => [
+      { src, dst: candidateId, type: 'co_occurs_with', label: 'contradicts' },
+      { src, dst: candidateId, type: 'derived_from', label: 'resolution_of' },
+    ]),
   ];
 
   const trapQrel = { docId: candidateId, relevance: 0.0, role: 'conflict_candidate_trap' };
@@ -217,7 +261,16 @@ export function buildConflictLifecycleClusterSpec({
   ];
   if (queryStubs.length !== BMU_CLUSTER_SIZE_K) throw new Error('conflict cluster must carry exactly k=5 rows');
 
-  return { docs, relations, queryStubs, forbiddenEvidence };
+  return {
+    docs, relations, queryStubs, forbiddenEvidence,
+    operationFamily,
+    publicPath: {
+      seedId: candidateId, pivotId,
+      firstEdgeType: pathEdges.seed, terminalEdgeType: pathEdges.branch,
+      terminalBranchIds, goldBranchIds: [resolvedId, resolutionId],
+      decoyBranchIds: decoyIds.slice(0, 2),
+    },
+  };
 }
 
 /**
@@ -284,6 +337,7 @@ export function generateConflictLifecycleClusters({
     const canonical = subj.canonicalName;
     const isProject = /-svc-/.test(canonical);
     const rnd = prng(`${seed}:bmu-conflict:${epoch}:${subj.id}:${clusterSlot}`);
+    const operationFamily = conflictOperationFamilyForCluster(clusterSlot);
 
     const { attr, bank } = bmuAttributeForClusterSlot(epoch, clusterSlot, {
       qualifiers: CONFLICT_QUALIFIERS, bases: CONFLICT_BASES, baseEpoch: rotationBaseEpoch,
@@ -313,6 +367,7 @@ export function generateConflictLifecycleClusters({
       tsDate, priorDate, subjectAliases: subj.aliases,
       candidateId: docId('conflict_candidate_trap'), resolvedId: docId('conflict_resolved'),
       resolutionId: docId('resolution_record'),
+      pivotId: docId('public_path_pivot'), operationFamily,
       decoyIds: decoyVals.map((_, i) => docId(`scope_mismatch_decoy:${i}`)), motifGroupId,
     });
 
@@ -345,12 +400,14 @@ export function generateConflictLifecycleClusters({
     for (const key of entityHoldoutKeys) usedEntityHoldoutKeysThisRun.add(key);
 
     for (const doc of spec.docs) {
-      addedDocs.push({
-        id: doc.id, lane: 'deep', kind: doc.kind, entityIds: [ownerEntityId, subj.id],
+      const emitted = {
+        id: doc.id, lane: 'deep', kind: 'bmu_public_record', entityIds: [ownerEntityId, subj.id],
         text: doc.text, shape: 'lifecycle_conflict_record', timestamp: doc.timestamp,
         currentStaleFlag: doc.currentStaleFlag,
         lifecycleScope: doc.lifecycleScope, liveUpdateEpoch: epoch,
-      });
+      };
+      Object.defineProperty(emitted, 'role', { value: doc.role, enumerable: false });
+      addedDocs.push(emitted);
     }
     for (const rel of spec.relations) addedRelations.push(rel);
 
@@ -366,7 +423,7 @@ export function generateConflictLifecycleClusters({
           lifecycleScope: scope, queryTime: tsDate, selector: `qtype_${stub.questionType}_v${stub.variant}` },
         questionType: stub.questionType,
         band: escalationLevel > 0 ? 'very_hard' : 'hard',
-        operationFamily: 'conflict_cluster_typed', liveUpdateEpoch: epoch,
+        operationFamily, operationClass: operationFamily, liveUpdateEpoch: epoch,
         bmuTask: stub.bmuTask,
       });
       rowIds.push(qid);
@@ -375,11 +432,13 @@ export function generateConflictLifecycleClusters({
     clusters.push({
       motifGroupId, family: CONFLICT_FAMILY, epoch, clusterSlot,
       subjectEntityId: subj.id, attribute: attr, scope,
-      escalationLevel, decoyCount,
+      operationFamily, operationClass: operationFamily,
+      escalationLevel, decoyCount, decoyScopes: [...decoyScopes],
       docIds: spec.docs.map((d) => d.id), rowIds, templateIds,
       entityHoldoutKeys: [...entityHoldoutKeys],
       questionTypes: [...new Set(spec.queryStubs.map((s) => s.questionType))],
       forbiddenEvidence: spec.forbiddenEvidence,
+      publicPath: spec.publicPath,
     });
   }
 
@@ -392,6 +451,10 @@ export function generateConflictLifecycleClusters({
     telemetry: {
       family: CONFLICT_FAMILY, epoch, clusterCount: clusters.length,
       rowCount: addedQueries.length, escalationLevel, questionTypeHistogram,
+      operationFamilyHistogram: clusters.reduce((histo, cluster) => {
+        histo[cluster.operationFamily] = (histo[cluster.operationFamily] ?? 0) + 1;
+        return histo;
+      }, {}),
       mintedSubjectEntityIds: clusters.map((c) => c.subjectEntityId),
       mintedTemplateIds: clusters.flatMap((c) => c.templateIds),
     },

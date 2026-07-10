@@ -22,6 +22,8 @@ import {
   conflictDecoyCount,
   CONFLICT_FAMILY,
   CONFLICT_QUESTION_TYPES,
+  CONFLICT_OPERATION_FAMILIES,
+  conflictOperationFamilyForCluster,
   generateConflictLifecycleClusters,
 } from '../../../../scripts/lib/bmu-generators/conflict_lifecycle.mjs';
 import {
@@ -59,6 +61,48 @@ describe('determinism', () => {
     const c = gen({ epoch: 138 });
     assert.ok(c.addedQueries.every((q) => q.id.startsWith('q_e138_')));
     assert.ok(a.addedQueries.every((q) => q.id.startsWith('q_e137_')));
+  });
+});
+
+describe('v2 operation-general public path', () => {
+  test('multiple deterministic operation classes are exposed as P5 strata', () => {
+    const out = gen({ clusterCount: 6 });
+    assert.deepEqual(new Set(out.clusters.map((c) => c.operationFamily)), new Set(CONFLICT_OPERATION_FAMILIES));
+    for (const c of out.clusters) {
+      assert.equal(c.operationFamily, conflictOperationFamilyForCluster(c.clusterSlot));
+      assert.equal(c.operationClass, c.operationFamily);
+      const rows = out.addedQueries.filter((q) => q.bmuTask.motifGroupId === c.motifGroupId);
+      assert.ok(rows.every((q) => q.operationFamily === c.operationFamily && q.operationClass === c.operationFamily));
+    }
+    assert.deepEqual(Object.keys(out.telemetry.operationFamilyHistogram).sort(), [...CONFLICT_OPERATION_FAMILIES].sort());
+  });
+
+  test('balanced outgoing→incoming diamonds defeat structural/recency/metadata selectors', () => {
+    const out = gen({ clusterCount: 4, escalationLevel: 2 });
+    const docById = new Map(out.addedDocs.map((doc) => [doc.id, doc]));
+    for (const c of out.clusters) {
+      const p = c.publicPath;
+      assert.equal(p.terminalBranchIds.length, 4);
+      assert.equal(p.goldBranchIds.length, 2);
+      assert.equal(p.decoyBranchIds.length, 2);
+      assert.ok(out.addedRelations.some((r) => r.src === p.seedId && r.dst === p.pivotId && r.type === p.firstEdgeType));
+      const observable = (id) => {
+        const { id: _id, text: _text, ...metadata } = JSON.parse(JSON.stringify(docById.get(id)));
+        const topology = out.addedRelations
+          .filter((r) => r.src === id)
+          .map((r) => ({ dstClass: r.dst === p.pivotId ? 'pivot' : r.dst === p.seedId ? 'seed' : 'other', type: r.type, label: r.label }))
+          .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+        return JSON.stringify({ metadata, topology });
+      };
+      assert.equal(new Set(p.terminalBranchIds.map(observable)).size, 1);
+      assert.equal(new Set(p.terminalBranchIds.map((id) => docById.get(id).text)).size, 4);
+    }
+  });
+
+  test('public envelopes use neutral kinds and never serialize construction roles', () => {
+    const serialized = JSON.parse(JSON.stringify(gen({ clusterCount: 2 }).addedDocs));
+    assert.ok(serialized.every((doc) => doc.kind === 'bmu_public_record'));
+    assert.ok(serialized.every((doc) => !Object.hasOwn(doc, 'role')));
   });
 });
 
@@ -191,7 +235,8 @@ describe('forbidden-trap construction (§5.2, §6.5)', () => {
         assert.equal(t.forbiddenEvidence.length, 1 + conflictDecoyCount(escalationLevel));
         assert.equal(docById.get(t.forbiddenEvidence[0]).lifecycleScope, q.publicIntent.lifecycleScope,
           'first forbidden is the same-scope candidate trap');
-        assert.ok(t.forbiddenEvidence.slice(1).every((id) => docById.get(id).lifecycleScope !== q.publicIntent.lifecycleScope));
+        assert.ok(t.forbiddenEvidence.slice(1).every((id) => docById.get(id).lifecycleScope === q.publicIntent.lifecycleScope),
+          'public scope metadata is balanced; mismatch is discernible only from text');
         // Trap doc claims currency with exact-question vocabulary (the §2.2
         // "out-ranks honestly" screen — asserted via the lint in mint, spot-
         // checked here on text shape).
@@ -207,7 +252,7 @@ describe('forbidden-trap construction (§5.2, §6.5)', () => {
     for (const c of out.clusters) {
       const rels = out.addedRelations.filter((r) => c.docIds.includes(r.src));
       const contradicts = rels.find((r) => r.label === 'contradicts');
-      const derived = rels.find((r) => r.type === 'derived_from');
+      const derived = rels.find((r) => r.type === 'derived_from' && r.label === 'resolution_of');
       assert.ok(contradicts && docById.has(contradicts.src) && docById.has(contradicts.dst), 'contradicts B→A');
       assert.equal(contradicts.type, 'co_occurs_with'); // ancestor encoding (evolve-corpus.mjs:446)
       assert.ok(derived && docById.has(derived.src) && derived.dst === contradicts.dst, 'derived_from R→A');

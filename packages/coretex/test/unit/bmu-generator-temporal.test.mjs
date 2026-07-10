@@ -20,6 +20,8 @@ import {
   BMU_TEMPORAL_BUDGET_B,
   BMU_TEMPORAL_CLUSTER_K,
   BMU_TEMPORAL_SHORTCUT_CONTROL_DOCS,
+  TEMPORAL_OPERATION_FAMILIES,
+  temporalOperationFamilyForCluster,
   renderTemplate,
 } from '../../../../scripts/lib/bmu-generators/temporal.mjs';
 import {
@@ -153,6 +155,45 @@ test('v2 public envelopes contain neither a role oracle nor a role-correlated ki
   const serialized = JSON.parse(JSON.stringify(clusters[0].docs));
   assert.ok(serialized.every((doc) => !Object.hasOwn(doc, 'role')));
   assert.ok(serialized.every((doc) => doc.kind === 'bmu_public_record'));
+});
+
+test('v2 operation classes are deterministic, multiple, and exposed to P5 on every row', () => {
+  const { clusters, telemetry } = generateTemporalClusters(baseOpts({ clusterCount: 6 }));
+  assert.deepEqual(new Set(clusters.map((c) => c.operationFamily)), new Set(TEMPORAL_OPERATION_FAMILIES));
+  for (let i = 0; i < clusters.length; i++) {
+    const c = clusters[i];
+    assert.equal(c.operationFamily, temporalOperationFamilyForCluster(i));
+    assert.equal(c.operationClass, c.operationFamily);
+    assert.ok(c.rows.every((row) => row.operationFamily === c.operationFamily && row.operationClass === c.operationFamily));
+  }
+  assert.deepEqual(Object.keys(telemetry.operationFamilyHistogram).sort(), [...TEMPORAL_OPERATION_FAMILIES].sort());
+});
+
+test('v2 public path is a balanced outgoing→incoming diamond; metadata cannot select gold', () => {
+  const { clusters } = generateTemporalClusters(baseOpts({ clusterCount: 4 }));
+  for (const c of clusters) {
+    const p = c.publicPath;
+    assert.equal(p.terminalBranchIds.length, 4);
+    assert.equal(p.goldBranchIds.length, 2);
+    assert.equal(p.decoyBranchIds.length, 2);
+    assert.ok(c.relations.some((r) => r.src === p.seedId && r.dst === p.pivotId && r.type === p.firstEdgeType));
+    for (const branchId of p.terminalBranchIds) {
+      assert.ok(c.relations.some((r) => r.src === branchId && r.dst === p.pivotId && r.type === p.terminalEdgeType));
+    }
+    const docById = new Map(c.docs.map((doc) => [doc.id, doc]));
+    const observable = (id) => {
+      const { id: _id, text: _text, ...metadata } = JSON.parse(JSON.stringify(docById.get(id)));
+      const topology = c.relations
+        .filter((r) => r.src === id)
+        .map((r) => ({ dstClass: r.dst === p.pivotId ? 'pivot' : r.dst === p.seedId ? 'seed' : 'other', type: r.type, label: r.label }))
+        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+      return JSON.stringify({ metadata, topology });
+    };
+    assert.equal(new Set(p.terminalBranchIds.map(observable)).size, 1,
+      'structural/recency/validity/metadata observables must be identical across gold and decoys');
+    assert.equal(new Set(p.terminalBranchIds.map((id) => docById.get(id).text)).size, 4,
+      'only branch text remains available for Qwen discrimination');
+  }
 });
 
 test('alias m=1 is shared across the active-index and registry generator APIs before mint', () => {

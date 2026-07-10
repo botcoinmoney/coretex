@@ -1189,9 +1189,12 @@ export async function scoreSubstrateAgainstQuery(
   // placed before every policy-atom admission and reads only the public stage-1
   // event ids plus public relation edges. It does not inspect qrels, family,
   // roles, bmuTask labels, publicIntent, timestamps, or lifecycle metadata.
-  // Every admitted branch is marked mandatory for the normal Qwen cap below;
-  // the path operation can therefore increase candidate availability but can
-  // never add an answer-shaped final-score bonus.
+  // Only TERMINAL branches are admitted. Intermediate traversal nodes are
+  // graph machinery, not answer candidates. Every terminal is marked
+  // mandatory for the normal Qwen cap below; the exact mandatory-pool check
+  // later fail-closes if terminals plus any direct anchors cannot all reach
+  // Qwen. The operation can increase availability but never adds an
+  // answer-shaped final-score bonus.
   if (opts.bmuPublicPathBundle !== undefined) {
     const law = opts.bmuPublicPathBundle;
     if (!Number.isInteger(law.stage1SeedLimit) || law.stage1SeedLimit < 1 || law.stage1SeedLimit > 16) {
@@ -1219,7 +1222,8 @@ export async function scoreSubstrateAgainstQuery(
     for (const list of incoming.values()) list.sort((a, b) => codePointCompare(a.id, b.id));
     let frontier = [...new Set(stage1Docs.slice(0, law.stage1SeedLimit).map((doc) => doc.eventId))]
       .sort(codePointCompare);
-    for (const step of law.steps) {
+    for (let stepIndex = 0; stepIndex < law.steps.length; stepIndex++) {
+      const step = law.steps[stepIndex]!;
       if ((step.direction !== 'outgoing' && step.direction !== 'incoming')
           || !Array.isArray(step.edgeTypes) || step.edgeTypes.length === 0
           || step.edgeTypes.some((edge: string) => typeof edge !== 'string' || edge.length === 0)) {
@@ -1239,15 +1243,20 @@ export async function scoreSubstrateAgainstQuery(
             (candidate.relations ?? []).some((relation) => relation.other_id === eventId && edgeTypes.has(relation.edgeType)),
           );
         for (const target of neighbors.sort((a, b) => codePointCompare(a.id, b.id)).slice(0, law.branchLimit)) {
-          // Exactly one public document per branch. The cap check above means
-          // every branch admission reaches Qwen; no branch is promoted by an
-          // additive score or silently discarded at the reranker boundary.
-          addAtomEventDocs(target, 'publicPath', 1);
           next.add(target.id);
         }
       }
       frontier = [...next].sort(codePointCompare);
       if (frontier.length === 0) break;
+    }
+    // Exactly one public document per TERMINAL branch. Intermediate branches
+    // are deliberately not admitted: admitting every level makes the two-step
+    // 4×4 law consume 16+64=80 mandatory slots while the old proof counted
+    // only 64. The exact mandatory-pool check below additionally accounts for
+    // direct substrate anchors before any Qwen call is made.
+    for (const eventId of frontier) {
+      const terminal = publicEvents.get(eventId);
+      if (terminal) addAtomEventDocs(terminal, 'publicPath', 1);
     }
   }
 
@@ -2146,7 +2155,12 @@ export async function scoreSubstrateAgainstQuery(
       if (sa !== sb) return sa - sb;
       return a.record.docId < b.record.docId ? -1 : 1;
     });
-  const anchorMandatory = anchorMandatoryAll.slice(0, rerankerInputCap);
+  if (opts.bmuPublicPathBundle !== undefined && anchorMandatoryAll.length > rerankerInputCap) {
+    throw new Error(`bmuPublicPathBundle mandatory pool has ${anchorMandatoryAll.length} docs (terminal branches plus direct/routed anchors) but rerankerInputTopK is ${rerankerInputCap}; refusing silent non-uniform Qwen truncation`);
+  }
+  const anchorMandatory = opts.bmuPublicPathBundle !== undefined
+    ? anchorMandatoryAll
+    : anchorMandatoryAll.slice(0, rerankerInputCap);
   const anchorMandatoryIds = new Set(anchorMandatory.map((c) => c.record.docId));
   const preRankFill = candidates.filter((c) => !anchorMandatoryIds.has(c.record.docId));
   const fillCount = Math.max(0, rerankerInputCap - anchorMandatory.length);
