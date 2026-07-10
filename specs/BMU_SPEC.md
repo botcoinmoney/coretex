@@ -1981,6 +1981,11 @@ blank state cannot reach.*
 
 ### rev3.4 → rev4.0 (BMU v2 replacement law; 2026-07-10)
 
+**Miner contract (one sentence, §18.3):** *encode directed relational programs
+in your substrate state that route AND lift queries the base stack cannot route
+— a routed terminal is promoted into the judged answer set only because your
+program reached it.*
+
 **Decision:** v1 is retained solely for replay. The replacement pipeline is
 `coretex-bmu-v2-r5state`; it preserves the r5 state layout, I1 scalar, I5
 deterministic judge, and I6 gate/confirm exclusion, but removes the v1
@@ -2001,7 +2006,36 @@ family.
   terminal docs) from the first v2 draft. The primitive reads
   neither qrels, `bmuTask`, family, role, timestamps, lifecycle metadata, nor
   `publicIntent`. Every admitted branch is sent to the existing Qwen cap as a
-  normal candidate; it receives no additive final-score or answer promotion.
+  normal candidate.
+- **§18 era-iteration delta (program-derived ranking bias, `4619dad`→ this
+  tip):** the first v2 draft gave admitted terminals NO final-score promotion,
+  so admission alone could not move utility — real Qwen simply did not rank a
+  routed terminal into topB, and every family's gate delta was 0 before confirm
+  bound (the gate+confirm NEGATIVE finding). This tip restores candidate-state
+  *causality over the judged order* with the minimal, in-doctrine mechanism:
+  each routed TERMINAL receives a uniform `BMU_V2_PROGRAM_ROUTE_BONUS_UNITS`
+  (=1)·UNIT bias in the SAME clamped `policyBonus` channel (UNIT = max−min
+  rerankerScore over the query's reranked list), and a routed terminal wins a
+  quantized-composite tie over a non-routed doc. The bias reads no qrel, answer,
+  family, motif, id, or metadata — every routed terminal gets the identical
+  magnitude. It rides the existing ±1·UNIT summed clamp (P_cap = 1), so **Rmax
+  is unchanged** (this is not a new Rmax term). Answers to the three questions:
+  **(Q1) causality** — the bias exists ONLY via terminals reached by an
+  EXECUTED candidate-state program; ZERO_STATE decodes no programs, admits no
+  terminals, and receives exactly zero bias (pinned by the §18 refutation
+  regression, including an adversarial-Qwen control where the reranker ranks the
+  routed terminal LOWEST yet the bias still promotes it while ZERO_STATE does
+  not). **(Q2) executable class space unchanged** — the bias is per-execution,
+  not per-class; it adds no operation classes and reads no labels. **(Q3)
+  shortcut surface** — uniform magnitude, no labels, capacity-bounded by the
+  resident program capacity (≤32 programs × branchLimit terminals) and the same
+  ±1·UNIT clamp; keyed-id inversion is unaffected (the bias moves rank, never
+  reveals ids). Because the bias promotes EVERY routed terminal uniformly, a
+  cue's program that routes decoy or forbidden terminals, or a row whose
+  required evidence is not a routed terminal, is UNSOLVABLE by construction —
+  the generator MUST mint discriminating single-answer-terminal programs and the
+  certification lane MUST reject rows failing the oracle-solved real-margin
+  check (§ certification).
 - **Free riders removed:** v2 force-disables temporal motif admission,
   conflict scope/classifier promotion, evidence motif admission, query-
   conditioned policy admission, entity/scope atom admission, conflict/evidence

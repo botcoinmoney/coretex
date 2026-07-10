@@ -163,6 +163,58 @@ test('regression: ZERO_STATE fails and exact candidate bytecode causally control
   }
 });
 
+// §18 era-iteration fix pin (mode-2 refutation): under an ADVERSARIAL reranker
+// that ranks the routed terminal LOWEST and the high-cosine distractors highest
+// (the real-Qwen failure mode where admission alone moved nothing), the
+// program-derived ranking bias must still promote the routed terminal into
+// topB — and ZERO_STATE, which routes nothing, must get NO bias and NOT admit
+// or promote it. This is the causal pin for BMU_V2_PROGRAM_ROUTE_BONUS_UNITS.
+test('regression: program-derived rank bias promotes routed terminal under adversarial Qwen; ZERO_STATE gets none', async () => {
+  const corpus = corpusFor('causes', 'supports');
+  const pack = { epochId: 0, evalSeedCommit: `0x${'71'.repeat(32)}`, events: [corpus.events[0]] };
+  // Adversarial reranker: routed truth scores the FLOOR, distractors the CEIL.
+  const adversarial = {
+    ...scoringOptions(),
+    reranker: {
+      model: 'adversarial-anti-truth',
+      async score(pairs) {
+        return pairs.map((pair) => (pair.document.includes('confirmed and in force') ? 0.02 : 0.98));
+      },
+    },
+  };
+  const parent = await evaluateRetrievalBenchmarkState(ZERO_STATE, corpus, pack, adversarial);
+  const candidateState = { words: new Array(1024).fill(0n) };
+  const program = encodeBmuPublicPathProgramWords({
+    programIndex: 0, queryKey: bmuOperationQueryKey('refutation executable route'), branchLimit: 4,
+    validFromEpoch: 0n, expiryEpoch: 0n,
+    steps: [{ direction: 'outgoing', edgeType: 'causes' }, { direction: 'incoming', edgeType: 'supports' }],
+  });
+  for (let i = 0; i < 4; i++) candidateState.words[RANGES.POLICY_EVIDENCE_START + i] = program[i];
+  const candidate = await evaluateRetrievalBenchmarkState(candidateState, corpus, pack, adversarial);
+  const p = parent.perQuery[0];
+  const c = candidate.perQuery[0];
+  // ZERO_STATE: no program, no routed terminal, no bias, no admission.
+  assert.equal(p.cappedDocIds.indexOf('truth-doc'), -1, 'blank state does not admit the terminal');
+  assert.equal(p.cappedDocSources.some((sources) => sources.includes('publicPath')), false);
+  // Candidate: terminal admitted via publicPath AND promoted to rank 1 by the
+  // program-derived bias, DESPITE the reranker scoring it lowest.
+  const candidateTruthIndex = c.cappedDocIds.indexOf('truth-doc');
+  assert.notEqual(candidateTruthIndex, -1, 'candidate admits the routed terminal');
+  assert.ok(c.cappedDocSources[candidateTruthIndex].includes('publicPath'));
+  const truthRow = c.finalRankingTop20.find((row) => row.docId === 'truth-doc');
+  assert.ok(truthRow, 'routed terminal reaches the final ranking');
+  // The program routes all four branch docs (truth + 3 decoys) as terminals;
+  // every routed terminal is promoted ABOVE all 70 high-cosine distractors by
+  // the bias, so truth enters the top-4 despite the reranker ranking it last.
+  assert.ok(truthRow.rank <= 4, `routed terminal promoted into top-4 by bias (rank ${truthRow.rank})`);
+  // The bias is the ONLY reason it outranks the distractors: its raw reranker
+  // score is the floor, yet it clears every non-routed high-cosine distractor.
+  assert.ok(truthRow.rerankerScore < 0.5, 'terminal was reranked at the floor (bias, not Qwen, promoted it)');
+  const top4 = c.finalRankingTop20.filter((row) => row.rank <= 4).map((row) => row.docId);
+  assert.deepEqual(new Set(top4), new Set(['truth-doc', 'decoy-a-doc', 'decoy-b-doc', 'decoy-c-doc']),
+    'the four routed terminals occupy ranks 1-4, above every non-routed distractor');
+});
+
 const splitOf = makeCanonicalSplitOf({ splitForRecord, liveTailQueryId, corpusEpoch: 136 });
 const publicDocs = (docs) => JSON.parse(JSON.stringify(docs));
 

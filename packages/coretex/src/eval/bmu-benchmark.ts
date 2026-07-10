@@ -107,6 +107,10 @@ export interface BmuJudgeRankingEntry {
   readonly docId: string;
   readonly rerankerScore: number;
   readonly finalReorderingScore: number;
+  /** §18: doc admitted ONLY by an executed candidate-state program (routed
+   *  terminal). Wins composite-score ties over non-routed docs so routing —
+   *  not the reranker's order — decides. Absent/false ⇒ legacy behavior. */
+  readonly routed?: boolean;
 }
 
 /** Quantize a composite score to the bundle-pinned grid (integer cells). */
@@ -130,6 +134,13 @@ export function bmuJudgeOrder(
     const qa = bmuQuantize(a.finalReorderingScore, grid);
     const qb = bmuQuantize(b.finalReorderingScore, grid);
     if (qb !== qa) return qb - qa;
+    // §18: a routed terminal (program-derived, label-free) wins the
+    // quantized-composite tie. The +1·UNIT bias lifts a Qwen-floored terminal
+    // to a tie with the pool ceiling; this preference resolves it in favor of
+    // routing before the raw-rerank tiebreak (which would favor the ceiling).
+    const rga = a.routed === true ? 1 : 0;
+    const rgb = b.routed === true ? 1 : 0;
+    if (rgb !== rga) return rgb - rga;
     const ra = bmuQuantize(a.rerankerScore, grid);
     const rb = bmuQuantize(b.rerankerScore, grid);
     if (rb !== ra) return rb - ra;
@@ -333,7 +344,7 @@ export async function evaluateBmuBenchmarkState(
       if (typeof r.finalReorderingScore !== 'number' || !Number.isFinite(r.finalReorderingScore)) {
         throw new Error(`evaluateBmuBenchmarkState: finalReorderingScore missing/non-finite for doc ${r.docId} on row ${event.id}`);
       }
-      return { docId: r.docId, rerankerScore: r.rerankerScore, finalReorderingScore: r.finalReorderingScore };
+      return { docId: r.docId, rerankerScore: r.rerankerScore, finalReorderingScore: r.finalReorderingScore, routed: r.routed === true };
     });
     const topB = bmuJudgeTopB(entries, task.budgetB, grid);
     // §5.5: the abstention signal is EXACTLY the policy-atom decision; the

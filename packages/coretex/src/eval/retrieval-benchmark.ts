@@ -393,8 +393,12 @@ export interface ScoringOptions {
    * BMU v2 generic public-path bundle. Stage-1 supplies a bounded number of
    * public seed events; each ordered step traverses only its declared public
    * edge direction and admits a bounded, deterministically sorted branch.
-   * The admitted documents receive NO additive score promotion: they merely
-   * enter the same Qwen candidate set as every other admitted branch.
+   * Each routed TERMINAL additionally receives a uniform, capacity-bounded
+   * program-derived reorder bias (`BMU_V2_PROGRAM_ROUTE_BONUS_UNITS`·UNIT) in
+   * the clamped policyBonus channel, so that EXECUTING a candidate-state
+   * program — not mere availability — moves the judged order. The bias is
+   * label-free and identical for every routed terminal; ZERO_STATE routes
+   * nothing and gets none (candidate-state causality).
    */
   readonly bmuPublicPathBundle?: {
     readonly stage1SeedLimit: number;
@@ -567,6 +571,24 @@ export interface ScoringOptions {
  *  words read as typed PolicyAtoms (this binary implements BOTH r4 and r5;
  *  r4 stays replayable). The active decode is chosen by the profile's pin. */
 export const CORETEX_PIPELINE_VERSION_THIS_BINARY = 'coretex-retrieval-v2-lens-r4';
+
+/**
+ * BMU v2 §18 era-iteration fix (program-derived ranking bias). A document that
+ * is admitted ONLY because an EXECUTED candidate-state public-path program
+ * routed to it as a TERMINAL receives a uniform, capacity-bounded reordering
+ * bias of exactly this many judge UNITs (UNIT = max−min rerankerScore over the
+ * query's reranked list). This restores candidate-state causality over the
+ * JUDGED order: admission alone (v2 draft) could not move utility because Qwen
+ * did not rank the routed terminal into topB, so gate delta was 0. The bias is
+ * added into the SAME per-doc policyBonus channel and is bounded by the same
+ * ±1·UNIT summed clamp (P_cap = 1, `bmuPolicyBonusClamp`), so Rmax (§13.2) is
+ * UNCHANGED — this is not an additional Rmax term. It reads no qrel, answer,
+ * family, motif, id, or metadata: every routed terminal gets the identical
+ * magnitude, and ZERO_STATE decodes no programs, admits no terminals, and
+ * therefore gets exactly zero bias (candidate-state causality, Q1). Set to the
+ * clamp cap (1) so a routed terminal always clears every non-routed candidate.
+ */
+export const BMU_V2_PROGRAM_ROUTE_BONUS_UNITS = 1;
 export { CORETEX_PIPELINE_VERSION_R5, CORETEX_PIPELINE_VERSION_BMU_V1, CORETEX_PIPELINE_VERSION_BMU_V2, isR5StateLaw, isBmuScoringLaw, isBmuV2ScoringLaw } from '../pipeline-versions.js';
 /** Versions this binary can replay (r4 + r5 + bmu-v1 coexist; decode mode is
  *  the r5 law for both r5 and bmu-v1 — BMU_SPEC.md §3; scoring law routes on
@@ -921,7 +943,7 @@ export interface PerQueryBreakdown {
    * complete reranked list and recompute nDCG faithfully. Undefined unless the
    * opt-in is set. Pure diagnostic — does not affect scoring.
    */
-  readonly finalRankingFull?: readonly { docId: string; relevance: number; rerankerScore: number; finalReorderingScore?: number }[];
+  readonly finalRankingFull?: readonly { docId: string; relevance: number; rerankerScore: number; finalReorderingScore?: number; routed?: boolean }[];
   /** Diagnostic-only rendered candidate text for the final top-20. Undefined unless exposeRenderedCandidates=true. */
   readonly renderedCandidatesTop20?: readonly RenderedCandidateTrace[];
   /** Diagnostic-only rendered candidate text for reranker input cap. Undefined unless exposeRenderedCandidates=true. */
@@ -1028,7 +1050,7 @@ export async function scoreSubstrateAgainstQuery(
     temporalBonus: number;
   }[];
   answerInCap: boolean;
-  finalRankingFull: readonly { docId: string; relevance: number; rerankerScore: number; finalReorderingScore?: number }[] | undefined;
+  finalRankingFull: readonly { docId: string; relevance: number; rerankerScore: number; finalReorderingScore?: number; routed?: boolean }[] | undefined;
   renderedCandidatesTop20: readonly RenderedCandidateTrace[] | undefined;
   rerankerInputCandidates: readonly RenderedCandidateTrace[] | undefined;
   policyTraces: readonly PolicyAtomTrace[];
@@ -2457,6 +2479,19 @@ export async function scoreSubstrateAgainstQuery(
     }
     const sign = (action: string): number => (action === 'suppress' ? -1 : 1);
     const addBonus = (docId: string, delta: number) => policyBonusByDocId.set(docId, (policyBonusByDocId.get(docId) ?? 0) + delta);
+    // BMU v2 §18 era-iteration fix: program-derived ranking bias. A document
+    // admitted ONLY because an executed candidate-state program routed to it as
+    // a terminal (its docId is a key of `publicPathBundleTextByDocId`) gets a
+    // uniform +BMU_V2_PROGRAM_ROUTE_BONUS_UNITS·UNIT nudge — identical for every
+    // routed terminal, no qrel/answer/family/id/metadata read. This is what lets
+    // routing (not availability) move the JUDGED order under real Qwen. It rides
+    // the same ±1·UNIT summed clamp (P_cap=1) below, so Rmax is unchanged.
+    // ZERO_STATE decodes no programs ⇒ no terminals ⇒ zero bias (Q1 causality).
+    if (opts.bmuPublicPathBundle !== undefined) {
+      for (const docId of publicPathBundleTextByDocId.keys()) {
+        addBonus(docId, BMU_V2_PROGRAM_ROUTE_BONUS_UNITS * UNIT);
+      }
+    }
     if (opts.enableEntityResolutionAtoms === true && atomAdmittedEntityDocIds.size > 0) {
       const beta = Math.min(opts.policyMaxBudgetEntity ?? 300, 0xffff) / 1000;
       for (const docId of atomAdmittedEntityDocIds) addBonus(docId, beta * UNIT);
@@ -2731,6 +2766,12 @@ export async function scoreSubstrateAgainstQuery(
     return raw > cap ? cap : raw < -cap ? -cap : raw;
   };
   const qrelById = new Map(query.qrels.map((q) => [q.documentId, q.relevance]));
+  // BMU v2 §18: a routed terminal (admitted ONLY by an executed candidate-state
+  // program) wins composite-score ties over non-routed docs. The +1·UNIT bias
+  // lifts a Qwen-floored terminal to a tie with the pool ceiling; this
+  // label-free, program-derived preference breaks that tie so routing — not the
+  // reranker's own order — decides. Empty set (ZERO_STATE / non-BMU) ⇒ no-op.
+  const isRoutedTerminal = (docId: string): boolean => publicPathBundleTextByDocId.has(docId);
   const rankedScored = candidates
     .map((c) => {
       const r = rerankerScoreByDocId.get(c.record.docId) ?? 0;
@@ -2746,6 +2787,9 @@ export async function scoreSubstrateAgainstQuery(
       if (b.finalReorderingScore !== a.finalReorderingScore) {
         return b.finalReorderingScore - a.finalReorderingScore;
       }
+      const ra = isRoutedTerminal(a.documentId) ? 1 : 0;
+      const rb = isRoutedTerminal(b.documentId) ? 1 : 0;
+      if (rb !== ra) return rb - ra;
       if (b.rerankerScore !== a.rerankerScore) return b.rerankerScore - a.rerankerScore;
       return a.documentId < b.documentId ? -1 : a.documentId > b.documentId ? 1 : 0;
     });
@@ -2828,7 +2872,7 @@ export async function scoreSubstrateAgainstQuery(
   // the BMU deterministic judge consumes `finalReorderingScore` from here to
   // re-rank on the quantized-composite chain — BMU_SPEC.md §13.2).
   const finalRankingFull = opts.exposeFullRanking === true
-    ? rankedScored.map((r) => ({ docId: r.documentId, relevance: r.relevance, rerankerScore: r.rerankerScore, finalReorderingScore: r.finalReorderingScore }))
+    ? rankedScored.map((r) => ({ docId: r.documentId, relevance: r.relevance, rerankerScore: r.rerankerScore, finalReorderingScore: r.finalReorderingScore, routed: isRoutedTerminal(r.documentId) }))
     : undefined;
   const renderedTrace = (docId: string, rank: number): RenderedCandidateTrace | null => {
     const c = componentsByDocId.get(docId);
