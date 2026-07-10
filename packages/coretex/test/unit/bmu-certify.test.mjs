@@ -3,11 +3,10 @@
  * §13.2 / I8 / G-B1..G-B3) over an in-memory conflict_lifecycle bank:
  *   - judge law: required ⊆ top-B ∧ zero forbidden, at the row's budget;
  *   - baseline determinism (BM25 ordering, seeded random-K) — re-run stable;
- *   - structural oracle: solves every generated row from RELATIONS + doc
- *     metadata only (a qrels-blind adapter), and fails closed (null) when
- *     the structure is amputated;
- *   - certifyBank end-to-end on a small bank: everything certified, gates
- *     G-B2/G-B3 green; a poisoned bank (answer text leaked into the query)
+ *   - the legacy public structural oracle cannot solve balanced BMU-v2
+ *     branches and fails closed (null) when the structure is amputated;
+ *   - the legacy certifier rejects the v2 bank at G-B2 while G-B3 remains
+ *     green; a poisoned bank (answer text leaked into the query)
  *     is REJECTED with reasons, never silently dropped;
  *   - §13.2 boundary margins: quantized grid-cell distances on both sides
  *     of a rank boundary, cap-vs-pool degenerate case logged.
@@ -100,13 +99,14 @@ describe('structural oracle (G-B2, qrels-blind)', () => {
     docById: new Map(bank.publicDocs.map((d) => [d.id, d])),
     relations: bank.relations,
   };
-  test('solves every generated row from relations + doc metadata', () => {
+  test('cannot distinguish the hidden operation across balanced public branches', () => {
+    let solved = 0;
     for (const row of bank.rows) {
       const ranked = conflictLifecycleOracleRank(row, ctx);
       assert.ok(ranked, `oracle returned null for ${row.id}`);
-      const j = judgeTopB(ranked, row.bmuTask);
-      assert.equal(j.judgeSuccess, true, `oracle judge failed on ${row.id}: ${JSON.stringify(j)}`);
+      solved += judgeTopB(ranked, row.bmuTask).judgeSuccess ? 1 : 0;
     }
+    assert.equal(solved, 0, 'public relation/metadata selectors must not solve a v2 bank');
   });
   test('fails closed (null) when the contradicts edge is amputated', () => {
     const row = bank.rows[0];
@@ -116,12 +116,13 @@ describe('structural oracle (G-B2, qrels-blind)', () => {
 });
 
 describe('certifyBank end-to-end', () => {
-  test('clean bank: all certified, G-B2/G-B3 gates green, real lane logged as capacity gap', () => {
+  test('balanced v2 bank: legacy G-B2 fails closed while G-B3 remains green', () => {
     const bank = makeBank();
     const report = certifyBank(bank, { realClusters: 2 });
-    assert.equal(report.counts.rejected, 0, JSON.stringify(report.rejectionReasonHistogram));
-    assert.equal(report.counts.certified, bank.rows.length);
-    assert.equal(report.gates['G-B2_oracle'].pass, true);
+    assert.equal(report.counts.rejected, bank.rows.length);
+    assert.equal(report.counts.certified, 0);
+    assert.equal(report.rejectionReasonHistogram.oracle_judge_failed, bank.rows.length);
+    assert.equal(report.gates['G-B2_oracle'].pass, false);
     assert.equal(report.gates['G-B3_bm25'].pass, true);
     assert.equal(report.gates['G-B3_firstK'].pass, true);
     assert.equal(report.gates['G-B3_randomK'].pass, true);

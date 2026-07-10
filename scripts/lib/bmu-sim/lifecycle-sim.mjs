@@ -190,6 +190,8 @@ function rowToProductionEvent(world, row) {
     id,
     family: BUCKETED[t.family],
     logicalFamily: row.family,
+    ...(row.operationClass !== undefined ? { operationClass: row.operationClass } : {}),
+    ...(row.operationFamily !== undefined ? { operationFamily: row.operationFamily } : {}),
     domain: 'bmu_p5_sim',
     split: 'eval_hidden',
     queryText: row.queryText,

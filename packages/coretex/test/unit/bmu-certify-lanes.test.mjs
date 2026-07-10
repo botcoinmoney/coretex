@@ -8,9 +8,11 @@
  *
  * Covers: judge u(t) component logic (required/forbidden/answer conjuncts);
  * deterministic quantized ranking + docId tiebreak; BM25 sanity; seeded
- * random-K determinism; temporal oracle structural derivation (label-free);
+ * random-K determinism; retirement of the v1 public-structure temporal oracle
+ * against balanced BMU-v2 branches;
  * leak-screen detections; end-to-end certifyBank on a real (small) generator
- * bank — oracle 100%, baselines 0, all rows certified; real-lane merge with
+ * bank — legacy oracle fails closed and any trivial-baseline wins remain explicit;
+ * real-lane merge with
  * synthetic cosine/rerank scores incl. no-substrate-solves rejection and
  * blank-state margin fields; fail-closed on duplicate doc ids / unknown
  * family.
@@ -106,26 +108,23 @@ test('temporal shortcut attackers use public structure only and the minted contr
         `${row.id}: last-mention must not match oracle positive coverage`);
       assert.equal(currency.requiredCovered && currency.answerInTopB, false,
         `${row.id}: validity-only must not match oracle positive coverage`);
-      assert.equal(recency.topB.some((id) => row.bmuTask.forbiddenEvidence.includes(id)), false,
-        'shortcut controls should defeat recency without relying on the forbidden veto');
+      assert.equal(recency.topB.some((id) => row.bmuTask.forbiddenEvidence.includes(id)), true,
+        'balanced v2 controls deliberately make last-mention admit a forbidden branch');
     }
   }
 });
 
-test('temporal oracle derives evidence from STRUCTURE and matches generator labels', () => {
+test('legacy temporal structural oracle cannot distinguish balanced BMU-v2 branches', () => {
   const bank = smallBank();
   const docs = bank.clusters.flatMap((c) => c.docs);
+  let solved = 0;
   for (const cluster of bank.clusters) {
     for (const row of cluster.rows) {
       const o = ORACLE_LANES.temporal(row, cluster, docs, row.bmuTask.budgetB);
-      // label agreement (mint-consistency): structure-derived == stamped
-      assert.deepEqual([...o.evidence].sort(), [...row.bmuTask.requiredEvidence].sort(), row.id);
-      assert.equal(o.answerId, row.bmuTask.answer.id, row.id);
-      // never admits a forbidden doc
-      for (const f of row.bmuTask.forbiddenEvidence) assert.ok(!o.ranked.includes(f), row.id);
-      assert.equal(judgeTopB(o.ranked, row.bmuTask).u, 1, row.id);
+      solved += judgeTopB(o.ranked, row.bmuTask).u;
     }
   }
+  assert.equal(solved, 0, 'public path/recency metadata must not identify the hidden operation branch');
 });
 
 test('leak screen: detects answer-value leak, gold-only vocab, shared skeleton', () => {
@@ -152,22 +151,24 @@ test('leak screen: detects answer-value leak, gold-only vocab, shared skeleton',
   assert.ok(r3.reasons.some((x) => x.startsWith('shared_4gram_skeleton_with_gold')));
 });
 
-test('certifyBank end-to-end on a real generator bank: oracle 1.0, trivial baselines 0, all certified', () => {
+test('legacy v1 certifyBank fails closed on a balanced BMU-v2 temporal bank', () => {
   const bank = smallBank();
   const report = certifyBank(bank, { seed: 'unit-test-seed' });
   assert.equal(report.totals.rows, 10);
-  assert.equal(report.totals.oracleRate, 1);
-  assert.equal(report.baselineRates.bm25.uRate, 0);
+  assert.equal(report.totals.oracleRate, 0);
+  assert.equal(report.baselineRates.bm25.uRate, 0.2);
   assert.equal(report.baselineRates.firstK.uRate, 0);
   assert.equal(report.baselineRates.randomK.uRate, 0);
   assert.equal(report.shortcutGates.requiredForFamily, true);
   assert.equal(report.shortcutGates.pass, true);
   assert.equal(report.shortcutGates.lanes.subjectScopedRecency.competitiveWithOracle, false);
   assert.equal(report.shortcutGates.lanes.validityCurrency.competitiveWithOracle, false);
-  assert.equal(report.totals.packCertified, true);
-  assert.equal(report.totals.certificationRate, 1);
-  assert.deepEqual(report.rejectedTasks, []);
-  assert.equal(report.certifiedSubset.length, 10);
+  assert.equal(report.totals.packCertified, false);
+  assert.equal(report.totals.certificationRate, 0);
+  assert.equal(report.rejectedTasks.length, 10);
+  assert.equal(report.rejectedReasonHistogram.oracle_failed, 10);
+  assert.equal(report.rejectedReasonHistogram.trivial_baseline_solves, 2);
+  assert.deepEqual(report.certifiedSubset, []);
   // no-silent-caps: real lane not run must be stated
   assert.match(report.realLaneCoverage.cap, /NOT RUN/);
 });
@@ -200,8 +201,10 @@ test('certifyBank real-lane merge: no-substrate solve rejects; margins reported 
   assert.ok(reqMargin.marginOk); // 0.99 vs 0.5 boundary ≈ 490 cells
   // coverage cap logged with exact counts
   assert.match(report.realLaneCoverage.cap, /1\/10 rows/);
-  // other rows untouched by the real lane stay certified
-  assert.equal(report.totals.certified, 9);
+  // The v1 structural oracle rejects every balanced v2 row independently of
+  // this synthetic real-lane result; the v2 bank certifier is authoritative.
+  assert.equal(report.totals.certified, 0);
+  assert.equal(report.rejectedReasonHistogram.oracle_failed, 10);
 });
 
 test('fail-closed: duplicate doc ids and unregistered family throw', () => {
