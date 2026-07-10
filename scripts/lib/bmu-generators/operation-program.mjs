@@ -53,24 +53,30 @@ const FAMILY_CUE = Object.freeze({
  *    (missing_required). The off-path decoys are not query-similar enough to be
  *    Qwen-admitted, so a pure-promote program (byte-identical) is used and the
  *    real-Qwen margin run is the arbiter.
- *  - near_collision_abstention: EMPTY (promote-only) for this tip. The clean
- *    suppression design requires a DISTINCT query-similar forbidden seed-trap
- *    doc (mirroring conflict's candidateId) so the depth-1 suppress step evicts
- *    the collision competitors WITHOUT (a) demoting the disambiguation record
- *    (which is simultaneously the lookalike answer and duplicate-discrim
- *    required, so it must be a promoted terminal) or (b) unbalancing the 3
- *    same-path decoys (structural indistinguishability). Seeding from a NEUTRAL
- *    root instead starves the route (BC1: the seed is not stage-1 retrievable),
- *    and seeding from one of the balanced decoys breaks decoy indistinguish-
- *    ability. The distinct-seed-trap variant + the BC1 chain-start-retrievability
- *    fix + the BC2 activation census are the next round; near_collision stays at
- *    its proven f7dfbcb promote-only behaviour (73 P5 accepts) until then.
+ *  - near_collision_abstention: suppress the depth-1 branch step (index 1),
+ *    ROUND 4. The clean design lands a DISTINCT query-similar forbidden
+ *    seed-trap doc (mirroring conflict's candidateId): the trap seeds the
+ *    outgoing step (query-similar ⇒ stage-1 retrievable ⇒ BC1-safe), the depth-1
+ *    suppress step evicts the collision competitors (alias/attribute/scope
+ *    lookalike decoys, step-produced) AND the trap itself (suppressed lineage),
+ *    while BOTH the exact-match record and the disambiguation record hang at
+ *    terminal depth as PROMOTED answer terminals (disambiguation is
+ *    simultaneously the lookalike answer and duplicate-discrim required, so it
+ *    must be a promoted terminal). The 3 same-path decoys stay structurally
+ *    indistinguishable (none seeds; all are depth-1 dead ends). Seeding from a
+ *    NEUTRAL root starves the route (BC1) and seeding from a balanced decoy
+ *    breaks decoy indistinguishability — the distinct seed-trap avoids both.
+ *  - multi_hop_relation: EMPTY (promote-only). The required chain intermediates
+ *    live at depth 1, so a step-1 suppress would evict REQUIRED docs
+ *    (missing_required). Off-path decoys stay promote-only pending real-Qwen
+ *    margin evidence of forbidden admission (round-4 decision: no margin
+ *    evidence yet ⇒ keep byte-identical promote-only).
  */
 export const BMU_FAMILY_SUPPRESS_STEPS = Object.freeze({
   temporal: Object.freeze([1]),
   conflict_lifecycle: Object.freeze([1]),
   multi_hop_relation: Object.freeze([]),
-  near_collision_abstention: Object.freeze([]),
+  near_collision_abstention: Object.freeze([1]),
 });
 
 /**

@@ -205,6 +205,7 @@ export function buildNearCollisionClusterSpec({
   canonical, subjectId, attr, scope, absentScope, role, value,
   decoys, tsDate, exactId, disambigId, motifGroupId, subjectAliases = [],
   operationClass = NEARCOL_OPERATION_CLASSES[0].name,
+  collisionSeedTrapId, trapValue,
 }) {
   if (!Array.isArray(decoys) || decoys.length < 3) {
     throw new Error('buildNearCollisionClusterSpec: >=3 sibling decoys required (alias + attribute + scope collision axes)');
@@ -218,9 +219,26 @@ export function buildNearCollisionClusterSpec({
   if (absentScope === scope || decoys.some((d) => d.kind === 'scope' && d.scope === absentScope)) {
     throw new Error('buildNearCollisionClusterSpec: absentScope must be covered by NO doc (neither the exact scope nor any scope-lookalike)');
   }
+  // ROUND 4: the distinct query-similar forbidden seed-trap (mirrors conflict's
+  // candidateId). It carries the exact-question vocabulary AND claims currency
+  // with a WRONG value so it is a strong stage-1 seed (BC1-safe) yet forbidden;
+  // the depth-1 suppress step evicts it (as suppressed lineage) along with the
+  // collision decoys, while the exact-match and disambiguation records hang at
+  // terminal depth as promoted answers. Its value differs from the exact value
+  // and every decoy value (never gold-only; never the answer).
+  if (collisionSeedTrapId === undefined || collisionSeedTrapId === null) {
+    throw new Error('buildNearCollisionClusterSpec: collisionSeedTrapId required (round-4 seed-trap suppression)');
+  }
+  if (trapValue === undefined || trapValue === value || decoys.some((d) => d.value === trapValue)) {
+    throw new Error('buildNearCollisionClusterSpec: trapValue must differ from the exact value and every decoy value');
+  }
   const primaryTrap = decoys[0];
 
   const docs = [
+    { id: collisionSeedTrapId, kind: `nearcol_${slug(attr)}`, role: 'collision_seed_trap',
+      text: `What ${attr} did ${canonical} the ${role} set for the ${scope}? The ${attr} ${canonical} the ${role} set for the ${scope} is ${trapValue}, per the standing intake note, and current filings should keep applying ${trapValue}.`,
+      timestamp: tsDate, currentStaleFlag: true, subjectKey: subjectId,
+      collisionRole: 'collision_seed_trap', collisionScope: scope, roleAliases: [role] },
     { id: exactId, kind: `nearcol_${slug(attr)}`, role: 'exact_match',
       text: `${canonical} serving as ${role} set the ${attr} for the ${scope} to ${value} in the registry workspace filing.`,
       timestamp: tsDate, currentStaleFlag: true, subjectKey: subjectId,
@@ -264,9 +282,13 @@ export function buildNearCollisionClusterSpec({
 
   const decoyIds = decoys.map((d) => d.id);
   const categoryFor = { alias: 'duplicate_name_alias_collision', attribute: 'attribute_lookalike_near_collision', scope: 'wrong_scope_near_collision' };
-  const decoyQrels = decoys.map((d) => ({ docId: d.id, relevance: 0.0, role: `${d.kind}_lookalike` }));
-  const decoyNegs = decoys.map((d) => ({ docId: d.id, category: categoryFor[d.kind] }));
-  const forbiddenAnswerable = decoyIds;
+  const trapQrel = { docId: collisionSeedTrapId, relevance: 0.0, role: 'collision_seed_trap' };
+  const trapNeg = { docId: collisionSeedTrapId, category: 'collision_seed_trap_exact_terms' };
+  const decoyQrels = [trapQrel, ...decoys.map((d) => ({ docId: d.id, relevance: 0.0, role: `${d.kind}_lookalike` }))];
+  const decoyNegs = [trapNeg, ...decoys.map((d) => ({ docId: d.id, category: categoryFor[d.kind] }))];
+  // Round 4: the seed-trap leads the veto set (forbiddenEvidence[0]) so the
+  // no-answer-leak lint treats it as the primary trap it must out-rank.
+  const forbiddenAnswerable = [collisionSeedTrapId, ...decoyIds];
   // §5.4: the answerable sibling stays a plausible decoy for the absent
   // variant, but it is the cluster's ROUTED TERMINAL under the shared
   // cue/program — a forbidden routed terminal makes the abstain row
@@ -274,7 +296,7 @@ export function buildNearCollisionClusterSpec({
   // (fix-2b hard contract). It therefore stays a hardNegative (below) and
   // out of the veto set; the abstain law still binds via the required
   // abstainSignal and the decoy veto.
-  const forbiddenAbstain = [...decoyIds];
+  const forbiddenAbstain = [collisionSeedTrapId, ...decoyIds];
 
   const entityHoldoutKeys = bmuEntityHoldoutKeysForSubject({ id: subjectId, canonicalName: canonical, aliases: subjectAliases });
   const stampTask = ({ requiredEvidence, answerId, answerValue, abstain, questionType, variant, templateScope }) => stampExecutableOperationTask({
@@ -329,7 +351,7 @@ export function buildNearCollisionClusterSpec({
   ];
   if (queryStubs.length !== BMU_CLUSTER_SIZE_K) throw new Error('near-collision cluster must carry exactly k=5 rows');
 
-  return { docs, relations, queryStubs, forbiddenAnswerable, forbiddenAbstain };
+  return { docs, relations, queryStubs, forbiddenAnswerable, forbiddenAbstain, collisionSeedTrapId };
 }
 
 /**
@@ -457,11 +479,15 @@ export function generateNearCollisionAbstentionClusters({
       decoys = [...orderedFirst, ...decoys.filter((d) => !first.has(d))];
     }
 
+    // Round 4: the seed-trap's wrong value is the next fresh bank/void token
+    // past the last decoy so it never collides with the exact value or a decoy.
+    const trapValue = decoyValue(decoys.length);
     const spec = buildNearCollisionClusterSpec({
       canonical, subjectId: subj.id, attr, scope, absentScope, role, value,
       decoys, tsDate, subjectAliases: subj.aliases,
       exactId: docId('exact_match'), disambigId: docId('disambiguation_record'), motifGroupId,
       operationClass,
+      collisionSeedTrapId: docId('collision_seed_trap'), trapValue,
     });
 
     // Mint-time no-answer-leak lint (fail-closed). answerValue passed is the
@@ -499,7 +525,8 @@ export function generateNearCollisionAbstentionClusters({
     // groups).
     const exactId = spec.docs.find((doc) => doc.role === 'exact_match')?.id;
     const disambigId = spec.docs.find((doc) => doc.role === 'disambiguation_record')?.id;
-    if (!exactId || !disambigId) throw new Error('near_collision_abstention: exact/disambiguation docs missing');
+    const collisionSeedTrapId = spec.collisionSeedTrapId;
+    if (!exactId || !disambigId || !collisionSeedTrapId) throw new Error('near_collision_abstention: exact/disambiguation/seed-trap docs missing');
     if (decoys.length % 3 !== 0) throw new Error('near_collision_abstention: decoy bank must partition into triples');
     const pathDocs = [];
     const pathGroups = [];
@@ -514,11 +541,16 @@ export function generateNearCollisionAbstentionClusters({
         ...sinkIds.map((id, j) => ({ id, role: 'path_pivot', text: `${j === 0 ? 'Neutral' : 'Mirrored'} registry pivot ${epoch}-${clusterSlot}-${groupIndex}-${j} receives the same independently filed collision branches under one docket.` })),
       );
       if (groupIndex === 0) {
+        // Round 4: seed the outgoing step from the query-similar forbidden
+        // seed-trap (BC1-safe stage-1 chain-start), suppress the depth-1 branch
+        // step to evict the trap (lineage) + collision decoys (step-produced),
+        // and hang BOTH answer records (exact-match + disambiguation) at terminal
+        // depth as promoted terminals.
         const topology = buildProgramPathTopology({
           program: operation.operationProgram,
-          seedId: disambigId,
+          seedId: collisionSeedTrapId,
           sinkIds,
-          goldIds: [exactId],
+          goldIds: [exactId, disambigId],
           decoyIds: trio.map((d) => d.id),
           midIdFor: (level) => docId(`path_mid:${groupIndex}:${level}`),
         });
@@ -529,7 +561,7 @@ export function generateNearCollisionAbstentionClusters({
         })));
         pathGroups.push({
           sinkId, sinkIds, truthId: exactId, decoyIds: trio.map((d) => d.id),
-          anchorId: disambigId, midIds: [...topology.midIds],
+          anchorId: collisionSeedTrapId, midIds: [...topology.midIds],
           branchIds: [...topology.terminalIds],
         });
       } else {

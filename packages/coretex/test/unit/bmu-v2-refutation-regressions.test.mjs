@@ -299,7 +299,7 @@ test('regression: known public generator seed cannot reverse keyed near-collisio
   const motifGroupId = `mg_e${publicEpoch}_nearcol_${String(clusterSlot).padStart(4, '0')}`;
   const attackerId = (slot) => opaqueBmuDocId({ docIdKeyHex: attackerKeyHex, seed, epoch: publicEpoch, motifGroupId, slot });
   const attackerPreferred = [attackerId('exact_match'), attackerId('disambiguation_record')];
-  const attackerForbidden = [attackerId('alias_collision_decoy:0'), attackerId('attribute_lookalike_decoy:0'), attackerId('scope_lookalike_decoy:0')];
+  const attackerForbidden = [attackerId('collision_seed_trap'), attackerId('alias_collision_decoy:0'), attackerId('attribute_lookalike_decoy:0'), attackerId('scope_lookalike_decoy:0')];
   const matchedAttackerIds = [...attackerPreferred, ...attackerForbidden]
     .filter((id) => docs.some((doc) => doc.id === id));
   const ranking = matchedAttackerIds.map((docId, index) => ({ docId, score: -index }));
@@ -309,7 +309,7 @@ test('regression: known public generator seed cannot reverse keyed near-collisio
   assert.deepEqual(matchedAttackerIds, []);
   const privateId = (slot) => opaqueBmuDocId({ docIdKeyHex, seed, epoch: publicEpoch, motifGroupId, slot });
   const preferred = [privateId('exact_match'), privateId('disambiguation_record')];
-  const forbidden = [privateId('alias_collision_decoy:0'), privateId('attribute_lookalike_decoy:0'), privateId('scope_lookalike_decoy:0')];
+  const forbidden = [privateId('collision_seed_trap'), privateId('alias_collision_decoy:0'), privateId('attribute_lookalike_decoy:0'), privateId('scope_lookalike_decoy:0')];
   const positive = attackerRanking(docs.map((doc) => doc.id), preferred, forbidden);
   const positiveRate = answerableRows.filter((row) => judgeTopB(positive, row.bmuTask).judgeSuccess).length / out.addedQueries.length;
   assert.equal(positiveRate, 0.8, 'private-key positive control solves all four answerable rows');
