@@ -98,6 +98,11 @@ export type BmuOperationDirection = 'outgoing' | 'incoming';
 export interface BmuOperationProgramStep {
   readonly direction: BmuOperationDirection;
   readonly edgeType: BmuOperationEdgeType;
+  /** §18.3 suppression opcode. A program whose FINAL step is suppress-marked
+   *  DEMOTES its executed terminals (−1·UNIT) instead of promoting them; seed/
+   *  intermediate lineage is demoted regardless. Part of the executable class
+   *  signature. Absent ⇒ false ⇒ promote (byte-identical to pre-§18.3). */
+  readonly suppress?: boolean;
 }
 export interface BmuOperationProgram {
   readonly branchLimit: typeof BMU_V2_OPERATION_BRANCH_LIMIT;
@@ -107,7 +112,7 @@ export interface BmuOperationProgram {
 /** Exact executable equivalence-class law shared with the public generator. */
 export function bmuExecutableOperationClass(cue: string, program: BmuOperationProgram): string {
   return `${cue}=>b${program.branchLimit}/${program.steps
-    .map((step) => `${step.direction}:${step.edgeType}`).join('/')}`;
+    .map((step) => `${step.direction}:${step.edgeType}${step.suppress === true ? ':suppress' : ''}`).join('/')}`;
 }
 
 /** BMU multi-hop retrieval law: a transferring boost operation raises score
@@ -265,7 +270,8 @@ export function validateBmuTaskOnEvent(
     const validEdges = new Set<string>(BMU_V2_OPERATION_EDGE_TYPES);
     if (!program || program.branchLimit !== BMU_V2_OPERATION_BRANCH_LIMIT
         || !Array.isArray(program.steps) || program.steps.length < 1 || program.steps.length > 4
-        || program.steps.some((step) => !step || !validDirections.has(step.direction) || !validEdges.has(step.edgeType))) {
+        || program.steps.some((step) => !step || !validDirections.has(step.direction) || !validEdges.has(step.edgeType)
+          || (step.suppress !== undefined && typeof step.suppress !== 'boolean'))) {
       err(`BMU v2 bmuOperationProgram must carry branchLimit=${BMU_V2_OPERATION_BRANCH_LIMIT} and 1..4 valid directed public-edge steps`);
     } else if (typeof cue === 'string' && t.operationClass !== bmuExecutableOperationClass(cue, program)) {
       err(`BMU v2 bmuTask.operationClass must equal the recomputed executable signature '${bmuExecutableOperationClass(cue, program)}'`);

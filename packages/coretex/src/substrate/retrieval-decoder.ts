@@ -159,6 +159,16 @@ export interface PolicyAtom {
 export interface BmuPublicPathProgramStep {
   readonly direction: 'outgoing' | 'incoming';
   readonly edgeType: RelationEdgeType;
+  /**
+   * BMU v2 §18.3 suppression opcode flag (bytecode bit 0x20 of the step byte).
+   * When a program's FINAL step is suppress-marked, that program's executed
+   * terminals are DEMOTED (−1·UNIT, same clamp) instead of promoted; a promote
+   * program keeps +1·UNIT. Label-free, uniform, part of the checksummed
+   * bytecode (so it is candidate-state-causal and non-invertible — flipping it
+   * is a different program with a different checksum). Absent ⇒ false ⇒
+   * byte-identical to the pre-§18.3 promote-only encoding.
+   */
+  readonly suppress?: boolean;
 }
 
 export interface BmuPublicPathProgram {
@@ -888,12 +898,20 @@ export function decodeBmuPublicPathPrograms(state: CortexState): {
         continue;
       }
       const edgeType = BMU_PATH_EDGE_BY_BITS[opcode & 0x0f];
-      const directionBits = opcode >> 4;
-      if (!edgeType || (directionBits !== 0 && directionBits !== 1)) {
+      const directionBits = (opcode >> 4) & 1;
+      const suppressBits = (opcode >> 5) & 1;
+      // Bits 0x40/0x80 are reserved and MUST be zero (fail closed on any other
+      // high bit so a future opcode cannot be smuggled through this decoder).
+      const reservedHigh = opcode >> 6;
+      if (!edgeType || reservedHigh !== 0) {
         malformed = true;
         continue;
       }
-      steps.push({ direction: directionBits === 1 ? 'incoming' : 'outgoing', edgeType });
+      steps.push({
+        direction: directionBits === 1 ? 'incoming' : 'outgoing',
+        edgeType,
+        suppress: suppressBits === 1,
+      });
     }
     if (malformed || steps.length !== stepCount) {
       failures++;
@@ -953,7 +971,8 @@ export function encodeBmuPublicPathProgramWords(program: BmuPublicPathProgram): 
     const step = program.steps[i]!;
     const direction = step.direction === 'incoming' ? 0x10 : step.direction === 'outgoing' ? 0 : -1;
     if (direction < 0) throw new Error('encodeBmuPublicPathProgramWords: bad direction');
-    bytecode |= BigInt(direction | relationTypeToBits(step.edgeType)) << BigInt(24 - i * 8);
+    const suppress = step.suppress === true ? 0x20 : 0;
+    bytecode |= BigInt(direction | suppress | relationTypeToBits(step.edgeType)) << BigInt(24 - i * 8);
   }
   const atomWord = (flags: number, budget: number, expiry: bigint): bigint => (
     (BigInt(BMU_PATH_PROGRAM_SELECTOR) << 248n)

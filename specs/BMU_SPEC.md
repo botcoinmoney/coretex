@@ -2064,6 +2064,43 @@ family.
   the generator MUST mint discriminating single-answer-terminal programs and the
   certification lane MUST reject rows failing the oracle-solved real-margin
   check (§ certification).
+- **§18.3 suppression channel (ROUND 3 — availability+eviction law):** the
+  route bonus above is AVAILABILITY-ONLY (+1·UNIT to promote terminals); it can
+  lift an answer INTO topB but cannot EVICT a query-similar forbidden competitor
+  that a strong reranker ranks into a small budgetB=4 topB on its own merit (the
+  zero-lift root cause, ledger §17.17 — conflict_lifecycle's forbidden set holds
+  the causal-base seed AND off-path co-occurring siblings). §18.3 adds the mirror
+  channel so programs may PROMOTE or SUPPRESS. Encoding: each program step's
+  bytecode byte gains a `suppress` opcode flag (bit `0x20`, alongside the `0x10`
+  direction bit and the `0x0f` edge-type nibble; bits `0x40`/`0x80` reserved,
+  decode fails closed on any set high bit). The flag is inside the checksummed
+  bytecode word, so flipping promote↔suppress is a DIFFERENT program with a
+  DIFFERENT checksum — candidate-state-causal and non-invertible. Semantics: a
+  program is a SUPPRESS program iff it carries ≥1 suppress step. For a suppress
+  program, (a) its executed TERMINALS (reached via the final step) are demoted
+  −1·UNIT iff the FINAL step is suppress-marked, and (b) its non-terminal route
+  lineage (the on-path query-similar causal-base seed + intermediates) is demoted
+  −1·UNIT. A PURE PROMOTE program (no suppress step) demotes NOTHING — its
+  seed/intermediate nodes are legitimate required evidence (e.g. a multi_hop
+  chain), so promote-only behavior is byte-identical to the pre-§18.3 law. The
+  −1·UNIT rides the SAME ±1·UNIT summed clamp (P_cap=1) and a suppressed doc
+  LOSES quantized-composite ties (mirror of the promote tie-win), so **Rmax is
+  unchanged**. A doc that is both a promote terminal and a suppress target keeps
+  the promotion (promote wins), so a program can never suppress an answer it
+  routed in. Three questions: **(Q1) causality** — suppression exists ONLY via an
+  executed candidate-state program; ZERO_STATE decodes no programs ⇒ empty
+  suppress set ⇒ zero bias in EITHER direction (pinned by the §18.3 refutation
+  regression, incl. an adversarial-Qwen control where the reranker ranks the
+  suppress terminal HIGHEST yet it is still demoted out of topB, and ZERO_STATE
+  demotes nothing). **(Q2) executable class space** — the suppress flag is part
+  of the executable signature (`:suppress` per step) but is per-execution, not a
+  new class family; it reads no labels. **(Q3) shortcut surface** — uniform
+  −1·UNIT magnitude, no labels, capacity-bounded by the same resident capacity +
+  ±1·UNIT clamp; keyed-id inversion unaffected. The certification oracle-solved
+  margin lane now verifies forbidden EVICTION (all forbidden docs OUT of topB
+  under the patched state), and the full-bank REAL-QWEN margin run is a BLOCKING
+  gate (a deterministic-only certification is blind to forbidden admission — the
+  §17.17 CPU/GPU divergence).
 - **§18 era-iteration fixes 2+3 (this tip):** (2a) the generators now mint the
   disjoint-partition deep-terminal bank above — the executed terminal set
   equals the operation-required answer terminal(s), enforced by the mint lint,

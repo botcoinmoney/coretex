@@ -125,6 +125,11 @@ export interface BmuJudgeRankingEntry {
    *  terminal). Wins composite-score ties over non-routed docs so routing —
    *  not the reranker's order — decides. Absent/false ⇒ legacy behavior. */
   readonly routed?: boolean;
+  /** §18.3: doc DEMOTED by an executed candidate-state program (suppress-terminal
+   *  or on-path seed/intermediate lineage). LOSES composite ties so the −1·UNIT
+   *  demotion is decisive at the topB boundary — the mirror of `routed`. A doc is
+   *  never both (promote wins). Absent/false ⇒ legacy behavior. */
+  readonly suppressed?: boolean;
 }
 
 /** Quantize a composite score to the bundle-pinned grid (integer cells). */
@@ -152,8 +157,10 @@ export function bmuJudgeOrder(
     // quantized-composite tie. The +1·UNIT bias lifts a Qwen-floored terminal
     // to a tie with the pool ceiling; this preference resolves it in favor of
     // routing before the raw-rerank tiebreak (which would favor the ceiling).
-    const rga = a.routed === true ? 1 : 0;
-    const rgb = b.routed === true ? 1 : 0;
+    // §18.3: promote wins (+1), suppress loses (−1), neutral 0 — a doc a program
+    // demoted drops below untouched docs at a quantized-composite tie.
+    const rga = a.routed === true ? 1 : a.suppressed === true ? -1 : 0;
+    const rgb = b.routed === true ? 1 : b.suppressed === true ? -1 : 0;
     if (rgb !== rga) return rgb - rga;
     const ra = bmuQuantize(a.rerankerScore, grid);
     const rb = bmuQuantize(b.rerankerScore, grid);
@@ -358,7 +365,7 @@ export async function evaluateBmuBenchmarkState(
       if (typeof r.finalReorderingScore !== 'number' || !Number.isFinite(r.finalReorderingScore)) {
         throw new Error(`evaluateBmuBenchmarkState: finalReorderingScore missing/non-finite for doc ${r.docId} on row ${event.id}`);
       }
-      return { docId: r.docId, rerankerScore: r.rerankerScore, finalReorderingScore: r.finalReorderingScore, routed: r.routed === true };
+      return { docId: r.docId, rerankerScore: r.rerankerScore, finalReorderingScore: r.finalReorderingScore, routed: r.routed === true, suppressed: r.suppressed === true };
     });
     const topB = bmuJudgeTopB(entries, task.budgetB, grid);
     // §5.5: the abstention signal is EXACTLY the policy-atom decision; the

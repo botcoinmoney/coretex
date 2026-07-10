@@ -119,6 +119,7 @@ export function canonicalBmuOperationProgram(program) {
     steps: Object.freeze(program.steps.map((step) => Object.freeze({
       direction: step.direction,
       edgeType: step.edgeType,
+      ...(step.suppress === true ? { suppress: true } : {}),
     }))),
   });
 }
@@ -131,7 +132,7 @@ export function executableOperationSignature({ operationCue, operationProgram, s
   }
   const program = canonicalBmuOperationProgram(operationProgram ?? { branchLimit, steps });
   const executableSignature = `${operationCue}=>b${program.branchLimit}/${program.steps
-    .map((step) => `${step.direction}:${step.edgeType}`).join('/')}`;
+    .map((step) => `${step.direction}:${step.edgeType}${step.suppress === true ? ':suppress' : ''}`).join('/')}`;
   if (executableSignature.length > 256) throw new Error('executable operation signature exceeds 256 characters');
   return Object.freeze({
     operationCue,
@@ -266,9 +267,30 @@ export function executeProgramOverRelations({ program, relations, seedIds, branc
     frontier = new Map([...next].sort(([a], [b]) => compare(a, b)));
     if (frontier.size === 0) break;
   }
+  // §18.3: suppression fires ONLY for a program carrying the suppress opcode.
+  // The final step's opcode decides terminal treatment; when the program has any
+  // suppress step, every non-terminal route node (seed + intermediates) is
+  // suppressed lineage. A pure promote program demotes nothing (byte-identical).
+  const programHasSuppress = canonical.steps.some((s) => s.suppress === true);
+  const terminalsSuppressed = canonical.steps[canonical.steps.length - 1]?.suppress === true;
+  const suppressLineageIds = new Set();
+  if (programHasSuppress) {
+    for (const route of frontier.values()) {
+      for (let i = 0; i < route.length - 1; i++) suppressLineageIds.add(route[i]);
+    }
+  }
+  const terminalIds = [...frontier.keys()];
   return Object.freeze({
-    terminalIds: [...frontier.keys()],
+    terminalIds,
     routes: new Map([...frontier].map(([id, route]) => [id, Object.freeze([...route])])),
+    /** Terminals promoted (+1·UNIT). Empty when the final step is suppress-marked. */
+    promoteTerminalIds: Object.freeze(terminalsSuppressed ? [] : [...terminalIds]),
+    /** Terminals demoted (−1·UNIT) because the final step is suppress-marked. */
+    suppressTerminalIds: Object.freeze(terminalsSuppressed ? [...terminalIds] : []),
+    /** Seed/intermediate lineage demoted (−1·UNIT) — never an answer terminal. */
+    suppressLineageIds: Object.freeze([...suppressLineageIds]),
+    programHasSuppress,
+    terminalsSuppressed,
   });
 }
 

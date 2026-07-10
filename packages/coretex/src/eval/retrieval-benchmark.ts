@@ -943,7 +943,7 @@ export interface PerQueryBreakdown {
    * complete reranked list and recompute nDCG faithfully. Undefined unless the
    * opt-in is set. Pure diagnostic — does not affect scoring.
    */
-  readonly finalRankingFull?: readonly { docId: string; relevance: number; rerankerScore: number; finalReorderingScore?: number; routed?: boolean }[];
+  readonly finalRankingFull?: readonly { docId: string; relevance: number; rerankerScore: number; finalReorderingScore?: number; routed?: boolean; suppressed?: boolean }[];
   /** Diagnostic-only rendered candidate text for the final top-20. Undefined unless exposeRenderedCandidates=true. */
   readonly renderedCandidatesTop20?: readonly RenderedCandidateTrace[];
   /** Diagnostic-only rendered candidate text for reranker input cap. Undefined unless exposeRenderedCandidates=true. */
@@ -1050,7 +1050,7 @@ export async function scoreSubstrateAgainstQuery(
     temporalBonus: number;
   }[];
   answerInCap: boolean;
-  finalRankingFull: readonly { docId: string; relevance: number; rerankerScore: number; finalReorderingScore?: number; routed?: boolean }[] | undefined;
+  finalRankingFull: readonly { docId: string; relevance: number; rerankerScore: number; finalReorderingScore?: number; routed?: boolean; suppressed?: boolean }[] | undefined;
   renderedCandidatesTop20: readonly RenderedCandidateTrace[] | undefined;
   rerankerInputCandidates: readonly RenderedCandidateTrace[] | undefined;
   policyTraces: readonly PolicyAtomTrace[];
@@ -1125,6 +1125,11 @@ export async function scoreSubstrateAgainstQuery(
   };
   const pool = new Map<string, CandidateRecord>();
   const publicPathBundleTextByDocId = new Map<string, string>();
+  // §18.3: docs a program marked for SUPPRESSION (suppress-terminal or on-path
+  // seed/intermediate lineage). They receive −1·UNIT and lose composite ties.
+  // A doc that is ALSO a promote terminal is excluded at bias time (promote
+  // wins), so this set never overrides an answer the program routed in.
+  const suppressBiasDocIds = new Set<string>();
   function addSource(record: CandidateRecord, src: SourceTag) {
     record.sources.add(src);
   }
@@ -1259,6 +1264,18 @@ export async function scoreSubstrateAgainstQuery(
       .filter((program) => program.queryKey === queryKey)
       .slice(0, law.maxPrograms);
     const terminalRoutes = new Map<string, readonly string[]>();
+    // BMU v2 §18.3 suppression channel. A program whose FINAL step carries the
+    // suppress opcode DEMOTES its executed terminals (−1·UNIT) instead of
+    // promoting them; every executed program's non-terminal route nodes
+    // (seed/intermediate lineage — "graph machinery", never an answer) are also
+    // demoted. This lets a program EVICT the query-similar forbidden competitors
+    // (on-path causal base via lineage; off-path co-occurring siblings via a
+    // suppress-terminal program) that availability-only routing could not remove
+    // from a small budgetB topB. Label-free, uniform, ZERO_STATE-inert (no
+    // programs ⇒ no bias either direction), and part of the checksummed
+    // bytecode (candidate-state-causal + non-invertible).
+    const suppressTerminalEventIds = new Set<string>();
+    const suppressLineageEventIds = new Set<string>();
     const initialFrontier = [...new Set(stage1Docs.slice(0, law.stage1SeedLimit).map((doc) => doc.eventId))]
       .sort(codePointCompare);
     for (const program of matchingPrograms) {
@@ -1297,12 +1314,28 @@ export async function scoreSubstrateAgainstQuery(
         frontier = new Map([...next].sort(([a], [b]) => codePointCompare(a, b)));
         if (frontier.size === 0) break;
       }
+      // §18.3: suppression fires ONLY for a program that carries the suppress
+      // opcode. A pure PROMOTE program (no suppress step) demotes nothing — its
+      // seed/intermediate nodes are legitimate required evidence in the promote
+      // families (e.g. a multi_hop chain), so blanket lineage demotion would
+      // wrongly evict required docs. For a SUPPRESS program, the FINAL step's
+      // opcode decides terminal treatment (only terminals are admitted, all
+      // reached via the last step) and every non-terminal route node (the
+      // on-path seed + intermediates — the query-similar forbidden base) is
+      // demoted lineage. This keeps promote-only behavior byte-identical.
+      const programHasSuppress = program.steps.some((s) => s.suppress === true);
+      const terminalsSuppressed = program.steps[program.steps.length - 1]?.suppress === true;
       for (const [eventId, route] of frontier) {
         const priorRoute = terminalRoutes.get(eventId);
         if (priorRoute && priorRoute.join('\0') !== route.join('\0')) {
           throw new Error(`bmuPublicPathBundle terminal collision at '${eventId}' — refusing ambiguous lineage`);
         }
         if (!priorRoute) terminalRoutes.set(eventId, route);
+        if (terminalsSuppressed) suppressTerminalEventIds.add(eventId);
+        if (programHasSuppress) {
+          // route.slice(0, -1) = seed + intermediates (never the terminal).
+          for (let i = 0; i < route.length - 1; i++) suppressLineageEventIds.add(route[i]!);
+        }
       }
     }
     // Exactly one public document per TERMINAL branch. Intermediate branches
@@ -1315,6 +1348,7 @@ export async function scoreSubstrateAgainstQuery(
       if (!terminal) continue;
       const added = addAtomEventDocs(terminal, 'publicPath', 1);
       const route = terminalRoutes.get(eventId)!;
+      const suppressed = suppressTerminalEventIds.has(eventId);
       const routeText = route.map((routeEventId, i) => {
         const routeEvent = publicEvents.get(routeEventId);
         const text = routeEvent?.truthDocuments[0]?.text ?? routeEvent?.queryText ?? '';
@@ -1323,7 +1357,24 @@ export async function scoreSubstrateAgainstQuery(
       if (routeText.length > law.maxRenderedLineageChars) {
         throw new Error(`bmuPublicPathBundle rendered lineage has ${routeText.length} chars, cap ${law.maxRenderedLineageChars}; refusing truncation`);
       }
-      for (const docId of added) publicPathBundleTextByDocId.set(docId, routeText);
+      // A promote terminal gets its lineage bundled into the reranker text (so
+      // Qwen scores the answer with its path context) AND the +UNIT bonus. A
+      // suppress terminal is admitted (so it reaches Qwen and can be demoted)
+      // but gets NO bundle text (we do not help the reranker score a doc we are
+      // evicting) and the −UNIT bonus below.
+      for (const docId of added) {
+        if (suppressed) suppressBiasDocIds.add(docId);
+        else publicPathBundleTextByDocId.set(docId, routeText);
+      }
+    }
+    // Map every suppressed lineage EVENT to its admitted doc (truthDocuments[0],
+    // the same doc addAtomEventDocs would pick) so the −UNIT demotion below
+    // reaches the on-path forbidden seed/intermediate even when it entered the
+    // pool via stage-1 (the query-similar causal base is stage-1 rank 1).
+    for (const eventId of suppressLineageEventIds) {
+      const ev = publicEvents.get(eventId);
+      const docId = ev?.truthDocuments[0]?.id;
+      if (docId !== undefined) suppressBiasDocIds.add(docId);
     }
   }
 
@@ -2491,6 +2542,15 @@ export async function scoreSubstrateAgainstQuery(
       for (const docId of publicPathBundleTextByDocId.keys()) {
         addBonus(docId, BMU_V2_PROGRAM_ROUTE_BONUS_UNITS * UNIT);
       }
+      // §18.3 suppression channel: a program-suppressed doc gets the mirror
+      // −BMU_V2_PROGRAM_ROUTE_BONUS_UNITS·UNIT nudge (same P_cap=1 clamp, Rmax
+      // unchanged) so an EXECUTED program can EVICT a query-similar forbidden
+      // competitor real Qwen ranks into topB on merit. Promote wins any overlap.
+      // ZERO_STATE decodes no programs ⇒ empty set ⇒ zero bias (Q1 causality).
+      for (const docId of suppressBiasDocIds) {
+        if (publicPathBundleTextByDocId.has(docId)) continue;
+        addBonus(docId, -BMU_V2_PROGRAM_ROUTE_BONUS_UNITS * UNIT);
+      }
     }
     if (opts.enableEntityResolutionAtoms === true && atomAdmittedEntityDocIds.size > 0) {
       const beta = Math.min(opts.policyMaxBudgetEntity ?? 300, 0xffff) / 1000;
@@ -2772,6 +2832,14 @@ export async function scoreSubstrateAgainstQuery(
   // label-free, program-derived preference breaks that tie so routing — not the
   // reranker's own order — decides. Empty set (ZERO_STATE / non-BMU) ⇒ no-op.
   const isRoutedTerminal = (docId: string): boolean => publicPathBundleTextByDocId.has(docId);
+  // §18.3: a program-suppressed doc (not also a promote terminal) LOSES
+  // composite ties so the −1·UNIT demotion is decisive at the topB boundary,
+  // mirroring how a routed terminal WINS ties. Rank preference: +1 promote,
+  // −1 suppress, 0 neutral.
+  const isSuppressedTerminal = (docId: string): boolean =>
+    suppressBiasDocIds.has(docId) && !publicPathBundleTextByDocId.has(docId);
+  const routePreference = (docId: string): number =>
+    isRoutedTerminal(docId) ? 1 : isSuppressedTerminal(docId) ? -1 : 0;
   const rankedScored = candidates
     .map((c) => {
       const r = rerankerScoreByDocId.get(c.record.docId) ?? 0;
@@ -2787,8 +2855,8 @@ export async function scoreSubstrateAgainstQuery(
       if (b.finalReorderingScore !== a.finalReorderingScore) {
         return b.finalReorderingScore - a.finalReorderingScore;
       }
-      const ra = isRoutedTerminal(a.documentId) ? 1 : 0;
-      const rb = isRoutedTerminal(b.documentId) ? 1 : 0;
+      const ra = routePreference(a.documentId);
+      const rb = routePreference(b.documentId);
       if (rb !== ra) return rb - ra;
       if (b.rerankerScore !== a.rerankerScore) return b.rerankerScore - a.rerankerScore;
       return a.documentId < b.documentId ? -1 : a.documentId > b.documentId ? 1 : 0;
@@ -2872,7 +2940,7 @@ export async function scoreSubstrateAgainstQuery(
   // the BMU deterministic judge consumes `finalReorderingScore` from here to
   // re-rank on the quantized-composite chain — BMU_SPEC.md §13.2).
   const finalRankingFull = opts.exposeFullRanking === true
-    ? rankedScored.map((r) => ({ docId: r.documentId, relevance: r.relevance, rerankerScore: r.rerankerScore, finalReorderingScore: r.finalReorderingScore, routed: isRoutedTerminal(r.documentId) }))
+    ? rankedScored.map((r) => ({ docId: r.documentId, relevance: r.relevance, rerankerScore: r.rerankerScore, finalReorderingScore: r.finalReorderingScore, routed: isRoutedTerminal(r.documentId), suppressed: isSuppressedTerminal(r.documentId) }))
     : undefined;
   const renderedTrace = (docId: string, rank: number): RenderedCandidateTrace | null => {
     const c = componentsByDocId.get(docId);
