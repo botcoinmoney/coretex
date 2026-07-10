@@ -202,10 +202,11 @@ describe('evaluateBmuBenchmarkState (e2e through the real pipeline)', () => {
     const result = await evaluateBmuBenchmarkState(ZERO_STATE, corpus, pack, opts);
     assert.equal(result.bmu.packSize, 8);
     assert.equal(result.bmu.scalarPpm, 875000);
-    await assert.rejects(
-      () => evaluateBmuBenchmarkState(ZERO_STATE, corpus, pack, { ...opts, rerankerInputTopK: 63 }),
-      /refusing non-uniform Qwen admission/,
-    );
+    // A blank state has no executable path program, so it owns no mandatory
+    // public-path pool and a smaller cap remains valid. Program-specific
+    // overflow refusal is covered by bmu-v2-executable-operation.test.mjs.
+    const blankAt63 = await evaluateBmuBenchmarkState(ZERO_STATE, corpus, pack, { ...opts, rerankerInputTopK: 63 });
+    assert.equal(blankAt63.bmu.scalarPpm, result.bmu.scalarPpm);
   });
 
   test('scalar law: 7/8 answerable rows lift; the blank state earns NO abstention utility (§5.5)', async () => {
