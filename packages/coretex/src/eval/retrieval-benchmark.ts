@@ -1280,7 +1280,9 @@ export async function scoreSubstrateAgainstQuery(
       .sort(codePointCompare);
     for (const program of matchingPrograms) {
       let frontier = new Map(initialFrontier.map((eventId) => [eventId, [eventId] as readonly string[]]));
-      for (const step of program.steps) {
+      for (let stepIndex = 0; stepIndex < program.steps.length; stepIndex++) {
+        const step = program.steps[stepIndex]!;
+        const isFinalStep = stepIndex === program.steps.length - 1;
         const next = new Map<string, readonly string[]>();
         for (const [eventId, route] of frontier) {
           const event = publicEvents.get(eventId);
@@ -1310,6 +1312,15 @@ export async function scoreSubstrateAgainstQuery(
             }
             if (!priorRoute) next.set(target.id, candidateRoute);
           }
+        }
+        // §18.3: a node "reached via a suppress-marked step" is demoted. For a
+        // NON-final suppress step, that is every node the step produced —
+        // including OFF-path dead-ends (e.g. conflict scope-mismatch siblings
+        // that branch off the pivot but never continue to a terminal), which
+        // terminal-route lineage alone cannot reach. The final suppress step is
+        // handled as terminal treatment below.
+        if (step.suppress === true && !isFinalStep) {
+          for (const producedEventId of next.keys()) suppressLineageEventIds.add(producedEventId);
         }
         frontier = new Map([...next].sort(([a], [b]) => codePointCompare(a, b)));
         if (frontier.size === 0) break;

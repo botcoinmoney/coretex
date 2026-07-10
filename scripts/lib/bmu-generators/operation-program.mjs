@@ -246,7 +246,12 @@ export function executeProgramOverRelations({ program, relations, seedIds, branc
     (incomingByDst.get(dst) ?? incomingByDst.set(dst, []).get(dst)).push({ other: src, type: relation.type ?? relation.edgeType });
   }
   let frontier = new Map([...new Set(seedIds)].sort(compare).map((id) => [id, [id]]));
-  for (const step of canonical.steps) {
+  // §18.3: nodes produced by a NON-final suppress step (off-path dead-ends the
+  // terminal-route lineage cannot reach).
+  const suppressStepProducedIds = new Set();
+  for (let stepIdx = 0; stepIdx < canonical.steps.length; stepIdx++) {
+    const step = canonical.steps[stepIdx];
+    const isFinalStep = stepIdx === canonical.steps.length - 1;
     const next = new Map();
     for (const [eventId, route] of frontier) {
       const neighbors = (step.direction === 'outgoing' ? outgoingBySrc.get(eventId) : incomingByDst.get(eventId)) ?? [];
@@ -264,16 +269,20 @@ export function executeProgramOverRelations({ program, relations, seedIds, branc
         if (!prior) next.set(target, candidateRoute);
       }
     }
+    if (step.suppress === true && !isFinalStep) {
+      for (const producedId of next.keys()) suppressStepProducedIds.add(producedId);
+    }
     frontier = new Map([...next].sort(([a], [b]) => compare(a, b)));
     if (frontier.size === 0) break;
   }
   // §18.3: suppression fires ONLY for a program carrying the suppress opcode.
   // The final step's opcode decides terminal treatment; when the program has any
   // suppress step, every non-terminal route node (seed + intermediates) is
-  // suppressed lineage. A pure promote program demotes nothing (byte-identical).
+  // suppressed lineage, PLUS every node produced by a non-final suppress step
+  // (off-path dead-ends). A pure promote program demotes nothing (byte-identical).
   const programHasSuppress = canonical.steps.some((s) => s.suppress === true);
   const terminalsSuppressed = canonical.steps[canonical.steps.length - 1]?.suppress === true;
-  const suppressLineageIds = new Set();
+  const suppressLineageIds = new Set(suppressStepProducedIds);
   if (programHasSuppress) {
     for (const route of frontier.values()) {
       for (let i = 0; i < route.length - 1; i++) suppressLineageIds.add(route[i]);
