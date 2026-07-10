@@ -113,7 +113,7 @@ describe('v2 operation-general public path', () => {
       assert.equal(profile.id, c.operationFamily);
       assert.equal(c.operationClass, c.operationFamily);
       assert.equal(c.operationClass, `${c.bmuOperationCue}=>b4/${c.bmuOperationProgram.steps
-        .map((step) => `${step.direction}:${step.edgeType}`).join('/')}`);
+        .map((step) => `${step.direction}:${step.edgeType}${step.suppress === true ? ':suppress' : ''}`).join('/')}`);
       assert.ok(CONFLICT_OPERATION_CLASS_BANK.some((candidate) => candidate.id === c.operationFamily));
       const topologyCue = {
         supports: /supports the linked review conclusion/,

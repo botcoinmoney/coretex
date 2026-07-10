@@ -458,6 +458,7 @@ export const ORACLE_MARGIN_DENSITY_PINS = Object.freeze({
 export function oracleSolvedMarginAudit(lane) {
   const clusterByMotif = new Map(lane.clusters.map((cluster) => [cluster.motifGroupId, cluster]));
   const executedByMotif = new Map();
+  const oracleGraphNodesByMotif = new Map();
   const classMembers = new Map();
   for (const cluster of lane.clusters) {
     const cls = cluster.operationClass ?? cluster.operationFamily;
@@ -490,11 +491,43 @@ export function oracleSolvedMarginAudit(lane) {
     }
     if (executed.error) { rowFindings.push({ rowId: row.id, reject: `route_execution: ${executed.error}` }); continue; }
     const terminals = new Set(executed.terminalIds);
+    const promoted = new Set(executed.promoteTerminalIds ?? executed.terminalIds);
+    const suppressed = new Set([...(executed.suppressLineageIds ?? []), ...(executed.suppressTerminalIds ?? [])]);
     const task = row.bmuTask;
-    const routedForbidden = (task.forbiddenEvidence ?? []).filter((id) => terminals.has(id));
+    const routedForbidden = (task.forbiddenEvidence ?? []).filter((id) => terminals.has(id) && !suppressed.has(id));
     if (routedForbidden.length > 0) {
       rowFindings.push({ rowId: row.id, reject: 'forbidden_terminal_routed', routedForbidden });
       continue;
+    }
+    // §18.3 fix 3 — eviction contract. When the cluster's program carries the
+    // suppress opcode, EVERY forbidden doc that is a node of the cluster's public
+    // relation graph (i.e. Qwen-reachable / query-similar) must be actively
+    // demoted under the patched state — not merely "not routed as a terminal".
+    // Off-graph forbidden docs (never a route node) are out of scope: they are
+    // gated by BGE non-retrieval, not by the route bonus.
+    if (executed.programHasSuppress === true) {
+      if (!oracleGraphNodesByMotif.has(cluster.motifGroupId)) {
+        const nodes = new Set();
+        for (const rel of cluster.relations ?? []) { nodes.add(rel.src); nodes.add(rel.dst ?? rel.other_id); }
+        oracleGraphNodesByMotif.set(cluster.motifGroupId, nodes);
+      }
+      const graphNodes = oracleGraphNodesByMotif.get(cluster.motifGroupId);
+      const notEvicted = (task.forbiddenEvidence ?? [])
+        .filter((id) => graphNodes.has(id) && !suppressed.has(id));
+      if (notEvicted.length > 0) {
+        rowFindings.push({ rowId: row.id, reject: 'forbidden_not_evicted_under_suppression', notEvicted });
+        continue;
+      }
+    }
+    if (task.abstain !== true) {
+      // §18.3 fix 3 — answer entry: the answer doc must be a PROMOTED routed
+      // terminal under the patched state (never demoted lineage). All four
+      // families lift their answer doc(s) to terminal depth by construction.
+      const answerId = task.answer?.id;
+      if (answerId !== undefined && answerId !== null && !promoted.has(answerId)) {
+        rowFindings.push({ rowId: row.id, reject: 'answer_not_promoted_terminal', answerId });
+        continue;
+      }
     }
     if (task.abstain !== true) {
       const anchors = new Set([

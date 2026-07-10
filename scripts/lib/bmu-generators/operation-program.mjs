@@ -35,6 +35,41 @@ const FAMILY_CUE = Object.freeze({
 });
 
 /**
+ * §18.3 fix 2 — per-family suppression plan (which step indices carry the
+ * suppress opcode). Suppression MUST be opcode-gated per-family because the
+ * topology role of each depth differs by family:
+ *
+ *  - conflict_lifecycle: suppress the depth-1 branch step (index 1). The seed
+ *    is the rejected candidate-base (forbidden lineage) and the depth-1
+ *    step-produced nodes are the scope-mismatch decoys (forbidden); the golds
+ *    are depth-2 terminals (promoted). Evicts the whole forbidden set with one
+ *    program per cue (CPU-walker proven, round3 evidence).
+ *  - temporal: suppress the depth-1 branch step (index 1). Seed = superseded
+ *    stale base (forbidden lineage); depth-1 step-produced = recency/currency
+ *    shortcut controls (forbidden); golds = current/change terminals (promoted).
+ *    Required evidence sits ONLY at terminal depth, so no required doc is demoted.
+ *  - multi_hop_relation: EMPTY (promote-only). The required chain intermediates
+ *    live at depth 1, so a step-1 suppress would evict REQUIRED docs
+ *    (missing_required). The off-path decoys are not query-similar enough to be
+ *    Qwen-admitted, so a pure-promote program (byte-identical) is used and the
+ *    real-Qwen margin run is the arbiter.
+ *  - near_collision_abstention: suppress the depth-1 branch step (index 1). The
+ *    collision-competitor decoys are the depth-1 step-produced forbidden set;
+ *    both answer docs (exact match + disambiguation) are lifted to terminal
+ *    depth by the generator so neither is demoted (abstain-path caveat honored:
+ *    abstain rows carry no required evidence and only benefit from decoy eviction).
+ */
+export const BMU_FAMILY_SUPPRESS_STEPS = Object.freeze({
+  temporal: Object.freeze([1]),
+  conflict_lifecycle: Object.freeze([1]),
+  multi_hop_relation: Object.freeze([]),
+  // near_collision requires both answer docs (exact + disambiguation) lifted to
+  // terminal depth before its depth-1 branch step can be suppressed; enabled in
+  // the near_collision topology-restructure round below.
+  near_collision_abstention: Object.freeze([1]),
+});
+
+/**
  * Mint-time lint (fix 2a): every minted program must be a disjoint-partition
  * deep-terminal program — exactly one leading outgoing step over the causal
  * pair, then 1..3 incoming steps over the evidence quad. This is precisely
@@ -155,14 +190,29 @@ export function executableOperationForFamilySlot(family, operationSequence, { er
   const classOrdinal = Math.floor(operationSequence / 2) % BMU_EXECUTABLE_PROGRAM_BANK.length;
   const plan = BMU_EXECUTABLE_PROGRAM_BANK[classOrdinal];
   assertDisjointPartitionProgram(plan);
-  const operationCue = `${familyCue} era ${era} route ${plan.steps.map((step) => step.edgeType).join(' then ')}`;
+  // §18.3 fix 2: overlay the family suppression plan onto the base bank steps.
+  // A non-final suppress step must exist for the flag to be signature-bearing;
+  // marking the final step is refused (that would demote the answer terminal).
+  const suppressSteps = new Set(BMU_FAMILY_SUPPRESS_STEPS[family] ?? []);
+  const lastIdx = plan.steps.length - 1;
+  for (const idx of suppressSteps) {
+    if (!Number.isInteger(idx) || idx < 1 || idx >= lastIdx) {
+      throw new Error(`bmu suppress plan: family '${family}' suppress step ${idx} must be a non-final step in 1..${lastIdx - 1}`);
+    }
+  }
+  const suppressedSteps = plan.steps.map((step, idx) => (
+    suppressSteps.has(idx) ? { direction: step.direction, edgeType: step.edgeType, suppress: true }
+      : { direction: step.direction, edgeType: step.edgeType }
+  ));
+  const operationCue = `${familyCue} era ${era} route ${suppressedSteps
+    .map((step) => `${step.edgeType}${step.suppress === true ? ' guarded' : ''}`).join(' then ')}`;
   return Object.freeze({
     ...plan,
     classOrdinal,
     era,
     ...executableOperationSignature({
       operationCue,
-      operationProgram: { branchLimit: plan.branchLimit, steps: plan.steps },
+      operationProgram: { branchLimit: plan.branchLimit, steps: suppressedSteps },
     }),
   });
 }

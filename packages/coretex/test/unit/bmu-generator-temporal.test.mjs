@@ -199,7 +199,7 @@ test('48-evolve census rotates 36 executable classes (>32 capacity), each with d
     const profile = temporalOperationProfileForCluster(c.operationSequence, 0);
     assert.equal(c.operationClass, c.operationFamily);
     assert.equal(c.operationClass, `${c.bmuOperationCue}=>b4/${c.bmuOperationProgram.steps
-      .map((step) => `${step.direction}:${step.edgeType}`).join('/')}`);
+      .map((step) => `${step.direction}:${step.edgeType}${step.suppress === true ? ':suppress' : ''}`).join('/')}`);
     assert.ok(TEMPORAL_OPERATION_CLASS_BANK.some((candidate) => candidate.id === c.operationFamily));
     assert.equal(profile.id, c.operationFamily);
     const docById = new Map(c.docs.map((doc) => [doc.id, doc]));

@@ -264,12 +264,19 @@ describe('forbidden-trap construction (§5.4, §6.5) + answerable/abstain mix', 
             'decoys have no incoming continuation');
         }
         if (group.truthId !== null) {
-          assert.deepEqual(group.branchIds, [group.truthId], 'the executed terminal set is exactly E');
+          // §18.3 fix 2: BOTH answer docs (exact match E + disambiguation D) are
+          // terminals so the depth-1 suppress step never demotes an answer.
+          assert.equal(group.branchIds.length, 2, 'the executed terminal set is {E, D}');
+          assert.ok(group.branchIds.includes(group.truthId), 'exact match E is a terminal');
           assert.ok(group.midIds.length >= 1);
-          assert.ok(out.addedRelations.some((relation) => relation.src === group.truthId
-            && relation.dst === group.midIds.at(-1) && relation.label === 'public_path_terminal'
-            && relation.type === c.bmuOperationProgram.steps.at(-1).edgeType));
-          assert.ok(!out.addedRelations.some((relation) => relation.src === group.truthId && relation.dst === group.sinkId));
+          for (const terminalId of group.branchIds) {
+            assert.ok(out.addedRelations.some((relation) => relation.src === terminalId
+              && relation.dst === group.midIds.at(-1) && relation.label === 'public_path_terminal'
+              && relation.type === c.bmuOperationProgram.steps.at(-1).edgeType));
+            assert.ok(!out.addedRelations.some((relation) => relation.src === terminalId && relation.dst === group.sinkId));
+          }
+          // The neutral registry root — not an answer doc — seeds the outgoing step.
+          assert.ok(!group.branchIds.includes(group.anchorId), 'the seed is a neutral root, not an answer terminal');
         } else {
           assert.deepEqual(group.branchIds, []);
           assert.deepEqual(group.midIds, []);

@@ -22,6 +22,8 @@ import {
 import {
   BMU_EXECUTABLE_PROGRAM_CAPACITY,
   BMU_EXECUTABLE_OPERATION_CLASS_BASIS,
+  BMU_FAMILY_SUPPRESS_STEPS,
+  executableOperationForFamilySlot,
   executableOperationSignature,
 } from '../../../../scripts/lib/bmu-generators/operation-program.mjs';
 
@@ -328,4 +330,32 @@ test('paired I6-disjoint mints exert aggregate pressure on one shared 32-program
   }
   assert.ok(aggregate.size > BMU_EXECUTABLE_PROGRAM_CAPACITY);
   assert.equal(aggregateKeys.size, aggregate.size, '56-bit key collision census is zero across the aggregate window');
+});
+
+test('§18.3 fix 2: per-family suppress plan is applied to minted operations and is signature-bearing', () => {
+  const families = ['conflict_lifecycle', 'temporal', 'near_collision_abstention', 'multi_hop_relation'];
+  for (const family of families) {
+    const plan = new Set(BMU_FAMILY_SUPPRESS_STEPS[family] ?? []);
+    // Sweep every class ordinal (operationSequence steps by 2 per class pair).
+    for (let seq = 0; seq < 72; seq += 2) {
+      const op = executableOperationForFamilySlot(family, seq);
+      const steps = op.operationProgram.steps;
+      const marked = steps.reduce((n, step, i) => n + (step.suppress === true ? 1 : 0), 0);
+      assert.equal(marked, plan.size, `${family} seq ${seq}: suppress-step count matches the family plan`);
+      for (let i = 0; i < steps.length; i++) {
+        assert.equal(steps[i].suppress === true, plan.has(i), `${family} seq ${seq}: step ${i} suppress flag matches plan`);
+        // A suppress step must never be the final (answer-terminal) step.
+        if (steps[i].suppress === true) assert.ok(i < steps.length - 1, `${family}: suppress step ${i} is non-final`);
+      }
+      // The suppress flag is signature-bearing: the class string carries :suppress.
+      const hasSuppressInClass = op.operationClass.includes(':suppress');
+      assert.equal(hasSuppressInClass, plan.size > 0, `${family}: class string reflects suppress presence`);
+      // Recompute independently — signature must be self-consistent.
+      assert.equal(op.operationClass, executableOperationSignature({
+        operationCue: op.operationCue, operationProgram: op.operationProgram,
+      }).operationClass);
+    }
+  }
+  // multi_hop stays promote-only (byte-identical to the pre-suppress law).
+  assert.equal(BMU_FAMILY_SUPPRESS_STEPS.multi_hop_relation.length, 0);
 });
