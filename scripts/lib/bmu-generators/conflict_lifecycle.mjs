@@ -106,15 +106,17 @@ export const CONFLICT_OPERATION_CLASS_BANK = Object.freeze(
 );
 export const CONFLICT_OPERATION_FAMILIES = Object.freeze(CONFLICT_OPERATION_CLASS_BANK.map((profile) => profile.id));
 
-export function conflictOperationProfileForCluster(epoch, clusterSlot) {
-  if (!Number.isInteger(epoch)) throw new Error('conflict_lifecycle: integer epoch required for operation rotation');
+export function conflictOperationProfileForCluster(operationSequenceOffset, clusterSlot) {
+  if (!Number.isInteger(operationSequenceOffset) || operationSequenceOffset < 0) throw new Error('conflict_lifecycle: non-negative integer operationSequenceOffset required');
   if (!Number.isInteger(clusterSlot) || clusterSlot < 0) throw new Error('conflict_lifecycle: non-negative integer clusterSlot required');
-  const sequence = (epoch - CONFLICT_ROTATION_BASE_EPOCH) * 2 + clusterSlot;
-  return CONFLICT_OPERATION_CLASS_BANK[((sequence % CONFLICT_OPERATION_CLASS_BANK.length) + CONFLICT_OPERATION_CLASS_BANK.length) % CONFLICT_OPERATION_CLASS_BANK.length];
+  const sequence = operationSequenceOffset + clusterSlot;
+  // Adjacent-pair rotation keeps two entity/template-disjoint instances of
+  // every class live together despite conflict's irregular per-epoch count.
+  return CONFLICT_OPERATION_CLASS_BANK[Math.floor(sequence / 2) % CONFLICT_OPERATION_CLASS_BANK.length];
 }
 
-export function conflictOperationFamilyForCluster(epoch, clusterSlot) {
-  return conflictOperationProfileForCluster(epoch, clusterSlot).id;
+export function conflictOperationFamilyForCluster(operationSequenceOffset, clusterSlot) {
+  return conflictOperationProfileForCluster(operationSequenceOffset, clusterSlot).id;
 }
 
 /** §5.2 question types — four DISTINCT types, five rows (current_for_scope ×2 variants). */
@@ -340,6 +342,7 @@ export function buildConflictLifecycleClusterSpec({
 export function generateConflictLifecycleClusters({
   epoch, seed, subjects, registry, splitOf,
   clusterCount = 2, escalationLevel = 0, clusterSlotOffset = 0,
+  operationSequenceOffset,
   ownerEntityId = 'e_universe', rotationBaseEpoch = CONFLICT_ROTATION_BASE_EPOCH,
 }) {
   if (!Number.isInteger(epoch) || epoch < 0) throw new Error('generateConflictLifecycleClusters: non-negative integer epoch required');
@@ -350,6 +353,7 @@ export function generateConflictLifecycleClusters({
     throw new Error('generateConflictLifecycleClusters: alias-aware m=1 registry required');
   }
   if (!Number.isInteger(clusterCount) || clusterCount < 1) throw new Error('generateConflictLifecycleClusters: clusterCount >= 1');
+  if (!Number.isInteger(operationSequenceOffset) || operationSequenceOffset < 0) throw new Error('generateConflictLifecycleClusters: operationSequenceOffset must be a non-negative integer');
 
   // Same deterministic date derivation as the ancestor (evolve-corpus.mjs:376-377).
   const tsDate = new Date(new Date('2024-01-01').getTime() + (40 + epoch) * 30 * 86400000).toISOString().slice(0, 10);
@@ -387,7 +391,7 @@ export function generateConflictLifecycleClusters({
     const canonical = subj.canonicalName;
     const isProject = /-svc-/.test(canonical);
     const rnd = prng(`${seed}:bmu-conflict:${epoch}:${subj.id}:${clusterSlot}`);
-    const operationProfile = conflictOperationProfileForCluster(epoch, clusterSlot);
+    const operationProfile = conflictOperationProfileForCluster(operationSequenceOffset, c);
     const operationFamily = operationProfile.id;
 
     const { attr, bank } = bmuAttributeForClusterSlot(epoch, clusterSlot, {
@@ -486,6 +490,7 @@ export function generateConflictLifecycleClusters({
       operationFamily, operationClass: operationFamily,
       operationSemantic: operationProfile.semantic.id,
       operationTopology: operationProfile.topology.id,
+      operationSequence: operationSequenceOffset + c,
       escalationLevel, decoyCount, decoyScopes: [...decoyScopes],
       docIds: spec.docs.map((d) => d.id), rowIds, templateIds,
       entityHoldoutKeys: [...entityHoldoutKeys],

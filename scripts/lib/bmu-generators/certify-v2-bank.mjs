@@ -1,0 +1,394 @@
+/**
+ * BMU v2 bank certification, intentionally split into PUBLIC attackers and a
+ * HIDDEN offline solvability oracle.
+ *
+ * The engine is family-agnostic. A family adapter only declares conservative
+ * operation capacity and optional public-only attacker lanes; extraction,
+ * random-K, metadata/path attacks, dedup, alias-aware m=1, role retirement,
+ * operation census, and the BGE→Qwen no-substrate contract are generic. New
+ * multi-hop/near-collision adapters can therefore be registered without
+ * changing any gate implementation.
+ */
+import { createHash } from 'node:crypto';
+import { judgeTopB, randomKRank, CERT_PINS } from './certify.mjs';
+import { subjectScopedRecencyLane, validityCurrencyLane } from './certify-lanes.mjs';
+
+const normText = (value) => String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+const compareId = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+const finite = (value) => typeof value === 'number' && Number.isFinite(value);
+
+export const DEFAULT_V2_BANK_ADAPTERS = Object.freeze({
+  temporal: Object.freeze({
+    conservativeOperationCapacity: 24,
+    maxActiveEpochGap: 32,
+    publicAttackers: Object.freeze({
+      subjectScopedRecency: (row, docs) => subjectScopedRecencyLane(row, docs),
+      validityCurrency: (row, docs) => validityCurrencyLane(row, docs),
+    }),
+  }),
+  conflict_lifecycle: Object.freeze({
+    conservativeOperationCapacity: 32,
+    maxActiveEpochGap: 32,
+    publicAttackers: Object.freeze({}),
+  }),
+});
+
+/** Structural bank normalizer. No family switch: either the bank already has
+ * top-level arrays or its clusters own rows/docs/relations. */
+export function normalizeV2Bank(bank) {
+  if (!bank || typeof bank !== 'object') throw new Error('normalizeV2Bank: bank object required');
+  const clusters = Array.isArray(bank.clusters) ? bank.clusters : [];
+  const docs = Array.isArray(bank.publicDocs) ? bank.publicDocs : clusters.flatMap((cluster) => cluster.docs ?? []);
+  const rows = Array.isArray(bank.rows) ? bank.rows : clusters.flatMap((cluster) => cluster.rows ?? []);
+  const relations = Array.isArray(bank.relations) ? bank.relations : clusters.flatMap((cluster) => cluster.relations ?? []);
+  if (clusters.length === 0 || docs.length === 0 || rows.length === 0) {
+    throw new Error('normalizeV2Bank: non-empty clusters/docs/rows required');
+  }
+  const docById = new Map(docs.map((doc) => [doc.id, doc]));
+  const rowsByMotif = new Map();
+  for (const row of rows) {
+    const motif = row.bmuTask?.motifGroupId;
+    const list = rowsByMotif.get(motif) ?? [];
+    list.push(row);
+    rowsByMotif.set(motif, list);
+  }
+  const normalizedClusters = clusters.map((cluster) => {
+    const clusterRows = cluster.rows ?? rowsByMotif.get(cluster.motifGroupId) ?? [];
+    const docIds = cluster.docIds ?? cluster.docs?.map((doc) => doc.id) ?? [];
+    const clusterDocs = cluster.docs ?? docIds.map((id) => docById.get(id)).filter(Boolean);
+    const ids = new Set(clusterDocs.map((doc) => doc.id));
+    const clusterRelations = cluster.relations ?? relations.filter((rel) => ids.has(rel.src) && ids.has(rel.dst));
+    return { ...cluster, rows: clusterRows, docs: clusterDocs, relations: clusterRelations };
+  });
+  return { family: bank.family, params: bank.params ?? {}, clusters: normalizedClusters, docs, rows, relations, docById };
+}
+
+export function makeV2BankAdapter({ conservativeOperationCapacity, maxActiveEpochGap = 32, publicAttackers = {} }) {
+  if (!Number.isInteger(conservativeOperationCapacity) || conservativeOperationCapacity < 1) {
+    throw new Error('makeV2BankAdapter: positive conservativeOperationCapacity required');
+  }
+  if (!Number.isInteger(maxActiveEpochGap) || maxActiveEpochGap < 1) throw new Error('makeV2BankAdapter: positive maxActiveEpochGap required');
+  for (const [name, lane] of Object.entries(publicAttackers)) {
+    if (typeof lane !== 'function') throw new Error(`makeV2BankAdapter: attacker '${name}' must be a function`);
+  }
+  return Object.freeze({ conservativeOperationCapacity, maxActiveEpochGap, publicAttackers: Object.freeze({ ...publicAttackers }) });
+}
+
+function publicMetadata(doc) {
+  const copy = JSON.parse(JSON.stringify(doc));
+  delete copy.id;
+  delete copy.text;
+  return copy;
+}
+
+function terminalTopology(cluster, docId) {
+  const path = cluster.publicPath;
+  return cluster.relations
+    .filter((rel) => rel.src === docId)
+    .map((rel) => ({
+      type: rel.type,
+      label: rel.label ?? null,
+      dstClass: rel.dst === path.pivotId ? 'pivot' : rel.dst === path.seedId ? 'seed' : 'other',
+    }))
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+}
+
+export function balancedTerminalAudit(cluster) {
+  const path = cluster.publicPath;
+  if (!path || !Array.isArray(path.terminalBranchIds) || path.terminalBranchIds.length < 2) {
+    return { pass: false, reason: 'missing_publicPath_terminal_branches' };
+  }
+  const docById = new Map(cluster.docs.map((doc) => [doc.id, doc]));
+  const missing = path.terminalBranchIds.filter((id) => !docById.has(id));
+  if (missing.length > 0) return { pass: false, reason: 'missing_terminal_docs', missing };
+  const signatures = path.terminalBranchIds.map((id) => JSON.stringify({
+    metadata: publicMetadata(docById.get(id)), topology: terminalTopology(cluster, id),
+  }));
+  const gold = new Set(path.goldBranchIds ?? []);
+  const decoy = new Set(path.decoyBranchIds ?? []);
+  const completePartition = path.terminalBranchIds.every((id) => gold.has(id) !== decoy.has(id));
+  return {
+    pass: new Set(signatures).size === 1 && completePartition && gold.size > 0 && decoy.size > 0,
+    observableClasses: new Set(signatures).size,
+    terminalCount: path.terminalBranchIds.length,
+    goldCount: gold.size,
+    decoyCount: decoy.size,
+    completePartition,
+  };
+}
+
+/** PUBLIC attacker: path membership, public metadata, opaque id and relation
+ * structure only. Text, qrels, bmuTask and generator roles are absent from its
+ * signature. Terminal candidates sort first; balanced signatures reduce its
+ * final choice to opaque id. */
+export function idMetadataPathAttacker(row, lane, cluster) {
+  const terminals = new Set(cluster.publicPath?.terminalBranchIds ?? []);
+  const scored = lane.docs.map((doc) => {
+    const inPath = terminals.has(doc.id) ? 1 : 0;
+    const signature = inPath
+      ? JSON.stringify({ metadata: publicMetadata(doc), topology: terminalTopology(cluster, doc.id) })
+      : JSON.stringify({ metadata: publicMetadata(doc), topology: [] });
+    return { docId: doc.id, inPath, signature };
+  });
+  scored.sort((a, b) => b.inPath - a.inPath || a.signature.localeCompare(b.signature) || compareId(a.docId, b.docId));
+  return scored.map(({ docId }) => ({ docId, score: 0 }));
+}
+
+function hiddenOracleRank(row, docs) {
+  const task = row.bmuTask;
+  const required = new Set(task.requiredEvidence);
+  const forbidden = new Set(task.forbiddenEvidence);
+  const middle = docs.map((doc) => doc.id).filter((id) => !required.has(id) && !forbidden.has(id)).sort(compareId);
+  return [...task.requiredEvidence, ...middle, ...task.forbiddenEvidence]
+    .map((docId, index) => ({ docId, score: -index }));
+}
+
+function disjointRepeat(members, maxActiveEpochGap) {
+  for (let i = 0; i < members.length; i++) {
+    for (let j = i + 1; j < members.length; j++) {
+      const a = members[i]; const b = members[j];
+      if (a.subjectEntityId === b.subjectEntityId) continue;
+      if ((a.templateIds ?? []).some((id) => (b.templateIds ?? []).includes(id))) continue;
+      if ((a.entityHoldoutKeys ?? []).some((key) => (b.entityHoldoutKeys ?? []).includes(key))) continue;
+      const epochGap = Math.abs((a.epoch ?? Number.MAX_SAFE_INTEGER) - (b.epoch ?? Number.MIN_SAFE_INTEGER));
+      if (!(epochGap < maxActiveEpochGap)) continue;
+      return { motifGroupIds: [a.motifGroupId, b.motifGroupId], epochGap, concurrentlyActiveAtSecondMint: true };
+    }
+  }
+  return null;
+}
+
+export function operationClassCensus(lane, capacity, maxActiveEpochGap = 32) {
+  const byClass = new Map();
+  for (const cluster of lane.clusters) {
+    const operationClass = cluster.operationClass ?? cluster.operationFamily;
+    const members = byClass.get(operationClass) ?? [];
+    members.push(cluster);
+    byClass.set(operationClass, members);
+  }
+  const classes = [...byClass].map(([operationClass, members]) => ({
+    operationClass,
+    clusters: members.length,
+    disjointRepeat: disjointRepeat(members, maxActiveEpochGap),
+  }));
+  return {
+    capacity,
+    distinctClasses: byClass.size,
+    margin: byClass.size - capacity,
+    classes,
+    pass: byClass.size > capacity && classes.every((entry) => entry.clusters >= 2 && entry.disjointRepeat !== null),
+  };
+}
+
+export function roleRetirementAudit(lane) {
+  const roleDocs = lane.docs.filter((doc) => Object.keys(doc).includes('role')).map((doc) => doc.id);
+  const roleKinds = lane.docs.filter((doc) => doc.kind !== 'bmu_public_record').map((doc) => ({ id: doc.id, kind: doc.kind }));
+  return { pass: roleDocs.length === 0 && roleKinds.length === 0, enumerableRoleDocs: roleDocs, roleCorrelatedKinds: roleKinds };
+}
+
+export function globalAliasM1Audit(families) {
+  const claims = { motif: new Map(), subject: new Map(), template: new Map(), identity: new Map() };
+  const violations = [];
+  const claim = (map, key, ref, kind) => {
+    if (typeof key !== 'string' || key.length === 0) return;
+    const prior = map.get(key);
+    if (prior && prior !== ref) violations.push(`${kind} '${key}' shared by ${prior} and ${ref}`);
+    else map.set(key, ref);
+  };
+  for (const [family, lane] of Object.entries(families)) {
+    for (const cluster of lane.clusters) {
+      const ref = `${family}:${cluster.motifGroupId}`;
+      claim(claims.motif, cluster.motifGroupId, ref, 'motifGroupId');
+      claim(claims.subject, cluster.subjectEntityId, ref, 'subjectEntityId');
+      for (const template of cluster.templateIds ?? []) claim(claims.template, template, ref, 'templateId');
+      for (const identity of cluster.entityHoldoutKeys ?? []) claim(claims.identity, identity, ref, 'entityHoldoutKey');
+    }
+  }
+  return { pass: violations.length === 0, violations, counts: Object.fromEntries(Object.entries(claims).map(([key, map]) => [key, map.size])) };
+}
+
+function familyAgnosticIntentKey(row) {
+  const intent = { ...(row.publicIntent ?? {}), subjectEntityId: row.subjectEntityId ?? row.publicIntent?.subjectEntityId };
+  return JSON.stringify(Object.entries(intent).filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .sort(([a], [b]) => compareId(a, b)));
+}
+
+export function crossFamilyDedupAudit(families) {
+  const indices = { docId: new Map(), queryId: new Map(), publicIntent: new Map(), docText: new Map(), queryText: new Map() };
+  const add = (map, key, ref) => { const refs = map.get(key) ?? []; refs.push(ref); map.set(key, refs); };
+  for (const [family, lane] of Object.entries(families)) {
+    for (const doc of lane.docs) {
+      add(indices.docId, doc.id, `${family}:${doc.id}`);
+      add(indices.docText, normText(doc.text), `${family}:${doc.id}`);
+    }
+    for (const row of lane.rows) {
+      add(indices.queryId, row.id, `${family}:${row.id}`);
+      add(indices.queryText, normText(row.queryText), `${family}:${row.id}`);
+      add(indices.publicIntent, familyAgnosticIntentKey(row), `${family}:${row.id}`);
+    }
+  }
+  const duplicate = (map) => [...map.entries()].filter(([, refs]) => refs.length > 1).map(([key, refs]) => ({ key, refs }));
+  const collisions = Object.fromEntries(Object.entries(indices).map(([name, map]) => [name, duplicate(map)]));
+  return { pass: Object.values(collisions).every((entries) => entries.length === 0), collisions };
+}
+
+export function buildNoSubstrateScoringJob(families, { pins = CERT_PINS, sourceCheckout = null } = {}) {
+  const docs = Object.values(families).flatMap((lane) => lane.docs).map((doc) => ({ id: doc.id, text: doc.text }));
+  const queries = Object.entries(families).flatMap(([family, lane]) => lane.rows.map((row) => ({
+    id: row.id, family, text: row.queryText, budgetB: row.bmuTask.budgetB,
+  })));
+  const identityPayload = {
+    sourceCheckout,
+    noSubstrate: true,
+    pins: { biencoder: pins.biencoder, reranker: pins.reranker, rerankerInputTopK: pins.rerankerInputTopK },
+    queries, docs,
+  };
+  return {
+    schema: 'coretex.bmu-v2.no-substrate-scoring-job.v1',
+    ...identityPayload,
+    identity: createHash('sha256').update(JSON.stringify(identityPayload)).digest('hex'),
+  };
+}
+
+export function certifyNoSubstrateScoring(job, output, rowById) {
+  const errors = [];
+  const expectedIdentity = createHash('sha256').update(JSON.stringify({
+    sourceCheckout: job.sourceCheckout,
+    noSubstrate: job.noSubstrate,
+    pins: job.pins,
+    queries: job.queries,
+    docs: job.docs,
+  })).digest('hex');
+  if (job.schema !== 'coretex.bmu-v2.no-substrate-scoring-job.v1') errors.push('bad job schema');
+  if (job.noSubstrate !== true) errors.push('job not stamped noSubstrate=true');
+  if (job.identity !== expectedIdentity) errors.push('job identity is not self-consistent');
+  if (output?.schema !== 'coretex.bmu-v2.no-substrate-scoring-output.v1') errors.push('bad output schema');
+  if (job.sourceCheckout?.clean !== true || !/^[0-9a-f]{40}$/.test(job.sourceCheckout?.commit ?? '')) errors.push('job sourceCheckout is not clean and commit-bound');
+  if (output?.jobIdentity !== job.identity) errors.push('job identity mismatch');
+  if (output?.freshScoring !== true || output?.cacheRebound === true) errors.push('fresh scoring contract violated');
+  if (output?.noSubstrate !== true) errors.push('output not stamped noSubstrate=true');
+  if (output?.pins?.biencoder !== job.pins.biencoder
+      || output?.pins?.reranker !== job.pins.reranker
+      || output?.pins?.rerankerInputTopK !== job.pins.rerankerInputTopK) errors.push('model/cap pins mismatch');
+  const resultById = new Map((output?.perQuery ?? []).map((entry) => [entry.id, entry]));
+  if (resultById.size !== job.queries.length) errors.push('query result cardinality mismatch');
+  const docIds = job.docs.map((doc) => doc.id).sort(compareId);
+  const perQuery = [];
+  for (const query of job.queries) {
+    const result = resultById.get(query.id);
+    if (!result) { errors.push(`missing query ${query.id}`); continue; }
+    const bge = result.bge ?? [];
+    const bgeIds = bge.map((entry) => entry.docId).sort(compareId);
+    if (JSON.stringify(bgeIds) !== JSON.stringify(docIds) || !bge.every((entry) => finite(entry.score))) {
+      errors.push(`${query.id}: BGE must score every job doc exactly once with finite scores`);
+      continue;
+    }
+    const expectedQwenIds = [...bge].sort((a, b) => b.score - a.score || compareId(a.docId, b.docId))
+      .slice(0, Math.min(job.pins.rerankerInputTopK, bge.length)).map((entry) => entry.docId);
+    const actualInput = result.qwenInputDocIds ?? [];
+    if (JSON.stringify(actualInput) !== JSON.stringify(expectedQwenIds)) errors.push(`${query.id}: Qwen input is not exact BGE top-K`);
+    const qwen = result.qwen ?? [];
+    if (JSON.stringify(qwen.map((entry) => entry.docId).sort(compareId)) !== JSON.stringify([...expectedQwenIds].sort(compareId))
+        || !qwen.every((entry) => finite(entry.score))) errors.push(`${query.id}: Qwen scores must cover exact input ids`);
+    const ranked = [...qwen].sort((a, b) => b.score - a.score || compareId(a.docId, b.docId));
+    const row = rowById.get(query.id);
+    const judge = row ? judgeTopB(ranked, row.bmuTask) : { judgeSuccess: false };
+    perQuery.push({ id: query.id, judgeSuccess: judge.judgeSuccess });
+  }
+  return {
+    contractPass: errors.length === 0,
+    hardnessPass: errors.length === 0 && perQuery.every((entry) => !entry.judgeSuccess),
+    errors,
+    confidentSuccesses: perQuery.filter((entry) => entry.judgeSuccess).map((entry) => entry.id),
+  };
+}
+
+export function certifyV2Banks(rawBanks, {
+  adapters = DEFAULT_V2_BANK_ADAPTERS,
+  seed = 'bmu-v2-bank-certification-v1',
+  noSubstrateOutput = null,
+  sourceCheckout = null,
+} = {}) {
+  const families = {};
+  for (const raw of rawBanks) {
+    const lane = normalizeV2Bank(raw);
+    if (!lane.family || families[lane.family]) throw new Error(`certifyV2Banks: missing/duplicate family '${lane.family}'`);
+    if (!adapters[lane.family]) throw new Error(`certifyV2Banks: no adapter for '${lane.family}'`);
+    families[lane.family] = lane;
+  }
+  const perFamily = {};
+  for (const [family, lane] of Object.entries(families)) {
+    const adapter = adapters[family];
+    const clusterByMotif = new Map(lane.clusters.map((cluster) => [cluster.motifGroupId, cluster]));
+    const randomResults = [];
+    const metadataResults = [];
+    const shortcutResults = Object.fromEntries(Object.keys(adapter.publicAttackers).map((name) => [name, []]));
+    const hiddenResults = [];
+    for (const row of lane.rows) {
+      const cluster = clusterByMotif.get(row.bmuTask?.motifGroupId);
+      if (!cluster) throw new Error(`${family}:${row.id}: no cluster for motif ${row.bmuTask?.motifGroupId}`);
+      randomResults.push(judgeTopB(randomKRank(lane.docs, `${seed}|${family}|${row.id}`), row.bmuTask));
+      metadataResults.push(judgeTopB(idMetadataPathAttacker(row, lane, cluster), row.bmuTask));
+      for (const [name, attacker] of Object.entries(adapter.publicAttackers)) {
+        const ids = attacker(row, lane.docs);
+        shortcutResults[name].push(judgeTopB(ids.map((docId) => ({ docId, score: 0 })), row.bmuTask));
+      }
+      hiddenResults.push(judgeTopB(hiddenOracleRank(row, lane.docs), row.bmuTask, { signalFires: row.bmuTask.abstain === true }));
+    }
+    const rate = (results) => results.filter((result) => result.judgeSuccess).length / results.length;
+    const balanced = lane.clusters.map((cluster) => ({ motifGroupId: cluster.motifGroupId, ...balancedTerminalAudit(cluster) }));
+    const metadataIdGuesses = lane.clusters.map((cluster) => {
+      const ids = [...cluster.publicPath.terminalBranchIds].sort(compareId);
+      return (cluster.publicPath.goldBranchIds ?? []).includes(ids[0]);
+    });
+    const goldFraction = lane.clusters.reduce((sum, cluster) =>
+      sum + cluster.publicPath.goldBranchIds.length / cluster.publicPath.terminalBranchIds.length, 0) / lane.clusters.length;
+    const opaqueIdGoldGuessRate = metadataIdGuesses.filter(Boolean).length / metadataIdGuesses.length;
+    perFamily[family] = {
+      gates: {
+        randomK: { rate: rate(randomResults), max: 0.05, pass: rate(randomResults) <= 0.05 },
+        idMetadataPathAttacker: {
+          judgeSuccessRate: rate(metadataResults),
+          opaqueIdGoldGuessRate,
+          chanceGoldFraction: goldFraction,
+          pass: rate(metadataResults) === 0 && balanced.every((entry) => entry.pass)
+            && opaqueIdGoldGuessRate <= goldFraction + 0.10,
+        },
+        balancedTerminalBranches: { pass: balanced.every((entry) => entry.pass), failures: balanced.filter((entry) => !entry.pass) },
+        operationClassCensus: operationClassCensus(lane, adapter.conservativeOperationCapacity, adapter.maxActiveEpochGap),
+        roleRetirement: roleRetirementAudit(lane),
+        ...Object.fromEntries(Object.entries(shortcutResults).map(([name, results]) => [name, {
+          judgeSuccessRate: rate(results), pass: rate(results) === 0,
+        }])),
+      },
+      // This oracle explicitly consumes hidden bmuTask/qrel-derived truth and
+      // is never presented as a public attacker or mineable strategy.
+      offlineHiddenOracle: { rate: rate(hiddenResults), pass: hiddenResults.every((result) => result.judgeSuccess), inputAuthority: 'hidden_bmuTask_only' },
+    };
+  }
+  const globalGates = {
+    crossFamilyDedup: crossFamilyDedupAudit(families),
+    globalAliasM1: globalAliasM1Audit(families),
+  };
+  const noSubstrateJob = buildNoSubstrateScoringJob(families, { sourceCheckout });
+  const rowById = new Map(Object.values(families).flatMap((lane) => lane.rows).map((row) => [row.id, row]));
+  const noSubstrate = noSubstrateOutput
+    ? certifyNoSubstrateScoring(noSubstrateJob, noSubstrateOutput, rowById)
+    : { contractPass: false, hardnessPass: false, pending: true, errors: ['fresh full-bank BGE+Qwen output not supplied'] };
+  const cheapPass = Object.values(perFamily).every((report) =>
+    Object.values(report.gates).every((gate) => gate.pass === true) && report.offlineHiddenOracle.pass)
+    && Object.values(globalGates).every((gate) => gate.pass);
+  return {
+    schema: 'coretex.bmu-v2.bank-certification.v1',
+    cheapPass,
+    fullPass: cheapPass && noSubstrate.contractPass && noSubstrate.hardnessPass,
+    perFamily,
+    globalGates,
+    noSubstrate: { ...noSubstrate, job: noSubstrateJob },
+    caps: [
+      'Cheap certification uses text-free/public-only attackers and synthetic score-contract fixtures only.',
+      'GREEN hardness still requires fresh full-bank BGE-M3 + Qwen output on the emitted no-substrate job; cache rebinding is forbidden.',
+      'Parent and oracle-solved three-state margins remain a full scorer certification lane, not this light harness.',
+    ],
+  };
+}

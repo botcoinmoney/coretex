@@ -62,6 +62,7 @@ const baseOpts = (over = {}) => ({
   subjects: subjectBank(),
   universe: 'user_scope_bmu_test',
   clusterCount: 3,
+  operationSequenceOffset: 0,
   splitOf: canonicalSplitOf,
   ...over,
 });
@@ -164,7 +165,7 @@ test('v2 operation classes are deterministic, multiple, and exposed to P5 on eve
   assert.ok(new Set(clusters.map((c) => c.operationFamily)).size > 1);
   for (let i = 0; i < clusters.length; i++) {
     const c = clusters[i];
-    assert.equal(c.operationFamily, temporalOperationFamilyForCluster(c.epoch, i));
+    assert.equal(c.operationFamily, temporalOperationFamilyForCluster(c.operationSequence, 0));
     assert.equal(c.operationClass, c.operationFamily);
     assert.ok(c.rows.every((row) => row.operationFamily === c.operationFamily && row.operationClass === c.operationFamily));
   }
@@ -175,19 +176,25 @@ test('48-evolve census rotates 32 real classes (>24 capacity), each with disjoin
   const activeIndex = createBmuActiveIndex();
   const subjects = subjectBank(256);
   const clusters = [];
-  for (let step = 0; step < 48; step++) {
-    const epoch = 150 + step;
-    retireAgedClusters(activeIndex, epoch, 16);
+  const schedule = [
+    { epoch: 144, count: 8, phase: 'bootstrap-1' },
+    { epoch: 152, count: 11, phase: 'bootstrap-2-margin3' },
+    ...Array.from({ length: 48 }, (_, step) => ({ epoch: 152 + (step + 1) * 8, count: 1, phase: `steady-${step + 1}` })),
+  ];
+  let operationSequenceOffset = 0;
+  for (const { epoch, count } of schedule) {
+    retireAgedClusters(activeIndex, epoch, 32);
     clusters.push(...generateTemporalClusters(baseOpts({
-      epoch, subjects, clusterCount: 2, activeIndex,
+      epoch, subjects, clusterCount: count, activeIndex, operationSequenceOffset,
     })).clusters);
+    operationSequenceOffset += count;
   }
   const byClass = new Map();
   for (const c of clusters) {
     const rows = byClass.get(c.operationFamily) ?? [];
     rows.push(c);
     byClass.set(c.operationFamily, rows);
-    const profile = temporalOperationProfileForCluster(c.epoch, c.clusterSlot);
+    const profile = temporalOperationProfileForCluster(c.operationSequence, 0);
     assert.equal(c.operationFamily, `temporal_${c.operationSemantic}__${c.publicPath.firstEdgeType}_then_${c.publicPath.terminalEdgeType}`);
     assert.ok(TEMPORAL_OPERATION_CLASS_BANK.some((candidate) => candidate.id === c.operationFamily));
     assert.equal(profile.id, c.operationFamily);
@@ -210,17 +217,20 @@ test('48-evolve census rotates 32 real classes (>24 capacity), each with disjoin
   assert.equal(byClass.size, TEMPORAL_OPERATION_FAMILIES.length);
   assert.equal(byClass.size, 32);
   assert.ok(byClass.size > 24, 'class bank exceeds conservative temporal state capacity by eight');
-  assert.equal(new Set(clusters.slice(0, 32).map((c) => c.operationFamily)).size, 32,
-    'one 16-evolve active+future window already exposes every class');
+  assert.equal(new Set(clusters.slice(0, 64).map((c) => c.operationFamily)).size, 32,
+    'bootstrap plus the exact cadence-8 steady schedule exposes every class without gcd aliasing');
   const behaviorSignatures = new Set();
   for (const [classId, members] of byClass) {
     assert.ok(members.length >= 2, `${classId} must repeat for holdout transfer`);
     const pair = members.flatMap((a, i) => members.slice(i + 1).map((b) => [a, b])).find(([a, b]) =>
       a.subjectEntityId !== b.subjectEntityId
       && !a.templateIds.some((id) => b.templateIds.includes(id))
-      && !a.entityHoldoutKeys.some((key) => b.entityHoldoutKeys.includes(key)));
-    assert.ok(pair, `${classId} needs an entity+template-disjoint repeat for I6 transfer`);
-    const [a] = pair;
+      && !a.entityHoldoutKeys.some((key) => b.entityHoldoutKeys.includes(key))
+      && Math.abs(a.operationSequence - b.operationSequence) === 1
+      && Math.abs(a.epoch - b.epoch) < 32);
+    assert.ok(pair, `${classId} needs a simultaneously-active entity+template-disjoint repeat for I6 transfer`);
+    const [a, b] = pair;
+    assert.ok(b.epoch - a.epoch < 32, 'first instance remains active at second mint');
     const gold = a.docs.find((doc) => doc.id === a.publicPath.goldBranchIds[0]);
     behaviorSignatures.add(`${a.publicPath.firstEdgeType}|${a.publicPath.terminalEdgeType}|${gold.text.split(' ')[0]}`);
   }
@@ -272,6 +282,7 @@ test('alias m=1 is shared across the active-index and registry generator APIs be
     splitOf: canonicalSplitOf,
     clusterCount: 1,
     escalationLevel: 0,
+    operationSequenceOffset: 0,
     ownerEntityId: 'e_universe',
   }), /subject bank exhausted under GLOBAL m=1/);
 });

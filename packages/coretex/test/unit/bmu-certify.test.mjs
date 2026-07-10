@@ -44,11 +44,14 @@ function makeBank({ epochs = [137, 138], clustersPerEpoch = 3 } = {}) {
   }));
   const registry = createM1Registry();
   const rows = []; const docs = []; const relations = []; const clusters = [];
+  let operationSequenceOffset = 0;
   for (const epoch of epochs) {
     const out = generateConflictLifecycleClusters({
       epoch, seed: 'bmu-certify-test', subjects, registry, splitOf,
       clusterCount: clustersPerEpoch, escalationLevel: epoch - epochs[0],
+      operationSequenceOffset,
     });
+    operationSequenceOffset += clustersPerEpoch;
     rows.push(...out.addedQueries); docs.push(...out.addedDocs);
     relations.push(...out.addedRelations); clusters.push(...out.clusters);
   }

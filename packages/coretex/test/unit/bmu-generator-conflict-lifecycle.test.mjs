@@ -49,7 +49,7 @@ const bank = (n) => Array.from({ length: n }, (_, i) => ({
 
 const gen = (over = {}) => generateConflictLifecycleClusters({
   epoch: 137, seed: 'bmu-p2-test', subjects: bank(40), registry: createM1Registry(),
-  splitOf, clusterCount: 4, escalationLevel: 1, ...over,
+  splitOf, clusterCount: 4, escalationLevel: 1, operationSequenceOffset: 0, ...over,
 });
 
 describe('determinism', () => {
@@ -71,7 +71,7 @@ describe('v2 operation-general public path', () => {
     const out = gen({ clusterCount: 6 });
     assert.ok(new Set(out.clusters.map((c) => c.operationFamily)).size > 1);
     for (const c of out.clusters) {
-      assert.equal(c.operationFamily, conflictOperationFamilyForCluster(c.epoch, c.clusterSlot));
+      assert.equal(c.operationFamily, conflictOperationFamilyForCluster(c.operationSequence, 0));
       assert.equal(c.operationClass, c.operationFamily);
       const rows = out.addedQueries.filter((q) => q.bmuTask.motifGroupId === c.motifGroupId);
       assert.ok(rows.every((q) => q.operationFamily === c.operationFamily && q.operationClass === c.operationFamily));
@@ -85,11 +85,24 @@ describe('v2 operation-general public path', () => {
     const clusters = [];
     const docs = [];
     const relations = [];
-    for (let step = 0; step < 48; step++) {
+    const steadyCounts = [2, 1, 2, 1];
+    const schedule = [
+      { epoch: 144, count: 11, escalationLevel: 0 },
+      { epoch: 152, count: 14, escalationLevel: 1 },
+      ...Array.from({ length: 48 }, (_, step) => ({
+        epoch: 152 + (step + 1) * 8,
+        count: steadyCounts[step % steadyCounts.length],
+        escalationLevel: step % 3,
+      })),
+    ];
+    let operationSequenceOffset = 0;
+    for (const spec of schedule) {
       const out = generateConflictLifecycleClusters({
-        epoch: 137 + step, seed: 'bmu-v2-conflict-48-evolve', subjects, registry,
-        splitOf, clusterCount: 2, escalationLevel: step % 3,
+        epoch: spec.epoch, seed: 'bmu-v2-conflict-48-evolve', subjects, registry,
+        splitOf, clusterCount: spec.count, escalationLevel: spec.escalationLevel,
+        operationSequenceOffset,
       });
+      operationSequenceOffset += spec.count;
       clusters.push(...out.clusters);
       docs.push(...out.addedDocs);
       relations.push(...out.addedRelations);
@@ -100,7 +113,7 @@ describe('v2 operation-general public path', () => {
       const members = byClass.get(c.operationFamily) ?? [];
       members.push(c);
       byClass.set(c.operationFamily, members);
-      const profile = conflictOperationProfileForCluster(c.epoch, c.clusterSlot);
+      const profile = conflictOperationProfileForCluster(c.operationSequence, 0);
       assert.equal(profile.id, c.operationFamily);
       assert.equal(c.operationFamily, `conflict_${c.operationSemantic}__${c.publicPath.firstEdgeType}_then_${c.publicPath.terminalEdgeType}`);
       assert.ok(CONFLICT_OPERATION_CLASS_BANK.some((candidate) => candidate.id === c.operationFamily));
@@ -122,17 +135,20 @@ describe('v2 operation-general public path', () => {
     assert.equal(byClass.size, CONFLICT_OPERATION_FAMILIES.length);
     assert.equal(byClass.size, 40);
     assert.ok(byClass.size > 32, 'class bank exceeds conservative conflict state capacity by eight');
-    assert.equal(new Set(clusters.slice(0, 40).map((c) => c.operationFamily)).size, 40,
-      'one 20-evolve active+future window already exposes every class');
+    assert.equal(new Set(clusters.slice(0, 80).map((c) => c.operationFamily)).size, 40,
+      'bootstrap plus the exact cadence-8 irregular steady cycle exposes every class without gcd aliasing');
     const behaviorSignatures = new Set();
     for (const [classId, members] of byClass) {
       assert.ok(members.length >= 2, `${classId} must repeat for holdout transfer`);
       const pair = members.flatMap((a, i) => members.slice(i + 1).map((b) => [a, b])).find(([a, b]) =>
         a.subjectEntityId !== b.subjectEntityId
         && !a.templateIds.some((id) => b.templateIds.includes(id))
-        && !a.entityHoldoutKeys.some((key) => b.entityHoldoutKeys.includes(key)));
-      assert.ok(pair, `${classId} needs an entity+template-disjoint repeat for I6 transfer`);
-      const [a] = pair;
+        && !a.entityHoldoutKeys.some((key) => b.entityHoldoutKeys.includes(key))
+        && Math.abs(a.operationSequence - b.operationSequence) === 1
+        && Math.abs(a.epoch - b.epoch) < 32);
+      assert.ok(pair, `${classId} needs a simultaneously-active entity+template-disjoint repeat for I6 transfer`);
+      const [a, b] = pair;
+      assert.ok(b.epoch - a.epoch < 32, 'first instance remains active at second mint');
       const gold = docById.get(a.publicPath.goldBranchIds[0]);
       behaviorSignatures.add(`${a.publicPath.firstEdgeType}|${a.publicPath.terminalEdgeType}|${gold.text.split(' ')[0]}`);
     }
@@ -174,10 +190,13 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
     const registry = createM1Registry();
     const subjects = bank(60);
     const rows = [];
+    let operationSequenceOffset = 0;
     for (const epoch of [137, 138, 139]) {
       const out = generateConflictLifecycleClusters({
         epoch, seed: 'bmu-p2-census', subjects, registry, splitOf, clusterCount: 6, escalationLevel: 0,
+        operationSequenceOffset,
       });
+      operationSequenceOffset += 6;
       rows.push(...out.addedQueries);
     }
     assert.equal(rows.length, 3 * 6 * BMU_CLUSTER_SIZE_K);
@@ -196,6 +215,7 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
     }
     const out = generateConflictLifecycleClusters({
       epoch: 137, seed: 'bmu-p2-skip', subjects, registry, splitOf, clusterCount: 2, escalationLevel: 0,
+      operationSequenceOffset: 0,
     });
     const used = new Set(out.clusters.map((c) => c.subjectEntityId));
     for (const s of subjects.slice(0, 3)) assert.ok(!used.has(s.id), `pre-claimed ${s.id} must be skipped`);
@@ -203,6 +223,7 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
     registry.releaseCluster({ subjectEntityId: subjects[0].id, templateIds: [`tt_other_${subjects[0].id}`] });
     const out2 = generateConflictLifecycleClusters({
       epoch: 138, seed: 'bmu-p2-skip', subjects, registry, splitOf, clusterCount: 1, escalationLevel: 0,
+      operationSequenceOffset: 2,
     });
     assert.equal(out2.clusters[0].subjectEntityId, subjects[0].id);
   });
@@ -215,7 +236,7 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
     ];
     const out = generateConflictLifecycleClusters({
       epoch: 137, seed: 'bmu-alias-m1', subjects, registry: createM1Registry(),
-      splitOf, clusterCount: 2, escalationLevel: 0,
+      splitOf, clusterCount: 2, escalationLevel: 0, operationSequenceOffset: 0,
     });
     assert.deepEqual(out.clusters.map((c) => c.subjectEntityId), ['e_alias_a', 'e_alias_c']);
     assert.ok(out.addedQueries.every((q) => q.bmuTask.entityHoldoutKeys.includes(`id:${q.subjectEntityId}`)));
@@ -226,6 +247,7 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
     assert.throws(
       () => generateConflictLifecycleClusters({
         epoch: 137, seed: 'bmu-p2-exhaust', subjects: bank(3), registry, splitOf, clusterCount: 5, escalationLevel: 0,
+        operationSequenceOffset: 0,
       }),
       /subject bank exhausted under GLOBAL m=1/,
     );
@@ -239,6 +261,7 @@ describe('GLOBAL m=1 (§4.1 multiplicity mint law)', () => {
     assert.throws(
       () => generateConflictLifecycleClusters({
         epoch: 137, seed: 'bmu-p2-test', subjects: bank(40), registry, splitOf, clusterCount: 4, escalationLevel: 1,
+        operationSequenceOffset: 0,
       }),
       /m=1 violation: templateId/,
     );
@@ -261,10 +284,13 @@ describe('template mint-partition law (§4.1 M7)', () => {
     const registry = createM1Registry();
     const subjects = bank(60);
     const all = new Set();
+    let operationSequenceOffset = 0;
     for (const epoch of [137, 138, 139]) {
       const out = generateConflictLifecycleClusters({
         epoch, seed: 'bmu-p2-tpl', subjects, registry, splitOf, clusterCount: 6, escalationLevel: 0,
+        operationSequenceOffset,
       });
+      operationSequenceOffset += 6;
       for (const c of out.clusters) for (const t of c.templateIds) {
         assert.ok(!all.has(t), `templateId ${t} reused across epochs`);
         all.add(t);

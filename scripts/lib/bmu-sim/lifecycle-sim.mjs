@@ -140,9 +140,25 @@ export function buildWorld({ dist, simSeed = 'bmu-p5-sim-v1', bankSize = 240 }) 
     docsById: new Map(),        // public doc id -> doc (text universe for legs 3/4)
     clusters: new Map(),        // motifGroupId -> bookkeeping record
     familyOfId: new Map(),      // production row id -> logicalFamily (frontier interleave key)
-    operationClassCursors: { multi_hop_relation: 0, near_collision_abstention: 0 },
     mintLog: [],
+    // Monotone per-family class rotation. This is intentionally independent
+    // of epoch arithmetic: A1 evolves jump by eight epochs and family mint
+    // counts are irregular, so `(epoch*k+slot) mod bank` can alias forever.
+    operationSequence: Object.fromEntries(FAMILIES.map((family) => [family, 0])),
   };
+}
+
+export function resolveGeneratedOperationClass(cluster, rows) {
+  const rowClasses = new Set(rows.map((row) => row.operationClass ?? row.operationFamily).filter(Boolean));
+  if (rowClasses.size !== 1) {
+    throw new Error(`BMU operation-class disagreement in ${cluster.motifGroupId}: rows expose ${JSON.stringify([...rowClasses])}`);
+  }
+  const rowOperationClass = [...rowClasses][0];
+  const operationClass = cluster.operationClass ?? cluster.operationFamily ?? rowOperationClass;
+  if (typeof operationClass !== 'string' || operationClass.length === 0 || operationClass !== rowOperationClass) {
+    throw new Error(`BMU operation-class mismatch in ${cluster.motifGroupId}: cluster=${String(operationClass)} rows=${String(rowOperationClass)}`);
+  }
+  return operationClass;
 }
 
 function rowToProductionEvent(world, row) {
@@ -246,6 +262,7 @@ export function mintEvolve(world, epoch, clusterCounts, { escalationLevel = 0 } 
       epoch, seed: `${world.simSeed}:temporal`, subjects: world.banks.temporal,
       universe: world.universes.temporal, clusterCount: clusterCounts.temporal,
       splitOf: world.splitOf, activeIndex: world.activeIndex,
+      operationSequenceOffset: world.operationSequence.temporal,
     }), (out) => out.clusters.map((c) => ({ cluster: c, rows: c.rows, docs: c.docs, mechanism: 'index' }))],
     ['multi_hop_relation', () => {
       const count = clusterCounts.multi_hop_relation;
@@ -253,15 +270,15 @@ export function mintEvolve(world, epoch, clusterCounts, { escalationLevel = 0 } 
         epoch, seed: `${world.simSeed}:multihop`, subjects: world.banks.multi_hop_relation,
         universe: world.universes.multi_hop_relation, clusterCount: count,
         splitOf: world.splitOf, activeIndex: world.activeIndex,
-        operationClassSlotOffset: world.operationClassCursors.multi_hop_relation,
+        operationClassSlotOffset: world.operationSequence.multi_hop_relation,
       });
-      world.operationClassCursors.multi_hop_relation += count;
       return out;
     }, (out) => out.clusters.map((c) => ({ cluster: c, rows: c.rows, docs: c.docs, mechanism: 'index' }))],
     ['conflict_lifecycle', () => generateConflictLifecycleClusters({
       epoch, seed: `${world.simSeed}:conflict`, subjects: world.banks.conflict_lifecycle,
       registry: world.registry, splitOf: world.splitOf, clusterCount: clusterCounts.conflict_lifecycle,
       escalationLevel, ownerEntityId: world.ownerEntityId,
+      operationSequenceOffset: world.operationSequence.conflict_lifecycle,
     }), (out) => out.clusters.map((c) => ({
       cluster: c,
       rows: out.addedQueries.filter((r) => r.bmuTask.motifGroupId === c.motifGroupId),
@@ -274,9 +291,8 @@ export function mintEvolve(world, epoch, clusterCounts, { escalationLevel = 0 } 
         epoch, seed: `${world.simSeed}:nearcol`, subjects: world.banks.near_collision_abstention,
         registry: world.registry, splitOf: world.splitOf, clusterCount: count,
         escalationLevel, ownerEntityId: world.ownerEntityId,
-        operationClassSlotOffset: world.operationClassCursors.near_collision_abstention,
+        operationClassSlotOffset: world.operationSequence.near_collision_abstention,
       });
-      world.operationClassCursors.near_collision_abstention += count;
       return out;
     }, (out) => out.clusters.map((c) => ({
       cluster: c,
@@ -288,7 +304,9 @@ export function mintEvolve(world, epoch, clusterCounts, { escalationLevel = 0 } 
   for (const [family, generate, explode] of lanes) {
     if ((clusterCounts[family] ?? 0) < 1) continue;
     const out = generate();
+    world.operationSequence[family] += clusterCounts[family];
     for (const { cluster, rows, docs, mechanism } of explode(out)) {
+      const operationClass = resolveGeneratedOperationClass(cluster, rows);
       for (const d of docs) world.docsById.set(d.id, d);
       const rowProductionIds = [];
       for (const row of rows) {
@@ -307,6 +325,8 @@ export function mintEvolve(world, epoch, clusterCounts, { escalationLevel = 0 } 
         subjectEntityId: cluster.subjectEntityId,
         templateIds: [...(cluster.templateIds ?? [])],
         entityHoldoutKeys: [...(cluster.entityHoldoutKeys ?? cluster.rows?.[0]?.bmuTask?.entityHoldoutKeys ?? [])],
+        operationClass,
+        operationFamily: cluster.operationFamily ?? operationClass,
         mechanism,
         mintEpoch: epoch,
         rowProductionIds,

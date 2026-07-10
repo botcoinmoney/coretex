@@ -514,9 +514,11 @@ multiple tasks and per-doc indexing lifts ~none.
   these in top-B zeroes the task. Under r5 the trap was a graded negative;
   under BMU it is a hard veto — the family's anti-lexical-shortcut screen.
 - **Recency/currency shortcut controls (rev3.4):** every BMU temporal cluster
-  also mints four benign, same-subject, currently-valid records for unrelated
-  attributes whose public observation times are later than the scored
-  revision. They are neither required nor forbidden. Certification runs two
+  also mints four same-subject, same-attribute, currently-valid alternative
+  records whose public observation times match the scored revision. All four
+  are forbidden: leaving non-path controls neutral lets a recency sorter place
+  `{gold + neutral controls}` inside top-B without encountering a veto.
+  Certification runs two
   public-only attacker lanes — subject-scoped last mention and generic
   validity-current filtering — and rejects a row if either obtains utility
   OR matches the structural oracle's positive-evidence coverage. The pack
@@ -528,8 +530,12 @@ multiple tasks and per-doc indexing lifts ~none.
   (revision supersession, validity renewal, rollback restoration, effective
   handoff) cross eight concrete edge programs (`{derived_from,causes}` then
   `{supports,supersedes,coreference_of,co_occurs_with}`) for **32 classes**,
-  eight above the conservative 24-operation temporal state capacity. Epoch
-  and cluster slot only rotate this fixed bank; neither appears in a class id.
+  eight above the conservative 24-operation temporal state capacity. A
+  monotone per-family operation cursor rotates this fixed bank in adjacent
+  pairs (`floor(sequence/2) mod 32`); epoch never selects a class, while local
+  mint order advances the cursor. Neither appears in its id. Pairing is load-bearing: at one temporal
+  cluster/evolve, a one-per-class rotation would repeat only after 32 evolves,
+  long after maxAge=32 epochs (four cadence-8 evolves) retired the first copy.
   The selected semantic group changes the truth/decoy propositions and the
   selected topology changes actual emitted relation types. Each class emits
   four metadata-identical terminal branches (current + provenance truths, two
@@ -540,8 +546,12 @@ multiple tasks and per-doc indexing lifts ~none.
   seed anchor, a winning-terminal anchor, and the two-word subject/attribute
   currency record. Class transfer therefore learns the semantic+edge operation
   across held-out entities/templates rather than carrying instance ids.
-  A 48-evolve census MUST realize all 32 classes and at least two
-  entity/template-disjoint clusters per class.
+  The exact P5 schedule (bootstrap `8 + 11` at epochs 144/152 for margin 3,
+  then one temporal cluster at each of 48 cadence-8 evolves) mints 67 clusters.
+  It MUST realize all 32 classes and mint an entity/template-disjoint adjacent
+  pair per class with epoch gap `< maxAge`, so both copies are active at the
+  second mint. Epoch-derived rotation is forbidden: cadence 8 aliases
+  `(epoch*k+slot) mod 32` to only a small subset.
 
 ### 5.2 conflict_lifecycle
 
@@ -576,8 +586,11 @@ multiple tasks and per-doc indexing lifts ~none.
   `bmu_public_record` kind. A class instance needs at most four one-word
   MemoryIndex anchors (seed, pivot, resolved, resolution record); its repeated
   held-out clusters test transfer of the resolution decision, not id storage.
-  A 48-evolve census MUST realize all 40 classes and
-  at least two entity/template-disjoint clusters per class.
+  The exact P5 schedule (bootstrap `11 + 14`, then the irregular `2/1/2/1`
+  conflict cycle across 48 cadence-8 evolves) mints 97 clusters. The unified
+  per-family cursor uses the same adjacent-pair law and MUST realize all 40
+  classes with an entity/template-disjoint pair concurrently active per class;
+  epoch arithmetic is forbidden.
 
 ### 5.3 multi_hop_relation (incl. bridge/coreference framing)
 
@@ -1961,6 +1974,16 @@ family.
   same-patch real-Qwen gate + excluded-confirm acceptance per family, then
   `GREEN_SUSTAINABLE` P5, parent/blank K=5, parent/oracle three-state margins,
   watermark horizons, and shadow evidence before any operator action.
+- **Generic bank certification:** `certify-v2-bank.mjs` separates public-only
+  attackers from an explicitly hidden `bmuTask` solvability oracle. Generic
+  gates cover full-bank random-K ≤5%, balanced-terminal indistinguishability,
+  id/metadata/path-only failure, role/kind retirement, operation-class
+  capacity/repeat census, cross-family doc/query/publicIntent dedup and global
+  alias-aware m=1. Temporal registers recency and validity-currency public
+  lanes through the adapter API. A commit-bound no-substrate job pins the full
+  BGE-all-docs → exact top-K Qwen input/output contract and rejects cache
+  rebinding; cheap certification is never a substitute for its fresh full-bank
+  real-model output or three-state scorer margins.
 
 ### rev3.3 → rev3.4 (pre-arm metadata-integrity hardening)
 

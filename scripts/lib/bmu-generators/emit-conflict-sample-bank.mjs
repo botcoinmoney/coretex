@@ -53,12 +53,15 @@ const allRows = [];
 const allDocs = [];
 const allRelations = [];
 const allClusters = [];
+let operationSequenceOffset = 0;
 for (const spec of PARAMS.epochs) {
   const out = generateConflictLifecycleClusters({
     epoch: spec.epoch, seed: PARAMS.seed, subjects, registry, splitOf,
     clusterCount: spec.clusterCount, escalationLevel: spec.escalationLevel,
     ownerEntityId: PARAMS.ownerEntityId,
+    operationSequenceOffset,
   });
+  operationSequenceOffset += spec.clusterCount;
   perEpoch.push({ epoch: spec.epoch, telemetry: out.telemetry });
   allRows.push(...out.addedQueries);
   allDocs.push(...out.addedDocs);

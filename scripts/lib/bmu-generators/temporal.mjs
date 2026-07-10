@@ -104,9 +104,9 @@ export const TEMPORAL_PATH_TOPOLOGIES = Object.freeze(
 
 /** 4 real temporal decisions × 8 concrete edge programs = 32 transferable
  * classes, eight above the conservative 24-operation state capacity. Class
- * ids contain no epoch/entity/template token; the epoch/slot sequence merely
- * rotates the bank, while the selected profile changes emitted prose and
- * actual public relation types. */
+ * ids contain no epoch/entity/template token; the monotone family cursor
+ * rotates the bank independently of irregular epoch mint counts, while the
+ * selected profile changes emitted prose and actual public relation types. */
 export const TEMPORAL_OPERATION_CLASS_BANK = Object.freeze(
   TEMPORAL_SEMANTIC_OPERATIONS.flatMap((semantic) =>
     TEMPORAL_PATH_TOPOLOGIES.map((topology) => Object.freeze({
@@ -114,17 +114,18 @@ export const TEMPORAL_OPERATION_CLASS_BANK = Object.freeze(
     }))),
 );
 export const TEMPORAL_OPERATION_FAMILIES = Object.freeze(TEMPORAL_OPERATION_CLASS_BANK.map((profile) => profile.id));
-export const TEMPORAL_OPERATION_ROTATION_BASE_EPOCH = 137;
-
-export function temporalOperationProfileForCluster(epoch, clusterSlot) {
-  if (!Number.isInteger(epoch)) throw new Error('bmu temporal: integer epoch required for operation rotation');
+export function temporalOperationProfileForCluster(operationSequenceOffset, clusterSlot) {
+  if (!Number.isInteger(operationSequenceOffset) || operationSequenceOffset < 0) throw new Error('bmu temporal: non-negative integer operationSequenceOffset required');
   if (!Number.isInteger(clusterSlot) || clusterSlot < 0) throw new Error('bmu temporal: non-negative integer clusterSlot required');
-  const sequence = (epoch - TEMPORAL_OPERATION_ROTATION_BASE_EPOCH) * 2 + clusterSlot;
-  return TEMPORAL_OPERATION_CLASS_BANK[((sequence % TEMPORAL_OPERATION_CLASS_BANK.length) + TEMPORAL_OPERATION_CLASS_BANK.length) % TEMPORAL_OPERATION_CLASS_BANK.length];
+  const sequence = operationSequenceOffset + clusterSlot;
+  // Adjacent-pair rotation: two entity/template-disjoint instances of a class
+  // coexist inside maxAge. One-class-per-cluster rotation repeated only after
+  // 32 mints, long after the first temporal instance retired at cadence 8.
+  return TEMPORAL_OPERATION_CLASS_BANK[Math.floor(sequence / 2) % TEMPORAL_OPERATION_CLASS_BANK.length];
 }
 
-export function temporalOperationFamilyForCluster(epoch, clusterSlot) {
-  return temporalOperationProfileForCluster(epoch, clusterSlot).id;
+export function temporalOperationFamilyForCluster(operationSequenceOffset, clusterSlot) {
+  return temporalOperationProfileForCluster(operationSequenceOffset, clusterSlot).id;
 }
 
 /**
@@ -327,6 +328,7 @@ export function generateTemporalClusters({
   splitOf,
   activeIndex = createBmuActiveIndex(),
   escalation = {},
+  operationSequenceOffset,
 }) {
   if (!Number.isInteger(epoch)) throw new Error('bmu temporal: epoch must be an integer');
   if (typeof seed !== 'string' || seed.length === 0) throw new Error('bmu temporal: seed required');
@@ -334,6 +336,7 @@ export function generateTemporalClusters({
   if (!Array.isArray(subjects) || subjects.length === 0) throw new Error('bmu temporal: subjects bank required');
   if (typeof universe !== 'string' || universe.length === 0) throw new Error('bmu temporal: universe (ownerEntityId) required');
   if (!Number.isInteger(clusterCount) || clusterCount < 1) throw new Error('bmu temporal: clusterCount must be a positive integer');
+  if (!Number.isInteger(operationSequenceOffset) || operationSequenceOffset < 0) throw new Error('bmu temporal: operationSequenceOffset must be a non-negative integer');
 
   const { tsDate, priorDate } = datesForEpoch(epoch);
   const escalationLevel = escalationLevelForEpoch(epoch, escalation);
@@ -381,7 +384,7 @@ export function generateTemporalClusters({
       throw new Error(`bmu temporal: value bank cannot supply ${BMU_TEMPORAL_SHORTCUT_CONTROL_DOCS} distinct balanced decoys`);
     }
     const shadowDecoyVals = decoyVals.slice(0, escalationLevel);
-    const operationProfile = temporalOperationProfileForCluster(epoch, ordinal);
+    const operationProfile = temporalOperationProfileForCluster(operationSequenceOffset, ordinal);
     const operationFamily = operationProfile.id;
     const pathEdges = operationProfile.topology;
     const terminalPathClause = {
@@ -428,7 +431,7 @@ export function generateTemporalClusters({
       if (operationProfile.semantic.id === 'rollback_restoration') {
         if (role === 'current') return withPathSemantics(`Rollback decision ${tsDate}: controls restored ${val} as governing. Subject ${canonical}; field ${attr}. The interim ${staleVal} revision was invalid.`);
         if (role === 'change_provenance') return withPathSemantics(`Rollback audit ${tsDate} invalidated interim ${staleVal} and restored ${val}. Subject ${canonical}; field ${attr}.`);
-        return withPathSemantics(`Rollback audit ${tsDate} examined ${decoyValue}, but controls did not restore that candidate. Subject ${canonical}; field ${attr}.`);
+        return withPathSemantics(`Rollback audit ${tsDate} examined ${decoyValue}, but review did not restore that candidate. Subject ${canonical}; field ${attr}.`);
       }
       if (role === 'current') return withPathSemantics(`Handoff notice ${tsDate}: the effective transition activates ${val}. Subject ${canonical}; field ${attr}.`);
       if (role === 'change_provenance') return withPathSemantics(`Handoff record ${tsDate} closed ${staleVal} and activated successor ${val}. Subject ${canonical}; field ${attr}.`);
@@ -497,6 +500,11 @@ export function generateTemporalClusters({
     }
     const terminalBranchIds = [currentId, changeId, shortcutControlIds[0], shortcutControlIds[1]];
     const pathDecoyIds = shortcutControlIds.slice(0, 2);
+    // All same-recency/current control observations are forbidden. Leaving
+    // the two non-path controls neutral lets a public recency/currency sorter
+    // place {gold + neutral controls} in top-B without ever touching a veto.
+    // They remain outside the four-branch diamond, but close that shortcut.
+    const shortcutForbiddenIds = [...shortcutControlIds];
     const relations = [
       // Fixed v2 outgoing→incoming diamond: stale lexical seed → pivot;
       // two truths + two balanced decoys → the same pivot.
@@ -511,7 +519,7 @@ export function generateTemporalClusters({
     if (spec.queryStubs.length !== BMU_TEMPORAL_CLUSTER_K) {
       throw new Error(`bmu temporal: ancestor spec emitted ${spec.queryStubs.length} stubs, expected k=${BMU_TEMPORAL_CLUSTER_K}`);
     }
-    const forbiddenEvidence = [staleId, ...pathDecoyIds, ...shadowIds];
+    const forbiddenEvidence = [staleId, ...shortcutForbiddenIds, ...shadowIds];
     const clusterTemplateIds = [];
     const rows = [];
     for (let slot = 0; slot < TEMPORAL_ROW_SLOTS.length; slot++) {
@@ -536,11 +544,11 @@ export function generateTemporalClusters({
         lane: 'deep', family: BMU_TEMPORAL_LOGICAL_FAMILY, queryText,
         qrels: [
           ...stub.qrels.map((r) => ({ ...r })),
-          ...pathDecoyIds.map((docId) => ({ docId, relevance: 0, role: 'balanced_public_path_decoy' })),
+          ...shortcutForbiddenIds.map((docId) => ({ docId, relevance: 0, role: 'recency_currency_control' })),
         ],
         hardNegatives: [
           ...stub.hardNegatives.map((n) => ({ ...n })),
-          ...pathDecoyIds.map((docId) => ({ docId, category: 'balanced_public_path_decoy' })),
+          ...shortcutForbiddenIds.map((docId) => ({ docId, category: 'recency_currency_control' })),
         ],
         publicIntent: {
           atom: 'temporal_cluster', subjectEntityId: subj.id, attribute: attr,
@@ -605,6 +613,7 @@ export function generateTemporalClusters({
       operationClass: operationFamily,
       operationSemantic: operationProfile.semantic.id,
       operationTopology: operationProfile.topology.id,
+      operationSequence: operationSequenceOffset + ordinal,
       templateIds: [...clusterTemplateIds],
       entityHoldoutKeys: [...entityHoldoutKeys],
       docs,
