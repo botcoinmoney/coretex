@@ -332,7 +332,7 @@ function armRow(family, logicalFamily, bucketed, i, { epoch = 137, subject, temp
 }
 
 function armPool({ counts, epoch = 137 } = {}) {
-  const spec = counts ?? { temporal: 80, conflict_lifecycle: 110, multi_hop_relation: 110, near_collision_abstention: 80 };
+  const spec = counts ?? { temporal: 80, conflict_lifecycle: 80, multi_hop_relation: 80, near_collision_abstention: 80 };
   const buckets = { temporal: 'temporal', conflict_lifecycle: 'conflict_lifecycle', multi_hop_relation: 'multi_hop_relation', near_collision_abstention: 'near_collision' };
   const logical = { temporal: 'temporal_update', conflict_lifecycle: 'conflict_lifecycle', multi_hop_relation: 'multi_session_bridge', near_collision_abstention: 'abstention_missing' };
   const events = [];
@@ -356,11 +356,11 @@ describe('§6.7b ARM-GATE census (rev3.2 reserve∪active pool)', () => {
   });
 
   test('REFUSES below a per-family minimum, reporting per-family counts', () => {
-    const events = armPool({ counts: { temporal: 80, conflict_lifecycle: 109, multi_hop_relation: 110, near_collision_abstention: 80 } });
+    const events = armPool({ counts: { temporal: 80, conflict_lifecycle: 79, multi_hop_relation: 80, near_collision_abstention: 80 } });
     const poolIds = new Set(events.map((e) => e.id));
     const report = evaluateBmuArmGate({ corpus: { events }, poolIds, epochId: 137, posture: 'arm' });
     assert.equal(report.ok, false);
-    assert.ok(report.reasons.some((r) => r.includes('conflict_lifecycle') && r.includes('109 < required 110')), report.reasons.join('; '));
+    assert.ok(report.reasons.some((r) => r.includes('conflict_lifecycle') && r.includes('79 < required 80')), report.reasons.join('; '));
     assert.ok(report.reasons.some((r) => r.includes(`N_min ${BMU_ARM_GATE_N_MIN}`)));
   });
 

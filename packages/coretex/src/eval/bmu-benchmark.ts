@@ -77,16 +77,30 @@ export const BMU_JUDGE_RMAX_LIMIT = 4;
 export const BMU_REGRESSION_BUDGET_PER_FAMILY = 1;
 export const BMU_REGRESSION_BUDGET_TOTAL = 2;
 
-/** §6.7b (rev3.1): per-family eligible-active minima E_f_min = k·ceil(N_f·(k+1)/k). */
+/** §6.7b (rev4.1 fix-2c recalibration): per-family eligible-active minima.
+ *
+ * The rev3.1 values {80, 110, 110, 80} were §6.7c BOOTSTRAP-RAMP sizing
+ * artifacts (E_f_min clusters {16,22,22,16} x k=5), not scoring-law
+ * requirements. The executable-era census law mints every family EQUALLY
+ * (72 mints/family per 48-evolve era — required for 36 paired classes), so
+ * the replacement-only active frontier converges to armCount/4 ~ 107.5
+ * rows/family: any floor above ~107 is arithmetically guaranteed to erode
+ * into a permanent boot-census brick (measured in the P5 operation-general
+ * lane: multi_hop 99-109 < 110 from evolve 13 onward). The BINDING
+ * steady-state requirement is dual-pack quota fillability after §6.3
+ * exclusion — gate + confirm need <=15 family rows each, so >=30 disjoint
+ * rows plus margin; 80 is 2.6x that bound and is the floor temporal and
+ * near_collision already run at. Unified floors keep ~27 rows (~5.5
+ * clusters) of equilibrium margin per family. */
 export const BMU_ARM_GATE_FAMILY_MINIMA: Readonly<Record<BmuFamily, number>> = {
   temporal: 80,
-  conflict_lifecycle: 110,
-  multi_hop_relation: 110,
+  conflict_lifecycle: 80,
+  multi_hop_relation: 80,
   near_collision_abstention: 80,
 };
 
-/** §6.7b (rev3.1): N_min = Σ E_f_min = 380 eligible-active rows (76 clusters). */
-export const BMU_ARM_GATE_N_MIN = 380;
+/** §6.7b: N_min = Σ E_f_min = 320 eligible-active rows (64 clusters). */
+export const BMU_ARM_GATE_N_MIN = 320;
 
 /** §6.7b: fresh overlay cohort of ≥ 2 clusters per family within freshWindow. */
 export const BMU_ARM_GATE_FRESH_CLUSTERS_MIN = 2;
@@ -766,7 +780,7 @@ export interface BmuArmGateReport {
  * semantics): the pool of stamped rows AVAILABLE FOR BULK-ACTIVATION
  * (bmuTask rows in RESERVE ∪ ACTIVE — pre-arm they sit in the reserve; the
  * §6.7a prerequisite-2 bulk-activation is what makes them eligible-active at
- * arm) must satisfy the per-family minima {80, 110, 110, 80} (N_min 380), a
+ * arm) must satisfy the per-family minima {80, 80, 80, 80} (N_min 320), a
  * fresh overlay cohort of ≥ 2 clusters per family within `freshWindow`, and
  * the GLOBAL m = 1 multiplicity census (across ALL families — §4.1 rev3.2).
  *

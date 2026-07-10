@@ -37,8 +37,8 @@ const PIN = { modelId: 'Qwen/Qwen3-Reranker-0.6B', revision: 'e61197ed45024b0ed8
 
 const FAMS = [
   { bmu: 'temporal', bucketed: 'temporal', logical: 'temporal_update', min: 80 },
-  { bmu: 'conflict_lifecycle', bucketed: 'conflict_lifecycle', logical: 'conflict_lifecycle', min: 110 },
-  { bmu: 'multi_hop_relation', bucketed: 'multi_hop_relation', logical: 'multi_session_bridge', min: 110 },
+  { bmu: 'conflict_lifecycle', bucketed: 'conflict_lifecycle', logical: 'conflict_lifecycle', min: 80 },
+  { bmu: 'multi_hop_relation', bucketed: 'multi_hop_relation', logical: 'multi_session_bridge', min: 80 },
   { bmu: 'near_collision_abstention', bucketed: 'near_collision', logical: 'abstention_missing', min: 80 },
 ];
 
@@ -200,7 +200,7 @@ describe('BLOCKER-1: BMU evaluator boot census is STRUCTURAL — stale mints sta
   test('REFUSES construction when a family is below its structural minimum', async () => {
     await assert.rejects(
       construct(makeStaleMintCorpus({ shortFamily: 'conflict_lifecycle' })),
-      /BMU boot census refused.*conflict_lifecycle.*109 < required 110/s,
+      /BMU boot census refused.*conflict_lifecycle.*79 < required 80/s,
     );
   });
 });
@@ -240,7 +240,7 @@ describe('MINOR: bulk-activate executable ARM census (corpus-derived, cross-chec
     writeFileSync(corpusPath, JSON.stringify({ ...serializeProductionCorpus(corpus), corpusRoot: corpus.corpusRoot }));
     const statePath = join(dir, 'state.json');
     writeFileSync(statePath, JSON.stringify(frontierState(corpus)));
-    const res = runTool(['--in', statePath, '--out', join(dir, 'out.json'), '--mode', 'bulk-activate', '--arm-epoch', '137', '--corpus', corpusPath, '--count', '380']);
+    const res = runTool(['--in', statePath, '--out', join(dir, 'out.json'), '--mode', 'bulk-activate', '--arm-epoch', '137', '--corpus', corpusPath, '--count', '320']);
     assert.notEqual(res.status, 0);
     assert.match(res.out, /ARM census REFUSED/);
     assert.match(res.out, /fresh clusters/);
@@ -268,21 +268,21 @@ describe('MINOR: bulk-activate executable ARM census (corpus-derived, cross-chec
     // Diverging --stamped-ids is refused.
     const badIdsPath = join(dir, 'bad-ids.json');
     writeFileSync(badIdsPath, JSON.stringify([corpus.events[0].id, 'ghost-row']));
-    const bad = runTool(['--in', statePath, '--out', outPath, '--mode', 'bulk-activate', '--arm-epoch', '137', '--corpus', corpusPath, '--count', '380', '--stamped-ids', badIdsPath]);
+    const bad = runTool(['--in', statePath, '--out', outPath, '--mode', 'bulk-activate', '--arm-epoch', '137', '--corpus', corpusPath, '--count', '320', '--stamped-ids', badIdsPath]);
     assert.notEqual(bad.status, 0);
     assert.match(bad.out, /diverges from the corpus-derived stamped set/);
 
-    // Honest run: census passes, ≥380 stamped rows end active, meta records census.
+    // Honest run: census passes, >=320 stamped rows end active, meta records census.
     const goodIdsPath = join(dir, 'good-ids.json');
     writeFileSync(goodIdsPath, JSON.stringify(corpus.events.map((e) => e.id)));
-    const good = runTool(['--in', statePath, '--out', outPath, '--mode', 'bulk-activate', '--arm-epoch', '137', '--corpus', corpusPath, '--count', '380', '--stamped-ids', goodIdsPath]);
+    const good = runTool(['--in', statePath, '--out', outPath, '--mode', 'bulk-activate', '--arm-epoch', '137', '--corpus', corpusPath, '--count', '320', '--stamped-ids', goodIdsPath]);
     assert.equal(good.status, 0, good.out);
     const next = JSON.parse(readFileSync(outPath, 'utf8'));
     const activeIds = new Set(next.active.map(([id]) => id));
     const stampedActive = corpus.events.filter((e) => activeIds.has(e.id)).length;
-    assert.ok(stampedActive >= 380, `stamped active ${stampedActive} < 380`);
+    assert.ok(stampedActive >= 320, `stamped active ${stampedActive} < 320`);
     // precommitted reserve order: the walked prefix is contiguous
-    assert.equal(next.reservePtr, 380);
+    assert.equal(next.reservePtr, 320);
     const meta = JSON.parse(readFileSync(`${outPath}.meta.json`, 'utf8'));
     assert.equal(meta.summary.armCensus.ok, true);
     assert.equal(meta.summary.armCensus.posture, 'arm');

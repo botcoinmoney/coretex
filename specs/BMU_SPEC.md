@@ -515,10 +515,23 @@ conflict, relation, and abstention atoms are disabled by the v2 profile; their
 descriptions below explain task semantics and traps, not alternate v2 reward
 surfaces.
 
-The executable bank is exactly the Cartesian 6×6 public-edge matrix (36
-classes) in every family. Semantic prose, sink multiplicity, question type,
-and generator labels are not class dimensions. A monotone per-family cursor
-mints adjacent I6-disjoint pairs with `floor(sequence/2) mod 36`. An operation
+The executable bank is the DISJOINT-PARTITION DEEP-TERMINAL program bank
+(fix 2a of the era iteration): 32 three-step programs (the Cartesian
+2 outgoing × 4 incoming × 4 incoming chains) plus 4 pinned four-step programs
+— 36 classes in every family. The one outgoing step draws ONLY from
+`{causes, derived_from}`; every incoming step draws ONLY from
+`{supports, supersedes, coreference_of, co_occurs_with}`. Because the two
+vocabularies never intersect, the ambiguous-lineage symmetric route
+(`outgoing:X` then `incoming:X`) is inexpressible, and the mint lint
+(`assertDisjointPartitionProgram`) refuses any non-conforming program
+fail-closed. Topology law: the executed terminal set of a cluster's program
+EQUALS the row's operation-required answer terminal(s) — decoys are balanced
+depth-1 dead ends beside the neutral chain relay(s), forbidden docs are never
+routed, and overflow decoys park in terminal-free side groups (the
+single-answer-terminal law the §18 route bonus requires for soundness).
+Semantic prose, sink multiplicity, question type, and generator labels are
+not class dimensions. A monotone per-family cursor mints adjacent
+I6-disjoint pairs with `floor(sequence/2) mod 36`. An operation
 era starts on an even cursor and alternates mint cycles
 `{temporal:2, conflict:2, multi-hop:1, near-collision:1}` and
 `{temporal:1, conflict:1, multi-hop:2, near-collision:2}` for 24 cycles:
@@ -1179,7 +1192,14 @@ bulk-activation at arm is what makes those rows eligible. Sequencing:
    forced-evolve cycles at cadence 8). This is generator THROUGHPUT
    arithmetic, not activation-pipe arithmetic.
 5. ARM-GATE (b) count + census checks pass: stamped per-family counts ≥
-   {80, 110, 110, 80} in reserve ∪ active; GLOBAL m = 1 census clean.
+   {80, 80, 80, 80} in reserve ∪ active (rev4.1 fix-2c recalibration: the
+   rev3.1 {80, 110, 110, 80} floors were §6.7c bootstrap-ramp sizing
+   artifacts; the executable-era census law mints families EQUALLY, so a
+   replacement-only frontier converges to armCount/4 ≈ 107.5 rows/family and
+   any floor > ~107 is guaranteed to erode into a permanent boot-census brick
+   — measured in the P5 operation-general lane. The binding steady-state
+   requirement is dual-pack quota fillability post-§6.3 exclusion, ≤ 2×15
+   rows; 80 is 2.6× that bound); GLOBAL m = 1 census clean.
 6. One-time BULK-ACTIVATION ((a) prerequisite 2): ≥ 380 stamped reserve rows
    activated in precommitted reserve order; new `activeFrontierRoot`
    repinned atomically with the bundle transition.
@@ -1937,9 +1957,12 @@ capacity, plus fallback/underfill-engagement telemetry.
    sharing a cue/program; load validation recomputes the exact operation class
    and rejects any cue/program/class drift.
 2. **What executable class space exceeds capacity.** All four generators use
-   the same enumerated 6×6 bank of 36 two-step programs:
-   `outgoing:<edge-1>` then `incoming:<edge-2>` over the six public relation
-   types. Semantic prose, topology diagnostics, and row variants do not count
+   the same enumerated disjoint-partition deep-terminal bank of 36 programs
+   (32 three-step + 4 four-step): one `outgoing` step over the causal pair,
+   then a 2–3 step `incoming` chain over the evidence quad (fix 2a; the
+   original 6×6 two-step matrix minted symmetric-route diagonals the decoder
+   refuses and promiscuous multi-terminal routes the §18 bias makes
+   unsolvable). Semantic prose, topology diagnostics, and row variants do not count
    as class identity. The executable-era schedule alternates mint counts
    A=`{temporal:2, conflict:2, multi-hop:1, near-collision:1}` and
    B=`{temporal:1, conflict:1, multi-hop:2, near-collision:2}` for 24 A/B
@@ -1951,9 +1974,14 @@ capacity, plus fallback/underfill-engagement telemetry.
    two unsupported boundary singletons and cannot claim 36 adjacent pairs.
 3. **What inversion and shortcut surfaces remain.** Program cues and bytecode
    are intentionally public; required/forbidden branch semantics are not.
-   Truth and decoy terminals have the same branch structure, metadata, and
-   recency distribution, so id/metadata/path selectors MUST fail while Qwen
-   judges the uniformly rendered lineage. Document ids MUST be generated from
+   Under the deep-terminal law the routed-terminal position is public BY
+   DESIGN (the program points at the answer; the reward channel is state
+   execution, not answer secrecy): the hard blindness gate is that ids and
+   metadata alone — WITHOUT executing the public program — solve nothing,
+   decoys are mutually indistinguishable depth-1 dead ends, and golds are
+   observationally identical to each other. The certification route-closure
+   audit executes the actual program and requires terminals == golds with no
+   routed decoy/forbidden doc. Document ids MUST be generated from
    a required independent keyed HMAC secret whose artifact exposes only a
    commitment; known public seeds and wrong keys MUST fail the inversion gate.
    Traversal is a simple path: already-visited events are removed before the
@@ -2036,6 +2064,25 @@ family.
   the generator MUST mint discriminating single-answer-terminal programs and the
   certification lane MUST reject rows failing the oracle-solved real-margin
   check (§ certification).
+- **§18 era-iteration fixes 2+3 (this tip):** (2a) the generators now mint the
+  disjoint-partition deep-terminal bank above — the executed terminal set
+  equals the operation-required answer terminal(s), enforced by the mint lint,
+  the deep-terminal route-closure audit, and the CPU-deterministic
+  `oracleSolvedMargin` certification lane (forbidden-terminal routing, non-
+  routed non-anchor required evidence, and top-B overflow are per-row
+  REJECTIONS); the real-Qwen ≥3-grid-cell solved-state margin half runs on the
+  emitted `coretex.bmu-v2.oracle-solved-margin-job.v1` pair manifest (GPU
+  lane). (3) pack-density law: family overlay slots group into blocks of
+  `BMU_PACK_CLASS_DENSITY` (=3); each block samples ONE operation class via a
+  SEED-INDEPENDENT digest (`bmu-overlay-class-density-v2`) over the family
+  cohort's sorted class list, so gate and §6.3 excluded-confirm packs sample
+  the SAME classes; block draws lock to one motif cluster after the first row
+  (the paired I6-disjoint cluster stays available to confirm), and base draws
+  exclude sampled-class rows entirely. Acceptance arithmetic: one flip =
+  15,625 ppm < the 20,000 ppm floor (single-row classes unacceptable by
+  construction); the guaranteed two sparser-side rows give 31,250 ≥ 20,000 +
+  11,250 margin. Deterministic, patch-independent, no miner steering;
+  pre-executable cohorts draw byte-identically to rev3.1.
 - **Free riders removed:** v2 force-disables temporal motif admission,
   conflict scope/classifier promotion, evidence motif admission, query-
   conditioned policy admission, entity/scope atom admission, conflict/evidence

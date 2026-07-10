@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { splitForRecord, liveTailQueryId } from '../../dist/index.js';
 import * as dist from '../../dist/index.js';
 import {
+  buildOracleSolvedMarginJob,
   certifyNoSubstrateScoring,
   certifyV2Banks,
+  oracleSolvedMarginAudit,
   crossFamilyDedupAudit,
   DEFAULT_V2_BANK_ADAPTERS,
   idMetadataPathAttacker,
@@ -210,4 +212,62 @@ test('P5 lifecycle owns one monotone cursor and persists generated class identit
     { motifGroupId: 'mg_bad', operationClass: 'class-a' },
     [{ operationClass: 'class-b' }],
   ), /operation-class mismatch/);
+});
+
+test('fix-2b oracle-solved margin lane certifies compliant rows and rejects a routed forbidden terminal', () => {
+  const lane = normalizeV2Bank(fixtureBanks()[0]);
+  const clean = oracleSolvedMarginAudit(lane);
+  assert.equal(clean.pass, true, JSON.stringify(clean.rejectedRows.slice(0, 3), null, 2));
+  assert.equal(clean.densityArithmeticHolds, true);
+  assert.equal(clean.certifiedRows, clean.rows);
+
+  // Poison: route a forbidden decoy as a terminal (the promiscuous-generator
+  // shape the ca152a6 law-soundness finding demonstrated) — every row of the
+  // cluster must be REJECTED, never certified.
+  const cluster = lane.clusters[0];
+  const forbiddenId = cluster.rows[0].bmuTask.forbiddenEvidence.at(-1);
+  const midId = cluster.publicPath.midIds.at(-1);
+  const terminalEdge = cluster.bmuOperationProgram.steps.at(-1).edgeType;
+  const poisonedCluster = {
+    ...cluster,
+    relations: [...cluster.relations, { src: forbiddenId, dst: midId, type: terminalEdge, label: 'public_path_terminal' }],
+  };
+  const poisoned = {
+    ...lane,
+    clusters: lane.clusters.map((candidate) => (candidate === cluster ? poisonedCluster : candidate)),
+  };
+  const audit = oracleSolvedMarginAudit(poisoned);
+  assert.equal(audit.pass, false);
+  assert.ok(audit.rejectedRows.some((finding) => finding.reject === 'forbidden_terminal_routed'
+    && finding.routedForbidden.includes(forbiddenId)));
+});
+
+test('fix-2b pair manifest is identity-bound and enumerates class pairs with row law only', () => {
+  const banks = fixtureBanks();
+  const families = Object.fromEntries(banks.map((bank) => [bank.family, normalizeV2Bank(bank)]));
+  const sourceCheckout = { commit: 'c'.repeat(40), clean: true };
+  const job = buildOracleSolvedMarginJob(families, { sourceCheckout });
+  assert.equal(job.schema, 'coretex.bmu-v2.oracle-solved-margin-job.v1');
+  assert.equal(job.oracleSolvedMargin, true);
+  assert.match(job.identity, /^[0-9a-f]{64}$/);
+  assert.equal(job.pins.density.rowFlipPpm, 15_625);
+  for (const [family, laneJob] of Object.entries(job.perFamily)) {
+    assert.ok(laneJob.classPairs.length >= 1, `${family}: class pairs present`);
+    for (const pair of laneJob.classPairs) {
+      assert.ok(pair.operationCue && pair.operationProgram);
+      for (const cluster of pair.clusters) {
+        assert.ok(cluster.seedId, 'manifest carries the public seed for solved-state execution');
+        for (const row of cluster.rows) {
+          assert.ok(Array.isArray(row.requiredEvidence) && Array.isArray(row.forbiddenEvidence));
+          assert.equal('qrels' in row, false, 'manifest never leaks qrels');
+        }
+      }
+    }
+  }
+  // Identity binds the payload: any mutation is detectable.
+  const mutated = JSON.parse(JSON.stringify(job));
+  mutated.perFamily[Object.keys(mutated.perFamily)[0]].classPairs[0].operationCue = 'tampered';
+  const recomputed = buildOracleSolvedMarginJob(families, { sourceCheckout });
+  assert.equal(recomputed.identity, job.identity);
+  assert.notEqual(JSON.stringify(mutated.perFamily), JSON.stringify(job.perFamily));
 });

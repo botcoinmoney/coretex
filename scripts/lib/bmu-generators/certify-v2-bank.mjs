@@ -426,6 +426,165 @@ export function crossFamilyDedupAudit(families) {
   return { pass: Object.values(collisions).every((entries) => entries.length === 0), collisions };
 }
 
+/**
+ * §17.13 fix-2b oracle-solved margin certification lane (CPU-deterministic
+ * structural half). For every minted row, executes the row's ACTUAL public
+ * program (reference walker == compiled decoder byte law) from the cluster's
+ * public seed and verifies the solved-state feasibility contract:
+ *   (a) NO forbidden doc of ANY of the cluster's rows is a routed terminal —
+ *       one routed forbidden makes that row unsolvable by construction under
+ *       the uniform route bonus;
+ *   (b) every required-evidence doc is either a routed terminal or the
+ *       cluster's public seed/anchor (independently retrievable at stage 1);
+ *   (c) top-B feasibility: |terminals ∪ required| <= budgetB — the biased
+ *       routed cohort plus non-routed required must fit the judged window;
+ *   (d) class 2-flip achievability under the fix-3 density law: the class
+ *       has an adjacent I6-disjoint paired mint (census-checked) and the
+ *       density arithmetic 2 x 15,625 >= 20,000 + margin holds.
+ * The real-Qwen >=3-grid-cell margin half runs on the GPU host against the
+ * emitted pair manifest (buildOracleSolvedMarginJob) — margins are measured,
+ * never fabricated here.
+ */
+export const ORACLE_MARGIN_DENSITY_PINS = Object.freeze({
+  // Mirrors the dist pins (hidden-query-pack.ts BMU_PACK_ROW_FLIP_PPM /
+  // BMU_PACK_DENSITY_MARGIN_PPM and bmu-benchmark.ts BMU_MIN_IMPROVEMENT_PPM);
+  // bound in-code by bmu-v2-pack-density.test.mjs.
+  rowFlipPpm: 15_625,
+  minImprovementPpm: 20_000,
+  densityMarginPpm: 11_250,
+  sparserSideRows: 2,
+});
+
+export function oracleSolvedMarginAudit(lane) {
+  const clusterByMotif = new Map(lane.clusters.map((cluster) => [cluster.motifGroupId, cluster]));
+  const executedByMotif = new Map();
+  const classMembers = new Map();
+  for (const cluster of lane.clusters) {
+    const cls = cluster.operationClass ?? cluster.operationFamily;
+    const members = classMembers.get(cls) ?? [];
+    members.push(cluster);
+    classMembers.set(cls, members);
+  }
+  const rowFindings = [];
+  const arithmetic = ORACLE_MARGIN_DENSITY_PINS.sparserSideRows * ORACLE_MARGIN_DENSITY_PINS.rowFlipPpm
+    >= ORACLE_MARGIN_DENSITY_PINS.minImprovementPpm + ORACLE_MARGIN_DENSITY_PINS.densityMarginPpm;
+  for (const row of lane.rows) {
+    const cluster = clusterByMotif.get(row.bmuTask?.motifGroupId);
+    if (!cluster) { rowFindings.push({ rowId: row.id, reject: 'no_cluster' }); continue; }
+    let executed = executedByMotif.get(cluster.motifGroupId);
+    if (!executed) {
+      const path = cluster.publicPath ?? cluster.pathGroups?.find((group) => group.truthId !== null && group.truthId !== undefined);
+      const seedId = cluster.publicPath?.seedId ?? path?.anchorId;
+      try {
+        executed = seedId === undefined
+          ? { error: 'no_public_seed' }
+          : executeProgramOverRelations({
+            program: cluster.bmuOperationProgram,
+            relations: cluster.relations ?? [],
+            seedIds: [seedId],
+          });
+      } catch (error) {
+        executed = { error: String(error?.message ?? error) };
+      }
+      executedByMotif.set(cluster.motifGroupId, executed);
+    }
+    if (executed.error) { rowFindings.push({ rowId: row.id, reject: `route_execution: ${executed.error}` }); continue; }
+    const terminals = new Set(executed.terminalIds);
+    const task = row.bmuTask;
+    const routedForbidden = (task.forbiddenEvidence ?? []).filter((id) => terminals.has(id));
+    if (routedForbidden.length > 0) {
+      rowFindings.push({ rowId: row.id, reject: 'forbidden_terminal_routed', routedForbidden });
+      continue;
+    }
+    if (task.abstain !== true) {
+      const anchors = new Set([
+        cluster.publicPath?.seedId,
+        ...(cluster.pathGroups ?? []).map((group) => group.anchorId),
+      ].filter((id) => id !== undefined && id !== null));
+      const unreachableRequired = (task.requiredEvidence ?? [])
+        .filter((id) => !terminals.has(id) && !anchors.has(id));
+      if (unreachableRequired.length > 0) {
+        rowFindings.push({ rowId: row.id, reject: 'required_neither_routed_nor_anchor', unreachableRequired });
+        continue;
+      }
+      const judgedCohort = new Set([...terminals, ...(task.requiredEvidence ?? [])]);
+      if (judgedCohort.size > task.budgetB) {
+        rowFindings.push({ rowId: row.id, reject: 'topB_overflow', cohort: judgedCohort.size, budgetB: task.budgetB });
+        continue;
+      }
+    }
+    const cls = cluster.operationClass ?? cluster.operationFamily;
+    const members = classMembers.get(cls) ?? [];
+    const hasDisjointPair = members.some((other) => other !== cluster
+      && other.subjectEntityId !== cluster.subjectEntityId
+      && !(other.templateIds ?? []).some((id) => (cluster.templateIds ?? []).includes(id)));
+    if (!hasDisjointPair) {
+      rowFindings.push({ rowId: row.id, reject: 'no_disjoint_class_pair_for_two_flip' });
+      continue;
+    }
+    rowFindings.push({ rowId: row.id, certified: true });
+  }
+  const rejected = rowFindings.filter((finding) => finding.certified !== true);
+  return {
+    pins: ORACLE_MARGIN_DENSITY_PINS,
+    densityArithmeticHolds: arithmetic,
+    rows: rowFindings.length,
+    certifiedRows: rowFindings.length - rejected.length,
+    rejectedRows: rejected,
+    pass: arithmetic && rejected.length === 0,
+    scope: 'CPU-deterministic structural feasibility; real-Qwen >=3-grid-cell margins run on the emitted oracle-margin pair manifest',
+  };
+}
+
+/** Fix-2b pair manifest: everything the GPU host needs to measure real-Qwen
+ * solved-state margins per class pair, identity-bound like the no-substrate
+ * job. No qrels/hidden labels beyond the bmuTask row law itself. */
+export function buildOracleSolvedMarginJob(families, { pins = CERT_PINS, sourceCheckout = null } = {}) {
+  const perFamily = Object.fromEntries(Object.entries(families).map(([family, lane]) => {
+    const byClass = new Map();
+    for (const cluster of lane.clusters) {
+      const cls = cluster.operationClass ?? cluster.operationFamily;
+      const list = byClass.get(cls) ?? [];
+      list.push(cluster);
+      byClass.set(cls, list);
+    }
+    const classPairs = [...byClass].map(([operationClass, clusters]) => ({
+      operationClass,
+      operationCue: clusters[0].bmuOperationCue,
+      operationProgram: clusters[0].bmuOperationProgram,
+      clusters: clusters.map((cluster) => ({
+        motifGroupId: cluster.motifGroupId,
+        subjectEntityId: cluster.subjectEntityId,
+        seedId: cluster.publicPath?.seedId
+          ?? cluster.pathGroups?.find((group) => group.truthId)?.anchorId ?? null,
+        rows: (cluster.rows ?? lane.rows.filter((row) => row.bmuTask?.motifGroupId === cluster.motifGroupId))
+          .map((row) => ({
+            id: row.id, queryText: row.queryText, budgetB: row.bmuTask.budgetB,
+            abstain: row.bmuTask.abstain === true,
+            requiredEvidence: row.bmuTask.requiredEvidence,
+            forbiddenEvidence: row.bmuTask.forbiddenEvidence,
+          })),
+      })),
+    }));
+    return [family, { classPairs }];
+  }));
+  const identityPayload = {
+    sourceCheckout,
+    oracleSolvedMargin: true,
+    pins: {
+      biencoder: pins.biencoder, reranker: pins.reranker, rerankerInputTopK: pins.rerankerInputTopK,
+      density: ORACLE_MARGIN_DENSITY_PINS,
+      marginRule: '>=3 grid cells at g=1e-3 for every required doc in judged topB under the solved state; zero forbidden admitted',
+    },
+    perFamily,
+  };
+  return {
+    schema: 'coretex.bmu-v2.oracle-solved-margin-job.v1',
+    ...identityPayload,
+    identity: createHash('sha256').update(JSON.stringify(identityPayload)).digest('hex'),
+  };
+}
+
 export function buildNoSubstrateScoringJob(families, { pins = CERT_PINS, sourceCheckout = null } = {}) {
   const docs = Object.values(families).flatMap((lane) => lane.docs).map((doc) => ({ id: doc.id, text: doc.text }));
   const queries = Object.entries(families).flatMap(([family, lane]) => lane.rows.map((row) => ({
@@ -575,6 +734,7 @@ export function certifyV2Banks(rawBanks, {
           rule: 'known generator seed/source plus exact motif inputs must match zero HMAC document ids and solve zero rows',
         },
         balancedTerminalBranches: { pass: balanced.every((entry) => entry.pass), failures: balanced.filter((entry) => !entry.pass) },
+        oracleSolvedMargin: oracleSolvedMarginAudit(lane),
         operationClassCensus: operationClassCensus(lane, adapter.conservativeOperationCapacity, adapter.maxActiveEpochGap),
         roleRetirement: roleRetirementAudit(lane),
         ...Object.fromEntries(Object.entries(shortcutResults).map(([name, results]) => [name, {
@@ -591,6 +751,7 @@ export function certifyV2Banks(rawBanks, {
     globalAliasM1: globalAliasM1Audit(families),
   };
   const noSubstrateJob = buildNoSubstrateScoringJob(families, { sourceCheckout });
+  const oracleMarginJob = buildOracleSolvedMarginJob(families, { sourceCheckout });
   const rowById = new Map(Object.values(families).flatMap((lane) => lane.rows).map((row) => [row.id, row]));
   const noSubstrate = noSubstrateOutput
     ? certifyNoSubstrateScoring(noSubstrateJob, noSubstrateOutput, rowById)
@@ -605,10 +766,11 @@ export function certifyV2Banks(rawBanks, {
     perFamily,
     globalGates,
     noSubstrate: { ...noSubstrate, job: noSubstrateJob },
+    oracleMargin: { job: oracleMarginJob, pending: true },
     caps: [
       'Cheap certification uses text-free/public-only attackers and synthetic score-contract fixtures only.',
       'GREEN hardness still requires fresh full-bank BGE-M3 + Qwen output on the emitted no-substrate job; cache rebinding is forbidden.',
-      'Parent and oracle-solved three-state margins remain a full scorer certification lane, not this light harness.',
+      'oracleSolvedMargin here is the CPU-deterministic structural half; real-Qwen >=3-grid-cell solved-state margins run on the emitted oracle-margin pair manifest (GPU host).',
     ],
   };
 }
