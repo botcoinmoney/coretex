@@ -495,13 +495,20 @@ export function generateMultiHopClusters({
       }
       docs.push(emitted);
     };
+    // §17.20 round-5 BC1 fix: the hop-1 bridge is the program chain-start and MUST
+    // be stage-1 (bge) retrievable from the row's query. The query names
+    // {canonical}+{topic}+{targetAttr}; without the target-attribute word the
+    // bridge loses the top-4 stage-1 race to the value-bearing decoys (observed
+    // live: 2/3 block-class rows routing-starved). Mention the {targetAttr} in a
+    // phrasing disjoint from every question skeleton (lint-checked), never the
+    // answer value or a bridge token.
     pushDoc({
       id: b1Id, role: 'chain_hop1',
       text: hopCount === 2
-        ? `Delegation review ${tsDate}: comparison docket ${relayToken} was opened for ${canonical}. Its delegated function is ${topic}; the filed branches must be read before choosing an endpoint.`
+        ? `Delegation review ${tsDate}: comparison docket ${relayToken} was opened for ${canonical}. Its delegated function is ${topic}; filed branches disputing the ${targetAttr} route through this docket and must be read before choosing an endpoint.`
         : (corefFramed
-          ? `${alias} filed review memo ${ticket} on ${tsDate} on behalf of ${canonical}. The memo concerns ${topic} and opens an authority comparison docket.`
-          : `Review memo ${ticket}, filed ${tsDate}, was opened for ${canonical}. Its subject is ${topic}, and it establishes an authority comparison docket.`),
+          ? `${alias} filed review memo ${ticket} on ${tsDate} on behalf of ${canonical}. The memo concerns ${topic}; filed branches disputing the ${targetAttr} route through its authority comparison docket.`
+          : `Review memo ${ticket}, filed ${tsDate}, was opened for ${canonical}. Its subject is ${topic}; filed branches disputing the ${targetAttr} route through its authority comparison docket.`),
     });
     pushDoc({
       id: b2Id, role: hopCount === 3 ? 'chain_hop2' : 'path_pivot', grounding: 'distant',

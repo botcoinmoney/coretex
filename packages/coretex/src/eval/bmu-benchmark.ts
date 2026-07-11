@@ -169,14 +169,22 @@ export function bmuJudgeOrder(
   });
 }
 
-/** Top-B doc ids of the judge ordering (`B ≤ 8 < rerankerTopK` always, §2.2). */
+/** Top-B doc ids of the judge ordering (`B ≤ 8 < rerankerTopK` always, §2.2).
+ *  §18.3 (round-5 EVICTION upgrade): a doc DEMOTED by an executed candidate-state
+ *  program (`suppressed`) is EXCLUDED from topB entirely, not merely rank-demoted.
+ *  Rank demotion alone cannot evict when the judged pool is ≤ budgetB (pool
+ *  starvation: with 3 candidates and B=4, the demoted doc still occupies a slot
+ *  no matter how low it sorts — observed live on the near_collision block class).
+ *  Still candidate-state-causal and ZERO_STATE-inert: only an executed program
+ *  marks `suppressed`, blank state decodes no programs and excludes nothing;
+ *  promote wins any overlap so a program can never exclude an answer it routed. */
 export function bmuJudgeTopB(
   entries: readonly BmuJudgeRankingEntry[],
   budgetB: number,
   grid: number,
 ): readonly string[] {
   if (!(grid > 0) || !Number.isFinite(grid)) throw new Error(`bmuJudgeTopB: grid must be a positive finite number (got ${grid})`);
-  return bmuJudgeOrder(entries, grid).slice(0, budgetB).map((e) => e.docId);
+  return bmuJudgeOrder(entries.filter((e) => e.suppressed !== true), grid).slice(0, budgetB).map((e) => e.docId);
 }
 
 // ─── §2.2 per-task utility (binary; no partial credit) ───────────────────────
