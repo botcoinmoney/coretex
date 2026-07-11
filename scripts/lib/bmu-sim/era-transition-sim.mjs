@@ -545,6 +545,75 @@ export function crossFamilyDistinctnessCeiling({ era = 1, familyCount = 4 } = {}
   };
 }
 
+/**
+ * §17.30 feasibility gate — the recommended ERA-3 all-4-step multi-depth bank.
+ * Proof-of-mechanism (NOT a live grammar; the implementation is a dedicated
+ * lane). Returns the cross-family census + guard checks + the actual mandatory
+ * terminal-pool size (real number vs the pinned Qwen cap 128).
+ */
+export const RERANKER_INPUT_TOPK = 128; // pinned bundle cap (bundle/index.ts:951)
+export function era3RecommendedDesignCensus() {
+  const spec = { outgoingEdgeTypes: ['coreference_of', 'co_occurs_with'], incomingEdgeTypes: ['causes', 'derived_from', 'supports', 'supersedes'] };
+  const plan = {
+    temporal: { step: 1, flag: 'suppress' },
+    conflict_lifecycle: { step: 2, flag: 'suppress' },
+    near_collision_abstention: { step: 1, flag: 'offPathSuppress' },
+    multi_hop_relation: { step: 2, flag: 'offPathSuppress' },
+  };
+  // 36 distinct 4-step base routes from era-3's disjoint partition
+  const base = [];
+  outer: for (const o of spec.outgoingEdgeTypes) {
+    for (const a of spec.incomingEdgeTypes) for (const b of spec.incomingEdgeTypes) for (const c of spec.incomingEdgeTypes) {
+      base.push({ branchLimit: 4, steps: [{ direction: 'outgoing', edgeType: o }, { direction: 'incoming', edgeType: a }, { direction: 'incoming', edgeType: b }, { direction: 'incoming', edgeType: c }] });
+      if (base.length >= 36) break outer;
+    }
+  }
+  const sigWith = (program, flagByStep) => program.steps.map((s, i) => {
+    const f = flagByStep[i] ?? 'none';
+    return `${s.direction}:${s.edgeType}${f === 'suppress' ? ':sup' : f === 'offPathSuppress' ? ':off' : ''}`;
+  }).join('/') + `|b${program.branchLimit}`;
+  const sigs = [];
+  const perFamilyDistinct = {};
+  for (const family of FAMILIES) {
+    const fam = new Set();
+    for (const b of base) { const s = sigWith(b, { [plan[family].step]: plan[family].flag }); sigs.push(s); fam.add(s); }
+    perFamilyDistinct[family] = fam.size;
+  }
+  const travOf = (steps) => steps.map((s) => `${s.direction}:${s.edgeType}`).join('/');
+  const era1Trav = new Set(programBankForEra(1).map((p) => travOf(p.steps)));
+  const era2Trav = new Set(programBankForEra(2).map((p) => travOf(p.steps)));
+  const crossEraOverlap = [...new Set(base.map((p) => travOf(p.steps)))].filter((t) => era1Trav.has(t) || era2Trav.has(t)).length;
+  // actual mandatory terminal pool for a depth-3 program (controlled topology).
+  // Terminal count is EDGE-AGNOSTIC (depends only on the diamond shape), so we
+  // measure on a REGISTERED-era 4-step program (era-3 is feasibility-only, not
+  // registered, so it would fail the era-lint by design).
+  const shape = programBankForEra(2).find((pr) => pr.steps.length === 4);
+  const topo = buildProgramPathTopology({ program: shape, seedId: 'S_seed', sinkIds: ['S_sink'], goldIds: ['S_gold'], decoyIds: ['S_decoy'], midIdFor: (l) => `S_mid${l}` });
+  const out = executeProgramOverRelations({ program: shape, relations: topo.relations, seedIds: ['S_seed'], branchLimit: 4 });
+  // distinct demotion operations across the 4 families (genuine distinctness)
+  const demotion = (step, flag) => {
+    const pr = { branchLimit: 4, steps: shape.steps.map((s, i) => ({ direction: s.direction, edgeType: s.edgeType, ...(i === step && flag === 'suppress' ? { suppress: true } : {}), ...(i === step && flag === 'offPathSuppress' ? { offPathSuppress: true } : {}) })) };
+    const t = buildProgramPathTopology({ program: pr, seedId: 'D_seed', sinkIds: ['D_sink'], goldIds: ['D_gold'], decoyIds: ['D_decoy'], midIdFor: (l) => `D_mid${l}` });
+    const o = executeProgramOverRelations({ program: pr, relations: t.relations, seedIds: ['D_seed'], branchLimit: 4 });
+    return JSON.stringify([[...o.suppressLineageIds].sort(), [...o.offPathSuppressedIds].sort()]);
+  };
+  const distinctDemotions = new Set(FAMILIES.map((f) => demotion(plan[f].step, plan[f].flag))).size;
+  return {
+    totalCueBoundClasses: sigs.length,
+    distinctCrossFamilySigs: new Set(sigs).size,
+    reaches144: new Set(sigs).size === 144,
+    withinFamilyReuseRatioZero: FAMILIES.every((f) => perFamilyDistinct[f] === 36),
+    crossEraTraversalOverlap: crossEraOverlap,
+    crossEraDisjoint: crossEraOverlap === 0,
+    distinctDemotionOperations: distinctDemotions,
+    fourGenuinelyDistinctOperations: distinctDemotions === 4,
+    terminalsAdmitted: out.terminalIds.length,
+    promotePathIntermediates: out.promotePathNodeIds.length,
+    withinQwenCap: out.terminalIds.length + out.promotePathNodeIds.length <= RERANKER_INPUT_TOPK,
+    pinnedQwenCap: RERANKER_INPUT_TOPK,
+  };
+}
+
 export function sha256Hex(text) {
   return createHash('sha256').update(text).digest('hex');
 }

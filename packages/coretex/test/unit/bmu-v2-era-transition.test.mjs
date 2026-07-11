@@ -12,6 +12,8 @@ import {
   runEraTransition,
   crossFamilyDedupCensus,
   crossFamilyDistinctnessCeiling,
+  era3RecommendedDesignCensus,
+  RERANKER_INPUT_TOPK,
   buildClassCatalog,
 } from '../../../../scripts/lib/bmu-sim/era-transition-sim.mjs';
 import { executeProgramOverRelations } from '../../../../scripts/lib/bmu-generators/operation-program.mjs';
@@ -97,6 +99,24 @@ test('cross-family 144 target is UNREACHABLE via flags: ceiling 112 (pigeonhole)
   // retained design measures 72 (< 112 ceiling): the extra gap is the
   // correctness-forced 3-family seed-treatment equivalence.
   assert.equal(crossFamilyDedupCensus({ eras: [1] })[1].distinctCrossFamilySigs, 72);
+});
+
+test('§17.30 era-3 feasibility: all-4-step multi-depth bank reaches 144/144 WITHIN the pinned Qwen cap', () => {
+  const d = era3RecommendedDesignCensus();
+  // 144/144 distinct cross-family sigs (4 genuinely-distinct depth/flag operations)
+  assert.equal(d.reaches144, true);
+  assert.equal(d.distinctCrossFamilySigs, 144);
+  assert.equal(d.fourGenuinelyDistinctOperations, true);
+  assert.equal(d.distinctDemotionOperations, 4);
+  // guards preserved
+  assert.equal(d.withinFamilyReuseRatioZero, true);       // 36 distinct/family
+  assert.equal(d.crossEraDisjoint, true);                 // outgoing disjoint from era-1/2
+  assert.equal(d.crossEraTraversalOverlap, 0);
+  // Qwen input cap is NOT binding: depth-3 mandatory pool is tiny vs 128
+  assert.equal(RERANKER_INPUT_TOPK, 128);
+  assert.equal(d.terminalsAdmitted, 1);                   // only the gold terminal
+  assert.ok(d.terminalsAdmitted + d.promotePathIntermediates < 32, 'depth-3 pool << 128');
+  assert.equal(d.withinQwenCap, true);
 });
 
 test('transition journal per-evolve derives eviction + costly + retirement counters', () => {

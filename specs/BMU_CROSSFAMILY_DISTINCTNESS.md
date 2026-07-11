@@ -47,27 +47,65 @@ at the program-traversal level the benchmark currently expresses ~2 distinct
 operations (demote-seed vs spare-seed) over ONE shared 36-route bank
 (traversal-signature census = 36 for all four families).
 
-## (C) The only path to 144, and why it is deferred
+## (C) The only path to 144: an all-4-step multi-depth bank
 Genuine 4-way distinctness needs operations at DIFFERENT DEPTHS: an **all-4-step
 (depth-3) bank** where each family suppresses at a distinct (depth, flag) and
 each depth's suppress correctly evicts a trap placed at that depth. A standalone
 proof-of-mechanism (probe part C) confirms this reaches **144/144** with every
-signature single-family. But it is NOT a cheap fix:
+signature single-family. It is a real redesign (re-derive four families' trap
+topologies to distinct depths + re-prove the certification lanes; high blast
+radius vs the proven §18 32/4 bank), so for THIS lane the 72 design is retained.
 
-- every program becomes depth-3 ⇒ the terminal fan is `seeds·branchLimit^3`
-  (= 4·4³ = 256 at branchLimit 4) vs the current `seeds·branchLimit^2` (= 64);
-  this likely **violates the pinned Qwen input-cap accounting** (§ "the
-  calculated terminal maximum MUST fit the pinned Qwen input cap"), and reducing
-  branchLimit breaks the balanced-decoy designs;
-- it requires re-deriving all four families' trap topologies to distinct depths
-  and re-proving the entire certification lane suite;
-- high blast radius against the proven §18 32/4 bank and the 1527-test suite.
+## §17.30 FEASIBILITY GATE (ruling-3) — the Qwen cap does NOT block era-3
+The §17.29 note above worried that an all-4-step bank "likely violates the Qwen
+terminal-cap (`seeds·branchLimit^3` = 256 > 128)". **That is CORRECTED.** Real
+numbers from the pinned scorer (probe part D,
+`.ops/coretex-bmu-crossfamily-144-feasibility.mjs`):
 
-Per the ruling's explicit fallback ("if it can't be cheaply fixed, REVERT to the
-72 design and document as accepted headroom"), this is deferred to a dedicated
-**multi-depth-operation bank redesign lane** (which must first resolve the Qwen
-terminal-cap feasibility — that may make 144 infeasible even via redesign, itself
-a valuable result).
+- **Pinned cap = `rerankerInputTopK = 128`** (MemReranker cross-encoder pool;
+  bundle DEFAULT + signed launch profiles).
+- The **only enforced check** is the RUNTIME mandatory-pool refusal
+  (`retrieval-benchmark.ts:2342`): throws iff (publicPath TERMINALS + direct/
+  routed anchors) > 128. There is **NO static `seeds·branchLimit^steps`
+  precheck** — that formula is a design-time upper bound, never a gate.
+- Terminals admitted = FINAL-frontier only, one doc per terminal
+  (`retrieval-benchmark.ts:1372`); intermediates are NOT admitted. **Measured
+  depth-3 mandatory pool = 1 terminal + 3 promote-path intermediates**; realistic
+  worst case (≤4 golds + intermediates + cluster/overlay anchors) ≈ **28**, i.e.
+  **~100 slots of headroom**. The 256 figure was the LOOSE b-ary worst-case fan,
+  which the controlled single-answer-terminal topology never realizes.
+
+**VERDICT: FEASIBLE.** ≥4 genuinely-distinct operations fit within the cap; depth
+3 supports up to **9** distinct operations (2 suppressable steps × 3 flag states),
+of which only 4 are needed.
+
+### Recommended era-3 bank (feasibility-validated; implementation = dedicated lane)
+- **Shape:** all-4-step (depth-3); 36 distinct base routes/family.
+- **Edge partition (cross-era disjoint):** outgoing `{coreference_of,
+  co_occurs_with}` (the last unused pair — disjoint from era-1
+  `{causes,derived_from}` and era-2 `{supports,supersedes}`), incoming
+  `{causes, derived_from, supports, supersedes}`. ⇒ cross-era reuseRatio 0 vs
+  BOTH prior eras; six edges = three fully-disjoint outgoing pairs = three eras.
+- **Per-family depth/flag (4 genuinely-distinct operations):** temporal
+  `suppress@1`, conflict_lifecycle `suppress@2`, near_collision_abstention
+  `offPathSuppress@1`, multi_hop_relation `offPathSuppress@2`. Each produces a
+  DISTINCT demotion set (mechanically verified) ⇒ **census 144/144, ratio 1.0,
+  every signature single-family**.
+- **Guards (all validated in probe part E + regression test):** within-family
+  reuseRatio 0 (36 distinct/family); cross-era reuseRatio 0; disjoint-partition
+  (outgoing∩incoming=∅); Qwen cap OK (pool ≈28 ≪ 128); G-B17 Q1 (state-decoded,
+  ZERO_STATE inert), Q2 (144 > capacity 32), Q3 (the (depth,flag) lives in the
+  CHECKSUMMED bytecode, not a readable label; family is already public via the
+  cue by design; required-evidence topology differs behind the keyed-HMAC/
+  deep-terminal blindness — no answer-id leak, no keyed-inversion shortcut).
+- **Implementation caveat (the era-3 lane's work, NOT this gate):** re-derive each
+  family's trap topology to place its trap at the family's assigned depth so the
+  depth/flag correctly evicts it (suppress@1/@2 and offPathSuppress@1/@2 all
+  mechanically proven); keep rendered lineage < `maxRenderedLineageChars` 8192
+  (4 path segments — comfortable).
+
+This lane STOPS at the verdict per the ruling; era-3 is a sequenced implementation
+lane, no longer runtime-gated.
 
 ## Decision
 - **Retain the 72 design.** No change to the live grammar/generators/decoder.
