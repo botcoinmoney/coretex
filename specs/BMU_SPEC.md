@@ -2164,6 +2164,66 @@ family.
   terminal stays suppressed). Wiring: `promotePathNodeDocIds` in
   `retrieval-benchmark.ts`, folded into `isRoutedTerminal` and the promote-bonus
   loop.
+- **§18.6 CREDITED OPERATION CLASSES + the restated reward invariant (ROUND 7 —
+  audit-2 ratification):** the reward channel credits exactly the memory
+  operations that CAUSALLY CHANGE the judged evidence set (the budget-B top-B a
+  row is scored on). Three credited classes:
+  - **route-and-lift (promotion).** An executed program routes a required/answer
+    doc (a terminal via §18, or a non-terminal bridge intermediate via §18.5) and
+    the `+1·UNIT` promote bias lifts it INTO top-B where native rank left it out.
+    Causal change = a required/answer doc ADDED to the judged set.
+  - **suppress-to-resolve (suppression).** An executed program demotes an
+    INTERFERING competitor (a stale/conflicting/forbidden doc, or off-path decoy)
+    via §18.3/§18.4 and the `−1·UNIT` bias plus the suppress tie-loss EVICTS it
+    from top-B, freeing the slot its crowding denied the required evidence.
+    Causal change = an interfering competitor REMOVED from the judged set (and,
+    consequently, the required evidence it was crowding out is admitted).
+  - **both.** A program may do both on its row (route required in AND evict a
+    competitor out); the two channels are independent and each ±1·UNIT bias is
+    summed under the same clamp (**Rmax unchanged**).
+
+  **Restated invariant (NORMATIVE):** *a memory operation earns reward iff it
+  changes the judged evidence set; a program that changes nothing in the judged
+  evidence set earns nothing.* Equivalently: **causal change = (promotion adding
+  a required/answer doc) OR (suppression removing an interfering competitor).**
+  A program that promotes nothing AND suppresses no doc that was in top-B is inert
+  and mints zero — whether it is a no-op, a forged-lineage walk over absent edges,
+  or a well-formed suppress program aimed at a doc that was never crowding the
+  answer. This SUBSUMES the earlier, narrower §18.3(c) statement (*a program that
+  promotes nothing can never smuggle a forbidden into the answer slot*): promoting
+  nothing is necessary but not sufficient for zero reward — the operation must
+  ALSO leave the judged set unchanged.
+
+  **Ratification rationale.** Suppression-only resolution (evicting a
+  stale/conflicting competitor on a row whose required evidence is natively
+  retrievable) is RATIFIED as a first-class memory operation, not a degenerate
+  case of promotion. This follows the memory-systems literature the redesign is
+  grounded in: forgetting/supersession failures dominate long-horizon memory
+  error (FORGETEVAL — forgetting failures dominate), and supersession-suppression
+  is the mechanism that drives stale-serving to zero (MemStrata). A benchmark that
+  only credited additive retrieval would be blind to the single most important
+  class of memory maintenance; §18.6 credits it explicitly while the invariant
+  and the protected-row floor keep it honest.
+
+  **Permanent controls (NORMATIVE; `bmu-v2-refutation-regressions.test.mjs`
+  §18.6(1)/(2) + `bmu-p4-controls.test.mjs` §18.6(3)):**
+  1. suppress-only on a NON-failing row (the suppress target is not in top-B)
+     leaves the judged set byte-identical ⇒ **earns 0** (negative control);
+  2. suppress-only on a genuinely failing row (a forbidden competitor crowds the
+     required answer out of top-B) evicts the competitor and admits the required
+     doc ⇒ **earns utility with NO promotion channel firing** — the ratified
+     suppress-to-resolve operation (positive control);
+  3. cross-class gold-suppression (evicting ANOTHER row's required gold) that
+     lands on a PROTECTED row dies on the zero-tolerance protected-row floor
+     (`protected_regression` veto fires despite net-positive utility), so
+     suppression can never be laundered into reward by harming a protected row.
+
+  See the harness ledger §17.24c correction: the round-7 gate-confirm
+  "overbroad-malicious-suppress" attacker that ACCEPTED 31250/31250 is a §18.6
+  suppress-to-resolve operation (its FINAL step is suppress ⇒ §18.5 promotes
+  NOTHING under the actual runtime; it earned purely by suppressing stale/
+  conflicting competitors on rows whose required evidence was natively
+  retrievable), NOT the promotion the original §17.24 note described.
 - **§18 era-iteration fixes 2+3 (this tip):** (2a) the generators now mint the
   disjoint-partition deep-terminal bank above — the executed terminal set
   equals the operation-required answer terminal(s), enforced by the mint lint,
