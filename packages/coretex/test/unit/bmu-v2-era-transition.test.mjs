@@ -6,6 +6,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 
 import * as dist from '../../dist/index.js';
 import {
@@ -13,17 +14,23 @@ import {
   crossFamilyDedupCensus,
   crossFamilyDistinctnessCeiling,
   era3RecommendedDesignCensus,
+  crossEraTransferAudit,
   RERANKER_INPUT_TOPK,
   buildClassCatalog,
+  stepSigOf,
 } from '../../../../scripts/lib/bmu-sim/era-transition-sim.mjs';
-import { executeProgramOverRelations } from '../../../../scripts/lib/bmu-generators/operation-program.mjs';
+import {
+  executeProgramOverRelations,
+  programBankForEra,
+  executableOperationForFamilySlot,
+} from '../../../../scripts/lib/bmu-generators/operation-program.mjs';
 
 const FAMILIES = ['temporal', 'conflict_lifecycle', 'multi_hop_relation', 'near_collision_abstention'];
 
 test('rotating arm: net>0 across the era transition, era-1 retirement costless, era-2 fresh', () => {
   const r = runEraTransition({ arm: 'rotating', dist, evolves: 48 });
   // era-2 minted genuinely fresh classes that required new discovery
-  assert.ok(r.checks.era2FreshDiscoveries > 0, 'era-2 fresh discoveries');
+  assert.ok(r.checks.toEraFreshDiscoveries > 0, 'era-2 fresh discoveries');
   // NET positive after transition, per family
   assert.equal(r.checks.netPositiveAfterTransition, true);
   for (const f of FAMILIES) assert.ok(r.summary.netAfterTransitionByFamily[f] > 0, `net>0 ${f}`);
@@ -117,6 +124,89 @@ test('§17.30 era-3 feasibility: all-4-step multi-depth bank reaches 144/144 WIT
   assert.equal(d.terminalsAdmitted, 1);                   // only the gold terminal
   assert.ok(d.terminalsAdmitted + d.promotePathIntermediates < 32, 'depth-3 pool << 128');
   assert.equal(d.withinQwenCap, true);
+});
+
+// ─── §17.32 era-3 LIVE implementation (all-4-step multi-depth) ────────────────
+
+test('§17.32 era-3 is registered and reaches 144/144 cross-family (LIVE bank, not just design census)', () => {
+  const bank = programBankForEra(3);
+  assert.equal(bank.length, 36);
+  assert.ok(bank.every((p) => p.steps.length === 4), 'era-3 all-4-step');
+  const FAM = ['temporal', 'conflict_lifecycle', 'near_collision_abstention', 'multi_hop_relation'];
+  const all = [];
+  const perFam = {};
+  for (const f of FAM) {
+    const s = new Set();
+    for (let o = 0; o < 36; o++) { const sig = stepSigOf(executableOperationForFamilySlot(f, o * 2, { era: 3 }).operationProgram); s.add(sig); all.push(sig); }
+    perFam[f] = s.size;
+  }
+  assert.deepEqual(perFam, { temporal: 36, conflict_lifecycle: 36, near_collision_abstention: 36, multi_hop_relation: 36 }, 'within-family reuseRatio 0');
+  assert.equal(new Set(all).size, 144, 'cross-family 144/144');
+});
+
+test('§17.32 era-1 and era-2 output stays BYTE-IDENTICAL (additive-only regression)', () => {
+  // pinned canonical signature snapshots (must never change once era-3 is added)
+  const snap = (era) => programBankForEra(era).map((p) => stepSigOf(p)).join('|');
+  const FAM = ['temporal', 'conflict_lifecycle', 'near_collision_abstention', 'multi_hop_relation'];
+  const opSnap = (era) => FAM.map((f) => Array.from({ length: 36 }, (_, o) => executableOperationForFamilySlot(f, o * 2, { era }).operationClass).join('~')).join('##');
+  // era-1 leading step is always causes/derived_from; era-2 supports/supersedes
+  assert.ok(programBankForEra(1).every((p) => ['causes', 'derived_from'].includes(p.steps[0].edgeType)));
+  assert.ok(programBankForEra(2).every((p) => ['supports', 'supersedes'].includes(p.steps[0].edgeType)));
+  // era-1 is still 32 three-step + 4 four-step (shape unchanged)
+  assert.equal(programBankForEra(1).filter((p) => p.steps.length === 3).length, 32);
+  assert.equal(programBankForEra(1).filter((p) => p.steps.length === 4).length, 4);
+  // era-1/2 class strings carry the v1/v2 basis unchanged
+  assert.ok(executableOperationForFamilySlot('temporal', 0, { era: 1 }).operationClassBasis.endsWith('v1'));
+  assert.ok(executableOperationForFamilySlot('temporal', 0, { era: 2 }).operationClassBasis.endsWith('v2'));
+  // snapshots are internally consistent (stable within a run) and disjoint across eras
+  assert.notEqual(snap(1), snap(2));
+  assert.notEqual(opSnap(1), opSnap(3));
+  // HARD byte-identity pin: era-1/era-2 canonical output (program-bank stepSigs +
+  // 144 operationClass strings) hashed. These constants were captured at the
+  // era-3 landing commit and MUST NEVER change — any drift means era-3 mutated a
+  // prior era, violating additive-only. (Regenerate ONLY on an intentional,
+  // reviewed era-1/2 grammar change, which would be a new law version.)
+  const pin = (era) => createHash('sha256').update(`${snap(era)}@@${opSnap(era)}`).digest('hex');
+  assert.equal(pin(1), 'a6064cee92cffbfd30d2bf5c6710d3153a454e13175b33020acf0e232b6bcc67', 'era-1 byte-identity');
+  assert.equal(pin(2), '1ec4b56946c61cd7b8f5993659b0788c2a9e757ccbd0bb9fdfa400161b18bd4a', 'era-2 byte-identity');
+});
+
+test('§17.32 era-3 per-family operations are GENUINELY DISTINCT and CORRECT (real execution)', () => {
+  const cat = buildClassCatalog({ eras: [3], queryKeyOf: (cue) => BigInt('0x' + Buffer.from(cue).toString('hex').slice(0, 14).padStart(14, '0')) });
+  const FAM = ['temporal', 'conflict_lifecycle', 'near_collision_abstention', 'multi_hop_relation'];
+  const depthByFam = { temporal: 1, conflict_lifecycle: 2, near_collision_abstention: 1, multi_hop_relation: 2 };
+  const demotions = new Set();
+  for (const f of FAM) {
+    const c = [...cat.values()].find((x) => x.family === f && x.ordinal === 0);
+    assert.equal(c.decoyDepth, depthByFam[f], `${f} trap depth`);
+    assert.equal(c.operationCorrect, true, `${f} operation correct (trap demoted + gold promoted)`);
+    demotions.add(c.demotionSig);
+  }
+  assert.equal(demotions.size, 4, '4 genuinely-distinct demotion operations');
+});
+
+test('§17.32 era-2 → era-3 transition: net>0 across rotation, retirement costless, correct', () => {
+  const r = runEraTransition({ arm: 'rotating', dist, fromEra: 2, toEra: 3, evolves: 48 });
+  assert.equal(r.summary.operationsAllCorrect, true);
+  assert.equal(r.checks.netPositiveAfterTransition, true);
+  for (const f of ['temporal', 'conflict_lifecycle', 'multi_hop_relation', 'near_collision_abstention']) assert.ok(r.summary.netAfterTransitionByFamily[f] > 0);
+  assert.equal(r.checks.sustainedNetAfterCapacity, true);
+  assert.ok(r.summary.totalEvictions > 0);
+  assert.equal(r.summary.totalCostlyEvictions, 0);
+  assert.ok(r.checks.toEraFreshDiscoveries > 0);
+  const s = runEraTransition({ arm: 'static', dist, fromEra: 2, toEra: 3, evolves: 48 });
+  assert.equal(s.checks.staticNetRateCollapsesToZero, true);
+});
+
+test('§17.32 miner transfer honest BOTH directions across era-2 ↔ era-3 (real execution)', () => {
+  const audit = crossEraTransferAudit({ dist, fromEra: 2, toEra: 3 });
+  assert.equal(audit.fromSolvesToCount, 0, 'no era-2 program solves any era-3 cluster');
+  assert.equal(audit.toSolvesFromCount, 0, 'no era-3 program solves any era-2 cluster');
+  assert.equal(audit.ownProgramControlFailures, 0, 'every own-program positive control passes');
+  assert.equal(audit.honestBothDirections, true);
+  // also honest across era-1 ↔ era-3 (three-era disjointness)
+  const audit13 = crossEraTransferAudit({ dist, fromEra: 1, toEra: 3 });
+  assert.equal(audit13.honestBothDirections, true);
 });
 
 test('transition journal per-evolve derives eviction + costly + retirement counters', () => {

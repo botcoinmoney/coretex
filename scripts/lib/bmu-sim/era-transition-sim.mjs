@@ -36,6 +36,7 @@ import {
   executableOperationForFamilySlot,
   buildProgramPathTopology,
   executeProgramOverRelations,
+  eraSpec,
 } from '../bmu-generators/operation-program.mjs';
 import {
   makeEraSchedule,
@@ -69,23 +70,38 @@ export function buildClassCatalog({ eras, queryKeyOf }) {
   const catalog = new Map(); // classKey "e<era>:<family>:<ordinal>" -> record
   for (const era of eras) {
     const bank = programBankForEra(era);
+    // §17.32: for an era with a per-family operation plan (era-3), the family's
+    // forbidden trap sits at the family's suppress DEPTH so the (depth,flag)
+    // correctly evicts it. Otherwise the trap is a depth-1 dead end (era-1/2).
+    const spec = eraSpec(era);
+    const trapDepthOf = (family) => spec.familyOperationPlan?.[family]?.step ?? 1;
     for (const family of FAMILIES) {
+      const decoyDepth = trapDepthOf(family);
       for (let ordinal = 0; ordinal < bank.length; ordinal++) {
         const op = executableOperationForFamilySlot(family, ordinal * 2, { era });
         const program = { branchLimit: op.operationProgram.branchLimit, steps: op.operationProgram.steps };
         const queryKey = queryKeyOf(op.operationCue);
         const classKey = `e${era}:${family}:${ordinal}`;
         const mg = `mg_${classKey}`;
+        const trapId = `${mg}_trap`;
         const topology = buildProgramPathTopology({
           program,
           seedId: `${mg}_seed`,
           sinkIds: [`${mg}_sink`],
           goldIds: [`${mg}_gold`],
-          decoyIds: [`${mg}_decoy`],
+          decoyIds: [trapId],
           midIdFor: (level) => `${mg}_mid${level}`,
+          decoyDepth,
         });
+        // Correctness of the family operation (verified by REAL execution): the
+        // (depth,flag) program must DEMOTE the trap at its depth and PROMOTE the
+        // gold terminal — no assertion, actual walk over the relations.
+        const exec = executeProgramOverRelations({ program, relations: topology.relations, seedIds: [`${mg}_seed`], branchLimit: program.branchLimit });
+        const demoted = new Set([...exec.suppressLineageIds, ...exec.suppressTerminalIds, ...exec.offPathSuppressedIds]);
+        const trapDemoted = demoted.has(trapId);
+        const goldPromoted = exec.promoteTerminalIds.includes(`${mg}_gold`);
         catalog.set(classKey, Object.freeze({
-          classKey, era, family, ordinal,
+          classKey, era, family, ordinal, decoyDepth, trapId,
           operationClass: op.operationClass,
           operationClassBasis: op.operationClassBasis,
           cue: op.operationCue,
@@ -95,6 +111,9 @@ export function buildClassCatalog({ eras, queryKeyOf }) {
           relations: topology.relations,
           seedId: `${mg}_seed`,
           requiredTerminals: new Set(topology.terminalIds),
+          trapDemoted, goldPromoted,
+          operationCorrect: trapDemoted && goldPromoted,
+          demotionSig: JSON.stringify([[...exec.suppressLineageIds].sort(), [...exec.offPathSuppressedIds].sort()]),
         }));
       }
     }
@@ -194,6 +213,8 @@ function createBoundedResidentStore({ encodeWords, decodeState, wordCount }) {
 export function runEraTransition({
   arm = 'rotating',
   dist,
+  fromEra = 1,
+  toEra = 2,
   evolves = 48,
   cadenceEpochs = 8,
   armEpoch = 152,
@@ -204,13 +225,16 @@ export function runEraTransition({
   if (!['rotating', 'static'].includes(arm)) throw new Error(`runEraTransition: bad arm ${arm}`);
   const schedule = arm === 'rotating'
     ? makeEraSchedule([
-      { era: 1, activationEpoch: -Infinity },
-      { era: 2, activationEpoch: transitionEpoch, coexistenceWindowEpochs: maxAgeEpochs, retireGraceEpochs: 0 },
+      { era: fromEra, activationEpoch: -Infinity },
+      { era: toEra, activationEpoch: transitionEpoch, coexistenceWindowEpochs: maxAgeEpochs, retireGraceEpochs: 0 },
     ])
-    : genesisEraSchedule(1);
+    : genesisEraSchedule(fromEra);
 
-  const catalog = buildClassCatalog({ eras: [1, 2], queryKeyOf: dist.bmuOperationQueryKey });
+  const catalog = buildClassCatalog({ eras: [fromEra, toEra], queryKeyOf: dist.bmuOperationQueryKey });
   const byEraFamOrdinal = (era, family, ordinal) => catalog.get(`e${era}:${family}:${ordinal % CLASSES_PER_FAMILY}`);
+  // operation-correctness gate: every minted era's family operation must evict
+  // its trap and promote its gold (real execution, computed in buildClassCatalog).
+  const operationsAllCorrect = [...catalog.values()].every((c) => c.operationCorrect);
 
   const store = createBoundedResidentStore({
     encodeWords: dist.encodeBmuPublicPathProgramWords,
@@ -233,7 +257,7 @@ export function runEraTransition({
   const netAcceptedAfterCapacityByFamily = emptyFamilyCounts();
   const grossWouldAcceptByFamily = emptyFamilyCounts();
   const firstDiscoveryStepSigs = new Set();
-  const firstDiscoveryByEra = { 1: new Set(), 2: new Set() };
+  const firstDiscoveryByEra = { [fromEra]: new Set(), [toEra]: new Set() };
   const reloadCount = emptyFamilyCounts();
   const rekeyCount = emptyFamilyCounts();
   let globalCapacityReachedEpoch = null;
@@ -423,7 +447,7 @@ export function runEraTransition({
   }
 
   return {
-    arm, schedule: schedule.entries, transitionEpoch: arm === 'rotating' ? transitionEpoch : null,
+    arm, fromEra, toEra, schedule: schedule.entries, transitionEpoch: arm === 'rotating' ? transitionEpoch : null,
     transition: transitionRec,
     pins: { evolves, cadenceEpochs, armEpoch, maxAgeEpochs, mintPerFamilyPerEvolve, capacity: CAPACITY },
     summary: {
@@ -433,13 +457,14 @@ export function runEraTransition({
       grossWouldAcceptByFamily,
       reloadCount, rekeyCount,
       firstDiscoveryStepSigs: firstDiscoveryStepSigs.size,
-      firstDiscoveryEra1: firstDiscoveryByEra[1].size,
-      firstDiscoveryEra2: firstDiscoveryByEra[2].size,
+      firstDiscoveryFromEra: firstDiscoveryByEra[fromEra].size,
+      firstDiscoveryToEra: firstDiscoveryByEra[toEra].size,
       totalRetirements: retirementEvents.length,
       totalEvictions, totalCostlyEvictions: totalCostly,
       netByFamilyHorizon: netByFamily,
       netAfterTransitionByFamily, costlyAfterTransitionByFamily,
       residentCount: store.size(),
+      operationsAllCorrect,
     },
     checks: {
       // ROTATING: net stays >0 across/after the rotation, per family.
@@ -459,11 +484,52 @@ export function runEraTransition({
       staticNetRateCollapsesToZero: arm === 'static'
         ? FAMILIES.reduce((a, f) => a + netAcceptedAfterCapacityByFamily[f], 0) <= FAMILIES.length
         : null,
-      // era-2 fresh discoveries actually happened (rotating)
-      era2FreshDiscoveries: arm === 'rotating' ? firstDiscoveryByEra[2].size : null,
+      // toEra fresh discoveries actually happened (rotating)
+      toEraFreshDiscoveries: arm === 'rotating' ? firstDiscoveryByEra[toEra].size : null,
+      operationsAllCorrect,
       appliedStateRoundTripsThroughout: true,
     },
     perEvolveJournal, acceptJournal, retirementEvents,
+  };
+}
+
+/**
+ * Bidirectional miner-transfer honesty over REAL execution: no fromEra program
+ * solves any toEra cluster AND no toEra program solves any fromEra cluster; each
+ * cluster's OWN program solves it (positive control). Returns leak counts.
+ */
+export function crossEraTransferAudit({ dist, fromEra, toEra }) {
+  const catalog = buildClassCatalog({ eras: [fromEra, toEra], queryKeyOf: dist.bmuOperationQueryKey });
+  const clustersOf = (era) => [...catalog.values()].filter((c) => c.era === era);
+  const programsOf = (era) => clustersOf(era).map((c) => c.program);
+  const solves = (program, cluster) => {
+    let out;
+    try { out = executeProgramOverRelations({ program, relations: cluster.relations, seedIds: [cluster.seedId], branchLimit: program.branchLimit }); }
+    catch { return false; }
+    const got = new Set(out.terminalIds);
+    if (got.size !== cluster.requiredTerminals.size) return false;
+    for (const t of cluster.requiredTerminals) if (!got.has(t)) return false;
+    return true;
+  };
+  let fromSolvesTo = 0;
+  let toSolvesFrom = 0;
+  let ownControlFailures = 0;
+  const fromPrograms = programsOf(fromEra);
+  const toPrograms = programsOf(toEra);
+  for (const cluster of clustersOf(toEra)) {
+    if (!solves(cluster.program, cluster)) ownControlFailures += 1;
+    for (const p of fromPrograms) if (solves(p, cluster)) fromSolvesTo += 1;
+  }
+  for (const cluster of clustersOf(fromEra)) {
+    if (!solves(cluster.program, cluster)) ownControlFailures += 1;
+    for (const p of toPrograms) if (solves(p, cluster)) toSolvesFrom += 1;
+  }
+  return {
+    fromEra, toEra,
+    fromSolvesToCount: fromSolvesTo,
+    toSolvesFromCount: toSolvesFrom,
+    ownProgramControlFailures: ownControlFailures,
+    honestBothDirections: fromSolvesTo === 0 && toSolvesFrom === 0 && ownControlFailures === 0,
   };
 }
 

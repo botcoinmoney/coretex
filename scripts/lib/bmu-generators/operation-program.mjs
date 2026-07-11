@@ -74,9 +74,44 @@ export const BMU_EXECUTABLE_ERA_REGISTRY = Object.freeze({
       Object.freeze(['co_occurs_with', 'derived_from', 'causes']),
     ]),
   }),
+  // ── era-3 (§17.32): MULTI-DEPTH per-family distinct operations (N1 closure) ──
+  // The N1 finding: era-1/era-2's uniform-per-family suppress overlay makes 3 of
+  // 4 families the SAME depth-1 operation (72/144 cross-family census). Era-3
+  // gives each family a genuinely DISTINCT operation by suppressing at a distinct
+  // (depth, flag): the benchmark now tests four DIFFERENT memory operations.
+  //  - all-4-step (depth-3) bank so every program has TWO suppressable non-final
+  //    steps (1,2); 4 families × {suppress@1, suppress@2, offPathSuppress@1,
+  //    offPathSuppress@2} ⇒ 144/144 distinct cross-family step-signatures.
+  //  - outgoing {coreference_of, co_occurs_with} — the last unused pair, DISJOINT
+  //    from era-1 {causes,derived_from} AND era-2 {supports,supersedes} ⇒ cross-era
+  //    reuseRatio 0 vs both prior eras. Six edges = three disjoint outgoing pairs.
+  //  - per-family trap sits at the family's suppress DEPTH (topology re-derived in
+  //    buildProgramPathTopology's decoyDepth); each (depth,flag) correctly evicts
+  //    that family's trap — mechanically verified by real execution, not assertion.
+  3: Object.freeze({
+    era: 3,
+    basis: 'shared-policy-evidence-384-511-4w-program-v3',
+    bankShape: 'all-4-step-depth3',
+    outgoingEdgeTypes: Object.freeze(['coreference_of', 'co_occurs_with']),
+    incomingEdgeTypes: Object.freeze(['causes', 'derived_from', 'supports', 'supersedes']),
+    // Per-family distinct (suppress depth, flag). Replaces the uniform global
+    // BMU_FAMILY_SUPPRESS_STEPS / BMU_FAMILY_OFFPATH_SUPPRESS_STEPS for era-3.
+    familyOperationPlan: Object.freeze({
+      temporal: Object.freeze({ step: 1, flag: 'suppress' }),
+      conflict_lifecycle: Object.freeze({ step: 2, flag: 'suppress' }),
+      near_collision_abstention: Object.freeze({ step: 1, flag: 'offPathSuppress' }),
+      multi_hop_relation: Object.freeze({ step: 2, flag: 'offPathSuppress' }),
+    }),
+  }),
 });
 
 const ALL_EDGE_TYPE_SET = new Set(BMU_EXECUTABLE_EDGE_TYPES);
+const FAMILY_CUE = Object.freeze({
+  temporal: 'temporal',
+  conflict_lifecycle: 'conflict lifecycle',
+  multi_hop_relation: 'multi hop relation',
+  near_collision_abstention: 'near collision abstention',
+});
 
 /** Validate one era spec against the §18 era invariants (fail-closed). */
 export function assertEraSpec(spec) {
@@ -95,11 +130,33 @@ export function assertEraSpec(spec) {
   const incSet = new Set(inc);
   if (outSet.size !== 2 || incSet.size !== 4) throw new Error(`bmu era ${spec.era}: duplicate edge in partition`);
   for (const e of out) if (incSet.has(e)) throw new Error(`bmu era ${spec.era}: edge '${e}' in BOTH outgoing and incoming (symmetric-route hazard)`);
-  const chains = spec.fourStepIncomingChains ?? [];
-  if (chains.length !== 2) throw new Error(`bmu era ${spec.era}: exactly 2 four-step incoming chains required`);
-  for (const chain of chains) {
-    if (!Array.isArray(chain) || chain.length !== 3) throw new Error(`bmu era ${spec.era}: each four-step chain has 3 incoming edges`);
-    for (const e of chain) if (!incSet.has(e)) throw new Error(`bmu era ${spec.era}: four-step chain edge '${e}' not in incoming set`);
+  const bankShape = spec.bankShape ?? 'mixed-3-4-step';
+  if (bankShape === 'mixed-3-4-step') {
+    // era-1/era-2: 32 three-step + 4 four-step, uniform per-family suppress plan.
+    const chains = spec.fourStepIncomingChains ?? [];
+    if (chains.length !== 2) throw new Error(`bmu era ${spec.era}: exactly 2 four-step incoming chains required`);
+    for (const chain of chains) {
+      if (!Array.isArray(chain) || chain.length !== 3) throw new Error(`bmu era ${spec.era}: each four-step chain has 3 incoming edges`);
+      for (const e of chain) if (!incSet.has(e)) throw new Error(`bmu era ${spec.era}: four-step chain edge '${e}' not in incoming set`);
+    }
+    if (spec.familyOperationPlan !== undefined) throw new Error(`bmu era ${spec.era}: mixed-3-4-step eras use the global family suppress plan, not familyOperationPlan`);
+  } else if (bankShape === 'all-4-step-depth3') {
+    // era-3: all-4-step (depth-3); per-family DISTINCT (suppress depth, flag).
+    const plan = spec.familyOperationPlan;
+    if (!plan) throw new Error(`bmu era ${spec.era}: all-4-step-depth3 requires familyOperationPlan`);
+    const families = Object.keys(FAMILY_CUE);
+    const seen = new Set();
+    for (const family of families) {
+      const p = plan[family];
+      if (!p || (p.step !== 1 && p.step !== 2)) throw new Error(`bmu era ${spec.era}: family '${family}' plan step must be 1 or 2 (non-final on a 4-step program)`);
+      if (p.flag !== 'suppress' && p.flag !== 'offPathSuppress') throw new Error(`bmu era ${spec.era}: family '${family}' plan flag must be suppress|offPathSuppress`);
+      const key = `${p.step}:${p.flag}`;
+      if (seen.has(key)) throw new Error(`bmu era ${spec.era}: two families share operation ${key} — families must be GENUINELY distinct (144/144)`);
+      seen.add(key);
+    }
+    if (Object.keys(plan).some((f) => !FAMILY_CUE[f])) throw new Error(`bmu era ${spec.era}: familyOperationPlan has an unknown family`);
+  } else {
+    throw new Error(`bmu era ${spec.era}: unknown bankShape '${String(bankShape)}'`);
   }
   if (typeof spec.basis !== 'string' || spec.basis.length === 0) throw new Error(`bmu era ${spec.era}: basis string required`);
   return spec;
@@ -148,12 +205,6 @@ const DIRECTIONS = new Set(['outgoing', 'incoming']);
 const EDGE_TYPES = new Set(BMU_EXECUTABLE_EDGE_TYPES);
 const OUTGOING_EDGE_TYPES = new Set(BMU_EXECUTABLE_OUTGOING_EDGE_TYPES);
 const INCOMING_EDGE_TYPES = new Set(BMU_EXECUTABLE_INCOMING_EDGE_TYPES);
-const FAMILY_CUE = Object.freeze({
-  temporal: 'temporal',
-  conflict_lifecycle: 'conflict lifecycle',
-  multi_hop_relation: 'multi hop relation',
-  near_collision_abstention: 'near collision abstention',
-});
 
 /**
  * §18.3 fix 2 — per-family suppression plan (which step indices carry the
@@ -320,21 +371,39 @@ export function programBankForEra(era = BMU_EXECUTABLE_OPERATION_ERA) {
   const spec = eraSpec(era);
   const out = spec.outgoingEdgeTypes;
   const inc = spec.incomingEdgeTypes;
-  const bank = Object.freeze([
-    ...out.flatMap((outgoingEdgeType, outerIndex) =>
-      inc.flatMap((firstIncoming, firstIndex) =>
-        inc.map((secondIncoming, secondIndex) => bankEntry(
-          outerIndex * 16 + firstIndex * 4 + secondIndex,
-          outgoingEdgeType,
-          [firstIncoming, secondIncoming],
-        )))),
-    ...out.flatMap((outgoingEdgeType, outerIndex) =>
-      spec.fourStepIncomingChains.map((chain, chainIndex) => bankEntry(
-        32 + outerIndex * spec.fourStepIncomingChains.length + chainIndex,
+  let bank;
+  if ((spec.bankShape ?? 'mixed-3-4-step') === 'all-4-step-depth3') {
+    // era-3: 36 DISTINCT four-step (depth-3) programs — 2 outgoing × the first 18
+    // incoming triples of the 4³=64 space (canonical order), each a distinct
+    // step-signature (within-family reuseRatio 0). Depth 3 gives two suppressable
+    // non-final steps so the four families' distinct (depth,flag) operations
+    // never collide (144/144 cross-family).
+    const triples = [];
+    for (const a of inc) for (const b of inc) for (const c of inc) triples.push([a, b, c]);
+    const chosen = triples.slice(0, 18);
+    bank = Object.freeze(out.flatMap((outgoingEdgeType, outerIndex) =>
+      chosen.map((chain, chainIndex) => bankEntry(
+        outerIndex * chosen.length + chainIndex,
         outgoingEdgeType,
         chain,
-      ))),
-  ].map((entry) => (assertDisjointPartitionProgram(entry, era), entry)));
+      ))).map((entry) => (assertDisjointPartitionProgram(entry, era), entry)));
+  } else {
+    bank = Object.freeze([
+      ...out.flatMap((outgoingEdgeType, outerIndex) =>
+        inc.flatMap((firstIncoming, firstIndex) =>
+          inc.map((secondIncoming, secondIndex) => bankEntry(
+            outerIndex * 16 + firstIndex * 4 + secondIndex,
+            outgoingEdgeType,
+            [firstIncoming, secondIncoming],
+          )))),
+      ...out.flatMap((outgoingEdgeType, outerIndex) =>
+        spec.fourStepIncomingChains.map((chain, chainIndex) => bankEntry(
+          32 + outerIndex * spec.fourStepIncomingChains.length + chainIndex,
+          outgoingEdgeType,
+          chain,
+        ))),
+    ].map((entry) => (assertDisjointPartitionProgram(entry, era), entry)));
+  }
   ERA_BANK_CACHE.set(era, bank);
   return bank;
 }
@@ -395,11 +464,22 @@ export function executableOperationForFamilySlot(family, operationSequence, { er
   const classOrdinal = Math.floor(operationSequence / 2) % bank.length;
   const plan = bank[classOrdinal];
   assertDisjointPartitionProgram(plan, era);
-  // §18.3 fix 2: overlay the family suppression plan onto the base bank steps.
-  // A non-final suppress step must exist for the flag to be signature-bearing;
-  // marking the final step is refused (that would demote the answer terminal).
-  const suppressSteps = new Set(BMU_FAMILY_SUPPRESS_STEPS[family] ?? []);
-  const offPathSuppressSteps = new Set(BMU_FAMILY_OFFPATH_SUPPRESS_STEPS[family] ?? []);
+  // §18.3 fix 2 (era-1/2): overlay the GLOBAL uniform family suppression plan.
+  // §17.32 (era-3): a per-era familyOperationPlan gives each family a DISTINCT
+  // (suppress depth, flag) so the four families are genuinely different
+  // operations (144/144 cross-family). A non-final suppress step must exist for
+  // the flag to be signature-bearing; marking the final step is refused.
+  let suppressSteps;
+  let offPathSuppressSteps;
+  if (spec.familyOperationPlan) {
+    const fp = spec.familyOperationPlan[family];
+    if (!fp) throw new Error(`bmu era ${era}: family '${family}' missing from familyOperationPlan`);
+    suppressSteps = new Set(fp.flag === 'suppress' ? [fp.step] : []);
+    offPathSuppressSteps = new Set(fp.flag === 'offPathSuppress' ? [fp.step] : []);
+  } else {
+    suppressSteps = new Set(BMU_FAMILY_SUPPRESS_STEPS[family] ?? []);
+    offPathSuppressSteps = new Set(BMU_FAMILY_OFFPATH_SUPPRESS_STEPS[family] ?? []);
+  }
   const lastIdx = plan.steps.length - 1;
   for (const idx of suppressSteps) {
     if (!Number.isInteger(idx) || idx < 1 || idx >= lastIdx) {
@@ -451,12 +531,20 @@ export function executableOperationForFamilySlot(family, operationSequence, { er
  * (golds) exceeds branchLimit, which would let id-sorted branch capping evict
  * the chain head or a required terminal.
  */
-export function buildProgramPathTopology({ program, seedId, sinkIds, goldIds, decoyIds, midIdFor }) {
+export function buildProgramPathTopology({ program, seedId, sinkIds, goldIds, decoyIds, midIdFor, decoyDepth = 1 }) {
   assertDisjointPartitionProgram(program);
   const steps = program.steps;
   const depth = steps.length - 1;
   if (depth < 2) {
     throw new Error('buildProgramPathTopology: deep-terminal law requires >=3 steps (decoys must sit strictly above terminal depth)');
+  }
+  // §17.32 (era-3): the family's forbidden trap may sit at a DEEPER branch level
+  // than depth 1 so a suppress@d / offPathSuppress@d operation evicts a depth-d
+  // trap. decoyDepth must be a NON-FINAL branch level in 1..depth-1 (a depth-`depth`
+  // node would be an answer terminal, not a dead-end decoy). Default 1 keeps the
+  // era-1/2 topology byte-identical.
+  if (!Number.isInteger(decoyDepth) || decoyDepth < 1 || decoyDepth >= depth) {
+    throw new Error(`buildProgramPathTopology: decoyDepth ${decoyDepth} must be a non-final branch level in 1..${depth - 1}`);
   }
   const branchLimit = program.branchLimit ?? BMU_EXECUTABLE_PROGRAM_BRANCH_LIMIT;
   if (!Array.isArray(sinkIds) || sinkIds.length < 1) throw new Error('buildProgramPathTopology: at least one sink id required');
@@ -466,7 +554,7 @@ export function buildProgramPathTopology({ program, seedId, sinkIds, goldIds, de
   }
   const decoys = decoyIds ?? [];
   if (1 + decoys.length > branchLimit) {
-    throw new Error(`buildProgramPathTopology: chain head + ${decoys.length} decoys exceed branchLimit ${branchLimit} at depth 1`);
+    throw new Error(`buildProgramPathTopology: chain head + ${decoys.length} decoys exceed branchLimit ${branchLimit} at depth ${decoyDepth}`);
   }
   const midIds = [];
   for (let level = 1; level < depth; level++) midIds.push(midIdFor(level));
@@ -479,17 +567,33 @@ export function buildProgramPathTopology({ program, seedId, sinkIds, goldIds, de
   // fail-closed as an ambiguous-lineage route collision. Mirror sinks remain
   // seed-edge topology decoration (outgoing-step dead ends).
   const primarySinkId = sinkIds[0];
-  const depthOneBranchIds = [midIds[0], ...decoys];
-  for (const src of depthOneBranchIds) {
-    relations.push({ src, dst: primarySinkId, type: steps[1].edgeType, label: 'public_path_branch' });
-  }
-  for (let level = 2; level < depth; level++) {
-    relations.push({ src: midIds[level - 1], dst: midIds[level - 2], type: steps[level].edgeType, label: 'public_path_chain' });
+  if (decoyDepth === 1) {
+    // ── DEPTH-1 decoys: the era-1/2 topology, byte-identical (emission order and
+    // relations unchanged from the original builder). ──
+    const depthOneBranchIds = [midIds[0], ...decoys];
+    for (const src of depthOneBranchIds) {
+      relations.push({ src, dst: primarySinkId, type: steps[1].edgeType, label: 'public_path_branch' });
+    }
+    for (let level = 2; level < depth; level++) {
+      relations.push({ src: midIds[level - 1], dst: midIds[level - 2], type: steps[level].edgeType, label: 'public_path_chain' });
+    }
+  } else {
+    // ── DEEPER decoys (§17.32, era-3): the on-route chain is emitted intact, then
+    // the decoys are dead-end branches produced by step[decoyDepth], balanced
+    // beside the chain relay at that level (no incoming continuation ⇒ never a
+    // routed terminal, but demoted by a suppress@decoyDepth / offPath@decoyDepth). ──
+    const parentAtLevel = (level) => (level === 1 ? primarySinkId : midIds[level - 2]);
+    for (let level = 1; level < depth; level++) {
+      relations.push({ src: midIds[level - 1], dst: parentAtLevel(level), type: steps[level].edgeType, label: level === 1 ? 'public_path_branch' : 'public_path_chain' });
+    }
+    for (const decoy of decoys) {
+      relations.push({ src: decoy, dst: parentAtLevel(decoyDepth), type: steps[decoyDepth].edgeType, label: 'public_path_branch' });
+    }
   }
   for (const goldId of goldIds) {
     relations.push({ src: goldId, dst: midIds[depth - 2], type: steps[depth].edgeType, label: 'public_path_terminal' });
   }
-  return Object.freeze({ relations, midIds, terminalDepth: depth, terminalIds: [...goldIds] });
+  return Object.freeze({ relations, midIds, terminalDepth: depth, terminalIds: [...goldIds], decoyDepth });
 }
 
 /**
