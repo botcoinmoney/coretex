@@ -1130,6 +1130,15 @@ export async function scoreSubstrateAgainstQuery(
   // A doc that is ALSO a promote terminal is excluded at bias time (promote
   // wins), so this set never overrides an answer the program routed in.
   const suppressBiasDocIds = new Set<string>();
+  // §18.5 PATH-INCLUSIVE PROMOTION: docs promoted because they are a NON-TERMINAL,
+  // NON-SEED on-path node (a bridge intermediate) of an executed program's route
+  // and are in NO suppress set. multi_hop is the only family whose REQUIRED
+  // evidence includes such nodes; the terminal channel above lifts only terminals
+  // and the suppress channel reaches lineage, so a required bridge rode native
+  // Qwen rank and died. Empty for ZERO_STATE (no programs ⇒ no routes) and for
+  // suppress-only families (their whole lineage is suppressed ⇒ nothing new
+  // promoted), so the three suppress families stay byte-identical.
+  const promotePathNodeDocIds = new Set<string>();
   function addSource(record: CandidateRecord, src: SourceTag) {
     record.sources.add(src);
   }
@@ -1406,6 +1415,32 @@ export async function scoreSubstrateAgainstQuery(
       const ev = publicEvents.get(eventId);
       const docId = ev?.truthDocuments[0]?.id;
       if (docId !== undefined) suppressBiasDocIds.add(docId);
+    }
+    // §18.5 PATH-INCLUSIVE PROMOTION. Resolved AFTER all suppression so the
+    // suppress sets are final. For every executed program's terminal route
+    // ([seed, ...intermediates, terminal]) promote each NON-TERMINAL, NON-SEED
+    // intermediate — the bridge nodes multi_hop requires as evidence — EXCEPT:
+    //   (a) genuine terminals (a node that is a terminal of any route): the
+    //       promote terminal channel owns them and promote wins;
+    //   (b) any node in a suppress set (lineage, suppressed terminal, or the
+    //       doc-level suppressBiasDocIds): suppress WINS for non-terminals.
+    // The seed (route[0], the query-similar hop-0 doc) is deliberately excluded:
+    // it is not a bridge and, in the suppress families, it is the forbidden base
+    // the program evicts. This is candidate-state-causal (routes derive from the
+    // decoded programs) and rides the same ±1·UNIT clamp as the terminal channel.
+    for (const route of terminalRoutes.values()) {
+      for (let i = 1; i < route.length - 1; i++) {
+        const eventId = route[i]!;
+        if (terminalRoutes.has(eventId)) continue;
+        if (suppressTerminalEventIds.has(eventId)) continue;
+        if (suppressLineageEventIds.has(eventId)) continue;
+        const ev = publicEvents.get(eventId);
+        const docId = ev?.truthDocuments[0]?.id;
+        if (docId === undefined) continue;
+        if (publicPathBundleTextByDocId.has(docId)) continue;
+        if (suppressBiasDocIds.has(docId)) continue;
+        promotePathNodeDocIds.add(docId);
+      }
     }
   }
 
@@ -2573,6 +2608,14 @@ export async function scoreSubstrateAgainstQuery(
       for (const docId of publicPathBundleTextByDocId.keys()) {
         addBonus(docId, BMU_V2_PROGRAM_ROUTE_BONUS_UNITS * UNIT);
       }
+      // §18.5 path-inclusive promotion: each on-path bridge intermediate gets the
+      // SAME uniform +BMU_V2_PROGRAM_ROUTE_BONUS_UNITS·UNIT nudge as a terminal,
+      // riding the same ±1·UNIT summed clamp (Rmax unchanged). Disjoint from the
+      // promoted-terminal and suppress sets by construction (resolved above), so
+      // no double-count and no promote/suppress collision. ZERO_STATE ⇒ empty.
+      for (const docId of promotePathNodeDocIds) {
+        addBonus(docId, BMU_V2_PROGRAM_ROUTE_BONUS_UNITS * UNIT);
+      }
       // §18.3 suppression channel: a program-suppressed doc gets the mirror
       // −BMU_V2_PROGRAM_ROUTE_BONUS_UNITS·UNIT nudge (same P_cap=1 clamp, Rmax
       // unchanged) so an EXECUTED program can EVICT a query-similar forbidden
@@ -2862,13 +2905,16 @@ export async function scoreSubstrateAgainstQuery(
   // lifts a Qwen-floored terminal to a tie with the pool ceiling; this
   // label-free, program-derived preference breaks that tie so routing — not the
   // reranker's own order — decides. Empty set (ZERO_STATE / non-BMU) ⇒ no-op.
-  const isRoutedTerminal = (docId: string): boolean => publicPathBundleTextByDocId.has(docId);
-  // §18.3: a program-suppressed doc (not also a promote terminal) LOSES
-  // composite ties so the −1·UNIT demotion is decisive at the topB boundary,
-  // mirroring how a routed terminal WINS ties. Rank preference: +1 promote,
-  // −1 suppress, 0 neutral.
+  // §18.5: a promoted on-path bridge intermediate is `routed` too — it wins
+  // composite ties exactly like a terminal (disjoint from the suppress set).
+  const isRoutedTerminal = (docId: string): boolean =>
+    publicPathBundleTextByDocId.has(docId) || promotePathNodeDocIds.has(docId);
+  // §18.3: a program-suppressed doc (not also a promoted terminal or on-path
+  // intermediate) LOSES composite ties so the −1·UNIT demotion is decisive at the
+  // topB boundary, mirroring how a routed doc WINS ties. Rank preference: +1
+  // promote, −1 suppress, 0 neutral.
   const isSuppressedTerminal = (docId: string): boolean =>
-    suppressBiasDocIds.has(docId) && !publicPathBundleTextByDocId.has(docId);
+    suppressBiasDocIds.has(docId) && !publicPathBundleTextByDocId.has(docId) && !promotePathNodeDocIds.has(docId);
   const routePreference = (docId: string): number =>
     isRoutedTerminal(docId) ? 1 : isSuppressedTerminal(docId) ? -1 : 0;
   const rankedScored = candidates

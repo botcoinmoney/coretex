@@ -2083,11 +2083,18 @@ family.
   −1·UNIT. A PURE PROMOTE program (no suppress step) demotes NOTHING — its
   seed/intermediate nodes are legitimate required evidence (e.g. a multi_hop
   chain), so promote-only behavior is byte-identical to the pre-§18.3 law. The
-  −1·UNIT rides the SAME ±1·UNIT summed clamp (P_cap=1) and a suppressed doc
-  LOSES quantized-composite ties (mirror of the promote tie-win), so **Rmax is
-  unchanged**. A doc that is both a promote terminal and a suppress target keeps
-  the promotion (promote wins), so a program can never suppress an answer it
-  routed in. Three questions: **(Q1) causality** — suppression exists ONLY via an
+  −1·UNIT rides the SAME ±1·UNIT summed clamp (P_cap=1), so **Rmax is
+  unchanged**. **CORRECTION (ROUND 7 audit — the earlier "−1·UNIT / loses ties"
+  description was inaccurate about the decisive step):** the −1·UNIT is only the
+  ranking nudge; the DECISIVE eviction happens at the judge boundary, where
+  `bmuJudgeTopB` **HARD-EXCLUDES** every `suppressed` doc from top-B entirely
+  (`entries.filter(e => e.suppressed !== true)` BEFORE the `slice(0, B)`), not
+  merely rank-demotes it. This matters because rank demotion alone cannot evict
+  when the judged pool is ≤ `budgetB` (a −1·UNIT loser still occupies a top-B
+  slot when there is nothing below it to fall behind); the hard filter removes it
+  regardless of pool size. A doc that is both a promote terminal and a suppress
+  target keeps the promotion (promote wins) and is NOT excluded, so a program can
+  never suppress an answer it routed in. Three questions: **(Q1) causality** — suppression exists ONLY via an
   executed candidate-state program; ZERO_STATE decodes no programs ⇒ empty
   suppress set ⇒ zero bias in EITHER direction (pinned by the §18.3 refutation
   regression, incl. an adversarial-Qwen control where the reranker ranks the
@@ -2119,6 +2126,44 @@ family.
   off-path-suppress program (every graph-node forbidden must be demoted; required
   seed + answer must survive/promote — CPU-validated at epoch 139: all 3 primary
   forbidden decoys evicted, seed spared, answer promoted).
+- **§18.5 PATH-INCLUSIVE PROMOTION (ROUND 7 — the multi_hop root cause):** the
+  promote channel (§18) lifts only routed TERMINALS, and the suppress channel
+  (§18.3/§18.4) reaches lineage. multi_hop is the ONLY family whose REQUIRED
+  evidence includes NON-TERMINAL path nodes — the bridge intermediates on the
+  route `seed → bridge → answer` (`requiredEvidence` = bridge + answer, §5.3).
+  Those intermediates received NEITHER channel and rode native Qwen rank, which
+  is exactly where multi_hop's rows died (the §17.22 falsification: three
+  generator-side fixes each moved multi_hop only 1–2 flips). §18.5 promotes them.
+  Semantics: after all suppression is resolved, for every executed program's
+  terminal route `[seed, …intermediates, terminal]`, each NON-TERMINAL,
+  NON-SEED intermediate is added to the promote set and receives the SAME uniform
+  `+BMU_V2_PROGRAM_ROUTE_BONUS_UNITS(=1)·UNIT` bias as a terminal (same clamped
+  `policyBonus` channel, same ±1·UNIT summed clamp ⇒ **Rmax unchanged**) and wins
+  quantized-composite ties (`routed`), EXCEPT: (a) a node that is a genuine
+  terminal of any route is owned by the terminal channel (**promote wins** — the
+  current behavior, unchanged); (b) a node in ANY suppress set (on-path lineage,
+  suppressed terminal, or `suppressBiasDocIds`) stays demoted (**suppress wins
+  for non-terminals**); (c) the SEED (`route[0]`, the query-similar hop-0 doc) is
+  never promoted — it is not a bridge and, in the suppress families, it is the
+  forbidden causal base the program evicts. Promotion is applied only to nodes
+  already retrieved into the candidate pool (no new mandatory admission — the
+  `16 intermediate + 64` mandatory-pool accounting of §18-fix-2b is unchanged;
+  an intermediate that never cleared retrieval simply receives an inert bonus).
+  Three questions: **(Q1) causality** — the intermediate promote set is derived
+  ONLY from routes of EXECUTED candidate-state programs; ZERO_STATE decodes no
+  programs ⇒ empty routes ⇒ **promotes NOTHING** (pinned by the §18.5 refutation
+  regression `bmu-v2-refutation-regressions.test.mjs`, incl. an adversarial-Qwen
+  control that floors the required bridge yet §18.5 lifts it into top-B while
+  ZERO_STATE does not). **(Q2) executable class space unchanged** — per-execution,
+  no new class, reads no labels. **(Q3) shortcut surface** — uniform magnitude,
+  no labels, capacity-bounded by the resident program capacity and the same
+  ±1·UNIT clamp. **Byte-identity for the three suppress families:** a PURE
+  suppress program has its entire non-terminal lineage in the suppress set, so
+  §18.5 adds NOTHING for conflict/temporal/near_collision (pinned by the §18.5
+  byte-identity regression: a suppress program promotes ZERO docs and its rival
+  terminal stays suppressed). Wiring: `promotePathNodeDocIds` in
+  `retrieval-benchmark.ts`, folded into `isRoutedTerminal` and the promote-bonus
+  loop.
 - **§18 era-iteration fixes 2+3 (this tip):** (2a) the generators now mint the
   disjoint-partition deep-terminal bank above — the executed terminal set
   equals the operation-required answer terminal(s), enforced by the mint lint,

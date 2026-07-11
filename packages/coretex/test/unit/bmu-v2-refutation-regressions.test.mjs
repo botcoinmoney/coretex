@@ -457,3 +457,141 @@ test('regression §18.3: encode/decode round-trips the suppress flag; a bit-flip
   assert.equal(tamperedDec.programs.length, 0, 'checksum mismatch => tampered program dropped');
   assert.ok(tamperedDec.failures >= 1, 'tamper is counted as a decode failure (fail-closed)');
 });
+
+// ─── §18.5 PATH-INCLUSIVE PROMOTION refutation controls (ROUND 7) ────────────
+// multi_hop is the only family whose REQUIRED evidence includes NON-TERMINAL
+// path nodes (bridge intermediates). The terminal promote channel lifts only
+// terminals and the suppress channel reaches lineage, so a required bridge rode
+// native Qwen rank and died (ledger §17.22). §18.5 promotes every on-path,
+// non-terminal, non-seed intermediate of an executed route EXCEPT nodes in a
+// suppress set. These controls pin it as candidate-state-causal (ZERO_STATE
+// promotes nothing) and prove suppress-family behavior is byte-identical.
+
+function bridgeCorpus() {
+  const query = [1, 0, 0, 0, 0, 0, 0, 0];
+  // Bridge sits at a mid cosine so it is retrieved into the reranker cap (like a
+  // real §17.21b-surfaced bridge) but is NOT near the query — it needs the
+  // program-derived promotion, not native rank, to clear the topB boundary.
+  const mid = [0.42, 0.907, 0, 0, 0, 0, 0, 0];
+  const low = [0.08, 0.997, 0, 0, 0, 0, 0, 0];
+  const events = [
+    event({
+      id: 'seed', text: 'review anchor', vector: query, queryVector: query,
+      relations: [{ other_id: 'bridge', edgeType: 'causes' }],
+      qrels: [{ documentId: 'terminal-doc', relevance: 1 }, { documentId: 'bridge-doc', relevance: 1 }],
+    }),
+    // Required bridge intermediate: on the route but neither a terminal nor the
+    // seed. Under the terminal-only channel it received no bias and died.
+    event({
+      id: 'bridge', text: 'the intermediate linking record that bridges the chain', vector: mid,
+      relations: [{ other_id: 'terminal', edgeType: 'supports' }],
+    }),
+    event({ id: 'terminal', text: 'the reviewed entry is confirmed and in force', vector: low }),
+    ...Array.from({ length: 40 }, (_, i) => event({
+      id: `filler-${String(i).padStart(2, '0')}`, text: `mid-cosine filler ${i}`, vector: low,
+    })),
+  ];
+  events[0].bmuOperationCue = 'refutation bridge route';
+  return {
+    schemaVersion: 'coretex.production-corpus.v1', corpusEpoch: 0,
+    corpusRoot: computeCorpusRoot(events), generatedAt: '2026-07-10T00:00:00.000Z',
+    biEncoderModelId: MODEL_ID, biEncoderRevision: REVISION,
+    biEncoderRetrievalKeyLayout: LAYOUT, events,
+    splitRatios: { trainVisiblePct: 70, calibrationPct: 10, evalHiddenPct: 15, canaryPct: 5 },
+  };
+}
+
+const BRIDGE_QUERY_KEY = bmuOperationQueryKey('refutation bridge route');
+
+function bridgeProgramState() {
+  const state = { words: new Array(1024).fill(0n) };
+  const words = encodeBmuPublicPathProgramWords({
+    programIndex: 0, queryKey: BRIDGE_QUERY_KEY, branchLimit: 4,
+    validFromEpoch: 0n, expiryEpoch: 0n,
+    steps: [
+      { direction: 'outgoing', edgeType: 'causes' },
+      { direction: 'outgoing', edgeType: 'supports' },
+    ],
+  });
+  for (let i = 0; i < 4; i++) state.words[RANGES.POLICY_EVIDENCE_START + i] = words[i];
+  return state;
+}
+
+test('regression §18.5: an executed program PROMOTES a required bridge intermediate the reranker floors; ZERO_STATE promotes nothing', async () => {
+  const corpus = bridgeCorpus();
+  const pack = { epochId: 0, evalSeedCommit: `0x${'71'.repeat(32)}`, events: [corpus.events[0]] };
+  // Adversarial reranker: the on-path bridge + terminal score the FLOOR, every
+  // filler the CEIL — the exact real-Qwen failure mode where native rank buries
+  // the required bridge. Only the program-derived promotion can lift it.
+  const opts = {
+    ...scoringOptions(),
+    reranker: {
+      model: 'anti-bridge',
+      async score(pairs) {
+        return pairs.map((pair) =>
+          (pair.document.includes('intermediate linking record') || pair.document.includes('confirmed and in force')) ? 0.02 : 0.98);
+      },
+    },
+  };
+  const budgetB = 4;
+  const entriesOf = (result) => result.perQuery[0].finalRankingFull.map((r) => ({
+    docId: r.docId, rerankerScore: r.rerankerScore, finalReorderingScore: r.finalReorderingScore,
+    routed: r.routed === true, suppressed: r.suppressed === true,
+  }));
+
+  // ZERO_STATE: no program => the bridge is not routed and rides the reranker
+  // FLOOR, far below the budgetB=4 topB (the failure §18.5 fixes).
+  const parent = await evaluateRetrievalBenchmarkState(ZERO_STATE, corpus, pack, opts);
+  const pEntries = entriesOf(parent);
+  assert.equal(pEntries.find((e) => e.docId === 'bridge-doc')?.routed, false,
+    'ZERO_STATE decodes no program => the bridge intermediate is NOT promoted');
+  const pTopB = bmuJudgeTopB(pEntries, budgetB, JUDGE_GRID);
+  assert.ok(!pTopB.includes('bridge-doc'), 'ZERO_STATE: floored bridge does NOT reach the budgetB=4 topB');
+
+  // Candidate state: the 2-step promote program routes seed --causes--> bridge
+  // --supports--> terminal. §18.5 promotes the NON-TERMINAL bridge (routed) and
+  // the terminal channel promotes the terminal; both clear the topB boundary
+  // DESPITE the reranker flooring them.
+  const candidate = await evaluateRetrievalBenchmarkState(bridgeProgramState(), corpus, pack, opts);
+  const cEntries = entriesOf(candidate);
+  const cBridge = cEntries.find((e) => e.docId === 'bridge-doc');
+  assert.ok(cBridge, 'candidate: bridge intermediate is a scored candidate');
+  assert.equal(cBridge.routed, true, 'candidate: the on-path bridge intermediate is PROMOTED (routed)');
+  assert.equal(cBridge.suppressed, false, 'candidate: the promoted bridge is not suppressed');
+  assert.ok(cBridge.rerankerScore < 0.5, 'the bridge was reranked at the FLOOR (promotion, not Qwen, lifted it)');
+  assert.equal(cEntries.find((e) => e.docId === 'terminal-doc')?.routed, true, 'candidate: the terminal is promoted');
+  const cTopB = bmuJudgeTopB(cEntries, budgetB, JUDGE_GRID);
+  assert.ok(cTopB.includes('bridge-doc'), `§18.5 lifts the required bridge into the topB (topB: ${cTopB.join(', ')})`);
+  assert.ok(cTopB.includes('terminal-doc'), 'the terminal is also in topB (required-evidence coverage + answer)');
+});
+
+test('regression §18.5 byte-identity: a SUPPRESS program never promotes its on-path lineage (suppress wins for non-terminals)', async () => {
+  // The three suppress families (conflict/temporal/near_collision) suppress their
+  // whole on-path lineage. §18.5 must therefore add NOTHING for a suppress
+  // program: its intermediates are in the suppress set and stay demoted, its
+  // terminals stay suppressed. This is the byte-identity proof for those families.
+  const corpus = suppressionCorpus();
+  const pack = { epochId: 0, evalSeedCommit: `0x${'71'.repeat(32)}`, events: [corpus.events[0]] };
+  const opts = suppressScoringOptions();
+  const candidateState = { words: new Array(1024).fill(0n) };
+  const words = encodeBmuPublicPathProgramWords({
+    programIndex: 0, queryKey: SUPPRESS_QUERY_KEY, branchLimit: 4,
+    validFromEpoch: 0n, expiryEpoch: 0n,
+    steps: [
+      { direction: 'outgoing', edgeType: 'causes' },
+      { direction: 'incoming', edgeType: 'supports', suppress: true },
+    ],
+  });
+  for (let i = 0; i < 4; i++) candidateState.words[RANGES.POLICY_EVIDENCE_START + i] = words[i];
+  const candidate = await evaluateRetrievalBenchmarkState(candidateState, corpus, pack, opts);
+  const rows = candidate.perQuery[0].finalRankingFull;
+  // The pivot is the on-path intermediate of the suppress route; it MUST NOT be
+  // promoted by §18.5 (it is suppressed lineage). No doc is routed at all.
+  assert.equal(rows.find((r) => r.docId === 'pivot-doc')?.routed === true, false,
+    '§18.5 does not promote a suppress program\'s on-path intermediate (pivot)');
+  assert.equal(rows.some((r) => r.routed === true), false,
+    'a pure suppress program promotes NOTHING — the promote channels stay empty (byte-identical)');
+  // And the suppression itself is unchanged: the rival terminal stays suppressed.
+  assert.equal(rows.find((r) => r.docId === 'rival-doc')?.suppressed, true,
+    'suppress-family behavior is byte-identical: the forbidden rival is still suppressed');
+});
