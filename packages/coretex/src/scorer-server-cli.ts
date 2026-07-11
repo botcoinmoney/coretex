@@ -37,9 +37,11 @@
  * coordinator/scorer-pair-trace.ts.
  */
 import http from 'node:http';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { scorerVersionMatchesRange } from './validator-runtime.js';
 
 import {
   createProductionCoreTexEvaluator,
@@ -97,6 +99,32 @@ export interface ScorerCodeHealth {
   readonly retrievalDecoderSha256: string;
   readonly bmuOperationProgramSha256: string;
   readonly builtDistIndexSha256: string;
+  // AUDIT-2 finding (law half, task 3c) — the round-7 list still omitted direct
+  // scoring-path deps in the transitive import closure of the reward-critical
+  // modules (bi-encoder retrieval scoring, IR nDCG metrics, hidden-query-pack
+  // derivation, public-corpus index, the reranker driver, and the structural-
+  // sanity component of the composite score). Named for per-module mismatch
+  // localization; ALSO folded into scoringClosureSha256 below.
+  readonly biEncoderSha256: string;
+  readonly irMetricsSha256: string;
+  readonly hiddenQueryPackSha256: string;
+  readonly publicCorpusIndexSha256: string;
+  readonly rerankerSha256: string;
+  readonly structuralValiditySha256: string;
+  /** SHA-256 over the FULL deterministic import closure of the reward-critical
+   *  scoring modules (path=hash lines, sorted) — every transitive dep incl. the
+   *  state codec/merkle/patch and canonical-json that determine roots + score
+   *  deltas. Any drift in ANY closure module fails closed; a unit test recomputes
+   *  the closure from source and asserts REWARD_CRITICAL_SCORING_CLOSURE covers
+   *  it, so a newly-imported scoring module cannot silently escape the pin. */
+  readonly scoringClosureSha256: string;
+  /** AUDIT-2 task 3b — RUNTIME attestation of the scorer-payload tarball the
+   *  host was staged from. Read from CORETEX_SCORER_PAYLOAD_SHA256 (the staging
+   *  script records the exact `scorer-payload-v2.tgz` sha it unpacked). null when
+   *  unstaged (source-run). EXCLUDED from coretexPackageSha256 (it is a staging
+   *  fact, not code identity); the coordinator compares it to the payload sha it
+   *  shipped, fail-closed under CORETEX_SCORER_EXTENDED_CODE_PIN. */
+  readonly stagedPayloadSha256: string | null;
 }
 
 export interface ScorerExpectedPins {
@@ -208,6 +236,14 @@ export interface ScorerHealth {
   readonly torch: string | null;
   readonly transformers: string | null;
   readonly python: string | null;
+  /** AUDIT-2 task 3a — RUNTIME attestation of the ACTUAL reranker weights on
+   *  disk: sha256 of the loaded `model.safetensors`, verified fail-closed at boot
+   *  against the bundle's pinned `model.reranker.files` sha. `null` only when the
+   *  weights dir was unresolvable AND CORETEX_SCORER_ALLOW_UNVERIFIED_WEIGHTS=1
+   *  (recorded in modelWeightsNote). Attesting id+revision alone let a swapped
+   *  checkpoint at the same revision serve silently; this closes that. */
+  readonly modelWeightsSha256: string | null;
+  readonly modelWeightsNote?: string;
   readonly code?: ScorerCodeHealth;
 }
 
@@ -751,6 +787,51 @@ function requiredCodeHash(label: string, ...relativeCandidates: string[]): strin
   return hash;
 }
 
+/**
+ * The FULL deterministic import closure of the reward-critical scoring modules
+ * (retrieval-benchmark, bmu-benchmark, bmu-task, retrieval-decoder,
+ * bmu-operation-program) — every transitive dep on the scoring/merkle path.
+ * Kept as a sorted constant so a newly-imported scoring module fails the
+ * closure-cover unit test (scorer-runtime-attestation.test) until it is added,
+ * i.e. the pin can never silently miss a reward-critical module. Module keys are
+ * dist-relative (…/dist/scorer-server-cli.js); each entry lists the .js dist
+ * path then the .ts source fallback for a source-run scorer.
+ */
+export const REWARD_CRITICAL_SCORING_CLOSURE: readonly string[] = [
+  'bundle/index',
+  'canonical/json',
+  'eval/bi-encoder',
+  'eval/bmu-benchmark',
+  'eval/bmu-operation-program',
+  'eval/bmu-task',
+  'eval/hidden-query-pack',
+  'eval/ir-metrics',
+  'eval/memory-ir-render',
+  'eval/public-corpus-index',
+  'eval/reranker',
+  'eval/retrieval-benchmark',
+  'eval/retrieval-corpus',
+  'pipeline-versions',
+  'state/codec',
+  'state/index',
+  'state/keccak256',
+  'state/merkle',
+  'state/patch',
+  'state/types',
+  'state/validate',
+  'substrate/retrieval-decoder',
+  'substrate/structural-validity',
+] as const;
+
+function computeScoringClosureSha256(): string {
+  const lines: string[] = [];
+  for (const mod of REWARD_CRITICAL_SCORING_CLOSURE) {
+    const hash = requiredCodeHash(mod, `./${mod}.js`, `./${mod}.ts`);
+    lines.push(`${mod}=${hash}`);
+  }
+  return sha256Hex(lines.sort().join('\n'));
+}
+
 export function computeScorerCodeHealth(): ScorerCodeHealth {
   const code = {
     pipelineVersion: SCORER_CODE_PIPELINE_VERSION,
@@ -772,9 +853,20 @@ export function computeScorerCodeHealth(): ScorerCodeHealth {
     retrievalDecoderSha256: requiredCodeHash('substrate/retrieval-decoder', './substrate/retrieval-decoder.js', './substrate/retrieval-decoder.ts'),
     bmuOperationProgramSha256: requiredCodeHash('eval/bmu-operation-program', './eval/bmu-operation-program.js', './eval/bmu-operation-program.ts'),
     builtDistIndexSha256: requiredCodeHash('index', './index.js', './index.ts'),
+    // AUDIT-2 finding (law half, task 3c) — direct scoring-path deps + the full
+    // closure rollup.
+    biEncoderSha256: requiredCodeHash('eval/bi-encoder', './eval/bi-encoder.js', './eval/bi-encoder.ts'),
+    irMetricsSha256: requiredCodeHash('eval/ir-metrics', './eval/ir-metrics.js', './eval/ir-metrics.ts'),
+    hiddenQueryPackSha256: requiredCodeHash('eval/hidden-query-pack', './eval/hidden-query-pack.js', './eval/hidden-query-pack.ts'),
+    publicCorpusIndexSha256: requiredCodeHash('eval/public-corpus-index', './eval/public-corpus-index.js', './eval/public-corpus-index.ts'),
+    rerankerSha256: requiredCodeHash('eval/reranker', './eval/reranker.js', './eval/reranker.ts'),
+    structuralValiditySha256: requiredCodeHash('substrate/structural-validity', './substrate/structural-validity.js', './substrate/structural-validity.ts'),
+    scoringClosureSha256: computeScoringClosureSha256(),
+    // AUDIT-2 task 3b — RUNTIME staging fact, EXCLUDED from coretexPackageSha256.
+    stagedPayloadSha256: (process.env['CORETEX_SCORER_PAYLOAD_SHA256']?.trim().toLowerCase() || null),
   };
   const coretexPackageSha256 = sha256Hex(Object.entries(code)
-    .filter(([key]) => key !== 'coretexPackageSha256')
+    .filter(([key]) => key !== 'coretexPackageSha256' && key !== 'stagedPayloadSha256')
     .map(([key, value]) => `${key}=${value ?? ''}`)
     .sort()
     .join('\n'));
@@ -819,6 +911,66 @@ function probeRuntimeHealth(): Pick<ScorerHealth, 'cuda' | 'device' | 'torch' | 
     // refusal to the coordinator's remote health check; refuse at boot instead.
     throw new Error(`scorer runtime health probe failed (refusing to boot with an unverified GPU runtime): ${(e as Error)?.message ?? String(e)}`);
   }
+}
+
+/**
+ * AUDIT-2 task 3a — resolve the reranker weights actually on disk and attest
+ * their sha256, fail-closed against the bundle's pinned model.reranker.files.
+ * transformers loads by id/revision and never checks the bytes, so a swapped
+ * checkpoint at the same revision would serve silently; attesting id+revision
+ * alone (the prior /healthz) did not close that. Resolution order:
+ *   1. CORETEX_RERANKER_MODEL_DIR — explicit staged weights dir (staging contract),
+ *   2. HF snapshot layout under CORTEX_LOCAL_MODEL_CACHE / HF_HOME / HUGGINGFACE_HUB_CACHE:
+ *      <cache>/models--<org>--<name>/snapshots/<revision>/.
+ * Every pinned *.safetensors must be present and byte-exact; the returned sha is
+ * the primary model.safetensors (or the id-sorted first shard). Throws on a
+ * resolvable-but-mismatched file. Unresolvable → throws UNLESS
+ * CORETEX_SCORER_ALLOW_UNVERIFIED_WEIGHTS=1 (then { sha256: null, note }).
+ */
+export function attestModelWeights(
+  bundle: CoreTexBundleManifest,
+  env: NodeJS.ProcessEnv,
+): { sha256: string | null; note?: string } {
+  const files = bundle.model?.reranker?.files ?? [];
+  const weightPins = files.filter((f) => /\.safetensors$/i.test(f.path));
+  if (weightPins.length === 0) {
+    return { sha256: null, note: 'bundle reranker pins carry no *.safetensors — cannot attest weights' };
+  }
+  const modelId = bundle.model.reranker.modelId;
+  const revision = bundle.model.reranker.revision;
+  const hfDirName = `models--${modelId.replace(/\//g, '--')}`;
+  const candidateDirs: string[] = [];
+  const explicit = env['CORETEX_RERANKER_MODEL_DIR']?.trim();
+  if (explicit) candidateDirs.push(explicit);
+  for (const cacheEnv of ['CORTEX_LOCAL_MODEL_CACHE', 'HF_HOME', 'HUGGINGFACE_HUB_CACHE', 'TRANSFORMERS_CACHE']) {
+    const base = env[cacheEnv]?.trim();
+    if (!base) continue;
+    // HF_HOME nests the hub under hub/; the others point straight at the hub root.
+    candidateDirs.push(join(base, 'hub', hfDirName, 'snapshots', revision));
+    candidateDirs.push(join(base, hfDirName, 'snapshots', revision));
+  }
+  const primaryPin = weightPins.find((f) => /(^|\/)model\.safetensors$/i.test(f.path)) ?? [...weightPins].sort((a, b) => (a.path < b.path ? -1 : 1))[0]!;
+  for (const dir of candidateDirs) {
+    if (!weightPins.every((pin) => existsSync(join(dir, pin.path)))) continue;
+    let primarySha: string | null = null;
+    for (const pin of weightPins) {
+      const actual = createHash('sha256').update(readFileSync(join(dir, pin.path))).digest('hex');
+      if (actual.toLowerCase() !== pin.sha256.toLowerCase()) {
+        throw new Error(
+          `coretex-scorer-server: reranker weight ${pin.path} sha ${actual} != bundle pin ${pin.sha256} (refusing to serve swapped weights from ${dir})`,
+        );
+      }
+      if (pin.path === primaryPin.path) primarySha = actual;
+    }
+    return { sha256: primarySha ?? primaryPin.sha256, note: `verified against bundle pin from ${dir}` };
+  }
+  if (env['CORETEX_SCORER_ALLOW_UNVERIFIED_WEIGHTS'] === '1') {
+    return { sha256: null, note: `weights dir unresolvable (tried ${candidateDirs.length} candidates); CORETEX_SCORER_ALLOW_UNVERIFIED_WEIGHTS=1` };
+  }
+  throw new Error(
+    `coretex-scorer-server: cannot resolve reranker weights to attest model.safetensors sha (set CORETEX_RERANKER_MODEL_DIR or a HF cache env; tried: ${candidateDirs.join(', ') || 'none'}). ` +
+    'Set CORETEX_SCORER_ALLOW_UNVERIFIED_WEIGHTS=1 only for a constrained CI host that does not serve rewards.',
+  );
 }
 
 interface BootedScorer {
@@ -960,6 +1112,25 @@ async function bootScorer(env: NodeJS.ProcessEnv): Promise<BootedScorer> {
     code,
   };
   const runtime = probeRuntimeHealth();
+  // AUDIT-2 task 3d — RUNTIME-MANIFEST fail-closed gate. The bundle's
+  // profile.runtimePin fixes the torch/transformers ranges the pinned scores
+  // were produced under (cpu_only torch 2.6.* for the flip bundle). The round-7
+  // CPU draws ran torch 2.13.0+cpu against a 2.6.* pin — a silent evidence
+  // defect. Refuse to boot a scorer whose interpreter drifts from the loaded
+  // bundle's pinned runtime, so that can never repeat silently.
+  const runtimePin = bundle.evaluator?.profile?.runtimePin;
+  const torchRange = runtimePin?.versions?.['torch'];
+  const transformersRange = runtimePin?.versions?.['transformers'];
+  if (!torchRange || !transformersRange) {
+    throw new Error('coretex-scorer-server: loaded bundle has no evaluator.profile.runtimePin.versions.torch/transformers — cannot pin the scorer runtime fingerprint');
+  }
+  if (runtime.torch == null || !scorerVersionMatchesRange(String(runtime.torch), torchRange)) {
+    throw new Error(`coretex-scorer-server: runtime torch ${runtime.torch ?? 'unimportable'} does not match bundle runtimePin ${torchRange} (refusing to score under a drifted runtime)`);
+  }
+  if (runtime.transformers == null || !scorerVersionMatchesRange(String(runtime.transformers), transformersRange)) {
+    throw new Error(`coretex-scorer-server: runtime transformers ${runtime.transformers ?? 'unimportable'} does not match bundle runtimePin ${transformersRange} (refusing to score under a drifted runtime)`);
+  }
+  const weights = attestModelWeights(bundle, env);
   const scorerHealth: ScorerHealth = {
     commit: gitCommit(),
     modelId: loadedPins.modelId,
@@ -972,6 +1143,8 @@ async function bootScorer(env: NodeJS.ProcessEnv): Promise<BootedScorer> {
     torch: runtime.torch,
     transformers: runtime.transformers,
     python: runtime.python,
+    modelWeightsSha256: weights.sha256,
+    ...(weights.note !== undefined ? { modelWeightsNote: weights.note } : {}),
     code,
   };
   // Cross-check the resolved prompt-template hash against the canonical render.
