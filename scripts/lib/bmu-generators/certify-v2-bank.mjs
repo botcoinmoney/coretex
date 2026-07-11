@@ -492,22 +492,36 @@ export function oracleSolvedMarginAudit(lane) {
     if (executed.error) { rowFindings.push({ rowId: row.id, reject: `route_execution: ${executed.error}` }); continue; }
     const terminals = new Set(executed.terminalIds);
     const promoted = new Set(executed.promoteTerminalIds ?? executed.terminalIds);
+    // §18.5: on-path bridge intermediates are also promoted (+1·UNIT, routed).
+    const promotedPathNodes = new Set(executed.promotePathNodeIds ?? []);
     const suppressed = new Set([...(executed.suppressLineageIds ?? []), ...(executed.suppressTerminalIds ?? []), ...(executed.offPathSuppressedIds ?? [])]);
     const task = row.bmuTask;
-    // A forbidden PROMOTED terminal is always a rejection: at runtime promote
-    // wins any suppress overlap, so a forbidden doc that reaches terminal depth
-    // enters topB with +UNIT even if some walk also marks it suppressed lineage.
+    // A forbidden PROMOTED TERMINAL is always a rejection: at runtime promote wins
+    // any suppress overlap, so a forbidden doc that reaches terminal depth enters
+    // topB with +UNIT even if some walk also marks it suppressed lineage.
     const routedForbidden = (task.forbiddenEvidence ?? []).filter((id) => promoted.has(id));
     if (routedForbidden.length > 0) {
       rowFindings.push({ rowId: row.id, reject: 'forbidden_terminal_routed', routedForbidden });
+      continue;
+    }
+    // ROUND 7 audit finding (c) — §18.5 MALICIOUS-PROMOTE class. A forbidden doc
+    // promoted as an on-path INTERMEDIATE also enters topB with +UNIT (path-
+    // inclusive promotion). A program that routes another class's gold/forbidden
+    // through a bridge intermediate must be REJECTED (mint-time; permanent control).
+    const promotedForbiddenIntermediate = (task.forbiddenEvidence ?? []).filter((id) => promotedPathNodes.has(id));
+    if (promotedForbiddenIntermediate.length > 0) {
+      rowFindings.push({ rowId: row.id, reject: 'forbidden_intermediate_promoted', promotedForbiddenIntermediate });
       continue;
     }
     // §18.3 fix 3 — eviction contract. When the cluster's program carries the
     // suppress opcode, EVERY forbidden doc that is a node of the cluster's public
     // relation graph (i.e. Qwen-reachable / query-similar) must be actively
     // demoted under the patched state — not merely "not routed as a terminal".
-    // Off-graph forbidden docs (never a route node) are out of scope: they are
-    // gated by BGE non-retrieval, not by the route bonus.
+    // Off-graph forbidden docs (never a route node) cannot be demoted by the
+    // route bonus, so this CPU cert does not require their eviction here — but
+    // (ROUND 7 finding (d)) they are NO LONGER trusted to BGE non-retrieval: they
+    // are emitted per row as `offGraphForbidden` in the margin job and VERIFIED
+    // non-retrieved in the BLOCKING real margin run (fail-closed if retrieved).
     if (executed.programHasSuppress === true || executed.programHasOffPathSuppress === true) {
       if (!oracleGraphNodesByMotif.has(cluster.motifGroupId)) {
         const nodes = new Set();
@@ -537,13 +551,19 @@ export function oracleSolvedMarginAudit(lane) {
         cluster.publicPath?.seedId,
         ...(cluster.pathGroups ?? []).map((group) => group.anchorId),
       ].filter((id) => id !== undefined && id !== null));
+      // §18.5: a required doc is reachable if it is a routed terminal, a public
+      // seed/anchor, OR a promoted on-path bridge intermediate (multi_hop's
+      // required bridge nodes are now covered by the path-inclusive promote).
       const unreachableRequired = (task.requiredEvidence ?? [])
-        .filter((id) => !terminals.has(id) && !anchors.has(id));
+        .filter((id) => !terminals.has(id) && !anchors.has(id) && !promotedPathNodes.has(id));
       if (unreachableRequired.length > 0) {
         rowFindings.push({ rowId: row.id, reject: 'required_neither_routed_nor_anchor', unreachableRequired });
         continue;
       }
-      const judgedCohort = new Set([...terminals, ...(task.requiredEvidence ?? [])]);
+      // top-B feasibility must count EVERY doc that receives the +UNIT promote bias
+      // (terminals ∪ promoted intermediates) plus non-routed required evidence: all
+      // occupy the judged window. §18.5's promoted intermediates now count here.
+      const judgedCohort = new Set([...terminals, ...promotedPathNodes, ...(task.requiredEvidence ?? [])]);
       if (judgedCohort.size > task.budgetB) {
         rowFindings.push({ rowId: row.id, reject: 'topB_overflow', cohort: judgedCohort.size, budgetB: task.budgetB });
         continue;
@@ -614,19 +634,31 @@ export function buildOracleSolvedMarginJob(families, { pins = CERT_PINS, sourceC
       operationClass,
       operationCue: clusters[0].bmuOperationCue,
       operationProgram: clusters[0].bmuOperationProgram,
-      clusters: clusters.map((cluster) => ({
-        motifGroupId: cluster.motifGroupId,
-        subjectEntityId: cluster.subjectEntityId,
-        seedId: cluster.publicPath?.seedId
-          ?? cluster.pathGroups?.find((group) => group.truthId)?.anchorId ?? null,
-        rows: (cluster.rows ?? lane.rows.filter((row) => row.bmuTask?.motifGroupId === cluster.motifGroupId))
-          .map((row) => ({
-            id: row.id, queryText: row.queryText, budgetB: row.bmuTask.budgetB,
-            abstain: row.bmuTask.abstain === true,
-            requiredEvidence: row.bmuTask.requiredEvidence,
-            forbiddenEvidence: row.bmuTask.forbiddenEvidence,
-          })),
-      })),
+      clusters: clusters.map((cluster) => {
+        // ROUND 7 audit finding (d): OFF-GRAPH forbidden docs (forbidden evidence
+        // that is NOT a node of the cluster's public relation graph) are NOT
+        // reachable by any suppress route, so the CPU cert cannot demote them. They
+        // must therefore be VERIFIED non-retrieved in the BLOCKING real margin run
+        // (rather than trusted to BGE non-retrieval). Emit them per row so the
+        // runner can assert each off-graph forbidden is absent from the retrieved
+        // pool / topB; any that IS retrieved fails the margin gate closed.
+        const graphNodes = new Set();
+        for (const rel of cluster.relations ?? []) { graphNodes.add(rel.src); graphNodes.add(rel.dst ?? rel.other_id); }
+        return {
+          motifGroupId: cluster.motifGroupId,
+          subjectEntityId: cluster.subjectEntityId,
+          seedId: cluster.publicPath?.seedId
+            ?? cluster.pathGroups?.find((group) => group.truthId)?.anchorId ?? null,
+          rows: (cluster.rows ?? lane.rows.filter((row) => row.bmuTask?.motifGroupId === cluster.motifGroupId))
+            .map((row) => ({
+              id: row.id, queryText: row.queryText, budgetB: row.bmuTask.budgetB,
+              abstain: row.bmuTask.abstain === true,
+              requiredEvidence: row.bmuTask.requiredEvidence,
+              forbiddenEvidence: row.bmuTask.forbiddenEvidence,
+              offGraphForbidden: (row.bmuTask.forbiddenEvidence ?? []).filter((id) => !graphNodes.has(id)),
+            })),
+        };
+      }),
     }));
     return [family, { classPairs }];
   }));
@@ -636,7 +668,7 @@ export function buildOracleSolvedMarginJob(families, { pins = CERT_PINS, sourceC
     pins: {
       biencoder: pins.biencoder, reranker: pins.reranker, rerankerInputTopK: pins.rerankerInputTopK,
       density: ORACLE_MARGIN_DENSITY_PINS,
-      marginRule: '>=3 grid cells at g=1e-3 for every required doc in judged topB under the solved state; zero forbidden admitted',
+      marginRule: '>=3 grid cells at g=1e-3 for every required doc in judged topB under the solved state; zero forbidden admitted; and every per-row offGraphForbidden id VERIFIED non-retrieved in the real run (not trusted to BGE) — finding (d) fail-closed',
     },
     perFamily,
   };

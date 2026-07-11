@@ -85,6 +85,18 @@ export interface ScorerCodeHealth {
   readonly retrievalCorpusSha256: string;
   readonly memoryIrRenderSha256: string;
   readonly rerankerRunnerSha256: string | null;
+  // ROUND 7 audit finding C — reward-critical dist modules the canonical health
+  // above omitted. Field names are the CONTRACT with the coordinator's
+  // REWARD_CRITICAL_SCORER_FILES (coretex-remote-scorer.ts): the coordinator
+  // hashes these out of its OWN vendored dist and, under
+  // CORETEX_SCORER_EXTENDED_CODE_PIN, requires the scorer to report matching
+  // hashes under EXACTLY these keys. A scorer that omits any key or drifts a hash
+  // fails closed (SCORER_CODE_HASH_MISMATCH).
+  readonly bmuBenchmarkSha256: string;
+  readonly bmuTaskSha256: string;
+  readonly retrievalDecoderSha256: string;
+  readonly bmuOperationProgramSha256: string;
+  readonly builtDistIndexSha256: string;
 }
 
 export interface ScorerExpectedPins {
@@ -750,6 +762,16 @@ export function computeScorerCodeHealth(): ScorerCodeHealth {
     retrievalCorpusSha256: requiredCodeHash('eval/retrieval-corpus', './eval/retrieval-corpus.js', './eval/retrieval-corpus.ts'),
     memoryIrRenderSha256: requiredCodeHash('eval/memory-ir-render', './eval/memory-ir-render.js', './eval/memory-ir-render.ts'),
     rerankerRunnerSha256: sha256FileFromModule('../scripts/reranker_runner.py'),
+    // ROUND 7 audit finding C — reward-critical modules (keys are the
+    // coordinator's REWARD_CRITICAL_SCORER_FILES contract; distRel ⇒ .js under
+    // dist/, .ts source fallback for a source-run scorer). All exist in this
+    // build ⇒ required (fail-closed on absence). builtDistIndexSha256 hashes the
+    // built dist bundle entry the coordinator pins as `index.js`.
+    bmuBenchmarkSha256: requiredCodeHash('eval/bmu-benchmark', './eval/bmu-benchmark.js', './eval/bmu-benchmark.ts'),
+    bmuTaskSha256: requiredCodeHash('eval/bmu-task', './eval/bmu-task.js', './eval/bmu-task.ts'),
+    retrievalDecoderSha256: requiredCodeHash('substrate/retrieval-decoder', './substrate/retrieval-decoder.js', './substrate/retrieval-decoder.ts'),
+    bmuOperationProgramSha256: requiredCodeHash('eval/bmu-operation-program', './eval/bmu-operation-program.js', './eval/bmu-operation-program.ts'),
+    builtDistIndexSha256: requiredCodeHash('index', './index.js', './index.ts'),
   };
   const coretexPackageSha256 = sha256Hex(Object.entries(code)
     .filter(([key]) => key !== 'coretexPackageSha256')

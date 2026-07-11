@@ -393,11 +393,29 @@ export function executeProgramOverRelations({ program, relations, seedIds, branc
   const offPathSuppressedIds = new Set();
   for (const id of offPathStepProducedIds) if (!onRouteIds.has(id)) offPathSuppressedIds.add(id);
   const terminalIds = [...frontier.keys()];
+  const terminalIdSet = new Set(terminalIds);
+  // §18.5 PATH-INCLUSIVE PROMOTION parity with retrieval-benchmark.ts
+  // (promotePathNodeDocIds): every NON-TERMINAL, NON-SEED on-path intermediate of
+  // an executed route that is NOT in any suppress set is promoted (+1·UNIT,
+  // routed). Empty for a pure suppress program (its lineage is suppressed) and
+  // for ZERO_STATE (no routes), so the three suppress families are byte-identical.
+  const promotePathNodeIds = new Set();
+  for (const route of frontier.values()) {
+    for (let i = 1; i < route.length - 1; i++) {
+      const id = route[i];
+      if (terminalIdSet.has(id)) continue;
+      if (suppressLineageIds.has(id)) continue;
+      if (offPathSuppressedIds.has(id)) continue;
+      promotePathNodeIds.add(id);
+    }
+  }
   return Object.freeze({
     terminalIds,
     routes: new Map([...frontier].map(([id, route]) => [id, Object.freeze([...route])])),
     /** Terminals promoted (+1·UNIT). Empty when the final step is suppress-marked. */
     promoteTerminalIds: Object.freeze(terminalsSuppressed ? [] : [...terminalIds]),
+    /** §18.5: on-path bridge intermediates promoted (+1·UNIT, routed). */
+    promotePathNodeIds: Object.freeze([...promotePathNodeIds]),
     /** Terminals demoted (−1·UNIT) because the final step is suppress-marked. */
     suppressTerminalIds: Object.freeze(terminalsSuppressed ? [...terminalIds] : []),
     /** Seed/intermediate lineage demoted (−1·UNIT) — never an answer terminal. */

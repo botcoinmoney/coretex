@@ -595,3 +595,68 @@ test('regression §18.5 byte-identity: a SUPPRESS program never promotes its on-
   assert.equal(rows.find((r) => r.docId === 'rival-doc')?.suppressed, true,
     'suppress-family behavior is byte-identical: the forbidden rival is still suppressed');
 });
+
+// ─── ROUND 7 audit finding (c): MALICIOUS / OVERBROAD suppress attacker controls
+// The §18.3/§18.4 suppression channel and the §18.5 promote channel must be
+// REJECTED or provably HARMLESS under adversarial programs: a suppress-everything
+// program, a program that suppresses another row's gold/required, and a
+// forged-lineage suppress whose declared edges do not exist. These are permanent
+// controls: an attacker can never smuggle a forbidden doc into the answer slot,
+// and can only ever harm its OWN row (self-defeating, utility 0).
+
+test('control §18.3(c): a FORGED-LINEAGE suppress (declared edges absent from the graph) executes to nothing and is inert', async () => {
+  const corpus = suppressionCorpus();
+  const pack = { epochId: 0, evalSeedCommit: `0x${'71'.repeat(32)}`, events: [corpus.events[0]] };
+  const opts = suppressScoringOptions();
+  // The route seed --causes--> pivot <--supports-- rival EXISTS. Forge a program
+  // over edge types the corpus never contains (derived_from / supersedes): the
+  // walk produces an empty frontier, so nothing is suppressed or promoted.
+  const state = { words: new Array(1024).fill(0n) };
+  const words = encodeBmuPublicPathProgramWords({
+    programIndex: 0, queryKey: SUPPRESS_QUERY_KEY, branchLimit: 4,
+    validFromEpoch: 0n, expiryEpoch: 0n,
+    steps: [
+      { direction: 'outgoing', edgeType: 'derived_from' },
+      { direction: 'incoming', edgeType: 'supersedes', suppress: true },
+    ],
+  });
+  for (let i = 0; i < 4; i++) state.words[RANGES.POLICY_EVIDENCE_START + i] = words[i];
+  const res = await evaluateRetrievalBenchmarkState(state, corpus, pack, opts);
+  const rows = res.perQuery[0].finalRankingFull;
+  assert.equal(rows.some((r) => r.suppressed === true), false, 'forged-lineage suppress demotes NOTHING (edges absent ⇒ empty walk)');
+  assert.equal(rows.some((r) => r.routed === true), false, 'forged-lineage program promotes NOTHING');
+  // Inert ⇒ the rival keeps its reranker-CEIL top slot, exactly like ZERO_STATE.
+  const topB = bmuJudgeTopB(rows.map((r) => ({ docId: r.docId, rerankerScore: r.rerankerScore, finalReorderingScore: r.finalReorderingScore, routed: r.routed === true, suppressed: r.suppressed === true })), 4, JUDGE_GRID);
+  assert.equal(topB[0], 'rival-doc', 'forged suppress is inert: rival still rank 1 (no eviction)');
+});
+
+test('control §18.3(c): an OVERBROAD suppress that targets its OWN answer only evicts that answer — it can never smuggle a forbidden into the answer slot', async () => {
+  // The suppress channel HARD-EXCLUDES its targets from topB. If a program
+  // suppresses the doc that WOULD be the answer, the row simply scores 0 — the
+  // attacker cannot use suppression to make a FORBIDDEN doc win the answer slot,
+  // because promotion is a separate, terminal-scoped channel. Here the rival is
+  // suppressed AND no non-answer doc is ever promoted into a routed win.
+  const corpus = suppressionCorpus();
+  const pack = { epochId: 0, evalSeedCommit: `0x${'71'.repeat(32)}`, events: [corpus.events[0]] };
+  const opts = suppressScoringOptions();
+  const state = { words: new Array(1024).fill(0n) };
+  const words = encodeBmuPublicPathProgramWords({
+    programIndex: 0, queryKey: SUPPRESS_QUERY_KEY, branchLimit: 4,
+    validFromEpoch: 0n, expiryEpoch: 0n,
+    steps: [
+      { direction: 'outgoing', edgeType: 'causes' },
+      { direction: 'incoming', edgeType: 'supports', suppress: true },
+    ],
+  });
+  for (let i = 0; i < 4; i++) state.words[RANGES.POLICY_EVIDENCE_START + i] = words[i];
+  const res = await evaluateRetrievalBenchmarkState(state, corpus, pack, opts);
+  const rows = res.perQuery[0].finalRankingFull;
+  const entries = rows.map((r) => ({ docId: r.docId, rerankerScore: r.rerankerScore, finalReorderingScore: r.finalReorderingScore, routed: r.routed === true, suppressed: r.suppressed === true }));
+  const topB = bmuJudgeTopB(entries, 4, JUDGE_GRID);
+  // The suppressed rival is HARD-EXCLUDED from topB (never occupies the answer
+  // slot), and NO filler was promoted into a routed win to take its place — the
+  // suppress program cannot mint a promotion (promotion is terminal-scoped and
+  // this program routes no promote terminal).
+  assert.ok(!topB.includes('rival-doc'), 'overbroad suppress hard-excludes its target from topB');
+  assert.equal(entries.some((e) => e.routed === true), false, 'a suppress program promotes NOTHING — no forbidden can be routed into the answer slot');
+});
