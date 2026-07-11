@@ -506,9 +506,14 @@ export function generateMultiHopClusters({
       id: b1Id, role: 'chain_hop1',
       text: hopCount === 2
         ? `Delegation review ${tsDate}: comparison docket ${relayToken} was opened for ${canonical}. Its delegated function is ${topic}; filed branches disputing the ${targetAttr} route through this docket and must be read before choosing an endpoint.`
+        // §17.21 round-5: the coref bridge must LEAD with the canonical subject
+        // and echo the query's possessive `{canonical}'s {topic}` framing — the
+        // r5-evict confirm leg proved the alias-led phrasing loses the top-4
+        // stage-1 race to the possessive-mirroring decoys on the coref-framed
+        // I6-disjoint cluster (per-cluster BC1 fragility).
         : (corefFramed
-          ? `${alias} filed review memo ${ticket} on ${tsDate} on behalf of ${canonical}. The memo concerns ${topic}; filed branches disputing the ${targetAttr} route through its authority comparison docket.`
-          : `Review memo ${ticket}, filed ${tsDate}, was opened for ${canonical}. Its subject is ${topic}; filed branches disputing the ${targetAttr} route through its authority comparison docket.`),
+          ? `${canonical}'s ${topic} review memo ${ticket} was filed on ${tsDate} by ${alias} on the subject's behalf; filed branches disputing the ${targetAttr} route through its authority comparison docket.`
+          : `${canonical}'s ${topic} review memo ${ticket} was filed on ${tsDate}; filed branches disputing the ${targetAttr} route through its authority comparison docket.`),
     });
     pushDoc({
       id: b2Id, role: hopCount === 3 ? 'chain_hop2' : 'path_pivot', grounding: 'distant',

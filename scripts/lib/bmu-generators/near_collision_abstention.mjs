@@ -565,19 +565,32 @@ export function generateNearCollisionAbstentionClusters({
           branchIds: [...topology.terminalIds],
         });
       } else {
-        const anchorId = docId(`public_path_anchor:${groupIndex}`);
-        pathDocs.push(
-          { id: anchorId, role: 'path_anchor', text: `Registry comparison for ${canonical}'s ${attr} groups another trio of near-collision filings for textual review.` },
-        );
-        pathRelations.push({ src: anchorId, dst: sinkId, type: operationPlan.outgoingEdgeType, label: 'public_path_seed' });
+        // §17.21 round-5: side trios MUST be reachable from the SAME
+        // collision_seed_trap seed or no program can ever evict them — the
+        // real-Qwen proof at the r5-evict context showed side-group decoys
+        // (formerly seeded from their own neutral anchors, never among the
+        // top-4 stage-1 seeds) are verbatim query-echo docs that ride into
+        // topB on merit ⇒ forbidden_admitted ⇒ gate floor. Seeding the side
+        // sinks from the trap makes every trio step-produced at the depth-1
+        // suppress step (and the §18.3 eviction upgrade excludes them from
+        // topB). Side sinks stay terminal-free dead ends — no decoy is routed
+        // IN, and each node keeps a single route (no ambiguous lineage).
+        pathRelations.push(...sinkIds.map((id) => ({ src: collisionSeedTrapId, dst: id, type: operationPlan.outgoingEdgeType, label: 'public_path_seed' })));
         for (const d of trio) {
           pathRelations.push({ src: d.id, dst: sinkId, type: operationPlan.incomingEdgeType, label: 'public_path_branch' });
         }
         pathGroups.push({
           sinkId, sinkIds, truthId: null, decoyIds: trio.map((d) => d.id),
-          anchorId, midIds: [], branchIds: [],
+          anchorId: collisionSeedTrapId, midIds: [], branchIds: [],
         });
       }
+    }
+    // Fail-closed: the trap's step-0 outgoing fan (primary + side sinks) must
+    // fit the branch cap or id-sorted capping could silently drop the PRIMARY
+    // sink and break routing.
+    const trapFan = pathRelations.filter((r) => r.src === collisionSeedTrapId && r.label === 'public_path_seed').length;
+    if (trapFan > operation.operationProgram.branchLimit) {
+      throw new Error(`bmu near_collision: trap step-0 fan ${trapFan} exceeds branchLimit ${operation.operationProgram.branchLimit}`);
     }
     const allDocs = [...spec.docs, ...pathDocs];
 

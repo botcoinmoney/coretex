@@ -158,12 +158,15 @@ test('legacy v1 certifyBank fails closed on a balanced BMU-v2 temporal bank', ()
   const report = certifyBank(bank, { seed: 'unit-test-seed' });
   assert.equal(report.totals.rows, 10);
   assert.equal(report.totals.oracleRate, 0);
-  assert.equal(report.baselineRates.bm25.uRate, 0.2);
+  // Round-5 suppress-reach sinks enlarge the doc pool again; the fixed-seed
+  // bm25 draw now covers one fewer row (0.2 -> 0.1, strictly better).
+  assert.equal(report.baselineRates.bm25.uRate, 0.1);
   assert.equal(report.baselineRates.firstK.uRate, 0);
-  // Deep-terminal mid relays enlarge the doc pool, shifting this fixed-seed
-  // random draw: one lucky 3-doc draw covers one row. randomK is a BANK-level
-  // rate gate; the pack still fails closed below.
-  assert.equal(report.baselineRates.randomK.uRate, 0.1);
+  // Deep-terminal mid relays + round-5 suppress-reach sinks enlarge the doc
+  // pool, shifting this fixed-seed random draw: the lucky 3-doc draw no longer
+  // covers any row. randomK is a BANK-level rate gate; the pack still fails
+  // closed below.
+  assert.equal(report.baselineRates.randomK.uRate, 0);
   assert.equal(report.shortcutGates.requiredForFamily, true);
   assert.equal(report.shortcutGates.pass, true);
   assert.equal(report.shortcutGates.lanes.subjectScopedRecency.competitiveWithOracle, false);
@@ -172,7 +175,9 @@ test('legacy v1 certifyBank fails closed on a balanced BMU-v2 temporal bank', ()
   assert.equal(report.totals.certificationRate, 0);
   assert.equal(report.rejectedTasks.length, 10);
   assert.equal(report.rejectedReasonHistogram.oracle_failed, 10);
-  assert.equal(report.rejectedReasonHistogram.trivial_baseline_solves, 2);
+  // Round-5 pool growth: bm25 covers one fewer row and randomK none, so only
+  // one row remains trivially-baseline-solved in this fixed-seed fixture.
+  assert.equal(report.rejectedReasonHistogram.trivial_baseline_solves, 1);
   assert.deepEqual(report.certifiedSubset, []);
   // no-silent-caps: real lane not run must be stated
   assert.match(report.realLaneCoverage.cap, /NOT RUN/);

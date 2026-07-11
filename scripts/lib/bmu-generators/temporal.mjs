@@ -551,6 +551,45 @@ export function generateTemporalClusters({
       // topology oracle: golds and in-path controls carry the identical edge.
       ...[...goldBranchIds, ...pathDecoyIds].map((src) => ({ src, dst: staleId, type: 'supersedes', label: 'supersedes_candidate' })),
     ];
+    // §17.21 round-5: EVERY forbidden doc must be reachable by the executed
+    // suppress walk or no program can ever evict it (real-Qwen proof at the
+    // r5-evict context: the escalation shadows + the 4th shortcut control sat
+    // OFF the topology, were never step-produced, and rode into topB on merit
+    // ⇒ forbidden_admitted ⇒ gate floor). Hang each off-topology forbidden doc
+    // on a dedicated suppress-reach sink seeded from the SAME stale seed
+    // (outgoing step-0 edge) so the depth-1 suppress step produces — and the
+    // §18.3 eviction upgrade excludes — all of them. Chunked to the branch cap;
+    // the step-0 fan (path pivot + suppress sinks) is cap-checked fail-closed.
+    const offTopologyForbiddenIds = [...shortcutControlIds.slice(3), ...shadowIds];
+    if (offTopologyForbiddenIds.length > 0) {
+      const branchCap = operation.operationProgram.branchLimit;
+      const chunks = [];
+      for (let i = 0; i < offTopologyForbiddenIds.length; i += branchCap) {
+        chunks.push(offTopologyForbiddenIds.slice(i, i + branchCap));
+      }
+      if (1 + chunks.length > branchCap) {
+        throw new Error(`bmu temporal: step-0 fan ${1 + chunks.length} (path pivot + suppress sinks) exceeds branchLimit ${branchCap}`);
+      }
+      chunks.forEach((chunk, ci) => {
+        const suppressSinkId = docId(`public_path_suppress_sink:${ci}`);
+        // Deliberately NOT subject-scoped and NOT validity-current: a neutral
+        // current subject-scoped doc would enlarge the veto-free pool a public
+        // recency/currency sorter can pack into topB (cheap-gate regression).
+        const sinkDoc = {
+          id: suppressSinkId, lane: 'deep', kind: 'bmu_public_record',
+          entityIds: [universe],
+          text: `Neutral review holding docket ${priorDate}-x${ci + 1}-r${ordinal} groups parallel superseded observations for a public-path check.`,
+          shape: 'temporal_update_record', timestamp: `${priorDate}T12:00:00Z`, currentStaleFlag: false,
+          validity: { subjectEntityId: subj.id, attribute: attr, validFrom: priorDate, observedAt: `${priorDate}T12:00:00Z`, validUntil: priorDate }, liveUpdateEpoch: epoch,
+        };
+        Object.defineProperty(sinkDoc, 'role', { value: 'path_suppress_sink', enumerable: false });
+        docs.push(sinkDoc);
+        relations.push({ src: staleId, dst: suppressSinkId, type: operation.operationProgram.steps[0].edgeType, label: 'public_path_seed' });
+        for (const src of chunk) {
+          relations.push({ src, dst: suppressSinkId, type: operation.operationProgram.steps[1].edgeType, label: 'public_path_branch' });
+        }
+      });
+    }
 
     // ── k=5 rows: inherited qrels per type + template bank + bmuTask ────────
     if (spec.queryStubs.length !== BMU_TEMPORAL_CLUSTER_K) {

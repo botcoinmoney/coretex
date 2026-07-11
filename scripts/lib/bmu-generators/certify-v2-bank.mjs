@@ -494,7 +494,10 @@ export function oracleSolvedMarginAudit(lane) {
     const promoted = new Set(executed.promoteTerminalIds ?? executed.terminalIds);
     const suppressed = new Set([...(executed.suppressLineageIds ?? []), ...(executed.suppressTerminalIds ?? []), ...(executed.offPathSuppressedIds ?? [])]);
     const task = row.bmuTask;
-    const routedForbidden = (task.forbiddenEvidence ?? []).filter((id) => terminals.has(id) && !suppressed.has(id));
+    // A forbidden PROMOTED terminal is always a rejection: at runtime promote
+    // wins any suppress overlap, so a forbidden doc that reaches terminal depth
+    // enters topB with +UNIT even if some walk also marks it suppressed lineage.
+    const routedForbidden = (task.forbiddenEvidence ?? []).filter((id) => promoted.has(id));
     if (routedForbidden.length > 0) {
       rowFindings.push({ rowId: row.id, reject: 'forbidden_terminal_routed', routedForbidden });
       continue;
