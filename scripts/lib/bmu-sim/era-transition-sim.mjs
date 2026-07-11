@@ -507,6 +507,44 @@ export function crossFamilyDedupCensus({ eras = [1, 2] } = {}) {
   return perEra;
 }
 
+/**
+ * Exhaustive ceiling on distinct cross-family step-signatures achievable under
+ * the current deep-terminal bank + single mutually-exclusive suppress flag per
+ * suppressable NON-FINAL INCOMING step (the live generator's overlay envelope:
+ * no flags on the outgoing seed or the terminal step; 0x20/0x40 mutually
+ * exclusive). Proves whether the N1 target 144/144 is reachable WITHOUT changing
+ * the bank shape / decoder.
+ *
+ * Per program: achievable flag-patterns = 3^(#suppressable non-final incoming
+ * steps) — 3 for a 3-step program (only step 1), 9 for a 4-step (steps 1,2). A
+ * program contributes at most min(#families, #patterns) distinct cross-family
+ * sigs (pigeonhole). Current bank = 32 three-step + 4 four-step ⇒ ceiling
+ * 32·min(4,3) + 4·min(4,9) = 96 + 16 = 112 < 144.
+ */
+export function crossFamilyDistinctnessCeiling({ era = 1, familyCount = 4 } = {}) {
+  const bank = programBankForEra(era);
+  const perShape = {};
+  let ceiling = 0;
+  for (const program of bank) {
+    let suppressable = 0;
+    for (let i = 1; i < program.steps.length - 1; i++) if (program.steps[i].direction === 'incoming') suppressable += 1;
+    const patterns = 3 ** suppressable;
+    const contribution = Math.min(familyCount, patterns);
+    ceiling += contribution;
+    const shape = `${program.steps.length}-step`;
+    perShape[shape] = perShape[shape] ?? { count: 0, patternsPerProgram: patterns, contributionPerProgram: contribution };
+    perShape[shape].count += 1;
+  }
+  return {
+    familyCount,
+    totalCueBoundClasses: bank.length * familyCount,
+    maxDistinctCrossFamilySigs: ceiling,
+    reaches144: ceiling >= bank.length * familyCount,
+    ratioCeiling: Number((ceiling / (bank.length * familyCount)).toFixed(4)),
+    perShape,
+  };
+}
+
 export function sha256Hex(text) {
   return createHash('sha256').update(text).digest('hex');
 }

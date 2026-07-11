@@ -11,6 +11,7 @@ import * as dist from '../../dist/index.js';
 import {
   runEraTransition,
   crossFamilyDedupCensus,
+  crossFamilyDistinctnessCeiling,
   buildClassCatalog,
 } from '../../../../scripts/lib/bmu-sim/era-transition-sim.mjs';
 import { executeProgramOverRelations } from '../../../../scripts/lib/bmu-generators/operation-program.mjs';
@@ -79,6 +80,23 @@ test('cross-family dedup census: 144 cue-bound classes collapse to 72 distinct s
     assert.equal(census[era].familySharingSets['conflict_lifecycle+near_collision_abstention+temporal'], 36);
     assert.equal(census[era].familySharingSets.multi_hop_relation, 36);
   }
+});
+
+test('cross-family 144 target is UNREACHABLE via flags: ceiling 112 (pigeonhole); collapse is correctness-forced (accepted headroom §17.29)', () => {
+  // §17.29 ruling-2 outcome: 144/144 is NOT reachable within the deep-terminal
+  // bank + single-non-final-flag overlay. This locks the ceiling so a future
+  // change that claims to reach 144 must FIRST change the bank shape.
+  for (const era of [1, 2]) {
+    const c = crossFamilyDistinctnessCeiling({ era, familyCount: 4 });
+    assert.equal(c.maxDistinctCrossFamilySigs, 112, `era ${era} ceiling`);
+    assert.equal(c.reaches144, false);
+    assert.equal(c.perShape['3-step'].patternsPerProgram, 3); // pigeonhole: 4 families, 3 flag states
+    assert.equal(c.perShape['3-step'].count, 32);
+    assert.equal(c.perShape['4-step'].count, 4);
+  }
+  // retained design measures 72 (< 112 ceiling): the extra gap is the
+  // correctness-forced 3-family seed-treatment equivalence.
+  assert.equal(crossFamilyDedupCensus({ eras: [1] })[1].distinctCrossFamilySigs, 72);
 });
 
 test('transition journal per-evolve derives eviction + costly + retirement counters', () => {
