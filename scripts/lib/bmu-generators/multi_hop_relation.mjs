@@ -522,13 +522,24 @@ export function generateMultiHopClusters({
     // provenance phrasings ("filed arrangement / basis / grounds / paperwork /
     // established") rerank b1 weakly — observed live: the v4 provenance row alone
     // fails missing_required, holding the block to 2/3 flips (exactly the accept
-    // floor → seed-draw-fragile). Echo the provenance query vocabulary into b1 in
-    // a phrasing DISJOINT from every CP skeleton (lint-checked below), never the
-    // answer value, never a bridge token, so the provenance row's required seed
-    // survives into top-B and the block flips 3/3 for any draw.
+    // floor → seed-draw-fragile).
+    //
+    // ITERATION NOTE (real-Qwen margin, round-6 attempt 1): a generic appended
+    // sentence with NO slot words ("...arrangement of record that establishes
+    // the basis and grounds the routing") DILUTED b1's reranker relevance and
+    // regressed ALL THREE block rows to missing_required (b1 lost top-B on the
+    // endpoint phrasings that previously flipped; route/evict/promote stayed
+    // green). The echo must therefore be slot-anchored: LEAD with the same
+    // possessive `{canonical}'s {topic}` pattern that §17.21 proved wins the
+    // race, and name the {targetAttr}, so the added sentence RAISES b1's
+    // alignment with every question's surface while adding the provenance
+    // vocabulary (authority/filed/basis). Phrasing is 4-gram-disjoint from
+    // every template skeleton (mint-time sharedSkeletonNgrams lint fails
+    // closed), never names the answer value or a bridge token, and never emits
+    // `for {canonical}'s {topic}` (the question-side gram).
     pushDoc({
       id: b1Id, role: 'chain_hop1',
-      text: `${b1Base} For provenance, this filed memo is the arrangement of record that establishes the basis and grounds the routing.`,
+      text: `${b1Base} ${canonical}'s ${topic} authority rests on this ${hopCount === 2 ? 'docket' : 'memo'} as its filed ${targetAttr} basis.`,
     });
     pushDoc({
       id: b2Id, role: hopCount === 3 ? 'chain_hop2' : 'path_pivot', grounding: 'distant',
