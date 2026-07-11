@@ -424,13 +424,24 @@ test('every minted row id lands in eval_hidden under the canonical split', () =>
 
 // ── rotation grid ────────────────────────────────────────────────────────────
 
-test('topic rotation: deterministic grid walk with series suffix past a full cycle', () => {
-  const a = multiHopTopicForEpochSlot(150, 0);
-  const b = multiHopTopicForEpochSlot(150, 1);
-  assert.notDeepEqual(a, b, 'two topics per epoch (slot parity)');
-  assert.deepEqual(multiHopTopicForEpochSlot(150, 2), a, 'slot parity wraps');
-  const wrapped = multiHopTopicForEpochSlot(133 + 18, 0); // (18)*2 = 36 = grid size → cycle 1
-  assert.match(wrapped.topic, /\(series 2\)$/);
+test('topic rotation: per-cluster stride walk, topics pairwise-distinct (delta 9)', () => {
+  // Delta 9 decollision law: every same-epoch cluster ordinal gets its own
+  // grid cell (stride 32 > max clusters/epoch, grid 36), so no two same-epoch
+  // clusters share a (topic, targetAttr) cell — the cross-cluster
+  // decoy-crowding trap observed under real Qwen in §17.22.
+  assert.deepEqual(multiHopTopicForEpochSlot(150, 0), multiHopTopicForEpochSlot(150, 0), 'deterministic');
+  const topics = new Set();
+  for (let slot = 0; slot < 32; slot++) topics.add(multiHopTopicForEpochSlot(150, slot).topic);
+  assert.equal(topics.size, 32, 'same-epoch topics pairwise-distinct across a full mint');
+  // Cross-epoch cell reuse always lands in a later cycle, so the series
+  // suffix keeps the topic STRING distinct: (150,10) and (151,14) hit the
+  // same grid cell (index delta = 32 + 4 = 36) but different cycles.
+  const e0 = multiHopTopicForEpochSlot(150, 10);
+  const e1 = multiHopTopicForEpochSlot(151, 14);
+  assert.equal(e0.targetAttr, e1.targetAttr, 'same cell reused across epochs');
+  assert.notEqual(e0.topic, e1.topic, 'series suffix separates cross-epoch cell reuse');
+  const wrapped = multiHopTopicForEpochSlot(152, 0); // (152-133)*32 = 608 → deep cycle
+  assert.match(wrapped.topic, /\(series \d+\)$/);
 });
 
 // ── sample bank (certification sizing: §6.7b E_f_min = 110 rows / 22 clusters)

@@ -160,6 +160,25 @@ const MULTI_HOP_BASES = [
   ['paging coverage', 'duty owner', 'owner'],
 ];
 
+/**
+ * Delta 9 (§17.22 round-6, forced by the real-Qwen top-B dump): per-cluster
+ * topic decollision. The inherited walk consumed only 2 grid cells per epoch
+ * (`(epoch-base)*2 + slot%2`), so EVERY same-epoch cluster shared one of two
+ * (topic, targetAttr) cells — and each cluster's off-path decoys (which name
+ * subject+topic+targetAttr by the §6.5 trap law) were lexically live for every
+ * OTHER same-epoch cluster's queries. Those cross-cluster decoys sit outside
+ * the row's forbiddenEvidence, so no program can evict them; under real Qwen
+ * they crowded the REQUIRED hop-1 bridge out of top-B (observed live: the
+ * multi_hop margin block's judged top-B was [answer + three other clusters'
+ * decoys] on every phrasing). The stride walk below gives same-epoch clusters
+ * pairwise-distinct cells (stride > max clusters/epoch; 25 ≤ 36 grid cells),
+ * and cross-epoch cell reuse always lands in a different cycle, so the series
+ * suffix keeps topic STRINGS globally distinct across any active window. The
+ * one-shot-headroom rotation mechanism (grid + series anti-exhaustion) is
+ * unchanged.
+ */
+export const BMU_MULTI_HOP_TOPIC_STRIDE = 32;
+
 export function multiHopTopicForEpochSlot(epoch, slot, { baseEpoch = TYPED_CLUSTER_ROTATION_BASE_EPOCH } = {}) {
   const grid = [];
   for (const qualifier of MULTI_HOP_QUALIFIERS) {
@@ -167,7 +186,7 @@ export function multiHopTopicForEpochSlot(epoch, slot, { baseEpoch = TYPED_CLUST
       grid.push([`${qualifier} ${topicBase}`, targetAttr, valueSlug]);
     }
   }
-  const index = (epoch - baseEpoch) * 2 + (slot % 2);
+  const index = (epoch - baseEpoch) * BMU_MULTI_HOP_TOPIC_STRIDE + slot;
   const cycle = Math.floor(index / grid.length);
   const [topic, targetAttr, valueSlug] = grid[((index % grid.length) + grid.length) % grid.length];
   return { topic: cycle > 0 ? `${topic} (series ${cycle + 1})` : topic, targetAttr, valueSlug };
@@ -524,22 +543,27 @@ export function generateMultiHopClusters({
     // fails missing_required, holding the block to 2/3 flips (exactly the accept
     // floor → seed-draw-fragile).
     //
-    // ITERATION NOTE (real-Qwen margin, round-6 attempt 1): a generic appended
-    // sentence with NO slot words ("...arrangement of record that establishes
-    // the basis and grounds the routing") DILUTED b1's reranker relevance and
-    // regressed ALL THREE block rows to missing_required (b1 lost top-B on the
-    // endpoint phrasings that previously flipped; route/evict/promote stayed
-    // green). The echo must therefore be slot-anchored: LEAD with the same
-    // possessive `{canonical}'s {topic}` pattern that §17.21 proved wins the
-    // race, and name the {targetAttr}, so the added sentence RAISES b1's
-    // alignment with every question's surface while adding the provenance
-    // vocabulary (authority/filed/basis). Phrasing is 4-gram-disjoint from
-    // every template skeleton (mint-time sharedSkeletonNgrams lint fails
-    // closed), never names the answer value or a bridge token, and never emits
-    // `for {canonical}'s {topic}` (the question-side gram).
+    // ITERATION RECORD (round-6, both b1-text echoes FALSIFIED under real Qwen,
+    // then the true root cause found by dumping the judged top-B):
+    //  - attempt 1 (generic appended provenance sentence, no slot words) and
+    //    attempt 2 (slot-anchored possessive echo naming {targetAttr}) BOTH
+    //    regressed all three block rows to missing_required, and attempt 2
+    //    additionally broke the §6.5 trap-dominance design screen (the trap
+    //    must out-rank golds lexically on a bare substrate). b1 text is
+    //    therefore reverted to the proven §17.21 round-5 form below.
+    //  - the judged top-B dump showed the docs crowding b1 out were
+    //    CROSS-CLUSTER off-path decoys (other same-epoch clusters' shared
+    //    digests/parallel filings) carrying the IDENTICAL topic+targetAttr —
+    //    they are outside this row's forbiddenEvidence, so no program can
+    //    evict them. Root cause: the topic rotation walked only 2 grid cells
+    //    per epoch, so ALL same-epoch clusters shared one of two
+    //    (topic, targetAttr) cells. Fixed in multiHopTopicForEpochSlot
+    //    (delta 9): per-cluster cell stride — same-epoch clusters get
+    //    pairwise-distinct topics, so a query's only lexically-live decoys are
+    //    its own cluster's (all forbidden ⇒ all evicted by the program).
     pushDoc({
       id: b1Id, role: 'chain_hop1',
-      text: `${b1Base} ${canonical}'s ${topic} authority rests on this ${hopCount === 2 ? 'docket' : 'memo'} as its filed ${targetAttr} basis.`,
+      text: b1Base,
     });
     pushDoc({
       id: b2Id, role: hopCount === 3 ? 'chain_hop2' : 'path_pivot', grounding: 'distant',
