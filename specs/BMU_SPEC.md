@@ -1,6 +1,6 @@
 # BMU — Budgeted Memory Utility: versioned CoreTex scoring laws
 
-**Revision:** rev4.1 (BMU v2 candidate-executable operation era and keyed opaque ids; changelog in §17).
+**Revision:** rev4.2 (portable coordinator-free inference entrypoint; BMU v2 candidate-executable operation era and keyed opaque ids; changelog in §17).
 **Status:** PRE-ARM implementation candidate. Code and offline evidence may
 accompany this document; nothing here arms, pins, or deploys anything.
 
@@ -1941,6 +1941,40 @@ capacity, plus fallback/underfill-engagement telemetry.
 ---
 
 ## 17. Changelog
+
+### rev4.1 → rev4.2 (portable coordinator-free inference entrypoint; 2026-07-11)
+
+**G-B16 portability (§19 / invariant I11) packaging refinement — DONE, not just
+flagged.** The re-audit at the settled tri-era tip proved the inference code path
+imports zero coordinator/reducer/rewards/validator/shards modules, but the
+`@botcoin/coretex` package still shipped a single barrel (`src/index.ts`, exported
+as `./full`) that re-exports the coordinator core alongside inference — so an
+integrator importing it *loaded* (never executed) `CoreTexCoordinatorCore` +
+validator + chain code. This rev adds, ADDITIVELY, a dedicated portable entrypoint:
+
+- **`src/inference.ts` → `@botcoin/coretex/inference` (`dist/inference.js`).**
+  Re-exports ONLY the inference subtree (`canonical/ + state/ + eval/ +
+  substrate/ + bundle/ + corpus/ + pipeline-versions`). It does NOT route through
+  `validator.ts` (which itself drags in reducer/rewards/shards); its module-load
+  closure is coordinator-free.
+- **Entrypoint map:** `.`/`./validator` = validator-client surface; `./coordinator`
+  = `CoreTexCoordinatorCore`; `./full` = whole barrel; **`./inference` = portable,
+  coordinator-free memory-IR harness surface.**
+- **Proved (evidence, G-B16 lane):** (1) static require-graph closure of
+  `dist/inference.js` contains 0 excluded (coordinator/reducer/rewards/validator/
+  shards) modules vs 20 in `dist/index.js`; (2) runtime: 0 coordinator symbols on
+  the inference entrypoint vs 3 on the barrel, all 23 harness-needed symbols
+  present; (3) the standalone harness re-run THROUGH `./inference` reproduces the
+  6/6 byte-identical scoring result (perTask+scalarPpm, decoder, program-walk,
+  rendered lineage, finalRankingFull) and is bit-identical to the `./full` run
+  (modulo the embedded entrypoint-path string). Unit test
+  `test/unit/inference-entrypoint.test.mjs` asserts the surface includes the
+  inference symbols and excludes every coordinator symbol (with a barrel control).
+
+**Additive-only:** the barrel and every inference/era module are unchanged;
+era-1/2/3 canonical output stays byte-identical (the pinned regression still
+passes). This closes the sole G-B16 honest finding
+(`packaging-granularity-barrel-couples-coordinator`).
 
 ### rev4.0 → rev4.1 (candidate-executable operation era and keyed opaque ids; 2026-07-10)
 

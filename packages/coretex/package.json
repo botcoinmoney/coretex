@@ -20,6 +20,10 @@
       "types": "./dist/coordinator.d.ts",
       "default": "./dist/coordinator.js"
     },
+    "./inference": {
+      "types": "./dist/inference.d.ts",
+      "default": "./dist/inference.js"
+    },
     "./full": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
