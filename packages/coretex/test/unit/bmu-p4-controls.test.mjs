@@ -389,6 +389,31 @@ describe('P4 dual-pack controls over the BMU acceptance law', () => {
     assert.ok(result.deltaPpm > FLOORS.acceptanceThresholdPpm);
   });
 
+  test('control §18.6(3): cross-class gold-suppression dies on the protected-row floor', async () => {
+    // §18.6 taxonomy: suppression only earns when it removes an INTERFERING
+    // competitor on its OWN failing row. A cross-class attacker that suppresses
+    // (evicts) another row's REQUIRED gold registers as that row's trap winning
+    // — a regression. On a PROTECTED row the zero-tolerance floor vetoes the whole
+    // patch even though its net utility is positive, so gold-suppression can never
+    // be laundered into reward.
+    const beforeDown = ids('confirm', 'multi_hop_relation', [10, 11, 12, 13, 14, 15]);
+    const protectedGoldSuppressed = ids('confirm', 'temporal', [0]); // the protected row's gold evicted
+    const fixture = makeFixture();
+    const result = await evalOne({
+      corpus: fixture.corpus,
+      pack: fixture.confirmPack,
+      beforeTrapRows: beforeDown,
+      afterTrapRows: protectedGoldSuppressed,
+    });
+    assert.equal(result.accepted, false, 'cross-class gold-suppression of a protected row is REJECTED');
+    assert.equal(result.reason, 'protected_regression:confirm-temporal-00');
+    assert.ok(result.deltaPpm > FLOORS.acceptanceThresholdPpm, 'the veto fires DESPITE net-positive utility');
+    // The protected row indeed regressed to forbidden_admitted (its gold lost the
+    // slot) — proving the floor, not the threshold, is what killed it.
+    const protectedTask = result.after.bmu.perTask.find((t) => t.recordId === protectedGoldSuppressed[0]);
+    assert.equal(protectedTask?.failure, 'forbidden_admitted', 'the protected row regressed (gold suppressed)');
+  });
+
   test('always-abstain policy atom fails answerable packs through the production path', async () => {
     const fixture = makeFixture();
     const result = await evalOne({

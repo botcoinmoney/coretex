@@ -660,3 +660,161 @@ test('control §18.3(c): an OVERBROAD suppress that targets its OWN answer only 
   assert.ok(!topB.includes('rival-doc'), 'overbroad suppress hard-excludes its target from topB');
   assert.equal(entries.some((e) => e.routed === true), false, 'a suppress program promotes NOTHING — no forbidden can be routed into the answer slot');
 });
+
+// ─── §18.6 CREDITED-OPERATION taxonomy — permanent controls (AUDIT-2) ─────────
+// The ratified invariant (BMU_SPEC §18.6): a memory operation earns iff it
+// CAUSALLY CHANGES the judged evidence set (topB) — promotion adding
+// required/answer OR suppression removing an interfering competitor. "Changes
+// nothing in the judged set ⇒ no reward." These controls pin all three arms:
+//   1. suppress-only on a NON-failing row (no competitor in topB) → judged set
+//      unchanged → earns 0 (NEGATIVE control);
+//   2. suppress-only on a genuinely failing row (competitor crowds out required
+//      evidence) → competitor evicted, required admitted → earns utility
+//      (POSITIVE control — the ratified suppress-to-resolve operation);
+//   3. cross-class gold-suppression dies on the protected-row floor
+//      (bmu-p4-controls §18.6, protected_regression veto).
+const entriesOfResult = (result) => result.perQuery[0].finalRankingFull.map((r) => ({
+  docId: r.docId, rerankerScore: r.rerankerScore, finalReorderingScore: r.finalReorderingScore,
+  routed: r.routed === true, suppressed: r.suppressed === true,
+}));
+
+function suppressRouteState(queryKey) {
+  const state = { words: new Array(1024).fill(0n) };
+  const words = encodeBmuPublicPathProgramWords({
+    programIndex: 0, queryKey, branchLimit: 4, validFromEpoch: 0n, expiryEpoch: 0n,
+    steps: [
+      { direction: 'outgoing', edgeType: 'causes' },
+      { direction: 'incoming', edgeType: 'supports', suppress: true },
+    ],
+  });
+  for (let i = 0; i < 4; i++) state.words[RANGES.POLICY_EVIDENCE_START + i] = words[i];
+  return state;
+}
+
+// NEGATIVE control — suppress-only on a non-failing row earns 0.
+function noCompetitorCorpus() {
+  const query = [1, 0, 0, 0, 0, 0, 0, 0];
+  const low = [0.08, 0.997, 0, 0, 0, 0, 0, 0];
+  const events = [
+    event({
+      id: 'seed', text: 'review anchor', vector: query, queryVector: query,
+      relations: [{ other_id: 'pivot', edgeType: 'causes' }],
+      qrels: [{ documentId: 'gold-doc', relevance: 1 }],
+    }),
+    event({ id: 'pivot', text: 'neutral comparison pivot', vector: low }),
+    // The answer is natively retrievable at the reranker CEIL — the row is
+    // ALREADY solved with no forbidden competitor anywhere in topB.
+    event({ id: 'gold', text: 'the reviewed entry is confirmed and in force', vector: low }),
+    // The suppress target sits at the reranker FLOOR, strictly below every
+    // filler — it is NOT in the judged set to begin with.
+    event({
+      id: 'offpath', text: 'an off-topic non-competitor never near the answer', vector: low,
+      relations: [{ other_id: 'pivot', edgeType: 'supports' }],
+    }),
+    ...Array.from({ length: 40 }, (_, i) => event({
+      id: `filler-${String(i).padStart(2, '0')}`, text: `mid-cosine filler ${i}`, vector: low,
+    })),
+  ];
+  events[0].bmuOperationCue = 'refutation nocompete route';
+  return {
+    schemaVersion: 'coretex.production-corpus.v1', corpusEpoch: 0,
+    corpusRoot: computeCorpusRoot(events), generatedAt: '2026-07-10T00:00:00.000Z',
+    biEncoderModelId: MODEL_ID, biEncoderRevision: REVISION,
+    biEncoderRetrievalKeyLayout: LAYOUT, events,
+    splitRatios: { trainVisiblePct: 70, calibrationPct: 10, evalHiddenPct: 15, canaryPct: 5 },
+  };
+}
+
+test('control §18.6(1): suppress-only on a NON-failing row (no competitor in topB) changes NOTHING in the judged set — earns 0', async () => {
+  const corpus = noCompetitorCorpus();
+  const pack = { epochId: 0, evalSeedCommit: `0x${'71'.repeat(32)}`, events: [corpus.events[0]] };
+  const opts = {
+    ...scoringOptions(),
+    reranker: {
+      model: 'gold-reader',
+      // gold = CEIL, the suppress target = strict FLOOR (below every filler).
+      async score(pairs) {
+        return pairs.map((pair) =>
+          pair.document.includes('confirmed and in force') ? 0.99
+            : pair.document.includes('non-competitor') ? 0.0 : 0.02);
+      },
+    },
+  };
+  const parent = await evaluateRetrievalBenchmarkState(ZERO_STATE, corpus, pack, opts);
+  const parentTopB = bmuJudgeTopB(entriesOfResult(parent), 4, JUDGE_GRID);
+  assert.ok(parentTopB.includes('gold-doc'), 'parent: the answer is natively in topB (non-failing row)');
+  assert.ok(!parentTopB.includes('offpath-doc'), 'parent: the suppress target is NOT in the judged set');
+
+  const candidate = await evaluateRetrievalBenchmarkState(suppressRouteState(bmuOperationQueryKey('refutation nocompete route')), corpus, pack, opts);
+  const cEntries = entriesOfResult(candidate);
+  const candidateTopB = bmuJudgeTopB(cEntries, 4, JUDGE_GRID);
+  // The program DID execute (the target is marked suppressed) — but it removed a
+  // doc that was never in the judged set, so the judged set is byte-identical.
+  assert.equal(cEntries.find((e) => e.docId === 'offpath-doc')?.suppressed, true, 'the suppress program executed (target demoted)');
+  assert.deepEqual(candidateTopB, parentTopB, 'suppress-only with no competitor in topB leaves the judged set UNCHANGED ⇒ no causal change ⇒ earns 0');
+});
+
+// POSITIVE control — suppress-only on a genuinely failing row earns utility.
+function competitorCrowdingCorpus() {
+  const query = [1, 0, 0, 0, 0, 0, 0, 0];
+  const low = [0.08, 0.997, 0, 0, 0, 0, 0, 0];
+  const events = [
+    event({
+      id: 'seed', text: 'review anchor', vector: query, queryVector: query,
+      relations: [{ other_id: 'pivot', edgeType: 'causes' }],
+      qrels: [{ documentId: 'gold-doc', relevance: 1 }],
+    }),
+    event({ id: 'pivot', text: 'neutral comparison pivot', vector: low }),
+    // Forbidden competitor: reranker CEIL, holds rank 1 in topB (row FAILS).
+    // Reached as the incoming:supports terminal so the suppress program routes it.
+    event({
+      id: 'rival', text: 'the RIVAL forbidden competitor rides along in topB', vector: low,
+      relations: [{ other_id: 'pivot', edgeType: 'supports' }],
+    }),
+    // Required answer: retrievable but held just BELOW the budgetB=4 boundary by
+    // three neutral crowders — it only enters the judged set once the competitor
+    // is evicted (the causal change the suppression makes).
+    event({ id: 'gold', text: 'the reviewed entry is confirmed and in force', vector: low }),
+    ...Array.from({ length: 3 }, (_, i) => event({ id: `crowd-${i}`, text: `neutral crowder ${i}`, vector: low })),
+    ...Array.from({ length: 40 }, (_, i) => event({
+      id: `filler-${String(i).padStart(2, '0')}`, text: `mid-cosine filler ${i}`, vector: low,
+    })),
+  ];
+  events[0].bmuOperationCue = 'refutation crowding route';
+  return {
+    schemaVersion: 'coretex.production-corpus.v1', corpusEpoch: 0,
+    corpusRoot: computeCorpusRoot(events), generatedAt: '2026-07-10T00:00:00.000Z',
+    biEncoderModelId: MODEL_ID, biEncoderRevision: REVISION,
+    biEncoderRetrievalKeyLayout: LAYOUT, events,
+    splitRatios: { trainVisiblePct: 70, calibrationPct: 10, evalHiddenPct: 15, canaryPct: 5 },
+  };
+}
+
+test('control §18.6(2): suppress-only on a genuinely failing row (competitor crowds out required) EVICTS the competitor and ADMITS the required — earns utility', async () => {
+  const corpus = competitorCrowdingCorpus();
+  const pack = { epochId: 0, evalSeedCommit: `0x${'71'.repeat(32)}`, events: [corpus.events[0]] };
+  const opts = {
+    ...scoringOptions(),
+    reranker: {
+      model: 'rival-crowder',
+      async score(pairs) {
+        return pairs.map((pair) =>
+          pair.document.includes('RIVAL forbidden competitor') ? 0.98
+            : pair.document.includes('neutral crowder') ? 0.50
+              : pair.document.includes('confirmed and in force') ? 0.40 : 0.02);
+      },
+    },
+  };
+  const parent = await evaluateRetrievalBenchmarkState(ZERO_STATE, corpus, pack, opts);
+  const parentTopB = bmuJudgeTopB(entriesOfResult(parent), 4, JUDGE_GRID);
+  assert.ok(parentTopB.includes('rival-doc'), 'parent: the forbidden competitor is in topB (row FAILS)');
+  assert.ok(!parentTopB.includes('gold-doc'), 'parent: the required answer is crowded OUT of the judged set');
+
+  const candidate = await evaluateRetrievalBenchmarkState(suppressRouteState(bmuOperationQueryKey('refutation crowding route')), corpus, pack, opts);
+  const cEntries = entriesOfResult(candidate);
+  const candidateTopB = bmuJudgeTopB(cEntries, 4, JUDGE_GRID);
+  assert.equal(cEntries.find((e) => e.docId === 'rival-doc')?.suppressed, true, 'candidate: the interfering competitor is suppressed');
+  assert.ok(!candidateTopB.includes('rival-doc'), 'candidate: the competitor is evicted from the judged set');
+  assert.ok(candidateTopB.includes('gold-doc'), 'candidate: evicting the competitor ADMITS the required answer into the judged set (causal change ⇒ utility)');
+  assert.equal(cEntries.some((e) => e.routed === true), false, 'utility came from suppression alone — no promotion channel fired (pure suppress-to-resolve)');
+});
