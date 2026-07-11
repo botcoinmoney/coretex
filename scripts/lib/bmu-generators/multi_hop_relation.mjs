@@ -89,9 +89,11 @@ import {
   bmuEntityHoldoutKeysForSubject,
 } from './common.mjs';
 import {
+  BMU_EXECUTABLE_OPERATION_ERA,
   BMU_EXECUTABLE_PROGRAM_BANK,
   buildProgramPathTopology,
   executableOperationForFamilySlot,
+  programBankForEra,
   stampExecutableOperationTask,
 } from './operation-program.mjs';
 
@@ -114,29 +116,36 @@ const MULTI_HOP_SEMANTIC_PROFILES = Object.freeze([
   Object.freeze({ key: 'dependency', truthKind: 'active dependency' }),
   Object.freeze({ key: 'custody', truthKind: 'accepted custody record' }),
 ]);
-/** Exactly 36 executable programs. Prose semantics rotate independently. */
-export const BMU_MULTI_HOP_OPERATION_CLASSES = Object.freeze(BMU_EXECUTABLE_PROGRAM_BANK.map((program, ordinal) => {
-  const semantic = MULTI_HOP_SEMANTIC_PROFILES[ordinal % MULTI_HOP_SEMANTIC_PROFILES.length];
-  const operation = executableOperationForFamilySlot(BMU_MULTI_HOP_FAMILY, ordinal * 2);
-  return Object.freeze({
-    name: operation.operationClass,
-    semantic: semantic.key,
-    truthKind: semantic.truthKind,
-    outgoingEdgeType: program.outgoingEdgeType,
-    incomingEdgeType: program.incomingEdgeType,
-    topology: ordinal % 2 === 0 ? 'single_sink' : 'dual_sink',
-    sinkMultiplicity: ordinal % 2 === 0 ? 1 : 2,
-    operation,
-  });
-}));
+/** Exactly 36 executable programs per era. Prose semantics rotate independently. */
+const MULTI_HOP_ERA_CLASS_CACHE = new Map();
+export function multiHopOperationClassesForEra(era = BMU_EXECUTABLE_OPERATION_ERA) {
+  const cached = MULTI_HOP_ERA_CLASS_CACHE.get(era);
+  if (cached) return cached;
+  const classes = Object.freeze(programBankForEra(era).map((program, ordinal) => {
+    const semantic = MULTI_HOP_SEMANTIC_PROFILES[ordinal % MULTI_HOP_SEMANTIC_PROFILES.length];
+    const operation = executableOperationForFamilySlot(BMU_MULTI_HOP_FAMILY, ordinal * 2, { era });
+    return Object.freeze({
+      name: operation.operationClass,
+      semantic: semantic.key,
+      truthKind: semantic.truthKind,
+      outgoingEdgeType: program.outgoingEdgeType,
+      incomingEdgeType: program.incomingEdgeType,
+      topology: ordinal % 2 === 0 ? 'single_sink' : 'dual_sink',
+      sinkMultiplicity: ordinal % 2 === 0 ? 1 : 2,
+      operation,
+    });
+  }));
+  MULTI_HOP_ERA_CLASS_CACHE.set(era, classes);
+  return classes;
+}
+export const BMU_MULTI_HOP_OPERATION_CLASSES = multiHopOperationClassesForEra(1);
 
-export function multiHopOperationClassForSlot(operationClassSlot) {
+export function multiHopOperationClassForSlot(operationClassSlot, era = BMU_EXECUTABLE_OPERATION_ERA) {
   if (!Number.isInteger(operationClassSlot) || operationClassSlot < 0) {
     throw new Error('multiHopOperationClassForSlot: non-negative integer slot required');
   }
-  return BMU_MULTI_HOP_OPERATION_CLASSES[
-    Math.floor(operationClassSlot / 2) % BMU_MULTI_HOP_OPERATION_CLASSES.length
-  ];
+  const classes = multiHopOperationClassesForEra(era);
+  return classes[Math.floor(operationClassSlot / 2) % classes.length];
 }
 
 /** Bridge-token vocabulary (ancestor API_HOSTS, evolve-corpus.mjs:34). */
@@ -449,6 +458,7 @@ export function generateMultiHopClusters({
   activeIndex = createBmuActiveIndex(),
   escalation = {},
   operationClassSlotOffset = Math.max(0, (epoch - TYPED_CLUSTER_ROTATION_BASE_EPOCH) * 2),
+  era = BMU_EXECUTABLE_OPERATION_ERA,
 }) {
   if (!Number.isInteger(epoch)) throw new Error('bmu multi_hop: epoch must be an integer');
   if (typeof seed !== 'string' || seed.length === 0) throw new Error('bmu multi_hop: seed required');
@@ -498,7 +508,7 @@ export function generateMultiHopClusters({
     // Operation class is selected BEFORE document text/ids are built and
     // controls the actual edge type of every branch. It is therefore a
     // deterministic topology decision, not a label inferred from gold roles.
-    const operationPlan = multiHopOperationClassForSlot(operationClassSlotOffset + ordinal);
+    const operationPlan = multiHopOperationClassForSlot(operationClassSlotOffset + ordinal, era);
     const operation = operationPlan.operation;
     const operationFamily = BMU_MULTI_HOP_OPERATION_FAMILY;
     const operationClass = operation.operationClass;

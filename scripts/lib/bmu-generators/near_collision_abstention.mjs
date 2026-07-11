@@ -98,9 +98,11 @@ import {
   bmuEntityHoldoutKeysForSubject,
 } from './common.mjs';
 import {
+  BMU_EXECUTABLE_OPERATION_ERA,
   BMU_EXECUTABLE_PROGRAM_BANK,
   buildProgramPathTopology,
   executableOperationForFamilySlot,
+  programBankForEra,
   stampExecutableOperationTask,
 } from './operation-program.mjs';
 
@@ -115,29 +117,36 @@ const NEARCOL_SEMANTIC_PROFILES = Object.freeze([
   Object.freeze({ key: 'variant_scope', primaryKind: 'scope' }),
   Object.freeze({ key: 'variant_attribute', primaryKind: 'attribute' }),
 ]);
-/** Exactly 36 executable programs. Collision semantics rotate separately. */
-export const NEARCOL_OPERATION_CLASSES = Object.freeze(BMU_EXECUTABLE_PROGRAM_BANK.map((program, ordinal) => {
-  const semantic = NEARCOL_SEMANTIC_PROFILES[ordinal % NEARCOL_SEMANTIC_PROFILES.length];
-  const operation = executableOperationForFamilySlot(NEARCOL_FAMILY, ordinal * 2);
-  return Object.freeze({
-    name: operation.operationClass,
-    semantic: semantic.key,
-    primaryKind: semantic.primaryKind,
-    outgoingEdgeType: program.outgoingEdgeType,
-    incomingEdgeType: program.incomingEdgeType,
-    topology: 'single_sink',
-    sinkMultiplicity: 1,
-    operation,
-  });
-}));
+/** Exactly 36 executable programs per era. Collision semantics rotate separately. */
+const NEARCOL_ERA_CLASS_CACHE = new Map();
+export function nearcolOperationClassesForEra(era = BMU_EXECUTABLE_OPERATION_ERA) {
+  const cached = NEARCOL_ERA_CLASS_CACHE.get(era);
+  if (cached) return cached;
+  const classes = Object.freeze(programBankForEra(era).map((program, ordinal) => {
+    const semantic = NEARCOL_SEMANTIC_PROFILES[ordinal % NEARCOL_SEMANTIC_PROFILES.length];
+    const operation = executableOperationForFamilySlot(NEARCOL_FAMILY, ordinal * 2, { era });
+    return Object.freeze({
+      name: operation.operationClass,
+      semantic: semantic.key,
+      primaryKind: semantic.primaryKind,
+      outgoingEdgeType: program.outgoingEdgeType,
+      incomingEdgeType: program.incomingEdgeType,
+      topology: 'single_sink',
+      sinkMultiplicity: 1,
+      operation,
+    });
+  }));
+  NEARCOL_ERA_CLASS_CACHE.set(era, classes);
+  return classes;
+}
+export const NEARCOL_OPERATION_CLASSES = nearcolOperationClassesForEra(1);
 
-export function nearcolOperationClassForSlot(operationClassSlot) {
+export function nearcolOperationClassForSlot(operationClassSlot, era = BMU_EXECUTABLE_OPERATION_ERA) {
   if (!Number.isInteger(operationClassSlot) || operationClassSlot < 0) {
     throw new Error('nearcolOperationClassForSlot: non-negative integer slot required');
   }
-  return NEARCOL_OPERATION_CLASSES[
-    Math.floor(operationClassSlot / 2) % NEARCOL_OPERATION_CLASSES.length
-  ];
+  const classes = nearcolOperationClassesForEra(era);
+  return classes[Math.floor(operationClassSlot / 2) % classes.length];
 }
 
 /** §5.4 question types — four DISTINCT types, five rows (exact_variant_lookup ×2 variants). */
@@ -374,6 +383,7 @@ export function generateNearCollisionAbstentionClusters({
   clusterCount = 2, escalationLevel = 0, clusterSlotOffset = 0,
   ownerEntityId = 'e_universe', rotationBaseEpoch = NEARCOL_ROTATION_BASE_EPOCH,
   operationClassSlotOffset = Math.max(0, (epoch - rotationBaseEpoch) * 2),
+  era = BMU_EXECUTABLE_OPERATION_ERA,
 }) {
   if (!Number.isInteger(epoch) || epoch < 0) throw new Error('generateNearCollisionAbstentionClusters: non-negative integer epoch required');
   if (typeof seed !== 'string' || !seed) throw new Error('generateNearCollisionAbstentionClusters: seed required');
@@ -423,7 +433,7 @@ export function generateNearCollisionAbstentionClusters({
     // Class choice controls both the primary collision axis and every public
     // branch edge. It is selected from cluster topology, never inferred from
     // a qrel/role label after generation.
-    const operationPlan = nearcolOperationClassForSlot(operationClassSlotOffset + c);
+    const operationPlan = nearcolOperationClassForSlot(operationClassSlotOffset + c, era);
     const operation = operationPlan.operation;
     const operationFamily = NEARCOL_OPERATION_FAMILY;
     const operationClass = operation.operationClass;

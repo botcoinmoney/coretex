@@ -10,6 +10,127 @@ export const BMU_EXECUTABLE_EDGE_TYPES = Object.freeze([
 ]);
 
 /**
+ * §18 GRAMMAR-ERA REGISTRY (era-2 iteration — this lane).
+ *
+ * The executable operation grammar is versioned by ERA. An era pins (a) the
+ * disjoint outgoing/incoming edge PARTITION, (b) the two four-step incoming
+ * chains, and (c) the operation-class basis string. The 36-class deep-terminal
+ * bank is REGENERATED per era from (a)+(b). Two eras are DISJOINT-PARTITION when
+ * their OUTGOING edge vocabularies do not intersect — because every legal
+ * program's leading step is `outgoing:<edge>`, a non-intersecting outgoing
+ * vocabulary makes it impossible for any era-N program's step-signature to equal
+ * any era-M program's (N≠M). That is the class-collision guarantee the transfer
+ * census keys on (cue-agnostic step-signature census): cross-era reuseRatio is 0
+ * by construction, so a miner's era-1 residents can never re-key onto era-2
+ * classes without genuinely NEW discovery.
+ *
+ * Era invariants enforced by `assertEraSpec`:
+ *  - outgoing ∩ incoming = ∅  (the symmetric-route `outgoing:X→incoming:X`
+ *    ambiguous-lineage program the decoder refuses fail-closed stays
+ *    inexpressible: fix 2a carried forward);
+ *  - |outgoing| = 2, |incoming| = 4  (so 2×4×4 + 2×2 = 36 classes / margin +4
+ *    over the resident capacity 32 — the §18.6 census floor);
+ *  - every edge is one of the six decoder-known public edge types (the byte law
+ *    is UNCHANGED — era-2 reuses the same 6 edges under a new partition, so no
+ *    decoder/relation-vocabulary change and no new keyed-inversion surface);
+ *  - the four-step chains draw only from the era's incoming set.
+ *
+ * G-B17 three-question posture for a new era (must hold for every registered
+ * era; audited by the era refuter, `bmu-v2-era-registry.test.mjs`):
+ *  Q1 candidate-state causality — era-N programs decode from state words 384–511
+ *     exactly like era-1; ZERO_STATE decodes none; an era-N cluster's required
+ *     terminals are reachable ONLY by executing an era-N program (its edges).
+ *  Q2 executable class-space > capacity — each era adds 36 classes disjoint from
+ *     every other registered era, so the aggregate executable space grows 36 per
+ *     era while the resident capacity stays 32 (strictly widening the gap).
+ *  Q3 no keyed-inversion shortcut — same keyed-HMAC id law, same deep-terminal
+ *     blindness (decoys are depth-1 dead ends, golds observationally identical);
+ *     the edge repartition leaks no labels and reveals no ids.
+ */
+export const BMU_EXECUTABLE_ERA_REGISTRY = Object.freeze({
+  1: Object.freeze({
+    era: 1,
+    basis: BMU_EXECUTABLE_OPERATION_CLASS_BASIS,
+    outgoingEdgeTypes: Object.freeze(['causes', 'derived_from']),
+    incomingEdgeTypes: Object.freeze(['supports', 'supersedes', 'coreference_of', 'co_occurs_with']),
+    fourStepIncomingChains: Object.freeze([
+      Object.freeze(['supports', 'supersedes', 'coreference_of']),
+      Object.freeze(['co_occurs_with', 'coreference_of', 'supersedes']),
+    ]),
+  }),
+  2: Object.freeze({
+    era: 2,
+    basis: 'shared-policy-evidence-384-511-4w-program-v2',
+    // Disjoint OUTGOING vocabulary vs era-1 {causes, derived_from} ⇒ no cross-era
+    // step-signature collision. The evidence/lineage roles rotate: era-2 routes
+    // OUT along the assertion pair {supports, supersedes} and gathers evidence IN
+    // along the causal/coreference quad — a genuinely different traversal grammar
+    // (a miner that learned era-1's causal-lineage-first programs has learned the
+    // WRONG leading step for every era-2 cue).
+    outgoingEdgeTypes: Object.freeze(['supports', 'supersedes']),
+    incomingEdgeTypes: Object.freeze(['coreference_of', 'causes', 'derived_from', 'co_occurs_with']),
+    fourStepIncomingChains: Object.freeze([
+      Object.freeze(['coreference_of', 'causes', 'derived_from']),
+      Object.freeze(['co_occurs_with', 'derived_from', 'causes']),
+    ]),
+  }),
+});
+
+const ALL_EDGE_TYPE_SET = new Set(BMU_EXECUTABLE_EDGE_TYPES);
+
+/** Validate one era spec against the §18 era invariants (fail-closed). */
+export function assertEraSpec(spec) {
+  if (!spec || !Number.isInteger(spec.era) || spec.era < 1) {
+    throw new Error('bmu era spec: era must be a positive integer');
+  }
+  const out = spec.outgoingEdgeTypes ?? [];
+  const inc = spec.incomingEdgeTypes ?? [];
+  if (out.length !== 2 || inc.length !== 4) {
+    throw new Error(`bmu era ${spec.era}: partition must be 2 outgoing × 4 incoming edges`);
+  }
+  for (const e of [...out, ...inc]) {
+    if (!ALL_EDGE_TYPE_SET.has(e)) throw new Error(`bmu era ${spec.era}: unknown public edge type '${String(e)}'`);
+  }
+  const outSet = new Set(out);
+  const incSet = new Set(inc);
+  if (outSet.size !== 2 || incSet.size !== 4) throw new Error(`bmu era ${spec.era}: duplicate edge in partition`);
+  for (const e of out) if (incSet.has(e)) throw new Error(`bmu era ${spec.era}: edge '${e}' in BOTH outgoing and incoming (symmetric-route hazard)`);
+  const chains = spec.fourStepIncomingChains ?? [];
+  if (chains.length !== 2) throw new Error(`bmu era ${spec.era}: exactly 2 four-step incoming chains required`);
+  for (const chain of chains) {
+    if (!Array.isArray(chain) || chain.length !== 3) throw new Error(`bmu era ${spec.era}: each four-step chain has 3 incoming edges`);
+    for (const e of chain) if (!incSet.has(e)) throw new Error(`bmu era ${spec.era}: four-step chain edge '${e}' not in incoming set`);
+  }
+  if (typeof spec.basis !== 'string' || spec.basis.length === 0) throw new Error(`bmu era ${spec.era}: basis string required`);
+  return spec;
+}
+
+/** Resolve a validated era spec by id (defaults to the active era). */
+export function eraSpec(era = BMU_EXECUTABLE_OPERATION_ERA) {
+  const spec = BMU_EXECUTABLE_ERA_REGISTRY[era];
+  if (!spec) throw new Error(`bmu era spec: era ${String(era)} not registered`);
+  return assertEraSpec(spec);
+}
+
+// Cross-era disjointness self-check: no two registered eras share an outgoing
+// edge (⇒ no shared program step-signature ⇒ transfer census reuseRatio 0
+// across eras). Runs once at module load; a future era added with a colliding
+// outgoing vocabulary fails the build.
+(() => {
+  const eras = Object.values(BMU_EXECUTABLE_ERA_REGISTRY).map(assertEraSpec);
+  for (let i = 0; i < eras.length; i++) {
+    for (let j = i + 1; j < eras.length; j++) {
+      const a = new Set(eras[i].outgoingEdgeTypes);
+      for (const e of eras[j].outgoingEdgeTypes) {
+        if (a.has(e)) {
+          throw new Error(`bmu era registry: eras ${eras[i].era} and ${eras[j].era} share outgoing edge '${e}' — cross-era class collision`);
+        }
+      }
+    }
+  }
+})();
+
+/**
  * Disjoint outgoing/incoming edge partition (era-iteration fix 2a). The one
  * outgoing step draws only from the causal-lineage pair; every incoming step
  * draws only from the four evidence edges. Because the two vocabularies never
@@ -108,26 +229,59 @@ export const BMU_FAMILY_OFFPATH_SUPPRESS_STEPS = Object.freeze({
  * Throws (mint fails closed) on any other shape, including the legacy
  * symmetric-route diagonal.
  */
-export function assertDisjointPartitionProgram(program) {
+export function assertDisjointPartitionProgram(program, era) {
   const steps = program?.steps;
   if (!Array.isArray(steps) || steps.length < 2 || steps.length > 4) {
     throw new Error('bmu mint lint: program must have 2..4 steps (one outgoing, then incoming chain)');
   }
-  if (steps[0].direction !== 'outgoing' || !OUTGOING_EDGE_TYPES.has(steps[0].edgeType)) {
-    throw new Error(`bmu mint lint: step 0 must be outgoing over {${BMU_EXECUTABLE_OUTGOING_EDGE_TYPES.join(', ')}}`);
+  // Resolve the era to lint against. When an era is supplied, the program must
+  // conform to THAT era's partition. When omitted, the era is INFERRED from the
+  // leading outgoing edge — unambiguous because registered eras never share an
+  // outgoing vocabulary (cross-era disjointness self-check above).
+  let spec;
+  if (era === undefined) {
+    if (steps[0].direction !== 'outgoing') {
+      throw new Error('bmu mint lint: step 0 must be outgoing');
+    }
+    const owner = Object.values(BMU_EXECUTABLE_ERA_REGISTRY)
+      .find((s) => new Set(s.outgoingEdgeTypes).has(steps[0].edgeType));
+    if (!owner) {
+      throw new Error(`bmu mint lint: step 0 edge '${steps[0].edgeType}' belongs to no registered era's outgoing vocabulary`);
+    }
+    spec = assertEraSpec(owner);
+  } else {
+    spec = eraSpec(era);
+  }
+  const outSet = new Set(spec.outgoingEdgeTypes);
+  const incSet = new Set(spec.incomingEdgeTypes);
+  if (steps[0].direction !== 'outgoing' || !outSet.has(steps[0].edgeType)) {
+    throw new Error(`bmu mint lint (era ${spec.era}): step 0 must be outgoing over {${spec.outgoingEdgeTypes.join(', ')}}`);
   }
   for (let i = 1; i < steps.length; i++) {
-    if (steps[i].direction !== 'incoming' || !INCOMING_EDGE_TYPES.has(steps[i].edgeType)) {
-      throw new Error(`bmu mint lint: step ${i} must be incoming over {${BMU_EXECUTABLE_INCOMING_EDGE_TYPES.join(', ')}}`);
+    if (steps[i].direction !== 'incoming' || !incSet.has(steps[i].edgeType)) {
+      throw new Error(`bmu mint lint (era ${spec.era}): step ${i} must be incoming over {${spec.incomingEdgeTypes.join(', ')}}`);
     }
   }
   return program;
 }
 
-const FOUR_STEP_INCOMING_CHAINS = Object.freeze([
-  Object.freeze(['supports', 'supersedes', 'coreference_of']),
-  Object.freeze(['co_occurs_with', 'coreference_of', 'supersedes']),
-]);
+/**
+ * Infer which registered era a disjoint-partition program belongs to (by its
+ * leading outgoing edge). Throws if the program is not a valid single-era
+ * program. This is the canonical cross-era class-assignment used to prove a
+ * program cannot belong to two eras at once.
+ */
+export function inferProgramEra(program) {
+  const steps = program?.steps;
+  if (!Array.isArray(steps) || steps.length < 1) throw new Error('inferProgramEra: program has no steps');
+  const owner = Object.values(BMU_EXECUTABLE_ERA_REGISTRY)
+    .find((s) => new Set(s.outgoingEdgeTypes).has(steps[0].edgeType));
+  if (!owner) throw new Error(`inferProgramEra: leading edge '${steps[0]?.edgeType}' belongs to no registered era`);
+  assertDisjointPartitionProgram(program, owner.era);
+  return owner.era;
+}
+
+const FOUR_STEP_INCOMING_CHAINS = BMU_EXECUTABLE_ERA_REGISTRY[1].fourStepIncomingChains;
 
 function bankEntry(ordinal, outgoingEdgeType, incomingChain) {
   return Object.freeze({
@@ -152,21 +306,40 @@ function bankEntry(ordinal, outgoingEdgeType, incomingChain) {
  * classes differ only when their encoded operation really differs. Every
  * entry passes the mint lint by construction.
  */
-export const BMU_EXECUTABLE_PROGRAM_BANK = Object.freeze([
-  ...BMU_EXECUTABLE_OUTGOING_EDGE_TYPES.flatMap((outgoingEdgeType, outerIndex) =>
-    BMU_EXECUTABLE_INCOMING_EDGE_TYPES.flatMap((firstIncoming, firstIndex) =>
-      BMU_EXECUTABLE_INCOMING_EDGE_TYPES.map((secondIncoming, secondIndex) => bankEntry(
-        outerIndex * 16 + firstIndex * 4 + secondIndex,
+/**
+ * Build the 36-class disjoint-partition deep-terminal program bank for one era.
+ * Ordinal layout is identical across eras (32 three-step 2×4×4 + 4 four-step
+ * 2×2), so `floor(sequence/2) mod 36` addresses the same slot index in every
+ * era — only the edge vocabulary differs. Every entry passes the era-scoped
+ * mint lint by construction.
+ */
+const ERA_BANK_CACHE = new Map();
+export function programBankForEra(era = BMU_EXECUTABLE_OPERATION_ERA) {
+  const cached = ERA_BANK_CACHE.get(era);
+  if (cached) return cached;
+  const spec = eraSpec(era);
+  const out = spec.outgoingEdgeTypes;
+  const inc = spec.incomingEdgeTypes;
+  const bank = Object.freeze([
+    ...out.flatMap((outgoingEdgeType, outerIndex) =>
+      inc.flatMap((firstIncoming, firstIndex) =>
+        inc.map((secondIncoming, secondIndex) => bankEntry(
+          outerIndex * 16 + firstIndex * 4 + secondIndex,
+          outgoingEdgeType,
+          [firstIncoming, secondIncoming],
+        )))),
+    ...out.flatMap((outgoingEdgeType, outerIndex) =>
+      spec.fourStepIncomingChains.map((chain, chainIndex) => bankEntry(
+        32 + outerIndex * spec.fourStepIncomingChains.length + chainIndex,
         outgoingEdgeType,
-        [firstIncoming, secondIncoming],
-      )))),
-  ...BMU_EXECUTABLE_OUTGOING_EDGE_TYPES.flatMap((outgoingEdgeType, outerIndex) =>
-    FOUR_STEP_INCOMING_CHAINS.map((chain, chainIndex) => bankEntry(
-      32 + outerIndex * FOUR_STEP_INCOMING_CHAINS.length + chainIndex,
-      outgoingEdgeType,
-      chain,
-    ))),
-].map((entry) => (assertDisjointPartitionProgram(entry), entry)));
+        chain,
+      ))),
+  ].map((entry) => (assertDisjointPartitionProgram(entry, era), entry)));
+  ERA_BANK_CACHE.set(era, bank);
+  return bank;
+}
+
+export const BMU_EXECUTABLE_PROGRAM_BANK = programBankForEra(1);
 
 export function canonicalBmuOperationProgram(program) {
   if (!program || program.branchLimit !== BMU_EXECUTABLE_PROGRAM_BRANCH_LIMIT) {
@@ -189,7 +362,7 @@ export function canonicalBmuOperationProgram(program) {
   });
 }
 
-export function executableOperationSignature({ operationCue, operationProgram, steps, branchLimit = BMU_EXECUTABLE_PROGRAM_BRANCH_LIMIT }) {
+export function executableOperationSignature({ operationCue, operationProgram, steps, branchLimit = BMU_EXECUTABLE_PROGRAM_BRANCH_LIMIT, operationClassBasis = BMU_EXECUTABLE_OPERATION_CLASS_BASIS }) {
   const canonicalCue = String(operationCue).normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
   if (!/^[a-z0-9][a-z0-9 _-]*$/.test(String(operationCue)) || canonicalCue !== operationCue
       || operationCue.length < 4 || operationCue.length > 160) {
@@ -204,7 +377,7 @@ export function executableOperationSignature({ operationCue, operationProgram, s
     operationProgram: program,
     operationLaw: 'public_path_program_v1',
     operationClass: executableSignature,
-    operationClassBasis: BMU_EXECUTABLE_OPERATION_CLASS_BASIS,
+    operationClassBasis,
     executableSignature,
   });
 }
@@ -217,9 +390,11 @@ export function executableOperationForFamilySlot(family, operationSequence, { er
     throw new Error('operationSequence must be a non-negative integer');
   }
   if (!Number.isInteger(era) || era < 1) throw new Error('operation era must be a positive integer');
-  const classOrdinal = Math.floor(operationSequence / 2) % BMU_EXECUTABLE_PROGRAM_BANK.length;
-  const plan = BMU_EXECUTABLE_PROGRAM_BANK[classOrdinal];
-  assertDisjointPartitionProgram(plan);
+  const spec = eraSpec(era);
+  const bank = programBankForEra(era);
+  const classOrdinal = Math.floor(operationSequence / 2) % bank.length;
+  const plan = bank[classOrdinal];
+  assertDisjointPartitionProgram(plan, era);
   // §18.3 fix 2: overlay the family suppression plan onto the base bank steps.
   // A non-final suppress step must exist for the flag to be signature-bearing;
   // marking the final step is refused (that would demote the answer terminal).
@@ -253,6 +428,7 @@ export function executableOperationForFamilySlot(family, operationSequence, { er
     ...executableOperationSignature({
       operationCue,
       operationProgram: { branchLimit: plan.branchLimit, steps: suppressedSteps },
+      operationClassBasis: spec.basis,
     }),
   });
 }

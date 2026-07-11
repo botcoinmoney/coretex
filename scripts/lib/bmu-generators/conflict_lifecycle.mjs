@@ -73,9 +73,11 @@ import {
   bmuEntityHoldoutKeysForSubject,
 } from './common.mjs';
 import {
+  BMU_EXECUTABLE_OPERATION_ERA,
   BMU_EXECUTABLE_PROGRAM_BANK,
   buildProgramPathTopology,
   executableOperationForFamilySlot,
+  programBankForEra,
   stampExecutableOperationTask,
 } from './operation-program.mjs';
 
@@ -96,36 +98,49 @@ export const CONFLICT_SEMANTIC_OPERATIONS = Object.freeze([
   Object.freeze({ id: 'appeal_resolution', decision: 'apply the final appeal disposition' }),
 ]);
 
-export const CONFLICT_PATH_TOPOLOGIES = Object.freeze(BMU_EXECUTABLE_PROGRAM_BANK.map((program) =>
-  Object.freeze({
-    id: `${program.outgoingEdgeType}_then_${program.incomingEdgeType}`,
-    seed: program.outgoingEdgeType,
-    branch: program.incomingEdgeType,
-  })));
+export function conflictPathTopologiesForEra(era = BMU_EXECUTABLE_OPERATION_ERA) {
+  return Object.freeze(programBankForEra(era).map((program) =>
+    Object.freeze({
+      id: `${program.outgoingEdgeType}_then_${program.incomingEdgeType}`,
+      seed: program.outgoingEdgeType,
+      branch: program.incomingEdgeType,
+    })));
+}
+export const CONFLICT_PATH_TOPOLOGIES = conflictPathTopologiesForEra(1);
 
-/** Exactly 36 executable classes; resolution semantics are independent. */
-export const CONFLICT_OPERATION_CLASS_BANK = Object.freeze(BMU_EXECUTABLE_PROGRAM_BANK.map((program, ordinal) => {
-  const operation = executableOperationForFamilySlot(CONFLICT_FAMILY, ordinal * 2);
-  return Object.freeze({
-    id: operation.operationClass,
-    semantic: CONFLICT_SEMANTIC_OPERATIONS[ordinal % CONFLICT_SEMANTIC_OPERATIONS.length],
-    topology: CONFLICT_PATH_TOPOLOGIES[ordinal],
-    operation,
-  });
-}));
+/** Exactly 36 executable classes per era; resolution semantics are independent. */
+const CONFLICT_ERA_BANK_CACHE = new Map();
+export function conflictOperationClassBankForEra(era = BMU_EXECUTABLE_OPERATION_ERA) {
+  const cached = CONFLICT_ERA_BANK_CACHE.get(era);
+  if (cached) return cached;
+  const topologies = conflictPathTopologiesForEra(era);
+  const bank = Object.freeze(programBankForEra(era).map((program, ordinal) => {
+    const operation = executableOperationForFamilySlot(CONFLICT_FAMILY, ordinal * 2, { era });
+    return Object.freeze({
+      id: operation.operationClass,
+      semantic: CONFLICT_SEMANTIC_OPERATIONS[ordinal % CONFLICT_SEMANTIC_OPERATIONS.length],
+      topology: topologies[ordinal],
+      operation,
+    });
+  }));
+  CONFLICT_ERA_BANK_CACHE.set(era, bank);
+  return bank;
+}
+export const CONFLICT_OPERATION_CLASS_BANK = conflictOperationClassBankForEra(1);
 export const CONFLICT_OPERATION_FAMILIES = Object.freeze(CONFLICT_OPERATION_CLASS_BANK.map((profile) => profile.id));
 
-export function conflictOperationProfileForCluster(operationSequenceOffset, clusterSlot) {
+export function conflictOperationProfileForCluster(operationSequenceOffset, clusterSlot, era = BMU_EXECUTABLE_OPERATION_ERA) {
   if (!Number.isInteger(operationSequenceOffset) || operationSequenceOffset < 0) throw new Error('conflict_lifecycle: non-negative integer operationSequenceOffset required');
   if (!Number.isInteger(clusterSlot) || clusterSlot < 0) throw new Error('conflict_lifecycle: non-negative integer clusterSlot required');
   const sequence = operationSequenceOffset + clusterSlot;
   // Adjacent-pair rotation keeps two entity/template-disjoint instances of
   // every class live together despite conflict's irregular per-epoch count.
-  return CONFLICT_OPERATION_CLASS_BANK[Math.floor(sequence / 2) % CONFLICT_OPERATION_CLASS_BANK.length];
+  const bank = conflictOperationClassBankForEra(era);
+  return bank[Math.floor(sequence / 2) % bank.length];
 }
 
-export function conflictOperationFamilyForCluster(operationSequenceOffset, clusterSlot) {
-  return conflictOperationProfileForCluster(operationSequenceOffset, clusterSlot).id;
+export function conflictOperationFamilyForCluster(operationSequenceOffset, clusterSlot, era = BMU_EXECUTABLE_OPERATION_ERA) {
+  return conflictOperationProfileForCluster(operationSequenceOffset, clusterSlot, era).id;
 }
 
 /** §5.2 question types — four DISTINCT types, five rows (current_for_scope ×2 variants). */
@@ -383,6 +398,7 @@ export function generateConflictLifecycleClusters({
   epoch, seed, docIdKeyHex, subjects, registry, splitOf,
   clusterCount = 2, escalationLevel = 0, clusterSlotOffset = 0,
   operationSequenceOffset,
+  era = BMU_EXECUTABLE_OPERATION_ERA,
   ownerEntityId = 'e_universe', rotationBaseEpoch = CONFLICT_ROTATION_BASE_EPOCH,
 }) {
   if (!Number.isInteger(epoch) || epoch < 0) throw new Error('generateConflictLifecycleClusters: non-negative integer epoch required');
@@ -431,7 +447,7 @@ export function generateConflictLifecycleClusters({
     const canonical = subj.canonicalName;
     const isProject = /-svc-/.test(canonical);
     const rnd = prng(`${seed}:bmu-conflict:${epoch}:${subj.id}:${clusterSlot}`);
-    const operationProfile = conflictOperationProfileForCluster(operationSequenceOffset, c);
+    const operationProfile = conflictOperationProfileForCluster(operationSequenceOffset, c, era);
     const operation = operationProfile.operation;
     const operationFamily = operationProfile.id;
     const operationClass = operation.operationClass;

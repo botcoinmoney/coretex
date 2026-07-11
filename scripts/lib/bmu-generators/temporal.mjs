@@ -71,9 +71,11 @@ import {
   bmuEntityHoldoutKeysForSubject,
 } from './common.mjs';
 import {
+  BMU_EXECUTABLE_OPERATION_ERA,
   BMU_EXECUTABLE_PROGRAM_BANK,
   buildProgramPathTopology,
   executableOperationForFamilySlot,
+  programBankForEra,
   stampExecutableOperationTask,
 } from './operation-program.mjs';
 
@@ -102,36 +104,49 @@ export const TEMPORAL_SEMANTIC_OPERATIONS = Object.freeze([
   Object.freeze({ id: 'effective_handoff', decision: 'dated handoff activates the successor value' }),
 ]);
 
-export const TEMPORAL_PATH_TOPOLOGIES = Object.freeze(BMU_EXECUTABLE_PROGRAM_BANK.map((program) =>
-  Object.freeze({
-    id: `${program.outgoingEdgeType}_then_${program.incomingEdgeType}`,
-    seed: program.outgoingEdgeType,
-    branch: program.incomingEdgeType,
-  })));
+export function temporalPathTopologiesForEra(era = BMU_EXECUTABLE_OPERATION_ERA) {
+  return Object.freeze(programBankForEra(era).map((program) =>
+    Object.freeze({
+      id: `${program.outgoingEdgeType}_then_${program.incomingEdgeType}`,
+      seed: program.outgoingEdgeType,
+      branch: program.incomingEdgeType,
+    })));
+}
+export const TEMPORAL_PATH_TOPOLOGIES = temporalPathTopologiesForEra(1);
 
-/** Exactly 36 executable classes; semantic prose rotates independently. */
-export const TEMPORAL_OPERATION_CLASS_BANK = Object.freeze(BMU_EXECUTABLE_PROGRAM_BANK.map((program, ordinal) => {
-  const operation = executableOperationForFamilySlot(BMU_TEMPORAL_FAMILY, ordinal * 2);
-  return Object.freeze({
-    id: operation.operationClass,
-    semantic: TEMPORAL_SEMANTIC_OPERATIONS[ordinal % TEMPORAL_SEMANTIC_OPERATIONS.length],
-    topology: TEMPORAL_PATH_TOPOLOGIES[ordinal],
-    operation,
-  });
-}));
+/** Exactly 36 executable classes per era; semantic prose rotates independently. */
+const TEMPORAL_ERA_BANK_CACHE = new Map();
+export function temporalOperationClassBankForEra(era = BMU_EXECUTABLE_OPERATION_ERA) {
+  const cached = TEMPORAL_ERA_BANK_CACHE.get(era);
+  if (cached) return cached;
+  const topologies = temporalPathTopologiesForEra(era);
+  const bank = Object.freeze(programBankForEra(era).map((program, ordinal) => {
+    const operation = executableOperationForFamilySlot(BMU_TEMPORAL_FAMILY, ordinal * 2, { era });
+    return Object.freeze({
+      id: operation.operationClass,
+      semantic: TEMPORAL_SEMANTIC_OPERATIONS[ordinal % TEMPORAL_SEMANTIC_OPERATIONS.length],
+      topology: topologies[ordinal],
+      operation,
+    });
+  }));
+  TEMPORAL_ERA_BANK_CACHE.set(era, bank);
+  return bank;
+}
+export const TEMPORAL_OPERATION_CLASS_BANK = temporalOperationClassBankForEra(1);
 export const TEMPORAL_OPERATION_FAMILIES = Object.freeze(TEMPORAL_OPERATION_CLASS_BANK.map((profile) => profile.id));
-export function temporalOperationProfileForCluster(operationSequenceOffset, clusterSlot) {
+export function temporalOperationProfileForCluster(operationSequenceOffset, clusterSlot, era = BMU_EXECUTABLE_OPERATION_ERA) {
   if (!Number.isInteger(operationSequenceOffset) || operationSequenceOffset < 0) throw new Error('bmu temporal: non-negative integer operationSequenceOffset required');
   if (!Number.isInteger(clusterSlot) || clusterSlot < 0) throw new Error('bmu temporal: non-negative integer clusterSlot required');
   const sequence = operationSequenceOffset + clusterSlot;
   // Adjacent-pair rotation: two entity/template-disjoint instances of a class
   // coexist inside maxAge. One-class-per-cluster rotation repeated only after
   // 32 mints, long after the first temporal instance retired at cadence 8.
-  return TEMPORAL_OPERATION_CLASS_BANK[Math.floor(sequence / 2) % TEMPORAL_OPERATION_CLASS_BANK.length];
+  const bank = temporalOperationClassBankForEra(era);
+  return bank[Math.floor(sequence / 2) % bank.length];
 }
 
-export function temporalOperationFamilyForCluster(operationSequenceOffset, clusterSlot) {
-  return temporalOperationProfileForCluster(operationSequenceOffset, clusterSlot).id;
+export function temporalOperationFamilyForCluster(operationSequenceOffset, clusterSlot, era = BMU_EXECUTABLE_OPERATION_ERA) {
+  return temporalOperationProfileForCluster(operationSequenceOffset, clusterSlot, era).id;
 }
 
 /**
@@ -336,6 +351,7 @@ export function generateTemporalClusters({
   activeIndex = createBmuActiveIndex(),
   escalation = {},
   operationSequenceOffset,
+  era = BMU_EXECUTABLE_OPERATION_ERA,
 }) {
   if (!Number.isInteger(epoch)) throw new Error('bmu temporal: epoch must be an integer');
   if (typeof seed !== 'string' || seed.length === 0) throw new Error('bmu temporal: seed required');
@@ -391,7 +407,7 @@ export function generateTemporalClusters({
       throw new Error(`bmu temporal: value bank cannot supply ${BMU_TEMPORAL_SHORTCUT_CONTROL_DOCS} distinct balanced decoys`);
     }
     const shadowDecoyVals = decoyVals.slice(0, escalationLevel);
-    const operationProfile = temporalOperationProfileForCluster(operationSequenceOffset, ordinal);
+    const operationProfile = temporalOperationProfileForCluster(operationSequenceOffset, ordinal, era);
     const operation = operationProfile.operation;
     const operationFamily = operation.operationClass;
     const operationClass = operation.operationClass;
