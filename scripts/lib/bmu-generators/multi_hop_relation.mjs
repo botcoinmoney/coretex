@@ -154,10 +154,53 @@ const MULTI_HOP_QUALIFIERS = [
   'weekday', 'weekend', 'overnight', 'holiday', 'incident', 'release',
   'audit', 'billing', 'onboarding', 'migration', 'failover', 'quarterly',
 ];
+/**
+ * Delta 9b (§17.22 round-6, forced by the second real-Qwen top-B dump): the
+ * BASE, not the qualifier, is the reranker-discriminative unit. With only 3
+ * bases the delta-9 stride still left ~8 same-epoch clusters sharing one
+ * (base, targetAttr) pair, and their §6.5 value-bearing trap decoys ("repeats
+ * VALUE in the ATTR field for ...") out-rank the processual hop-1 bridge for
+ * EVERY base-sharing cluster's queries (Qwen treats "failover rollback
+ * signoff" ≈ "onboarding rollback signoff"). The bank below carries 30
+ * pairwise-distinct (topicBase, targetAttr, valueSlug) triples; the grid is
+ * qualifier-OUTER × base-INNER, so the delta-9 stride hands consecutive
+ * same-epoch ordinals pairwise-distinct BASES (up to 30 clusters/epoch),
+ * which is what actually isolates each cluster's lexical field. Scaling
+ * caveat (recorded): a multi-epoch active window larger than the grid cycle
+ * reintroduces base reuse — series suffixes keep topic strings distinct, but
+ * base+attr words repeat; single-epoch launch frontiers are fully isolated.
+ */
 const MULTI_HOP_BASES = [
   ['escalation handling', 'contact endpoint', 'oncall'],
   ['rollback signoff', 'approver seat', 'approver'],
   ['paging coverage', 'duty owner', 'owner'],
+  ['deploy window scheduling', 'release warden', 'warden'],
+  ['config freeze review', 'thaw authority', 'authority'],
+  ['backup verification', 'restore custodian', 'custodian'],
+  ['quota rebalancing', 'capacity arbiter', 'arbiter'],
+  ['certificate renewal', 'signing delegate', 'delegate'],
+  ['dependency triage', 'patch marshal', 'marshal'],
+  ['queue drain rehearsal', 'throttle steward', 'steward'],
+  ['schema migration vetting', 'cutover referee', 'referee'],
+  ['runbook attestation', 'drill proctor', 'proctor'],
+  ['alert routing tuning', 'silence keeper', 'keeper'],
+  ['capacity forecasting', 'headroom assessor', 'assessor'],
+  ['incident retro filing', 'action registrar', 'registrar'],
+  ['access recertification', 'grant reviewer', 'reviewer'],
+  ['chaos drill staging', 'blast warden', 'blastwarden'],
+  ['log retention pruning', 'archive curator', 'curator'],
+  ['secret rotation', 'vault bearer', 'bearer'],
+  ['traffic shadowing', 'mirror conductor', 'conductor'],
+  ['canary promotion', 'bake adjudicator', 'adjudicator'],
+  ['sandbox teardown', 'reclaim bailiff', 'bailiff'],
+  ['billing reconciliation', 'ledger examiner', 'examiner'],
+  ['vendor failback drills', 'contract sentinel', 'sentinel'],
+  ['edge cache purging', 'invalidation broker', 'broker'],
+  ['fleet reimaging', 'image quartermaster', 'quartermaster'],
+  ['latency budget audits', 'percentile warden', 'pwarden'],
+  ['dr region swaps', 'failover chancellor', 'chancellor'],
+  ['token scope trimming', 'entitlement clerk', 'clerk'],
+  ['pager handoff ceremonies', 'rotation herald', 'herald'],
 ];
 
 /**

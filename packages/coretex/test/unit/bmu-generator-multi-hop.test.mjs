@@ -433,14 +433,21 @@ test('topic rotation: per-cluster stride walk, topics pairwise-distinct (delta 9
   const topics = new Set();
   for (let slot = 0; slot < 32; slot++) topics.add(multiHopTopicForEpochSlot(150, slot).topic);
   assert.equal(topics.size, 32, 'same-epoch topics pairwise-distinct across a full mint');
+  // Delta 9b: same-epoch clusters get pairwise-distinct BASES (grid is
+  // qualifier-outer × base-inner with 30 bases), so their targetAttr words
+  // differ too — the reranker-discriminative unit is isolated per cluster.
+  const attrs = new Set();
+  for (let slot = 0; slot < 30; slot++) attrs.add(multiHopTopicForEpochSlot(150, slot).targetAttr);
+  assert.equal(attrs.size, 30, 'same-epoch targetAttrs pairwise-distinct across a full mint');
   // Cross-epoch cell reuse always lands in a later cycle, so the series
-  // suffix keeps the topic STRING distinct: (150,10) and (151,14) hit the
-  // same grid cell (index delta = 32 + 4 = 36) but different cycles.
+  // suffix keeps the topic STRING distinct: (150,10) and (161,18) hit the
+  // same grid cell (index delta = 11*32 + 8 = 360 = grid size) but
+  // different cycles.
   const e0 = multiHopTopicForEpochSlot(150, 10);
-  const e1 = multiHopTopicForEpochSlot(151, 14);
+  const e1 = multiHopTopicForEpochSlot(161, 18);
   assert.equal(e0.targetAttr, e1.targetAttr, 'same cell reused across epochs');
   assert.notEqual(e0.topic, e1.topic, 'series suffix separates cross-epoch cell reuse');
-  const wrapped = multiHopTopicForEpochSlot(152, 0); // (152-133)*32 = 608 → deep cycle
+  const wrapped = multiHopTopicForEpochSlot(133 + 12, 0); // 12*32 = 384 > 360 → cycle 1
   assert.match(wrapped.topic, /\(series \d+\)$/);
 });
 
