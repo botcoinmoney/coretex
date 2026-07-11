@@ -118,13 +118,6 @@ export interface ScorerCodeHealth {
    *  the closure from source and asserts REWARD_CRITICAL_SCORING_CLOSURE covers
    *  it, so a newly-imported scoring module cannot silently escape the pin. */
   readonly scoringClosureSha256: string;
-  /** AUDIT-2 task 3b — RUNTIME attestation of the scorer-payload tarball the
-   *  host was staged from. Read from CORETEX_SCORER_PAYLOAD_SHA256 (the staging
-   *  script records the exact `scorer-payload-v2.tgz` sha it unpacked). null when
-   *  unstaged (source-run). EXCLUDED from coretexPackageSha256 (it is a staging
-   *  fact, not code identity); the coordinator compares it to the payload sha it
-   *  shipped, fail-closed under CORETEX_SCORER_EXTENDED_CODE_PIN. */
-  readonly stagedPayloadSha256: string | null;
 }
 
 export interface ScorerExpectedPins {
@@ -240,10 +233,20 @@ export interface ScorerHealth {
    *  disk: sha256 of the loaded `model.safetensors`, verified fail-closed at boot
    *  against the bundle's pinned `model.reranker.files` sha. `null` only when the
    *  weights dir was unresolvable AND CORETEX_SCORER_ALLOW_UNVERIFIED_WEIGHTS=1
-   *  (recorded in modelWeightsNote). Attesting id+revision alone let a swapped
-   *  checkpoint at the same revision serve silently; this closes that. */
-  readonly modelWeightsSha256: string | null;
-  readonly modelWeightsNote?: string;
+   *  (recorded in modelSafetensorsNote). Attesting id+revision alone let a swapped
+   *  checkpoint at the same revision serve silently; this closes that.
+   *  Field name is the coordinator ⇄ scorer contract (RUNTIME_ATTESTATION_CONTRACT.md §2). */
+  readonly modelSafetensorsSha256: string | null;
+  readonly modelSafetensorsNote?: string;
+  /** AUDIT-2 task 3b — RUNTIME attestation of the deployed scorer-payload tarball
+   *  (CORETEX_SCORER_PAYLOAD_SHA256; the staging script records the exact
+   *  `scorer-payload-v2.tgz` sha it unpacked). null when source-run. The
+   *  coordinator binds it to the payload it staged (RUNTIME_ATTESTATION_CONTRACT.md §2). */
+  readonly scorerPayloadSha256: string | null;
+  /** AUDIT-2 — optional strong binding: sha256 of the `runtime-manifest.v1`
+   *  artifact the scorer was deployed with (CORETEX_BMU_RUNTIME_MANIFEST_SHA256).
+   *  When present the coordinator asserts it equals the pinned manifest sha. */
+  readonly runtimeManifestSha256?: string;
   readonly code?: ScorerCodeHealth;
 }
 
@@ -862,11 +865,9 @@ export function computeScorerCodeHealth(): ScorerCodeHealth {
     rerankerSha256: requiredCodeHash('eval/reranker', './eval/reranker.js', './eval/reranker.ts'),
     structuralValiditySha256: requiredCodeHash('substrate/structural-validity', './substrate/structural-validity.js', './substrate/structural-validity.ts'),
     scoringClosureSha256: computeScoringClosureSha256(),
-    // AUDIT-2 task 3b — RUNTIME staging fact, EXCLUDED from coretexPackageSha256.
-    stagedPayloadSha256: (process.env['CORETEX_SCORER_PAYLOAD_SHA256']?.trim().toLowerCase() || null),
   };
   const coretexPackageSha256 = sha256Hex(Object.entries(code)
-    .filter(([key]) => key !== 'coretexPackageSha256' && key !== 'stagedPayloadSha256')
+    .filter(([key]) => key !== 'coretexPackageSha256')
     .map(([key, value]) => `${key}=${value ?? ''}`)
     .sort()
     .join('\n'));
@@ -1143,8 +1144,12 @@ async function bootScorer(env: NodeJS.ProcessEnv): Promise<BootedScorer> {
     torch: runtime.torch,
     transformers: runtime.transformers,
     python: runtime.python,
-    modelWeightsSha256: weights.sha256,
-    ...(weights.note !== undefined ? { modelWeightsNote: weights.note } : {}),
+    modelSafetensorsSha256: weights.sha256,
+    ...(weights.note !== undefined ? { modelSafetensorsNote: weights.note } : {}),
+    scorerPayloadSha256: (env['CORETEX_SCORER_PAYLOAD_SHA256']?.trim().toLowerCase() || null),
+    ...(env['CORETEX_BMU_RUNTIME_MANIFEST_SHA256']?.trim()
+      ? { runtimeManifestSha256: env['CORETEX_BMU_RUNTIME_MANIFEST_SHA256'].trim().toLowerCase() }
+      : {}),
     code,
   };
   // Cross-check the resolved prompt-template hash against the canonical render.

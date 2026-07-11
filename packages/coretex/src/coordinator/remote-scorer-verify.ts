@@ -46,6 +46,14 @@ export interface RemoteScorerExpectedHealth {
   readonly modelId: string;
   readonly revision: string;
   readonly promptTemplateHash: string;
+  /** AUDIT-2 — the active bundle's accelerator policy, derived by the
+   *  coordinator from `evaluator.profile.runtimePin.buildFlags`
+   *  (`cpu-only` ⇒ `'cpu_only'`). Under a `cpu_only` BMU bundle the scorer
+   *  runs deterministic fp32 on CPU (cuda:false, device:cpu), so requiring
+   *  cuda:true would refuse a legitimate CPU scorer (the round-7 CPU campaign
+   *  had to work around it). Absent/`'cuda'` ⇒ the GPU-pinned contract (cuda
+   *  MUST be true) is kept for r5 and GPU BMU bundles. */
+  readonly acceleratorPolicy?: 'cpu_only' | 'cuda';
   readonly code?: ScorerCodeHealth;
 }
 
@@ -234,7 +242,18 @@ export function verifyScorerResult(args: {
   }
   if (h.dtype !== "fp32") return { ok: false, code: "SCORER_HEALTH_MISMATCH", reason: `dtype ${h.dtype} != fp32` };
   if (h.tf32 !== false) return { ok: false, code: "SCORER_HEALTH_MISMATCH", reason: `tf32 ${h.tf32} != false` };
-  if (h.cuda !== true) return { ok: false, code: "SCORER_HEALTH_MISMATCH", reason: `cuda ${h.cuda} != true` };
+  // AUDIT-2 — accelerator-policy-aware CUDA check. A cpu_only BMU bundle runs
+  // deterministic fp32 on CPU (the logit-exact contract is fp32/tf32=false, not
+  // the device): require cuda:false + a cpu device. GPU-pinned bundles (r5 and
+  // any non-cpu_only BMU bundle) keep the strict cuda:true requirement. This
+  // reconciles the canonical verify with a genuinely CPU-only BMU scorer that
+  // the round-7 CPU campaign had to work around.
+  if (expectedHealth.acceleratorPolicy === 'cpu_only') {
+    if (h.cuda !== false) return { ok: false, code: "SCORER_HEALTH_MISMATCH", reason: `cuda ${h.cuda} != false (bundle runtimePin is cpu_only)` };
+    if (h.device !== 'cpu') return { ok: false, code: "SCORER_HEALTH_MISMATCH", reason: `device ${h.device} != cpu (bundle runtimePin is cpu_only)` };
+  } else if (h.cuda !== true) {
+    return { ok: false, code: "SCORER_HEALTH_MISMATCH", reason: `cuda ${h.cuda} != true` };
+  }
   const codeMismatch = compareScorerCodeHealth(expectedHealth.code, h.code);
   if (codeMismatch) {
     return { ok: false, code: "SCORER_CODE_HASH_MISMATCH", reason: `scorer code ${codeMismatch}` };

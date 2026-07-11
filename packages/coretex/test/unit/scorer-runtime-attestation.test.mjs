@@ -84,16 +84,17 @@ describe('3c/3b — computeScorerCodeHealth', () => {
       assert.match(health[k], /^[0-9a-f]{64}$/, `${k} must be a sha256`);
     }
   });
-  test('stagedPayloadSha256 reflects env and is EXCLUDED from coretexPackageSha256', () => {
+  test('code identity (coretexPackageSha256) is host/env-independent — the payload staging fact lives on ScorerHealth, not in code', () => {
+    // scorerPayloadSha256 was moved OUT of ScorerCodeHealth to top-level
+    // ScorerHealth (coordinator contract §2), so computeScorerCodeHealth carries
+    // no staging fact and its rollup does not move with the env.
     const before = process.env['CORETEX_SCORER_PAYLOAD_SHA256'];
     delete process.env['CORETEX_SCORER_PAYLOAD_SHA256'];
     const a = computeScorerCodeHealth();
-    assert.equal(a.stagedPayloadSha256, null);
     process.env['CORETEX_SCORER_PAYLOAD_SHA256'] = `0x${'ab'.repeat(32)}`;
     const b = computeScorerCodeHealth();
-    assert.equal(b.stagedPayloadSha256, `0x${'ab'.repeat(32)}`);
-    // Code identity must NOT move when only the staging fact changes.
-    assert.equal(a.coretexPackageSha256, b.coretexPackageSha256);
+    assert.equal(a.stagedPayloadSha256, undefined, 'no staging fact in code health');
+    assert.equal(a.coretexPackageSha256, b.coretexPackageSha256, 'code identity is env-independent');
     if (before === undefined) delete process.env['CORETEX_SCORER_PAYLOAD_SHA256'];
     else process.env['CORETEX_SCORER_PAYLOAD_SHA256'] = before;
   });

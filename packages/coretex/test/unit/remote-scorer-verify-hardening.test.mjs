@@ -60,3 +60,44 @@ describe('verifyScorerResult score hardening', () => {
     assert.equal(v.code, 'SCORER_STALE_CONTEXT');
   });
 });
+
+// AUDIT-2 — accelerator-policy-aware CUDA check. Under a cpu_only BMU bundle the
+// scorer runs deterministic fp32 on CPU (cuda:false), so the canonical
+// verifyScorerResult must NOT hard-require cuda:true; GPU-pinned bundles keep it.
+describe('verifyScorerResult accelerator-policy CUDA gate (§18.6 / round-7 CPU)', () => {
+  const alignedJob = { jobId: 'job-1', epochId: 8, parentStateRoot: B32('01'), corpusRoot: B32('cc'), bundleHash: B32('dd'), coreVersionHash: B32('dd'), policyHash: B32('ee'), thresholdPpm: 1_000 };
+  const alignedActive = { epochId: 8, parentStateRoot: B32('01'), corpusRoot: B32('cc'), bundleHash: B32('dd'), coreVersionHash: B32('dd'), workPolicyHash: B32('ee'), thresholdPpm: 1_000 };
+  const healthOf = (over) => ({ modelId: 'm', revision: 'r', promptTemplateHash: B32('ab'), dtype: 'fp32', tf32: false, ...over });
+  const run = (scorerHealth, acceleratorPolicy) => verifyScorerResult({
+    result: minimalResult({ accepted: false, scorerHealth }),
+    job: alignedJob,
+    outstandingJobIds: new Set(['job-1']),
+    active: alignedActive,
+    expectedHealth: { modelId: 'm', revision: 'r', promptTemplateHash: B32('ab'), ...(acceleratorPolicy ? { acceleratorPolicy } : {}) },
+  });
+  const cudaMismatch = (v) => v.code === 'SCORER_HEALTH_MISMATCH' && /cuda/.test(v.reason);
+
+  test('cpu_only bundle: cuda:false + device cpu is ACCEPTED past the health gate', () => {
+    const v = run(healthOf({ cuda: false, device: 'cpu' }), 'cpu_only');
+    assert.equal(cudaMismatch(v), false, `should not be a cuda mismatch: ${v.code} ${v.reason ?? ''}`);
+  });
+  test('cpu_only bundle: cuda:true is REFUSED (cuda != false)', () => {
+    const v = run(healthOf({ cuda: true, device: 'cuda:0' }), 'cpu_only');
+    assert.equal(v.code, 'SCORER_HEALTH_MISMATCH');
+    assert.match(v.reason, /cuda true != false/);
+  });
+  test('cpu_only bundle: a non-cpu device is REFUSED even with cuda:false', () => {
+    const v = run(healthOf({ cuda: false, device: 'cuda:0' }), 'cpu_only');
+    assert.equal(v.code, 'SCORER_HEALTH_MISMATCH');
+    assert.match(v.reason, /device .* != cpu/);
+  });
+  test('GPU-pinned (no acceleratorPolicy): cuda:false is REFUSED (round-7 guard kept for r5/GPU)', () => {
+    const v = run(healthOf({ cuda: false, device: 'cpu' }));
+    assert.equal(v.code, 'SCORER_HEALTH_MISMATCH');
+    assert.match(v.reason, /cuda false != true/);
+  });
+  test('GPU-pinned: cuda:true is ACCEPTED past the health gate', () => {
+    const v = run(healthOf({ cuda: true, device: 'cuda:0' }));
+    assert.equal(cudaMismatch(v), false, `should not be a cuda mismatch: ${v.code} ${v.reason ?? ''}`);
+  });
+});
