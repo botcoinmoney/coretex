@@ -1,5 +1,28 @@
 # BMU_CROSSFAMILY_DISTINCTNESS.md — cross-family operation distinctness (§17.29)
 
+> ## ⚠️ HEADLINE CORRECTION (§17.35) — SIGNATURE distinctness ≠ CREDITED distinctness
+>
+> The independent verifier established from the real code that the scorer credits
+> `u=1` **iff `required ⊆ topB ∧ forbidden ∩ topB = ∅`** (set membership); it does
+> **NOT** read the promote/demote signature. So every "144 distinct" / "4
+> genuinely-distinct operations" claim below is a **BYTECODE-SIGNATURE** count, not
+> an **operation** count. On the metric the scorer actually credits:
+> - the four families reduce to **2 credited operation-classes** —
+>   **suppress-forbidden-seed@1** (temporal, conflict_lifecycle, near_collision) and
+>   **spare-required-seed@1** (multi_hop). The distinguishing axis is the family's
+>   **SEED ROLE** (forbidden vs required), not depth/flag bytecode.
+> - measured credited cross-family transfer = **216** (the 3 forbidden-seed families
+>   mutually earn credited utility: 6 ordered pairs × 36); multi_hop transfers with
+>   no one. Own-control is **36/36** per family on the REAL seed.
+> - 144 = distinct **cue-bearing** operationClass strings; **72** = distinct
+>   **bytecode** step-signatures; **2** = distinct **credited** operation-classes.
+>
+> §17.29's "72 accepted headroom" was therefore right about the operation reality.
+> The era-3 "4 genuinely-distinct operations" framing is **RETRACTED**; the honest
+> N1 ceiling under the current utility is **2**. See the §17.35 feasibility verdict
+> at the end of this file. (The text below is preserved for history; read it through
+> this correction.)
+
 Records the outcome of Fable 5 ruling (2): pursue 144/144 distinct cross-family
 canonical step-signatures (4 families = 4 genuinely-distinct memory operations,
 the N1 north-star). Verdict: **NOT reachable within the hard constraints; the 72
@@ -121,3 +144,62 @@ lane, no longer runtime-gated.
   the 4-family benchmark tests ~2 distinct traversal operations at the program
   level today. Reaching 4 requires new operation PRIMITIVES (multi-depth
   suppression), not a relabel — the strategic input the ruling was after.
+
+---
+
+## §17.35 CREDITED-FEASIBILITY VERDICT (the honest N1 ceiling under the current utility)
+
+**Metric.** The scorer credits `u=1 iff required ⊆ topB ∧ forbidden ∩ topB = ∅`
+(`computeBmuTaskUtility`, set membership; it does NOT read the promote/demote
+signature). A "genuinely-distinct credited BEHAVIOR" = a cluster configuration on
+which a wrong-family operation FAILS credited utility. The distinguishing axes are:
+
+- **SEED ROLE** — forbidden on-route seed (needs `suppress`, evicts on-route
+  lineage) vs required on-route seed/bridge (needs `offPathSuppress`, spares it).
+  A wrong flag → `forbidden_admitted` or `missing_required`. → 2 classes.
+- **TRAP DEPTH d** — a query-competitive forbidden trap PRODUCED at step d is
+  demoted ONLY by a `suppress@d`; a `suppress@d'` (d'≠d) leaves it in topB.
+  **Verified by real execution:** suppress@1 on a depth-2 forbidden trap →
+  `forbidden_admitted`; suppress@2 → pass. So depth is a real credited axis.
+
+**Theoretical maximum** within the depth-3 (4-step) bank = {seedRole:2} ×
+{depth:1,2} = **4** credited classes {S@1, S@2, O@1, O@2}, all within the Qwen
+mandatory-pool cap (~28 ≤ 128) and the 6-edge decoder (no new edges).
+
+**Achievable under the CURRENT corpus/task design = 2.** Every current generator
+emits a DEPTH-1 trap/bridge: temporal (forbidden seed + depth-1 recency decoys),
+conflict_lifecycle (forbidden seed + depth-1 scope decoys), near_collision
+(forbidden seed + depth-1 collision decoys) → all **S@1**; multi_hop (required
+depth-1 bridge + depth-1 off-path decoys) → **O@1**. The depth-2 credited slots
+are UNPOPULATED — no current family has a depth-2-only query-competitive trap.
+Measured: own-control 36/36 per family; credited cross-family transfer **216**
+(the 3 forbidden-seed families mutually transfer, 6 ordered pairs × 36);
+credited operation-classes = **{forbidden@1, required@1}**.
+
+**To reach 4 (recommended design — a CORPUS redesign, NOT a flag reassignment):**
+author two families whose query-competitive trap genuinely sits at depth 2 (a
+2-hop forbidden decoy that a depth-1 suppress cannot reach), assigned:
+
+| family | seed role | trap depth | flag |
+|---|---|---|---|
+| A (e.g. temporal)            | forbidden | 1 | suppress@1        |
+| B (e.g. conflict, re-authored) | forbidden | 2 | suppress@2        |
+| C (e.g. multi_hop)           | required  | 1 | offPathSuppress@1 |
+| D (e.g. a new deep-bridge family) | required | 2 | offPathSuppress@2 |
+
+Each of B and D needs a new generator topology PLUS a real-Qwen margin proof that
+the depth-2 trap is query-competitive (rides into topB unless demoted at depth 2).
+This is a generator/corpus authoring task (2 new topologies), gated by real-Qwen
+evidence — not achievable by reassigning flags on the current corpus.
+
+**Alternative (orchestrator-level): a "credit-the-operation" v-next utility.** If
+`computeBmuTaskUtility` (or a companion term) scored the operation SIGNATURE
+directly (which promote/demote sets fired), the existing 4 bytecode-distinct
+combos {S@1,S@2,O@1,O@2} would become credited immediately — but that is a
+scoring-LAW change (a new BMU version), an orchestrator decision, not a
+generator change.
+
+**Bottom line (honest-red):** under the current utility + current corpus the N1
+credited ceiling is **2**. 4 is reachable only via (a) a 2-family corpus redesign
+with real depth-2 traps, or (b) a credit-the-operation scoring-law version. Both
+are separate, greenlight-gated steps.

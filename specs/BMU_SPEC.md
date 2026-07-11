@@ -1,6 +1,6 @@
 # BMU — Budgeted Memory Utility: versioned CoreTex scoring laws
 
-**Revision:** rev4.2 (portable coordinator-free inference entrypoint; BMU v2 candidate-executable operation era and keyed opaque ids; changelog in §17).
+**Revision:** rev4.3 (era-3 credited-metric correction — 2 credited operation-classes, not 4; portable coordinator-free inference entrypoint; BMU v2 candidate-executable operation era and keyed opaque ids; changelog in §17).
 **Status:** PRE-ARM implementation candidate. Code and offline evidence may
 accompany this document; nothing here arms, pins, or deploys anything.
 
@@ -1941,6 +1941,47 @@ capacity, plus fallback/underfill-engagement telemetry.
 ---
 
 ## 17. Changelog
+
+### rev4.2 → rev4.3 (era-3 CREDITED-metric correction; §17.35; 2026-07-11)
+
+**The scorer credits SET MEMBERSHIP, not the promote/demote signature.** The
+independent verifier established from the real code that `computeBmuTaskUtility`
+credits `u=1 iff required⊆topB ∧ forbidden∩topB=∅`; it never reads the
+promote/demote signature. Consequences, all landed additively (era-1/2 byte-identity
+pins still pass; the change is confined to era-3's `familyOperationPlan`, the sim,
+tests and docs):
+
+- **near_collision DEFECT fixed.** era-3 had assigned near_collision
+  `offPathSuppress@1`, but its REAL generator seeds from a query-similar FORBIDDEN
+  collision-seed-trap; `offPathSuppress` cannot evict an ON-ROUTE seed ⇒
+  `forbidden_admitted` ⇒ credited own-control fails 36/36 (the sim had passed only on
+  a NEUTRAL seed). Reassigned to `suppress@1` (evicts on-route forbidden lineage).
+  Own-control now 36/36 on the REAL seed; a regression test runs on the real seed +
+  asserts the old offPathSuppress path fails `forbidden_admitted`.
+- **era-3 plan corrected to the SEED-ROLE axis.** `familyOperationPlan` now carries
+  `seedRole` and `assertEraSpec` enforces the CREDITED-CORRECTNESS invariant:
+  forbidden seed ⟺ `suppress`, required seed ⟺ `offPathSuppress` (the old
+  all-distinct-(step,flag) rule was a bytecode fiction and is removed). All four
+  families operate at depth 1 (their real trap/bridge depth): temporal/conflict/
+  near_collision `suppress@1` (forbidden seed), multi_hop `offPathSuppress@1`
+  (required seed).
+- **Distinctness restated (§17.29 confirmed).** 144 = distinct CUE-BEARING
+  operationClass strings; **72** = distinct BYTECODE step-signatures; **2** =
+  distinct CREDITED operation-classes (`suppress-forbidden-seed@1` shared by 3
+  families + `spare-required-seed@1` for multi_hop). The era-3 "4 genuinely-distinct
+  operations / 144 distinct operations" framing is RETRACTED as a bytecode count.
+- **Transfer metric corrected.** The G-B17 refuter's A5 now censuses CREDITED
+  transfer (does a wrong-family program achieve `required⊆topB ∧ forbidden∩topB=∅`?),
+  not full-signature equality. Measured credited cross-family transfer = **216** (the
+  3 forbidden-seed families mutually transfer). G-B17 still SURVIVES (this is an N1
+  distinctness ceiling, not a keyed-inversion/label/answer-id leak).
+- **Credited-feasibility verdict (N1 ceiling).** Under the current utility+corpus the
+  credited ceiling is **2**. Depth IS a real credited axis (verified: suppress@1
+  fails on a depth-2 forbidden trap, suppress@2 passes), so the theoretical max is 4
+  {S@1,S@2,O@1,O@2} — but every current generator emits a depth-1 trap, so reaching 4
+  needs a 2-family CORPUS redesign with real depth-2 traps (real-Qwen-gated) OR a
+  "credit-the-operation" v-next scoring law. Full analysis:
+  `BMU_CROSSFAMILY_DISTINCTNESS.md §17.35`.
 
 ### rev4.1 → rev4.2 (portable coordinator-free inference entrypoint; 2026-07-11)
 

@@ -60,6 +60,51 @@ export function stepSigOf(program) {
 }
 
 /**
+ * §17.35 — the family SEED ROLE, derived from the program's flags. A program that
+ * carries `suppress` evicts on-route lineage, so its family's SEED is a FORBIDDEN
+ * query-similar trap that MUST be evicted. A program that carries only
+ * `offPathSuppress` spares on-route lineage, so its family's on-route SEED/bridge
+ * is REQUIRED. (A pure-promote program is treated as required-seed.)
+ */
+export function seedRoleOf(program) {
+  return program.steps.some((s) => s.suppress) ? 'forbidden' : 'required';
+}
+
+/**
+ * §17.35 CREDITED UTILITY — the ONLY thing the scorer credits:
+ * u = 1 iff required ⊆ topB ∧ forbidden ∩ topB = ∅ (set membership;
+ * `computeBmuTaskUtility` does NOT read the promote/demote signature).
+ *
+ * We model topB the way the real judge would rank the credited-relevant pool:
+ * every query-similar FORBIDDEN doc (the trap + a forbidden seed) is a strong
+ * stage-1 competitor (baseline 3 — it LOOKS most relevant, that is the trap);
+ * REQUIRED docs are retrievable (baseline 1); the operation then PROMOTES (+1) or
+ * DEMOTES (−3, enough to drop a query-similar competitor below a required doc) via
+ * its real executed promote/demote sets. topB = the top `|required|` by
+ * (score desc, docId asc). A wrong-family operation that fails to demote a
+ * forbidden doc (wrong seed-role flag) or demotes a required one (wrong seed-role
+ * flag) or leaves a forbidden trap at the wrong depth undemoted → fails credited.
+ */
+export function creditedUtility({ exec, requiredIds, forbiddenIds }) {
+  const promoted = new Set([...exec.promoteTerminalIds, ...exec.promotePathNodeIds]);
+  const demoted = new Set([...exec.suppressTerminalIds, ...exec.suppressLineageIds, ...exec.offPathSuppressedIds]);
+  const req = [...requiredIds];
+  const forb = [...forbiddenIds];
+  const baseline = (id) => (forbiddenIds.has(id) ? 3 : requiredIds.has(id) ? 1 : 0);
+  const score = (id) => baseline(id) + (promoted.has(id) ? 1 : 0) + (demoted.has(id) ? -3 : 0);
+  const pool = [...new Set([...req, ...forb])];
+  const budgetB = req.length;
+  const topB = new Set(pool
+    .map((id) => ({ id, s: score(id) }))
+    .sort((a, b) => (b.s - a.s) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .slice(0, budgetB)
+    .map((x) => x.id));
+  for (const f of forb) if (topB.has(f)) return { utility: 0, failure: 'forbidden_admitted', topB: [...topB] };
+  for (const r of req) if (!topB.has(r)) return { utility: 0, failure: 'missing_required', topB: [...topB] };
+  return { utility: 1, topB: [...topB] };
+}
+
+/**
  * The full per-era, per-family class catalog: 36 executable operations per
  * (family, era). Each carries the canonical operationClass, cue, program (with
  * the family suppress overlay), queryKey, cue-agnostic stepSig, and a
@@ -100,6 +145,17 @@ export function buildClassCatalog({ eras, queryKeyOf }) {
         const demoted = new Set([...exec.suppressLineageIds, ...exec.suppressTerminalIds, ...exec.offPathSuppressedIds]);
         const trapDemoted = demoted.has(trapId);
         const goldPromoted = exec.promoteTerminalIds.includes(`${mg}_gold`);
+        // §17.35 REAL SEED ROLE (the verifier's correction): the seed is NOT a
+        // neutral relay. For a forbidden-seed family the seed is a query-similar
+        // FORBIDDEN doc that must be evicted; for a required-seed family the seed is
+        // REQUIRED evidence. Own-control is now the CREDITED predicate on the REAL
+        // seed, not "trap demoted on a neutral seed".
+        const seedId = `${mg}_seed`;
+        const goldId = `${mg}_gold`;
+        const seedRole = seedRoleOf(program);
+        const requiredIds = new Set(seedRole === 'required' ? [goldId, seedId] : [goldId]);
+        const forbiddenIds = new Set(seedRole === 'forbidden' ? [trapId, seedId] : [trapId]);
+        const credited = creditedUtility({ exec, requiredIds, forbiddenIds });
         catalog.set(classKey, Object.freeze({
           classKey, era, family, ordinal, decoyDepth, trapId,
           operationClass: op.operationClass,
@@ -109,16 +165,79 @@ export function buildClassCatalog({ eras, queryKeyOf }) {
           queryKey,
           stepSig: stepSigOf(program),
           relations: topology.relations,
-          seedId: `${mg}_seed`,
+          seedId,
+          seedRole,
+          requiredIds: Object.freeze([...requiredIds]),
+          forbiddenIds: Object.freeze([...forbiddenIds]),
           requiredTerminals: new Set(topology.terminalIds),
           trapDemoted, goldPromoted,
+          // legacy signature-level flag (kept for back-compat / dist-identity)
           operationCorrect: trapDemoted && goldPromoted,
+          // §17.35 THE credited-metric own-control (required⊆topB ∧ forbidden∩topB=∅)
+          creditedUtility: credited.utility,
+          creditedCorrect: credited.utility === 1,
+          creditedFailure: credited.failure ?? null,
           demotionSig: JSON.stringify([[...exec.suppressLineageIds].sort(), [...exec.offPathSuppressedIds].sort()]),
         }));
       }
     }
   }
   return catalog;
+}
+
+/**
+ * §17.35 CREDITED cross-family transfer census — the CORRECTED transfer metric.
+ * The old A5 metric asked "does a wrong-family program reproduce the full
+ * promote/demote SIGNATURE?" — a quantity the scorer never reads. This asks the
+ * quantity the scorer credits: does family g's program achieve CREDITED UTILITY
+ * (required⊆topB ∧ forbidden∩topB=∅) on family f's cluster (f≠g)? Real execution
+ * of g's program over f's cluster relations + the credited predicate on f's REAL
+ * seed role. Returns own-control per family + the true credited transfer count.
+ */
+export function creditedCrossFamilyTransferCensus({ era, queryKeyOf }) {
+  const catalog = buildClassCatalog({ eras: [era], queryKeyOf });
+  const clusters = [...catalog.values()];
+  const byFamily = {};
+  for (const c of clusters) (byFamily[c.family] ??= []).push(c);
+  const families = Object.keys(byFamily);
+  const creditedOn = (program, cluster) => {
+    let exec;
+    try {
+      exec = executeProgramOverRelations({ program, relations: cluster.relations, seedIds: [cluster.seedId], branchLimit: program.branchLimit });
+    } catch { return { utility: 0, failure: 'fail_closed' }; }
+    return creditedUtility({ exec, requiredIds: new Set(cluster.requiredIds), forbiddenIds: new Set(cluster.forbiddenIds) });
+  };
+  const ownControlByFamily = {};
+  for (const f of families) ownControlByFamily[f] = byFamily[f].filter((c) => creditedOn(c.program, c).utility === 1).length;
+  let creditedTransfers = 0;
+  const transferPairs = {};
+  for (const f of families) {
+    for (const cluster of byFamily[f]) {
+      for (const g of families) {
+        if (g === f) continue;
+        for (const other of byFamily[g]) {
+          if (other.ordinal !== cluster.ordinal) continue; // ordinal-matched program
+          if (creditedOn(other.program, cluster).utility === 1) {
+            creditedTransfers += 1;
+            const key = `${g}->${f}`;
+            transferPairs[key] = (transferPairs[key] ?? 0) + 1;
+          }
+        }
+      }
+    }
+  }
+  const perFamilyCount = Object.fromEntries(families.map((f) => [f, byFamily[f].length]));
+  return {
+    era,
+    families,
+    clustersPerFamily: perFamilyCount,
+    ownControlByFamily,
+    ownControlAllPass: families.every((f) => ownControlByFamily[f] === byFamily[f].length),
+    creditedCrossFamilyTransfers: creditedTransfers,
+    transferPairs,
+    // distinct credited operation-classes = distinct (seedRole, demoted-trap-depth)
+    creditedOperationClasses: [...new Set(clusters.map((c) => `${c.seedRole}@${c.decoyDepth}`))].sort(),
+  };
 }
 
 /**

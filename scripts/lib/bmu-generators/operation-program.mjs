@@ -74,33 +74,50 @@ export const BMU_EXECUTABLE_ERA_REGISTRY = Object.freeze({
       Object.freeze(['co_occurs_with', 'derived_from', 'causes']),
     ]),
   }),
-  // ── era-3 (§17.32): MULTI-DEPTH per-family distinct operations (N1 closure) ──
-  // The N1 finding: era-1/era-2's uniform-per-family suppress overlay makes 3 of
-  // 4 families the SAME depth-1 operation (72/144 cross-family census). Era-3
-  // gives each family a genuinely DISTINCT operation by suppressing at a distinct
-  // (depth, flag): the benchmark now tests four DIFFERENT memory operations.
-  //  - all-4-step (depth-3) bank so every program has TWO suppressable non-final
-  //    steps (1,2); 4 families × {suppress@1, suppress@2, offPathSuppress@1,
-  //    offPathSuppress@2} ⇒ 144/144 distinct cross-family step-signatures.
+  // ── era-3 (§17.32, CORRECTED §17.35): a distinct GRAMMAR (disjoint outgoing
+  // vocabulary) whose per-family operation FLAG is governed by the family's SEED
+  // ROLE — the axis the scorer actually credits. ────────────────────────────────
+  // HONEST CORRECTION (§17.35, driven by the independent verifier §17.33): the
+  // scorer credits u=1 iff required⊆topB ∧ forbidden∩topB=∅ (set membership); it
+  // does NOT read the promote/demote signature. On that credited axis the earlier
+  // "4 distinct (depth,flag) operations / 144 distinct" claim was a BYTECODE-
+  // signature distinctness, not an operation distinctness. What genuinely makes a
+  // wrong-family program FAIL credited utility is the family's SEED ROLE:
+  //  - forbidden on-route seed (temporal/conflict/near_collision): the assigned
+  //    operation MUST carry `suppress` (0x20) — it evicts on-route seed LINEAGE.
+  //    `offPathSuppress` (0x40) demotes only off-path dead-ends and CANNOT evict an
+  //    on-route forbidden seed ⇒ forbidden_admitted (this was the near_collision
+  //    DEFECT: era-3 wrongly assigned it offPathSuppress@1 ⇒ own-control 36/36 fail
+  //    on the REAL forbidden collision-seed; the sim passed only via a neutral seed).
+  //  - required on-route seed (multi_hop): the assigned operation MUST carry
+  //    `offPathSuppress` (0x40) so the required seed/bridge is SPARED; `suppress`
+  //    would evict the required lineage ⇒ missing_required.
+  // Depth (1|2) is retained as a secondary BYTECODE dimension only (it does not, by
+  // itself, add a credited operation-class — see §17.35 feasibility verdict).
   //  - outgoing {coreference_of, co_occurs_with} — the last unused pair, DISJOINT
   //    from era-1 {causes,derived_from} AND era-2 {supports,supersedes} ⇒ cross-era
   //    reuseRatio 0 vs both prior eras. Six edges = three disjoint outgoing pairs.
-  //  - per-family trap sits at the family's suppress DEPTH (topology re-derived in
-  //    buildProgramPathTopology's decoyDepth); each (depth,flag) correctly evicts
-  //    that family's trap — mechanically verified by real execution, not assertion.
   3: Object.freeze({
     era: 3,
     basis: 'shared-policy-evidence-384-511-4w-program-v3',
     bankShape: 'all-4-step-depth3',
     outgoingEdgeTypes: Object.freeze(['coreference_of', 'co_occurs_with']),
     incomingEdgeTypes: Object.freeze(['causes', 'derived_from', 'supports', 'supersedes']),
-    // Per-family distinct (suppress depth, flag). Replaces the uniform global
+    // Per-family (suppress depth, flag, seedRole). The FLAG is validated against the
+    // SEED ROLE (the credited axis) in assertEraSpec. Replaces the uniform global
     // BMU_FAMILY_SUPPRESS_STEPS / BMU_FAMILY_OFFPATH_SUPPRESS_STEPS for era-3.
+    // Each family's REAL corpus structure places its trap/bridge at the depth-1
+    // branch (temporal/conflict/near_collision: forbidden seed + depth-1 decoys;
+    // multi_hop: required depth-1 bridge). So the credited-correct assignment is
+    // depth-1 for all four, distinguished ONLY by seed role (forbidden→suppress,
+    // required→offPathSuppress). This yields the 2 credited operation-classes the
+    // scorer actually distinguishes (§17.29 confirmed; see §17.35). Depth-2 slots
+    // exist in the 4-step bank but no current family has a depth-2-only trap.
     familyOperationPlan: Object.freeze({
-      temporal: Object.freeze({ step: 1, flag: 'suppress' }),
-      conflict_lifecycle: Object.freeze({ step: 2, flag: 'suppress' }),
-      near_collision_abstention: Object.freeze({ step: 1, flag: 'offPathSuppress' }),
-      multi_hop_relation: Object.freeze({ step: 2, flag: 'offPathSuppress' }),
+      temporal: Object.freeze({ step: 1, flag: 'suppress', seedRole: 'forbidden' }),
+      conflict_lifecycle: Object.freeze({ step: 1, flag: 'suppress', seedRole: 'forbidden' }),
+      near_collision_abstention: Object.freeze({ step: 1, flag: 'suppress', seedRole: 'forbidden' }),
+      multi_hop_relation: Object.freeze({ step: 1, flag: 'offPathSuppress', seedRole: 'required' }),
     }),
   }),
 });
@@ -141,18 +158,29 @@ export function assertEraSpec(spec) {
     }
     if (spec.familyOperationPlan !== undefined) throw new Error(`bmu era ${spec.era}: mixed-3-4-step eras use the global family suppress plan, not familyOperationPlan`);
   } else if (bankShape === 'all-4-step-depth3') {
-    // era-3: all-4-step (depth-3); per-family DISTINCT (suppress depth, flag).
+    // era-3: all-4-step (depth-3); per-family (step, flag, seedRole). The CREDITED-
+    // CORRECTNESS invariant (§17.35): the flag MUST match the seed role, because the
+    // scorer credits set membership (required⊆topB ∧ forbidden∩topB=∅), and only a
+    // matching flag makes the family's own operation achieve it —
+    //   seedRole 'forbidden' ⟺ flag 'suppress'        (evict on-route forbidden seed lineage)
+    //   seedRole 'required'  ⟺ flag 'offPathSuppress'  (spare on-route required seed/bridge)
+    // (We intentionally DO NOT require distinct (step,flag) across families: under
+    // the credited law the forbidden-seed families share one operation-class — that
+    // is the honest finding, not a defect. See §17.35.)
     const plan = spec.familyOperationPlan;
     if (!plan) throw new Error(`bmu era ${spec.era}: all-4-step-depth3 requires familyOperationPlan`);
     const families = Object.keys(FAMILY_CUE);
-    const seen = new Set();
     for (const family of families) {
       const p = plan[family];
       if (!p || (p.step !== 1 && p.step !== 2)) throw new Error(`bmu era ${spec.era}: family '${family}' plan step must be 1 or 2 (non-final on a 4-step program)`);
       if (p.flag !== 'suppress' && p.flag !== 'offPathSuppress') throw new Error(`bmu era ${spec.era}: family '${family}' plan flag must be suppress|offPathSuppress`);
-      const key = `${p.step}:${p.flag}`;
-      if (seen.has(key)) throw new Error(`bmu era ${spec.era}: two families share operation ${key} — families must be GENUINELY distinct (144/144)`);
-      seen.add(key);
+      if (p.seedRole !== 'forbidden' && p.seedRole !== 'required') throw new Error(`bmu era ${spec.era}: family '${family}' plan seedRole must be forbidden|required`);
+      if (p.seedRole === 'forbidden' && p.flag !== 'suppress') {
+        throw new Error(`bmu era ${spec.era}: family '${family}' has a forbidden on-route seed but flag '${p.flag}' — a forbidden seed requires 'suppress' (offPathSuppress cannot evict on-route lineage ⇒ forbidden_admitted)`);
+      }
+      if (p.seedRole === 'required' && p.flag !== 'offPathSuppress') {
+        throw new Error(`bmu era ${spec.era}: family '${family}' has a required on-route seed but flag '${p.flag}' — a required seed requires 'offPathSuppress' ('suppress' would evict the required lineage ⇒ missing_required)`);
+      }
     }
     if (Object.keys(plan).some((f) => !FAMILY_CUE[f])) throw new Error(`bmu era ${spec.era}: familyOperationPlan has an unknown family`);
   } else {

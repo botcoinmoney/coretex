@@ -18,6 +18,8 @@ import {
   RERANKER_INPUT_TOPK,
   buildClassCatalog,
   stepSigOf,
+  creditedCrossFamilyTransferCensus,
+  creditedUtility,
 } from '../../../../scripts/lib/bmu-sim/era-transition-sim.mjs';
 import {
   executeProgramOverRelations,
@@ -128,20 +130,30 @@ test('§17.30 era-3 feasibility: all-4-step multi-depth bank reaches 144/144 WIT
 
 // ─── §17.32 era-3 LIVE implementation (all-4-step multi-depth) ────────────────
 
-test('§17.32 era-3 is registered and reaches 144/144 cross-family (LIVE bank, not just design census)', () => {
+test('§17.35 era-3 census: 144 cue-bearing classes, 72 distinct BYTECODE sigs, 2 CREDITED classes (honest)', () => {
   const bank = programBankForEra(3);
   assert.equal(bank.length, 36);
   assert.ok(bank.every((p) => p.steps.length === 4), 'era-3 all-4-step');
   const FAM = ['temporal', 'conflict_lifecycle', 'near_collision_abstention', 'multi_hop_relation'];
-  const all = [];
+  const allSigs = [];
+  const allClasses = [];
   const perFam = {};
   for (const f of FAM) {
     const s = new Set();
-    for (let o = 0; o < 36; o++) { const sig = stepSigOf(executableOperationForFamilySlot(f, o * 2, { era: 3 }).operationProgram); s.add(sig); all.push(sig); }
+    for (let o = 0; o < 36; o++) {
+      const op = executableOperationForFamilySlot(f, o * 2, { era: 3 });
+      const sig = stepSigOf(op.operationProgram);
+      s.add(sig); allSigs.push(sig); allClasses.push(op.operationClass);
+    }
     perFam[f] = s.size;
   }
   assert.deepEqual(perFam, { temporal: 36, conflict_lifecycle: 36, near_collision_abstention: 36, multi_hop_relation: 36 }, 'within-family reuseRatio 0');
-  assert.equal(new Set(all).size, 144, 'cross-family 144/144');
+  // CUE-bearing operationClass strings remain 144 distinct (family name is in the cue).
+  assert.equal(new Set(allClasses).size, 144, 'cue-bearing operationClass census = 144');
+  // But the credited law reads bytecode (topB), not the cue: the 3 forbidden-seed
+  // families collapse to one suppress@1 bytecode, multi_hop is offPathSuppress@1 →
+  // 72 distinct bytecode step-signatures (§17.29 confirmed, NOT 144).
+  assert.equal(new Set(allSigs).size, 72, 'distinct BYTECODE step-signatures = 72 (3 forbidden families share suppress@1)');
 });
 
 test('§17.32 era-1 and era-2 output stays BYTE-IDENTICAL (additive-only regression)', () => {
@@ -171,18 +183,35 @@ test('§17.32 era-1 and era-2 output stays BYTE-IDENTICAL (additive-only regress
   assert.equal(pin(2), '1ec4b56946c61cd7b8f5993659b0788c2a9e757ccbd0bb9fdfa400161b18bd4a', 'era-2 byte-identity');
 });
 
-test('§17.32 era-3 per-family operations are GENUINELY DISTINCT and CORRECT (real execution)', () => {
-  const cat = buildClassCatalog({ eras: [3], queryKeyOf: (cue) => BigInt('0x' + Buffer.from(cue).toString('hex').slice(0, 14).padStart(14, '0')) });
-  const FAM = ['temporal', 'conflict_lifecycle', 'near_collision_abstention', 'multi_hop_relation'];
-  const depthByFam = { temporal: 1, conflict_lifecycle: 2, near_collision_abstention: 1, multi_hop_relation: 2 };
-  const demotions = new Set();
-  for (const f of FAM) {
-    const c = [...cat.values()].find((x) => x.family === f && x.ordinal === 0);
-    assert.equal(c.decoyDepth, depthByFam[f], `${f} trap depth`);
-    assert.equal(c.operationCorrect, true, `${f} operation correct (trap demoted + gold promoted)`);
-    demotions.add(c.demotionSig);
-  }
-  assert.equal(demotions.size, 4, '4 genuinely-distinct demotion operations');
+test('§17.35 era-3 CREDITED own-control passes on the REAL seed role for ALL families (incl. near_collision fix)', () => {
+  const qk = (cue) => BigInt('0x' + Buffer.from(cue).toString('hex').slice(0, 14).padStart(14, '0'));
+  const c = creditedCrossFamilyTransferCensus({ era: 3, queryKeyOf: qk });
+  // OWN-CONTROL on the REAL seed role (forbidden seed for temporal/conflict/
+  // near_collision; required seed for multi_hop) — the metric the scorer credits,
+  // NOT "trap demoted on a neutral seed". near_collision was the DEFECT (era-3
+  // assigned offPathSuppress@1 which cannot evict its on-route forbidden seed);
+  // now suppress@1 → 36/36.
+  assert.deepEqual(c.ownControlByFamily, {
+    temporal: 36, conflict_lifecycle: 36, near_collision_abstention: 36, multi_hop_relation: 36,
+  }, 'credited own-control 36/36 every family');
+  assert.equal(c.ownControlAllPass, true);
+  // The HONEST distinctness: exactly 2 CREDITED operation-classes — suppress-
+  // forbidden-seed (@depth1) vs spare-required-seed (@depth1). NOT 4.
+  assert.deepEqual(c.creditedOperationClasses, ['forbidden@1', 'required@1'], '2 credited operation-classes (not 4)');
+});
+
+test('§17.35 near_collision REAL forbidden seed is evicted by suppress but NOT by offPathSuppress (defect regression)', () => {
+  const qk = (cue) => BigInt('0x' + Buffer.from(cue).toString('hex').slice(0, 14).padStart(14, '0'));
+  const cat = buildClassCatalog({ eras: [3], queryKeyOf: qk });
+  const nc = [...cat.values()].find((x) => x.family === 'near_collision_abstention' && x.ordinal === 0);
+  assert.equal(nc.seedRole, 'forbidden');
+  assert.equal(nc.creditedCorrect, true, 'fixed suppress@1 credits its own forbidden-seed cluster');
+  // Regression: the OLD offPathSuppress@1 assignment fails credited (forbidden_admitted).
+  const bad = { branchLimit: nc.program.branchLimit, steps: nc.program.steps.map((s, i) => (i === 1 ? { direction: s.direction, edgeType: s.edgeType, offPathSuppress: true } : { direction: s.direction, edgeType: s.edgeType })) };
+  const exec = executeProgramOverRelations({ program: bad, relations: nc.relations, seedIds: [nc.seedId], branchLimit: nc.program.branchLimit });
+  const credited = creditedUtility({ exec, requiredIds: new Set(nc.requiredIds), forbiddenIds: new Set(nc.forbiddenIds) });
+  assert.equal(credited.utility, 0);
+  assert.equal(credited.failure, 'forbidden_admitted');
 });
 
 test('§17.32 era-2 → era-3 transition: net>0 across rotation, retirement costless, correct', () => {
