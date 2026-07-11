@@ -258,16 +258,21 @@ export function nearCollisionOracleRank(row, { docs, docById, relations, cluster
 
   const program = row.bmuOperationProgram;
   if (!program || program.branchLimit !== 4 || !Array.isArray(program.steps)) return null;
-  // Deep-terminal law: execute the row's actual public program from the
-  // disambiguation anchor and require the exact-match doc to be a routed
-  // TERMINAL — the same walk the compiled scorer runs.
+  // Deep-terminal law: execute the row's actual public program and require the
+  // exact-match doc to be a routed TERMINAL — the same walk the compiled scorer
+  // runs. The program is seeded from the query-similar collision seed-trap (the
+  // BC1-safe stage-1 chain-start the scorer's stage-1 frontier surfaces), NOT
+  // the disambiguation anchor; the round-4/round-5 topology moved the outgoing
+  // step-0 origin onto the seed-trap so its off-path decoys are step-produced
+  // and evictable. Derive that seed structurally from the cluster's
+  // public_path_seed edges (the same edges the scorer's decoder walks);
+  // amputating them fails the oracle closed.
+  const clusterRelations = relations.filter((rel) => clusterIds.has(rel.src) || clusterIds.has(rel.dst));
+  const seedIds = [...new Set(clusterRelations.filter((rel) => rel.label === 'public_path_seed').map((rel) => rel.src))];
+  if (seedIds.length === 0) return null;
   let executed;
   try {
-    executed = executeProgramOverRelations({
-      program,
-      relations: relations.filter((rel) => clusterIds.has(rel.src) || clusterIds.has(rel.dst)),
-      seedIds: [disambigDoc.id],
-    });
+    executed = executeProgramOverRelations({ program, relations: clusterRelations, seedIds });
   } catch {
     return null;
   }
