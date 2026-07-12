@@ -150,6 +150,53 @@ test('§17.39 item-4: frontier-chase FORCES a genuine COSTLY eviction of a still
   for (const f of FAMILIES) assert.ok(r.summary.netAfterTransitionByFamily[f] > 0, `net>0 after transition ${f}`);
 });
 
+test('§17.39 item-2: the sim emits VERIFIER-RECOMPUTABLE eviction evidence (decode+execute+schedule ⇒ same costly/costless)', () => {
+  // Independently REPLICATE the coordinator verifier's coverage recompute
+  // (bmuRecomputeEvictionCoverage) against the sim's own evictionDetail: decode the
+  // evicted bytes, bind the cue, infer the era from the leading edge, RE-EXECUTE the
+  // program (must solve its class), then DERIVE costliness from the era schedule —
+  // and assert it agrees with the sim's stillCoversActiveMotif for EVERY eviction,
+  // across BOTH the costless (net-positive) and heavily-costly (frontier-chase)
+  // regimes. This proves the disclosed boolean is fully verifier-reconstructable
+  // (zero producer trust) and that the sim's evidence is coordinator-compatible.
+  const ERA_OUT = { 1: ['causes', 'derived_from'], 2: ['supports', 'supersedes'] };
+  const recompute = (ev, entry, boundary) => {
+    const shell = new Array(Number(dist.WORD_COUNT_VALUE ?? 1024n)).fill(0n);
+    for (let i = 0; i < 4; i++) {
+      assert.match(ev.realProgramWordsHex[i], /^0x[0-9a-f]{64}$/, 'canonical 64-hex word');
+      shell[384 + i] = BigInt(ev.realProgramWordsHex[i]);
+    }
+    const dec = dist.decodeBmuPublicPathPrograms({ words: shell });
+    assert.equal(dec.programs.length, 1); assert.equal(dec.failures, 0);
+    const dp = dec.programs[0];
+    assert.equal(dist.bmuOperationQueryKey(ev.evictedCue), dp.queryKey, 'cue binds to bytes');
+    const era = [1, 2].find((e) => dp.steps[0].direction === 'outgoing' && ERA_OUT[e].includes(dp.steps[0].edgeType));
+    assert.equal(era, ev.era, 'inferred era matches disclosed era');
+    const prog = { branchLimit: dp.branchLimit, steps: dp.steps };
+    // use the VENDORED primitives (same ones the coordinator imports)
+    const ex = dist.executeProgramOverRelations({
+      program: prog,
+      relations: dist.buildProgramPathTopology({ program: prog, seedId: 'n_seed', sinkIds: ['n_sink'], goldIds: ['n_gold'], decoyIds: ['n_trap'], midIdFor: (l) => `n_mid${l}`, decoyDepth: 1 }).relations,
+      seedIds: ['n_seed'], branchLimit: prog.branchLimit,
+    });
+    assert.deepEqual(ex.terminalIds, ['n_gold'], 'evicted program solves its own class');
+    const derived = era === entry.eraId ? true : entry.epoch < boundary;
+    assert.equal((ev.coverageWitness.activeInstanceCount > 0), derived, 'witness consistent with derived');
+    assert.equal(ev.stillCoversActiveMotif, derived, 'disclosed boolean == verifier-derived coverage');
+    return derived;
+  };
+  for (const admissionPolicy of ['net-positive', 'frontier-chase']) {
+    const r = runEraTransition({ arm: 'rotating', admissionPolicy, dist, evolves: 48 });
+    const boundary = r.transitionEpoch + r.pins.maxAgeEpochs; // coexistence window = maxAge
+    let costly = 0; let total = 0;
+    for (const entry of r.perEvolveJournal) {
+      for (const ev of entry.evictionDetail) { total += 1; if (recompute(ev, entry, boundary)) costly += 1; }
+    }
+    assert.equal(costly, r.summary.totalCostlyEvictions, `${admissionPolicy} verifier-recomputed costly == sim costly`);
+    if (admissionPolicy === 'frontier-chase') assert.ok(costly > 0, 'frontier-chase exercises the COSTLY recompute path');
+  }
+});
+
 test('miner transfer stays honest: era-1 programs do not solve era-2 clusters (real execution)', () => {
   const catalog = buildClassCatalog({ eras: [1, 2], queryKeyOf: dist.bmuOperationQueryKey });
   const solvesWith = (program, cluster) => {

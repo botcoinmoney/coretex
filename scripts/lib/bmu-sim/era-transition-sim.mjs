@@ -607,10 +607,16 @@ export function runEraTransition({
             stillCoversActiveMotif: evictStillCoversActive,
             counterfactualUtilityDelta: netDeltaU,          // U(candidate)-U(parent), real bounded states
             evictionCostUtility: evictCost,                  // U lost on evicted's still-active clusters (0 if dead)
+            // §17.39 item-2: canonical 256-bit (64-hex) words + coverage witness so
+            // the coordinator can RE-EXECUTE the evicted program and DERIVE
+            // costliness itself (never trust stillCoversActiveMotif). activeInstanceCount
+            // is the live-instance count of the evicted class recomputed from the
+            // ACTUAL post-retirement active catalog.
             realProgramWordsHex: dist.encodeBmuPublicPathProgramWords({
               branchLimit: evicted.program.branchLimit, queryKey: evicted.queryKey,
               validFromEpoch: 0n, expiryEpoch: 0n, steps: evicted.program.steps,
-            }).map((w) => `0x${w.toString(16)}`),
+            }).map((w) => `0x${w.toString(16).padStart(64, '0')}`),
+            coverageWitness: { activeInstanceCount: evictCost },
             evictedCue: evicted.cue, evictedClaimedSignature: evicted.operationClass,
           }));
         }

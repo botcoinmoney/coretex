@@ -221,7 +221,12 @@ export const ERA_TRANSITION_JOURNAL_FIELDS = Object.freeze({
     'costlyEvictionsByFamily',    // evictions whose evicted resident STILL covered an active non-retired motif
     'retirementsByFamily',        // prior-era motif retirements this evolve (the costless-eviction feedstock)
     'retirementEligiblePriorEra', // which prior era is dead-resident-eligible now (or null)
-    'evictionDetail',             // [{ residencyKey, family, era, stillCoversActiveMotif }]
+    // §17.39 item-2: each evictionDetail entry carries { residencyKey, family, era,
+    // stillCoversActiveMotif, evictedCue, realProgramWordsHex (canonical 64-hex),
+    // coverageWitness:{ activeInstanceCount } } so the coordinator verifier can
+    // RE-EXECUTE the evicted program and DERIVE costliness itself rather than trust
+    // the stillCoversActiveMotif boolean.
+    'evictionDetail',
   ]),
 });
 
