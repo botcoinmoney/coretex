@@ -36,12 +36,21 @@ test('rotating arm: net>0 across the era transition, era-1 retirement costless, 
   // NET positive after transition, per family
   assert.equal(r.checks.netPositiveAfterTransition, true);
   for (const f of FAMILIES) assert.ok(r.summary.netAfterTransitionByFamily[f] > 0, `net>0 ${f}`);
-  // retirement makes evictions COSTLESS: evictions happen, none costly
+  // retirement makes evictions COSTLESS: evictions happen, none costly (greedy
+  // net-positive miner never makes a costly eviction — it stalls instead).
   assert.ok(r.summary.totalEvictions > 0);
   assert.equal(r.summary.totalCostlyEvictions, 0);
   // sustained net acceptance after the store saturates
   assert.equal(r.checks.sustainedNetAfterCapacity, true);
-  assert.ok(r.checks.netAcceptedAfterCapacityTotal > 100);
+  // §17.39 item-4 (era-aware retirement) — the sustained post-capacity headroom is
+  // now the GENUINE prior-era drain (≈ one costless accept per freed resident
+  // slot), NOT the pre-fix free-churn number (>100) that the era-blind age sweep
+  // manufactured by retiring current-era workload in lockstep. It comes ENTIRELY
+  // from prior-era retirement: zero current-era instances are age-expired.
+  assert.ok(r.checks.netAcceptedAfterCapacityTotal >= 20, `genuine drain headroom ${r.checks.netAcceptedAfterCapacityTotal}`);
+  assert.equal(r.checks.retiredCurrentEra, 0, 'no current-era instance age-expired under rotating');
+  assert.ok(r.checks.retiredPriorEra > 0, 'prior-era instances genuinely retired');
+  assert.equal(r.checks.headroomFromPriorEraRetirementOnly, true);
   // applied bounded state round-trips throughout (≤32 quads decode back exactly)
   assert.equal(r.checks.appliedStateRoundTripsThroughout, true);
 });
@@ -54,6 +63,91 @@ test('static control arm: net acceptance rate collapses to ~0 at saturation', ()
   const r = runEraTransition({ arm: 'rotating', dist, evolves: 48 });
   assert.ok(r.checks.netAcceptedAfterCapacityTotal > 20 * s.checks.netAcceptedAfterCapacityTotal + 20,
     'rotating sustains dramatically more post-capacity net than static');
+});
+
+// ─── §17.39 item-4: ERA-AWARE retirement + the 2×2 mechanism isolation ───────
+
+test('§17.39 item-4: rotating retirement is ERA-AWARE — only PRIOR-era instances retire, never current-era by age', () => {
+  const r = runEraTransition({ arm: 'rotating', dist, evolves: 48 });
+  // The pre-fix era-blind sweep retired ANY instance past maxAge (current-era
+  // included). The fix retires ONLY prior-era instances the schedule has declared
+  // obsolete (past the coexistence window). So under rotating:
+  assert.ok(r.summary.retiredPriorEra > 0, 'prior-era instances retire (costless feedstock)');
+  assert.equal(r.summary.retiredCurrentEra, 0, 'ZERO current-era instances age-expired');
+  // every retirement event is a genuinely-obsolete prior era (era < active era)
+  for (const ev of r.retirementEvents) {
+    assert.equal(ev.reason, 'prior-era-obsolete');
+    assert.equal(ev.era, r.fromEra, 'only the fromEra (prior) retires across a single transition');
+  }
+  // retirement only begins AFTER the coexistence window closes (never during it)
+  const firstRetire = Math.min(...r.retirementEvents.map((e) => e.epoch));
+  assert.ok(firstRetire > r.transitionEpoch, 'no prior-era retirement before the transition');
+});
+
+test('§17.39 item-4: 2×2 isolation — rotation × retirement, decoupled', () => {
+  const runs = {
+    static: runEraTransition({ arm: 'static', dist, evolves: 48 }),
+    retireOnly: runEraTransition({ arm: 'retire-only', dist, evolves: 48 }),
+    rotateNoRetire: runEraTransition({ arm: 'rotate-no-retire', dist, evolves: 48 }),
+    rotating: runEraTransition({ arm: 'rotating', dist, evolves: 48 }),
+  };
+  // (1) STATIC: neither mechanism → no renewal, headroom collapses to 0.
+  assert.equal(runs.static.checks.sustainedHeadroomAfterCapacity, false);
+  assert.equal(runs.static.summary.totalRetirements, 0);
+  assert.equal(runs.static.checks.netHeadroomAfterCapacityTotal, 0);
+
+  // (2) RETIRE-ONLY (age-TTL, NO rotation): reproduces the pre-fix net>0 — but it
+  // is FREE CHURN. Every retirement is CURRENT-era (unjustified), so the headroom
+  // is NOT sourced from genuine obsolescence. This is the isolated gimmick.
+  assert.equal(runs.retireOnly.checks.sustainedHeadroomAfterCapacity, true, 'age-TTL alone shows net>0…');
+  assert.ok(runs.retireOnly.summary.retiredCurrentEra > 0);
+  assert.equal(runs.retireOnly.summary.retiredPriorEra, 0);
+  assert.equal(runs.retireOnly.checks.headroomFromPriorEraRetirementOnly, false, '…but 100% from current-era free churn (GIMMICK)');
+
+  // (3) ROTATE-NO-RETIRE (rotation, NO retirement): minting fresh disjoint classes
+  // alone does NOT sustain — the store stays saturated with still-covered
+  // residents, so net after the transition is not positive.
+  assert.equal(runs.rotateNoRetire.summary.totalRetirements, 0);
+  assert.equal(runs.rotateNoRetire.checks.netPositiveAfterTransition, false);
+  assert.equal(runs.rotateNoRetire.checks.sustainedHeadroomAfterCapacity, false);
+
+  // (4) ROTATING (both, era-aware): genuine sustainability — headroom>0 sourced
+  // ONLY from prior-era obsolescence (zero current-era churn).
+  assert.equal(runs.rotating.checks.sustainedHeadroomAfterCapacity, true);
+  assert.equal(runs.rotating.checks.headroomFromPriorEraRetirementOnly, true);
+  assert.equal(runs.rotating.checks.netPositiveAfterTransition, true);
+  // The decisive isolation: retire-only and rotating BOTH show net>0, but only
+  // rotating's is justified. static and rotate-no-retire both show net→0.
+  assert.equal(runs.retireOnly.checks.headroomFromPriorEraRetirementOnly, false);
+  assert.equal(runs.rotating.checks.headroomFromPriorEraRetirementOnly, true);
+});
+
+test('§17.39 item-4: frontier-chase FORCES a genuine COSTLY eviction of a still-covered CURRENT-era resident', () => {
+  // A miner that chases the freshest workload (admits the newest class even at
+  // net≤0) evicts still-covered residents. In a STATIC (single-era) frontier this
+  // is 100% costly and yields ZERO headroom — the honest not-sustainable result.
+  const s = runEraTransition({ arm: 'static', admissionPolicy: 'frontier-chase', dist, evolves: 48 });
+  assert.ok(s.summary.totalCostlyEvictions > 0, 'costly evictions actually occur');
+  assert.equal(s.summary.totalCostlyEvictions, s.summary.totalEvictions, 'within a static era, EVERY eviction is costly');
+  assert.equal(s.checks.netHeadroomAfterCapacityTotal, 0, 'costly churn buys zero net headroom (honest: NOT sustainable)');
+  assert.equal(s.checks.sustainedHeadroomAfterCapacity, false);
+  // The costly eviction is a CURRENT-era resident that still covered an active
+  // motif — recomputed from the active catalog, not assumed.
+  const activeEra = s.fromEra;
+  const costlyDetail = s.perEvolveJournal.flatMap((e) => e.evictionDetail).find((d) => d.stillCoversActiveMotif);
+  assert.ok(costlyDetail, 'a costly eviction detail exists');
+  assert.equal(costlyDetail.era, activeEra, 'the costly-evicted resident is current-era');
+  assert.ok(costlyDetail.evictionCostUtility > 0, 'it still covered ≥1 active instance (real utility lost)');
+
+  // Under ROTATING + frontier-chase the SAME frontier-chaser incurs costly
+  // evictions WITHIN the era (before retirement) but the prior-era drain still
+  // funds a POSITIVE net after the transition — retirement converts would-be-costly
+  // churn into costless renewal exactly when the grammar genuinely rotates.
+  const r = runEraTransition({ arm: 'rotating', admissionPolicy: 'frontier-chase', dist, evolves: 48 });
+  assert.ok(r.summary.totalCostlyEvictions > 0, 'costly within-era evictions happen under rotating too');
+  assert.equal(r.summary.retiredCurrentEra, 0, 'still zero current-era age-expiry (retirement stays era-aware)');
+  assert.equal(r.checks.netPositiveAfterTransition, true, 'net after the transition stays >0 (prior-era drain funds it)');
+  for (const f of FAMILIES) assert.ok(r.summary.netAfterTransitionByFamily[f] > 0, `net>0 after transition ${f}`);
 });
 
 test('miner transfer stays honest: era-1 programs do not solve era-2 clusters (real execution)', () => {

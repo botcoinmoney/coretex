@@ -322,15 +322,50 @@ function createBoundedResidentStore({ encodeWords, decodeState, wordCount }) {
 // ─── the world: mint → frontier(retirement) → miner accept/evict/journal ─────
 
 /**
+ * §17.39 item-4 — the 2×2 isolation of the two runway mechanisms (grammar era
+ * ROTATION × workload RETIREMENT) the operator asked for, replacing the prior
+ * two-arm rotating/static design that only tested them COUPLED. Retirement is now
+ * ERA-AWARE (schedule-driven), not the old era-blind age-TTL sweep that
+ * "manufactured free churn" (every eviction costless because the workload aged out
+ * in lockstep with the retirement cadence):
+ *
+ *   | arm                | rotation | retirement            |
+ *   |--------------------|----------|-----------------------|
+ *   | static             | no       | none                  | net→0  (no renewal)
+ *   | retire-only        | no       | age-TTL (OLD defect)  | net>0 but FREE CHURN — the isolated gimmick
+ *   | rotate-no-retire   | yes      | none                  | net→0  (fresh classes alone don't free slots)
+ *   | rotating           | yes      | era-aware             | net>0 GENUINE (prior-era retirement frees slots)
+ *
+ * `retire-only` retains the OLD era-blind age-TTL sweep ON PURPOSE: it EXPOSES that
+ * age-TTL alone reproduces the "sustainable" number with ZERO genuine rotation —
+ * proving the pre-fix coupled sim's net>0 was the retirement mechanism (free churn),
+ * not the rotation. The diagnostic is `retiredCurrentEra` vs `retiredPriorEra`:
+ * retire-only retires 100% CURRENT-era live workload (unjustified — a real scorer
+ * still queries those motifs); rotating retires 100% PRIOR-era workload the grammar
+ * has genuinely rotated past (obsolete). era-aware costlessness is therefore only
+ * legitimate BECAUSE it is tied to the honest disjoint-grammar rotation
+ * (crossEraTransferAudit) — it is not a bare unit awarded per eviction.
+ *
  * @param {object} opts
- * @param {'rotating'|'static'} opts.arm — rotating exercises the era transition +
- *   maxAge retirement; static freezes the frontier (no retirement, era-1 only) —
- *   the net→0 control.
+ * @param {'rotating'|'static'|'retire-only'|'rotate-no-retire'} opts.arm
+ * @param {'net-positive'|'frontier-chase'} opts.admissionPolicy — net-positive is
+ *   the greedy miner that breaks when no candidate has positive net (never makes a
+ *   costly eviction by construction); frontier-chase models a miner that chases the
+ *   freshest workload and admits the newest class with any live instance even at
+ *   net≤0, FORCING a FIFO eviction of a still-covered CURRENT-era resident — the
+ *   §17.39 item-4 "current-era eviction must be recorded COSTLY" control.
  * @param {object} opts.dist — built @botcoin/coretex (encode/decode/queryKey).
- * @param {number} opts.transitionEpoch — epoch era-2 activates (rotating arm).
+ * @param {number} opts.transitionEpoch — epoch toEra activates (rotating arms).
  */
+const ARM_CONFIG = Object.freeze({
+  rotating: { rotates: true, retirementMode: 'era-aware' },
+  static: { rotates: false, retirementMode: 'none' },
+  'retire-only': { rotates: false, retirementMode: 'age-ttl' },
+  'rotate-no-retire': { rotates: true, retirementMode: 'none' },
+});
 export function runEraTransition({
   arm = 'rotating',
+  admissionPolicy = 'net-positive',
   dist,
   fromEra = 1,
   toEra = 2,
@@ -341,8 +376,13 @@ export function runEraTransition({
   transitionEpoch = 152 + 24 * 8, // mid-horizon by default
   mintPerFamilyPerEvolve = 2,
 }) {
-  if (!['rotating', 'static'].includes(arm)) throw new Error(`runEraTransition: bad arm ${arm}`);
-  const schedule = arm === 'rotating'
+  const armConfig = ARM_CONFIG[arm];
+  if (!armConfig) throw new Error(`runEraTransition: bad arm ${arm}`);
+  if (!['net-positive', 'frontier-chase'].includes(admissionPolicy)) {
+    throw new Error(`runEraTransition: bad admissionPolicy ${admissionPolicy}`);
+  }
+  const { rotates, retirementMode } = armConfig;
+  const schedule = rotates
     ? makeEraSchedule([
       { era: fromEra, activationEpoch: -Infinity },
       { era: toEra, activationEpoch: transitionEpoch, coexistenceWindowEpochs: maxAgeEpochs, retireGraceEpochs: 0 },
@@ -362,8 +402,9 @@ export function runEraTransition({
   });
 
   // Active workload = live cluster INSTANCES (motif instances of a class). Each
-  // mint appends instances; retirement drops instances older than maxAge (rotating)
-  // — static never retires.
+  // mint appends instances; ERA-AWARE retirement drops only genuinely-obsolete
+  // prior-era instances (rotating); age-TTL drops any aged instance (retire-only);
+  // static / rotate-no-retire never retire.
   let activeInstances = []; // [{ classKey, mintEpoch, instanceId }]
   const retirementEvents = [];
   const perEvolveJournal = [];
@@ -374,6 +415,12 @@ export function runEraTransition({
   const netAcceptedByFamily = emptyFamilyCounts();
   const netAcceptedAfterTransitionByFamily = emptyFamilyCounts();
   const netAcceptedAfterCapacityByFamily = emptyFamilyCounts();
+  // §17.39 item-4 honest headroom accounting after the store saturates:
+  //   costlyAfterCapacity — accepts that FIFO-evicted a still-covered resident;
+  //   costlessFirstDiscoveryAfterCapacity — genuine first-discoveries whose eviction
+  //     was costless (the real sustained-headroom feedstock).
+  const costlyAfterCapacityByFamily = emptyFamilyCounts();
+  const costlessFirstDiscoveryAfterCapacityByFamily = emptyFamilyCounts();
   const grossWouldAcceptByFamily = emptyFamilyCounts();
   const firstDiscoveryStepSigs = new Set();
   const firstDiscoveryByEra = { [fromEra]: new Set(), [toEra]: new Set() };
@@ -419,15 +466,47 @@ export function runEraTransition({
       }
     }
 
-    // ── frontier retirement (rotating only): drop instances older than maxAge ──
+    // ── frontier retirement — ERA-AWARE (§17.39 item-4 fix) ──────────────────
+    // The prior era-blind `epoch - mintEpoch >= maxAge` sweep retired CURRENT-era
+    // residents too, shrinking the live workload in lockstep with the retirement
+    // cadence so every eviction came out costless ("manufactured free churn").
+    // Now:
+    //   era-aware  — retire ONLY instances of the schedule's retirement-eligible
+    //                PRIOR era, and only once the coexistence window has closed
+    //                (genuinely obsolete: the grammar rotated past them). A
+    //                current-era instance is NEVER age-expired.
+    //   age-TTL    — the OLD defect, retained ONLY on the `retire-only` control to
+    //                isolate/expose the gimmick (era-blind age sweep, no rotation).
+    //   none       — no retirement (static / rotate-no-retire).
     const retirementsByFamily = emptyFamilyCounts();
-    if (arm === 'rotating') {
+    const activeEraNow = activeEraForEpoch(schedule, epoch);
+    if (retirementMode === 'era-aware') {
+      const eligiblePriorEra = retirementEligiblePriorEra(schedule, epoch); // era id or null
+      const coexisting = inCoexistenceWindow(schedule, epoch);
+      if (eligiblePriorEra !== null && !coexisting) {
+        const survivors = [];
+        for (const inst of activeInstances) {
+          const cluster = catalog.get(inst.classKey);
+          // Only genuinely-obsolete PRIOR-era instances retire. Recomputed from
+          // the ACTUAL active-instance catalog era, not an age assumption.
+          if (cluster.era === eligiblePriorEra && cluster.era < activeEraNow) {
+            retirementsByFamily[cluster.family] += 1;
+            retirementEvents.push({ epoch, instanceId: inst.instanceId, classKey: inst.classKey, era: cluster.era, family: cluster.family, ageEpochs: epoch - inst.mintEpoch, reason: 'prior-era-obsolete', currentEraAtRetire: false });
+          } else {
+            survivors.push(inst);
+          }
+        }
+        activeInstances = survivors;
+      }
+    } else if (retirementMode === 'age-ttl') {
+      // OLD era-blind mechanism (isolated on `retire-only`): retire ANY instance
+      // past maxAge, current-era included — this is the free-churn gimmick.
       const survivors = [];
       for (const inst of activeInstances) {
         if (epoch - inst.mintEpoch >= maxAgeEpochs) {
           const cluster = catalog.get(inst.classKey);
           retirementsByFamily[cluster.family] += 1;
-          retirementEvents.push({ epoch, instanceId: inst.instanceId, classKey: inst.classKey, era: cluster.era, family: cluster.family, ageEpochs: epoch - inst.mintEpoch });
+          retirementEvents.push({ epoch, instanceId: inst.instanceId, classKey: inst.classKey, era: cluster.era, family: cluster.family, ageEpochs: epoch - inst.mintEpoch, reason: 'age-ttl', currentEraAtRetire: cluster.era === activeEraNow });
         } else {
           survivors.push(inst);
         }
@@ -477,31 +556,46 @@ export function runEraTransition({
         const candidateU = utilityOf(candidateResidents);
         const netDeltaU = candidateU - parentU;
 
-        // eviction cost = U lost on the evicted program's still-active clusters
+        // eviction cost = U lost on the evicted program's still-active clusters,
+        // RECOMPUTED from the ACTUAL (post-retirement) active-instance catalog — a
+        // resident whose class still has ≥1 active instance is genuinely costly.
         const evictCost = evict ? activeInstancesForQueryKey(evict.queryKey) : 0;
         const evictStillCoversActive = evict ? evictCost > 0 : false;
 
-        const netAdvanced = netDeltaU > 0; // min gate/confirm modeled identically (deterministic)
-        if (!netAdvanced) break; // no positive-net candidate for this family this evolve
+        // ADMISSION POLICY:
+        //   net-positive — the greedy miner only admits when net advances; it will
+        //     NOT make a costly eviction (it stalls instead). costly count == 0.
+        //   frontier-chase — chase the freshest workload: admit the newest class
+        //     with any live instance (grossGain>0) even at net≤0, FORCING a FIFO
+        //     eviction of a still-covered current-era resident. This is the §17.39
+        //     item-4 control that makes a genuine COSTLY eviction happen.
+        const netAdvanced = netDeltaU > 0;
+        const admit = admissionPolicy === 'frontier-chase' ? grossGain > 0 : netAdvanced;
+        if (!admit) break; // this family has no admissible candidate this evolve
 
         // reload / rekey (solver-equivalence) flags — first-discovery credit gate
         const isReload = store.wasEvicted(cluster.queryKey);
         const isRekey = !isReload && (store.hasStepSig(cluster.stepSig) || store.wasDiscovered(cluster.stepSig));
         const firstDiscovery = !isReload && !isRekey;
 
+        // Capture BEFORE learn (peekEviction returned a victim ⇒ store was full).
+        const wasFullBeforeLearn = evict !== null;
         const { evicted } = store.learn(learnedRecord, epoch);
         if (!store.verifyAppliedState()) throw new Error(`applied bounded state failed to round-trip at epoch ${epoch}`);
         if (store.size() === CAPACITY && globalCapacityReachedEpoch === null) globalCapacityReachedEpoch = epoch;
 
-        const wasFullBeforeLearn = store.isFull();
         acceptedByFamily[family] += 1;
         gateConfirmAcceptedByFamily[family] += 1;
         netAcceptedByFamily[family] += 1;
-        // "after capacity" = the store was already full when this net-accept
-        // landed (⇒ it required a — here costless — eviction). This is the
-        // sustained-net signal: rotating > 0, static → 0.
-        if (globalCapacityReachedEpoch !== null && wasFullBeforeLearn) netAcceptedAfterCapacityByFamily[family] += 1;
-        if (arm === 'rotating' && epoch > transitionEpoch) netAcceptedAfterTransitionByFamily[family] += 1;
+        // "after capacity" = the store was already full when this accept landed
+        // (⇒ it required an eviction). RAW accept count; the honest headroom signal
+        // subtracts the costly evictions below (netHeadroomAfterCapacity).
+        if (globalCapacityReachedEpoch !== null && wasFullBeforeLearn) {
+          netAcceptedAfterCapacityByFamily[family] += 1;
+          if (evictStillCoversActive) costlyAfterCapacityByFamily[family] += 1;
+          if (firstDiscovery && !evictStillCoversActive) costlessFirstDiscoveryAfterCapacityByFamily[family] += 1;
+        }
+        if (rotates && epoch > transitionEpoch) netAcceptedAfterTransitionByFamily[family] += 1;
         if (isReload) reloadCount[family] += 1;
         if (isRekey) rekeyCount[family] += 1;
         if (firstDiscovery) { firstDiscoveryStepSigs.add(cluster.stepSig); firstDiscoveryByEra[cluster.era]?.add(cluster.stepSig); }
@@ -543,8 +637,8 @@ export function runEraTransition({
   }
 
   // ── summary + verdict ──
-  const transitionRec = arm === 'rotating' ? eraTransitionAt(schedule, transitionEpoch) : null;
-  const afterTransition = perEvolveJournal.filter((e) => arm === 'rotating' && e.epoch > transitionEpoch);
+  const transitionRec = rotates ? eraTransitionAt(schedule, transitionEpoch) : null;
+  const afterTransition = perEvolveJournal.filter((e) => rotates && e.epoch > transitionEpoch);
   const netAfterTransitionByFamily = emptyFamilyCounts();
   const costlyAfterTransitionByFamily = emptyFamilyCounts();
   for (const e of afterTransition) {
@@ -565,20 +659,35 @@ export function runEraTransition({
     }
   }
 
+  // §17.39 item-4 retirement provenance — the gimmick diagnostic. A CURRENT-era
+  // retirement is unjustified free churn (a real scorer still queries the motif);
+  // a PRIOR-era retirement is genuine grammar obsolescence.
+  const retiredPriorEra = retirementEvents.filter((e) => e.reason === 'prior-era-obsolete').length;
+  const retiredCurrentEra = retirementEvents.filter((e) => e.currentEraAtRetire === true).length;
+  // Honest headroom after saturation = accepts-after-capacity − costly-after-capacity.
+  const netHeadroomAfterCapacityByFamily = emptyFamilyCounts();
+  for (const f of FAMILIES) netHeadroomAfterCapacityByFamily[f] = netAcceptedAfterCapacityByFamily[f] - costlyAfterCapacityByFamily[f];
+  const netAcceptedAfterCapacityTotal = FAMILIES.reduce((a, f) => a + netAcceptedAfterCapacityByFamily[f], 0);
+  const costlyAfterCapacityTotal = FAMILIES.reduce((a, f) => a + costlyAfterCapacityByFamily[f], 0);
+  const netHeadroomAfterCapacityTotal = FAMILIES.reduce((a, f) => a + netHeadroomAfterCapacityByFamily[f], 0);
+
   return {
-    arm, fromEra, toEra, schedule: schedule.entries, transitionEpoch: arm === 'rotating' ? transitionEpoch : null,
+    arm, admissionPolicy, fromEra, toEra, schedule: schedule.entries, transitionEpoch: rotates ? transitionEpoch : null,
     transition: transitionRec,
     pins: { evolves, cadenceEpochs, armEpoch, maxAgeEpochs, mintPerFamilyPerEvolve, capacity: CAPACITY },
     summary: {
       globalCapacityReachedEpoch,
       netAcceptedByFamily, netAcceptedAfterTransitionByFamily,
       netAcceptedAfterCapacityByFamily,
+      costlyAfterCapacityByFamily, costlessFirstDiscoveryAfterCapacityByFamily,
+      netHeadroomAfterCapacityByFamily,
       grossWouldAcceptByFamily,
       reloadCount, rekeyCount,
       firstDiscoveryStepSigs: firstDiscoveryStepSigs.size,
       firstDiscoveryFromEra: firstDiscoveryByEra[fromEra].size,
       firstDiscoveryToEra: firstDiscoveryByEra[toEra].size,
       totalRetirements: retirementEvents.length,
+      retiredPriorEra, retiredCurrentEra,
       totalEvictions, totalCostlyEvictions: totalCostly,
       netByFamilyHorizon: netByFamily,
       netAfterTransitionByFamily, costlyAfterTransitionByFamily,
@@ -586,25 +695,38 @@ export function runEraTransition({
       operationsAllCorrect,
     },
     checks: {
-      // ROTATING: net stays >0 across/after the rotation, per family.
-      netPositiveAfterTransition: arm === 'rotating'
+      // rotates: costly-adjusted NET stays >0 across/after the rotation, per family.
+      // (rotating: true — prior-era drain funds it; rotate-no-retire: false — no
+      // retirement, so the store stays saturated with still-covered residents.)
+      netPositiveAfterTransition: rotates
         ? FAMILIES.every((f) => netAfterTransitionByFamily[f] > 0)
         : null,
-      // SUSTAINED-NET signal: net-accepts that landed AFTER the store saturated.
-      // rotating keeps net-admitting (retirement frees costless slots);
-      // static collapses to zero (every post-capacity swap is net ≤ 0).
-      netAcceptedAfterCapacityTotal: FAMILIES.reduce((a, f) => a + netAcceptedAfterCapacityByFamily[f], 0),
-      sustainedNetAfterCapacity: arm === 'rotating'
+      // Raw accepts that landed AFTER the store saturated (back-compat field).
+      netAcceptedAfterCapacityTotal,
+      costlyAfterCapacityTotal,
+      netHeadroomAfterCapacityTotal,
+      // GENUINE sustained headroom: costly-adjusted net accepts after saturation
+      // are strictly positive PER FAMILY (static → false, rotate-no-retire → false,
+      // frontier-chase-in-static → false; rotating → true; retire-only → true but
+      // see `headroomFromPriorEraRetirementOnly` for the gimmick unmasking).
+      sustainedHeadroomAfterCapacity: FAMILIES.every((f) => netHeadroomAfterCapacityByFamily[f] > 0),
+      // back-compat: rotates keeps net-admitting after saturation (raw).
+      sustainedNetAfterCapacity: rotates
         ? FAMILIES.every((f) => netAcceptedAfterCapacityByFamily[f] > 0)
         : null,
-      // STATIC control: net acceptance RATE → 0 at saturation (no sustained
-      // advance). A bounded one-time saturation-boundary swap (≤1/family) is
-      // permitted; sustained post-capacity net acceptance is not.
+      // STATIC control: net acceptance RATE → 0 at saturation. A bounded one-time
+      // saturation-boundary swap (≤1/family) is permitted.
       staticNetRateCollapsesToZero: arm === 'static'
-        ? FAMILIES.reduce((a, f) => a + netAcceptedAfterCapacityByFamily[f], 0) <= FAMILIES.length
+        ? netAcceptedAfterCapacityTotal <= FAMILIES.length
         : null,
-      // toEra fresh discoveries actually happened (rotating)
-      toEraFreshDiscoveries: arm === 'rotating' ? firstDiscoveryByEra[toEra].size : null,
+      // THE FREE-CHURN GIMMICK UNMASK: retire-only's positive headroom is fuelled
+      // ENTIRELY by CURRENT-era retirements (unjustified). rotating retires ZERO
+      // current-era instances — its headroom comes only from genuine prior-era
+      // obsolescence. This is what isolates the two mechanisms.
+      retiredCurrentEra, retiredPriorEra,
+      headroomFromPriorEraRetirementOnly: retiredCurrentEra === 0,
+      // toEra fresh discoveries actually happened (rotates)
+      toEraFreshDiscoveries: rotates ? firstDiscoveryByEra[toEra].size : null,
       operationsAllCorrect,
       appliedStateRoundTripsThroughout: true,
     },
