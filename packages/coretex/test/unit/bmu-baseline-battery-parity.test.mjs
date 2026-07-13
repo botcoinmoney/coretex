@@ -20,6 +20,12 @@ import {
   bestPublicBaselineSolves as mjsBestPublicBaselineSolves,
   inferBaselineEra as mjsInferBaselineEra,
   BMU_BASELINE_ERAS as MJS_BASELINE_ERAS,
+  bmuBaselineTaskFromProgram as mjsTaskFromProgram,
+  rerankerReadingCompilerProgram as mjsRerankerReadingCompilerProgram,
+  rerankerReadingCompilerSolves as mjsRerankerReadingCompilerSolves,
+  exhaustiveMinimalProgramSearch as mjsExhaustiveMinimalProgramSearch,
+  rawRerankerBaselineSolves as mjsRawRerankerBaselineSolves,
+  indexerBaselineSolves as mjsIndexerBaselineSolves,
 } from '../../../../scripts/lib/bmu-sim/transferring-compiler-audit.mjs';
 import {
   eraSpec,
@@ -98,4 +104,103 @@ test('§17.44 parity: bestPublicBaselineSolves VERDICT == law-repo across the fu
     assert.equal(dist.bmuInferBaselineEra(targetProgram), mjsInferBaselineEra(targetProgram), 'era inference parity');
   }
   assert.ok(checked >= (36 * 3 + 36 * 2 + 3) * 2);
+});
+
+// ─── §17.48 spike — parity for the four new battery members ───────────────────
+
+// A representative flagged corpus: every era's base bank (required-seed role) plus a
+// suppress@1 variant (forbidden-seed role) and an offPathSuppress@1 variant. Covers
+// both credited-role shapes without pulling in the sim.
+function flaggedProgramCorpus() {
+  const out = [];
+  for (const era of ERAS) {
+    for (const p of dist.bmuProgramBankForEra(era)) {
+      out.push({ branchLimit: p.branchLimit, steps: p.steps.map((s) => ({ direction: s.direction, edgeType: s.edgeType })) });
+      const sup = { branchLimit: p.branchLimit, steps: p.steps.map((s, i) => (i === 1 ? { direction: s.direction, edgeType: s.edgeType, suppress: true } : { direction: s.direction, edgeType: s.edgeType })) };
+      const off = { branchLimit: p.branchLimit, steps: p.steps.map((s, i) => (i === 1 ? { direction: s.direction, edgeType: s.edgeType, offPathSuppress: true } : { direction: s.direction, edgeType: s.edgeType })) };
+      out.push(sup, off);
+    }
+  }
+  return out;
+}
+
+test('§17.48 parity: reranker-reading / exhaustive / raw-reranker / indexer verdicts == law-repo (flagged corpus)', () => {
+  let checked = 0;
+  for (const program of flaggedProgramCorpus()) {
+    const dTask = dist.bmuBaselineTaskFromProgram(program);
+    const mTask = mjsTaskFromProgram(program);
+    assert.deepEqual(dTask, mTask, 'task-from-program parity');
+    if (dTask === null) continue;
+    // reranker-reading compiler: constructed program AND verdict byte-equal
+    assert.deepEqual(dist.rerankerReadingCompilerProgram(dTask), mjsRerankerReadingCompilerProgram(mTask), 'reranker-reading program parity');
+    assert.equal(
+      dist.rerankerReadingCompilerSolves(dTask).baselineSolvable,
+      mjsRerankerReadingCompilerSolves(mTask).baselineSolvable,
+      'reranker-reading verdict parity',
+    );
+    // exhaustive/minimal search: solvable + count + minimal-sig + fromEra
+    const de = dist.exhaustiveMinimalProgramSearch(dTask);
+    const me = mjsExhaustiveMinimalProgramSearch(mTask);
+    assert.deepEqual(
+      { b: de.baselineSolvable, c: de.solvingProgramCount, s: de.minimalStepSig, f: de.fromEra },
+      { b: me.baselineSolvable, c: me.solvingProgramCount, s: me.minimalStepSig, f: me.fromEra },
+      'exhaustive/minimal parity',
+    );
+    // raw-reranker + indexer: verdict + topB
+    assert.deepEqual(dist.rawRerankerBaselineSolves(dTask), mjsRawRerankerBaselineSolves(mTask), 'raw-reranker parity');
+    assert.deepEqual(dist.indexerBaselineSolves(dTask), mjsIndexerBaselineSolves(mTask), 'indexer parity');
+    checked += 1;
+  }
+  assert.ok(checked >= 36 * 3 * 3, `covered the flagged corpus (${checked})`);
+});
+
+test('§17.48 parity: bestPublicBaselineSolves VERDICT with every new opt-in flag == law-repo', () => {
+  const flagSets = [
+    { includeRerankerReadingCompiler: true },
+    { includeExhaustiveProgramSearch: true },
+    { includeRawReranker: true },
+    { includeIndexer: true },
+    { includeRerankerReadingCompiler: true, includeExhaustiveProgramSearch: true, includeRawReranker: true, includeIndexer: true },
+  ];
+  let checked = 0;
+  for (const targetProgram of flaggedProgramCorpus()) {
+    for (const flags of flagSets) {
+      assert.deepEqual(
+        dist.bestPublicBaselineSolves({ targetProgram, ...flags }),
+        mjsBestPublicBaselineSolves({ targetProgram, ...flags }),
+        `best-verdict parity ${JSON.stringify(flags)}`,
+      );
+      checked += 1;
+    }
+  }
+  assert.ok(checked >= 36 * 3 * 3 * flagSets.length);
+});
+
+test('§17.48 census sanity: on the CURRENT corpus reranker-reading + exhaustive solve ALL, raw-reranker + indexer solve NONE', () => {
+  // The four baselines against every era's flagged family programs (the roles the
+  // real 144-class catalog carries). Pins the headline finding: the current corpus
+  // publishes its solution, so the reranker-reading compiler degenerates to the
+  // topology probe (solves everything with zero discovery), while the reranker /
+  // proximity floors credit nothing (the memory operation is genuinely load-bearing).
+  const supFamily = (p) => ({ branchLimit: p.branchLimit, steps: p.steps.map((s, i) => (i === 1 ? { ...s, suppress: true } : { ...s })) });
+  const offFamily = (p) => ({ branchLimit: p.branchLimit, steps: p.steps.map((s, i) => (i === 1 ? { ...s, offPathSuppress: true } : { ...s })) });
+  for (const era of ERAS) {
+    let rr = 0; let ex = 0; let raw = 0; let ix = 0; let n = 0;
+    for (const base of dist.bmuProgramBankForEra(era)) {
+      // three forbidden-seed families (suppress@1) + one required-seed family (offPathSuppress@1)
+      for (const program of [supFamily(base), supFamily(base), supFamily(base), offFamily(base)]) {
+        const task = dist.bmuBaselineTaskFromProgram(program);
+        n += 1;
+        if (dist.rerankerReadingCompilerSolves(task).baselineSolvable) rr += 1;
+        if (dist.exhaustiveMinimalProgramSearch(task).baselineSolvable) ex += 1;
+        if (dist.rawRerankerBaselineSolves(task).baselineSolvable) raw += 1;
+        if (dist.indexerBaselineSolves(task).baselineSolvable) ix += 1;
+      }
+    }
+    assert.equal(n, 144, `era ${era} census size`);
+    assert.equal(rr, 144, `era ${era}: reranker-reading compiler solves all 144 (degenerate on the current corpus)`);
+    assert.equal(ex, 144, `era ${era}: exhaustive/minimal search solves all 144`);
+    assert.equal(raw, 0, `era ${era}: raw-reranker floor credits none`);
+    assert.equal(ix, 0, `era ${era}: indexer floor credits none`);
+  }
 });

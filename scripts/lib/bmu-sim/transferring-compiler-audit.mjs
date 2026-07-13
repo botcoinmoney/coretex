@@ -297,6 +297,7 @@ export function inferBaselineEra(program) {
 
 const T_SEED = 't_seed';
 const T_GOLD = 't_gold';
+const T_DECOY = 't_decoy';
 
 /** The canonical PUBLIC deep-terminal target cluster a program solves — a
  *  deterministic function of the program bytes (`buildProgramPathTopology`). Null
@@ -330,7 +331,11 @@ function solvesTargetCluster(program, cluster) {
  * scope note (topology-probe is default-off; it is the degenerate "the task
  * publishes its own solution" reading).
  */
-export function bestPublicBaselineSolves({ targetProgram, priorEras, includeTopologyProbe = false } = {}) {
+export function bestPublicBaselineSolves({
+  targetProgram, priorEras, includeTopologyProbe = false,
+  includeRerankerReadingCompiler = false, includeExhaustiveProgramSearch = false,
+  includeRawReranker = false, includeIndexer = false, exhaustiveEras, rerankerScore,
+} = {}) {
   const targetEra = inferBaselineEra(targetProgram);
   const cluster = bmuBaselineTargetCluster(targetProgram);
   if (cluster === null || targetEra === null) {
@@ -357,5 +362,281 @@ export function bestPublicBaselineSolves({ targetProgram, priorEras, includeTopo
       return { baselineSolvable: true, strategy: 'topologyProbeCompiler', fromEra: null, targetEra };
     }
   }
+  // §17.48 opt-in strategies (all default off — mirror the vendored TS twin).
+  if (includeRerankerReadingCompiler || includeExhaustiveProgramSearch || includeRawReranker || includeIndexer) {
+    const task = bmuBaselineTaskFromProgram(targetProgram);
+    if (task !== null) {
+      const injected = rerankerScore ? rerankerScore(task) : undefined;
+      const rrOpts = injected ? { rerankerScore: injected } : {};
+      if (includeRerankerReadingCompiler) {
+        const v = rerankerReadingCompilerSolves(task, rrOpts);
+        if (v.baselineSolvable) return { baselineSolvable: true, strategy: v.strategy, fromEra: null, targetEra };
+      }
+      if (includeExhaustiveProgramSearch) {
+        const v = exhaustiveMinimalProgramSearch(task, exhaustiveEras ? { eras: exhaustiveEras } : {});
+        if (v.baselineSolvable) return { baselineSolvable: true, strategy: v.strategy, fromEra: v.fromEra, targetEra };
+      }
+      if (includeRawReranker) {
+        const v = rawRerankerBaselineSolves(task, rrOpts);
+        if (v.baselineSolvable) return { baselineSolvable: true, strategy: v.strategy, fromEra: null, targetEra };
+      }
+      if (includeIndexer) {
+        const v = indexerBaselineSolves(task);
+        if (v.baselineSolvable) return { baselineSolvable: true, strategy: v.strategy, fromEra: null, targetEra };
+      }
+    }
+  }
   return { baselineSolvable: false, strategy: null, fromEra: null, targetEra };
+}
+
+// ─── §17.48 SPIKE — reranker-reading compiler, exhaustive/minimal program search,
+//     raw-reranker + indexer baselines. Self-contained harness twin of the vendored
+//     `@botcoin/coretex` `bmu-baseline-battery.ts` §17.48 section; PINNED
+//     byte-behaviourally to it by `bmu-baseline-battery-parity.test.mjs`. Every
+//     strategy runs on a generic task (relations + seed + gold + roles) so it points
+//     equally at the current corpus and a new task shape; the DEFAULT judge is the
+//     deterministic credited-utility oracle (`creditedUtility`, §17.47-Part-B-faithful
+//     to real Qwen), injectable for a live scorer. ────────────────────────────────
+
+const cmpStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** Reconstruct the full public task (roles included) a program implies — the
+ *  canonical deep-terminal cluster + the §17.35 seed-role derivation (suppress ⇒
+ *  forbidden seed; offPathSuppress/pure-promote ⇒ required seed). Mirrors
+ *  buildClassCatalog's role assignment. Null for a non-deep-terminal program. */
+export function bmuBaselineTaskFromProgram(program) {
+  const cluster = bmuBaselineTargetCluster(program);
+  if (cluster === null) return null;
+  const seedRole = program.steps.some((s) => s.suppress === true) ? 'forbidden' : 'required';
+  const requiredIds = seedRole === 'required' ? [cluster.goldId, cluster.seedId] : [cluster.goldId];
+  const forbiddenIds = seedRole === 'forbidden' ? [T_DECOY, cluster.seedId] : [T_DECOY];
+  return { relations: cluster.relations, seedId: cluster.seedId, goldId: cluster.goldId, trapId: T_DECOY, requiredIds, forbiddenIds, program };
+}
+
+/** The §17.35 set-membership credited law over an already-decided topB. */
+export function bmuBaselineCreditedFromTopB(topB, requiredIds, forbiddenIds) {
+  for (const f of forbiddenIds) if (topB.has(f)) return 0;
+  for (const r of requiredIds) if (!topB.has(r)) return 0;
+  return 1;
+}
+
+/** Deterministic credited-utility judge — byte-mirror of era-transition-sim's
+ *  `creditedUtility` (query-similar forbidden baseline 3, required 1; promote +1,
+ *  demote −3; topB = top |required|). */
+export function bmuBaselineCreditedUtility({ exec, requiredIds, forbiddenIds }) {
+  const promoted = new Set([...exec.promoteTerminalIds, ...exec.promotePathNodeIds]);
+  const demoted = new Set([...exec.suppressTerminalIds, ...exec.suppressLineageIds, ...exec.offPathSuppressedIds]);
+  const req = [...requiredIds];
+  const forb = [...forbiddenIds];
+  const baseline = (id) => (forbiddenIds.has(id) ? 3 : requiredIds.has(id) ? 1 : 0);
+  const score = (id) => baseline(id) + (promoted.has(id) ? 1 : 0) + (demoted.has(id) ? -3 : 0);
+  const pool = [...new Set([...req, ...forb])];
+  const budgetB = req.length;
+  const topB = new Set(pool
+    .map((id) => ({ id, s: score(id) }))
+    .sort((a, b) => (b.s - a.s) || cmpStr(a.id, b.id))
+    .slice(0, budgetB)
+    .map((x) => x.id));
+  return { utility: bmuBaselineCreditedFromTopB(topB, requiredIds, forbiddenIds), topB: [...topB] };
+}
+
+/** Judge a PROGRAM over a task: execute it, then apply the credited-utility law. */
+export function bmuBaselineJudgeProgram(program, task) {
+  let exec;
+  try {
+    exec = executeProgramOverRelations({ program, relations: task.relations, seedIds: [task.seedId], branchLimit: program.branchLimit });
+  } catch {
+    return { utility: 0, topB: [] };
+  }
+  return bmuBaselineCreditedUtility({ exec, requiredIds: new Set(task.requiredIds ?? []), forbiddenIds: new Set(task.forbiddenIds ?? []) });
+}
+
+/** Default reranker score model (documented deterministic stand-in for live Qwen):
+ *  query-similar forbidden trap = 3, required = 1, else 0 (the `creditedUtility`
+ *  baseline). Derivable from the current corpus's public structure (that is WHY it
+ *  leaks); a new task shape passes a real reranker instead. */
+export function bmuBaselineDefaultRerankerScore(task) {
+  const forb = new Set(task.forbiddenIds ?? []);
+  const req = new Set(task.requiredIds ?? []);
+  return (id) => (forb.has(id) ? 3 : req.has(id) ? 1 : 0);
+}
+
+function bmuBaselineAdjacency(relations) {
+  const adj = new Map();
+  const add = (a, b) => { (adj.get(a) ?? adj.set(a, new Set()).get(a)).add(b); };
+  for (const r of relations) {
+    const src = r.src;
+    const dst = r.dst ?? r.other_id;
+    if (src === undefined || dst === undefined) continue;
+    add(src, dst);
+    add(dst, src);
+  }
+  return adj;
+}
+
+/** Undirected BFS distance from the seed over the public relation graph. */
+export function bmuBaselineSeedDistances(task) {
+  const adj = bmuBaselineAdjacency(task.relations);
+  const dist = new Map([[task.seedId, 0]]);
+  let frontier = [task.seedId];
+  while (frontier.length > 0) {
+    const next = [];
+    for (const n of frontier) {
+      for (const m of adj.get(n) ?? []) {
+        if (!dist.has(m)) { dist.set(m, dist.get(n) + 1); next.push(m); }
+      }
+    }
+    frontier = next;
+  }
+  return dist;
+}
+
+// ── (1) reranker-reading compiler ────────────────────────────────────────────────
+
+/** Reconstruct the flagless public traversal, READ the reranker over reachable
+ *  competitors, apply the PUBLIC suppression law to those it surfaces above the
+ *  answer (on-route high seed ⇒ suppress; off-path high dead-end ⇒ offPathSuppress;
+ *  none ⇒ pure promote). Null if the served graph is not a reconstructable
+ *  deep-terminal topology. */
+export function rerankerReadingCompilerProgram(task, opts = {}) {
+  const rerankerScore = opts.rerankerScore ?? bmuBaselineDefaultRerankerScore(task);
+  const branchLimit = opts.branchLimit ?? task.program?.branchLimit ?? 4;
+  const skeleton = { branchLimit, steps: (task.program?.steps ?? []).map((s) => ({ direction: s.direction, edgeType: s.edgeType })) };
+  let base;
+  try { base = topologyProbeProgram(skeleton, { relations: task.relations }); } catch { return null; }
+  if (!base) return null;
+  const steps = base.steps.map((s) => ({ ...s }));
+  const dist = bmuBaselineSeedDistances(task);
+  // Promotion target: the public answer terminal when the served graph publishes it
+  // (current corpus); else the reranker's argmax reachable candidate — no per-shape
+  // modification, goldId not required.
+  const reachable = [...dist.keys()].filter((id) => id !== task.seedId);
+  const answer = task.goldId ?? reachable.slice().sort((a, b) => (rerankerScore(b) - rerankerScore(a)) || cmpStr(a, b))[0];
+  if (answer === undefined) return { branchLimit, steps };
+  const answerScore = rerankerScore(answer);
+  const seedScore = rerankerScore(task.seedId);
+  const competitorsAboveAnswer = reachable.filter((id) => id !== answer && rerankerScore(id) > answerScore);
+  let branchIdx = -1;
+  for (let i = 1; i < steps.length - 1; i++) { if (steps[i].direction === 'incoming') { branchIdx = i; break; } }
+  if (competitorsAboveAnswer.length > 0 && branchIdx >= 1) {
+    if (seedScore > answerScore) steps[branchIdx].suppress = true;
+    else steps[branchIdx].offPathSuppress = true;
+  }
+  return { branchLimit, steps };
+}
+
+/** The reranker-reading compiler's verdict: build the mechanical program, judge it. */
+export function rerankerReadingCompilerSolves(task, opts = {}) {
+  const program = rerankerReadingCompilerProgram(task, opts.rerankerScore ? { rerankerScore: opts.rerankerScore } : {});
+  if (program === null) return { baselineSolvable: false, strategy: null, program: null };
+  const judge = opts.judge ?? bmuBaselineJudgeProgram;
+  const solvable = judge(program, task).utility === 1;
+  return { baselineSolvable: solvable, strategy: solvable ? 'rerankerReadingCompiler' : null, program };
+}
+
+// ── (2) exhaustive / minimal program search ──────────────────────────────────────
+
+/** Public suppress-flag overlays of one base program (3^k over non-final incoming
+ *  steps; suppress/offPathSuppress mutually exclusive per step). */
+function bmuBaselineFlagOverlays(program) {
+  const suppressable = [];
+  for (let i = 1; i < program.steps.length - 1; i++) if (program.steps[i].direction === 'incoming') suppressable.push(i);
+  const total = 3 ** suppressable.length;
+  const out = [];
+  for (let mask = 0; mask < total; mask++) {
+    let m = mask;
+    const steps = program.steps.map((s) => ({ direction: s.direction, edgeType: s.edgeType }));
+    for (const idx of suppressable) {
+      const choice = m % 3; m = Math.floor(m / 3);
+      if (choice === 1) steps[idx].suppress = true;
+      else if (choice === 2) steps[idx].offPathSuppress = true;
+    }
+    out.push({ branchLimit: program.branchLimit, steps });
+  }
+  return out;
+}
+
+/** The full enumerable PUBLIC program space over the given eras (each era's 36-entry
+ *  base bank × the public flag envelope), de-duplicated by step-signature. */
+export function enumeratePublicProgramSpace(eras = BMU_BASELINE_ERAS) {
+  const out = [];
+  const seen = new Set();
+  for (const era of eras) {
+    if (BMU_EXECUTABLE_ERA_REGISTRY[era] === undefined) continue;
+    for (const base of programBankForEra(era)) {
+      for (const variant of bmuBaselineFlagOverlays({ branchLimit: base.branchLimit, steps: base.steps })) {
+        const sig = programSig(variant);
+        if (seen.has(sig)) continue;
+        seen.add(sig);
+        out.push(variant);
+      }
+    }
+  }
+  return out;
+}
+
+/** Brute-force the whole enumerable public program space; report whether ANY credits
+ *  the task + the MINIMAL crediting program (fewest steps, then flags, then
+ *  branchLimit, then step-sig). Operationalizes the operator's "minimal-solver". */
+export function exhaustiveMinimalProgramSearch(task, opts = {}) {
+  const judge = opts.judge ?? bmuBaselineJudgeProgram;
+  const space = enumeratePublicProgramSpace(opts.eras ?? BMU_BASELINE_ERAS);
+  const flagCount = (p) => p.steps.filter((s) => s.suppress === true || s.offPathSuppress === true).length;
+  const better = (a, b) => (
+    a.steps.length !== b.steps.length ? a.steps.length < b.steps.length
+      : flagCount(a) !== flagCount(b) ? flagCount(a) < flagCount(b)
+        : a.branchLimit !== b.branchLimit ? a.branchLimit < b.branchLimit
+          : programSig(a) < programSig(b)
+  );
+  let count = 0;
+  let minimal = null;
+  for (const program of space) {
+    if (judge(program, task).utility !== 1) continue;
+    count += 1;
+    if (minimal === null || better(program, minimal)) minimal = program;
+  }
+  return {
+    baselineSolvable: count > 0,
+    strategy: count > 0 ? 'exhaustiveProgramSearch' : null,
+    solvingProgramCount: count,
+    minimalProgram: minimal,
+    minimalStepSig: minimal === null ? null : programSig(minimal),
+    fromEra: minimal === null ? null : inferBaselineEra(minimal),
+  };
+}
+
+// ── (3) raw-reranker baseline (§17.47 Part B, now reusable) ──────────────────────
+
+/** Degenerate reranker-reading compiler with ZERO memory op: topB straight off the
+ *  reranker over required∪forbidden. Floor control (0/128 under real Qwen, §17.47). */
+export function rawRerankerBaselineSolves(task, opts = {}) {
+  const rerankerScore = opts.rerankerScore ?? bmuBaselineDefaultRerankerScore(task);
+  const requiredIds = new Set(task.requiredIds ?? []);
+  const forbiddenIds = new Set(task.forbiddenIds ?? []);
+  const pool = [...new Set([...requiredIds, ...forbiddenIds])];
+  const budgetB = requiredIds.size;
+  const topB = new Set(pool
+    .map((id) => ({ id, s: rerankerScore(id) }))
+    .sort((a, b) => (b.s - a.s) || cmpStr(a.id, b.id))
+    .slice(0, budgetB)
+    .map((x) => x.id));
+  const solvable = bmuBaselineCreditedFromTopB(topB, requiredIds, forbiddenIds) === 1;
+  return { baselineSolvable: solvable, strategy: solvable ? 'rawReranker' : null, topB: [...topB] };
+}
+
+// ── (4) indexer baseline (weakest floor) ─────────────────────────────────────────
+
+/** Pure retrieval — no reranker, no memory op: rank reachable docs by public
+ *  structural proximity (BFS distance from seed), take top |required|. True floor. */
+export function indexerBaselineSolves(task) {
+  const requiredIds = new Set(task.requiredIds ?? []);
+  const forbiddenIds = new Set(task.forbiddenIds ?? []);
+  const dist = bmuBaselineSeedDistances(task);
+  const budgetB = requiredIds.size;
+  const candidates = [...dist.keys()].filter((id) => id !== task.seedId);
+  const topB = new Set(candidates
+    .sort((a, b) => (dist.get(a) - dist.get(b)) || cmpStr(a, b))
+    .slice(0, budgetB));
+  const solvable = bmuBaselineCreditedFromTopB(topB, requiredIds, forbiddenIds) === 1;
+  return { baselineSolvable: solvable, strategy: solvable ? 'indexer' : null, topB: [...topB] };
 }
