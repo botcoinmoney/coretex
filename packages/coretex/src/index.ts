@@ -66,6 +66,7 @@ export * from './pipeline-versions.js';
 export * from './eval/bmu-task.js';
 export * from './eval/bmu-operation-program.js';
 export * from './eval/bmu-program-execution.js';
+export * from './eval/bmu-baseline-battery.js';
 export * from './eval/bmu-benchmark.js';
 export * from './eval/memory-ir-render.js';
 export * from './eval/ir-metrics.js';

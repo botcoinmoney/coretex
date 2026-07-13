@@ -52,6 +52,9 @@
 import {
   eraSpec,
   executeProgramOverRelations,
+  buildProgramPathTopology,
+  programBankForEra,
+  BMU_EXECUTABLE_ERA_REGISTRY,
 } from '../bmu-generators/operation-program.mjs';
 import {
   buildClassCatalog,
@@ -268,4 +271,91 @@ export function transferringCompilerAudit({ dist, fromEra, toEra }) {
       strategies.specIndexRemap.credited === total
       || strategies.topologyProbeCompiler.credited === total,
   };
+}
+
+// ─── §17.44 point-4/5 — the PERMANENT public-baseline battery, as a standing,
+//     per-program verdict (the harness-canonical twin of the vendored
+//     `bestPublicBaselineSolves` the COORDINATOR verifier imports from
+//     `@botcoin/coretex`; pinned byte-behaviourally by
+//     `bmu-baseline-battery-parity.test.mjs`). ────────────────────────────────
+
+/** All registered baseline eras, ascending. */
+export const BMU_BASELINE_ERAS = Object.freeze(
+  Object.keys(BMU_EXECUTABLE_ERA_REGISTRY).map(Number).sort((a, b) => a - b),
+);
+
+/** Infer a program's era from its leading outgoing edge; null when it is not a
+ *  well-formed single-era program (so it cannot be a cross-era spec-remap of one). */
+export function inferBaselineEra(program) {
+  const lead = program?.steps?.[0];
+  if (!lead || lead.direction !== 'outgoing') return null;
+  for (const era of BMU_BASELINE_ERAS) {
+    if (eraSpec(era).outgoingEdgeTypes.includes(lead.edgeType)) return era;
+  }
+  return null;
+}
+
+const T_SEED = 't_seed';
+const T_GOLD = 't_gold';
+
+/** The canonical PUBLIC deep-terminal target cluster a program solves — a
+ *  deterministic function of the program bytes (`buildProgramPathTopology`). Null
+ *  for a program that cannot form a deep-terminal cluster (not a bank program). */
+export function bmuBaselineTargetCluster(program) {
+  try {
+    const topo = buildProgramPathTopology({
+      program, seedId: T_SEED, sinkIds: ['t_sink'], goldIds: [T_GOLD],
+      decoyIds: ['t_decoy'], midIdFor: (level) => `t_mid${level}`, decoyDepth: 1,
+    });
+    return { relations: topo.relations, seedId: T_SEED, goldId: T_GOLD };
+  } catch {
+    return null;
+  }
+}
+
+function solvesTargetCluster(program, cluster) {
+  try {
+    const exec = executeProgramOverRelations({ program, relations: cluster.relations, seedIds: [cluster.seedId], branchLimit: program.branchLimit });
+    return exec.terminalIds.length === 1 && exec.terminalIds[0] === cluster.goldId;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * THE PERMANENT BASELINE BATTERY (§17.44 point 5), as a single importable verdict:
+ * does ANY purely-mechanical, public-information-only baseline already solve the
+ * canonical target cluster of `targetProgram`? See the vendored TS twin
+ * (`packages/coretex/src/eval/bmu-baseline-battery.ts`) for the full contract and
+ * scope note (topology-probe is default-off; it is the degenerate "the task
+ * publishes its own solution" reading).
+ */
+export function bestPublicBaselineSolves({ targetProgram, priorEras, includeTopologyProbe = false } = {}) {
+  const targetEra = inferBaselineEra(targetProgram);
+  const cluster = bmuBaselineTargetCluster(targetProgram);
+  if (cluster === null || targetEra === null) {
+    return { baselineSolvable: false, strategy: null, fromEra: null, targetEra };
+  }
+  const eras = (priorEras ?? BMU_BASELINE_ERAS.filter((e) => e < targetEra))
+    .filter((e) => e !== targetEra && BMU_EXECUTABLE_ERA_REGISTRY[e] !== undefined);
+  for (const fromEra of eras) {
+    const bank = programBankForEra(fromEra);
+    for (const order of ['registry', 'sorted']) {
+      let remap;
+      try { remap = makeEraEdgeRemap(fromEra, targetEra, { order }); } catch { continue; }
+      for (const q of bank) {
+        const compiled = remapProgramToEra({ branchLimit: q.branchLimit, steps: q.steps }, remap);
+        if (solvesTargetCluster(compiled, cluster)) {
+          return { baselineSolvable: true, strategy: order === 'registry' ? 'specIndexRemap' : 'setCanonicalRemap', fromEra, targetEra };
+        }
+      }
+    }
+  }
+  if (includeTopologyProbe === true) {
+    const probe = topologyProbeProgram(targetProgram, { relations: cluster.relations });
+    if (probe && solvesTargetCluster(probe, cluster)) {
+      return { baselineSolvable: true, strategy: 'topologyProbeCompiler', fromEra: null, targetEra };
+    }
+  }
+  return { baselineSolvable: false, strategy: null, fromEra: null, targetEra };
 }

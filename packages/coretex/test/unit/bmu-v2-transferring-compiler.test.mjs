@@ -34,10 +34,12 @@ import {
   remapProgramToEra,
   topologyProbeProgram,
   programSig,
+  bestPublicBaselineSolves,
 } from '../../../../scripts/lib/bmu-sim/transferring-compiler-audit.mjs';
 import {
   buildClassCatalog,
 } from '../../../../scripts/lib/bmu-sim/era-transition-sim.mjs';
+import { programBankForEra } from '../../../../scripts/lib/bmu-generators/operation-program.mjs';
 
 test('§17.39 item-5: crossEraTransferAudit\'s 0/0 is vacuous — a spec-reading remap transfers era-1→era-2 for FREE (144/144)', () => {
   const a = transferringCompilerAudit({ dist, fromEra: 1, toEra: 2 });
@@ -133,4 +135,68 @@ test('§17.39 item-5: topology probe reads ONLY public relations + carries the p
   }
   // era-1→era-2 same bank shape ⇒ the probe reconstructs the era-2 program exactly
   assert.equal(exact, 144, 'topology probe reconstructs the era-2 program byte-exact from public relations');
+});
+
+// ─── §17.44 point-4/5 — the PERMANENT baseline battery, as a standing per-program
+//     novelty verdict (the mechanism the coordinator verifier imports). ─────────
+
+test('§17.44 point-5: bestPublicBaselineSolves is a STANDING battery — the era-1→era-2 spec-remap exploit is NOT novel', () => {
+  // A miner takes a solved era-1 bank program, mechanically remaps it into era-2 by
+  // the PUBLIC registry index map (§17.43 strategy A) — genuinely new bytes, new
+  // queryKey — and would claim it a first discovery. The standing battery finds a
+  // public baseline (the remap of the era-1 bank) already solves the target cluster.
+  const remap12 = makeEraEdgeRemap(1, 2, { order: 'registry' });
+  let flagged = 0;
+  for (const era1 of programBankForEra(1)) {
+    const exploit = remapProgramToEra({ branchLimit: era1.branchLimit, steps: era1.steps }, remap12);
+    const v = bestPublicBaselineSolves({ targetProgram: exploit });
+    assert.equal(v.baselineSolvable, true, 'era-2 spec-remap of an era-1 bank program is baseline-solvable');
+    assert.equal(v.strategy, 'specIndexRemap');
+    assert.equal(v.fromEra, 1);
+    assert.equal(v.targetEra, 2);
+    flagged += 1;
+  }
+  assert.equal(flagged, 36, 'every era-1 bank program mechanically transfers to era-2');
+});
+
+test('§17.44 point-4: EVERY honest era-2 bank program is baseline-transferable (era rotation mints no novelty)', () => {
+  // The honest confirmation of the operator ruling: era-2 is a public relabeling of
+  // era-1, so all 36 era-2 bank programs — what a truthful era-2 producer would
+  // submit as "first discoveries" — are already solved by the era-1 baseline.
+  let flagged = 0;
+  for (const era2 of programBankForEra(2)) {
+    if (bestPublicBaselineSolves({ targetProgram: { branchLimit: era2.branchLimit, steps: era2.steps } }).baselineSolvable) flagged += 1;
+  }
+  assert.equal(flagged, 36, 'all 36 era-2 bank programs are public-baseline-transferable from era-1');
+});
+
+test('§17.44: an era-1 GENESIS program has no prior-era baseline — it is NOT flagged (novelty still possible)', () => {
+  for (const era1 of programBankForEra(1)) {
+    const v = bestPublicBaselineSolves({ targetProgram: { branchLimit: era1.branchLimit, steps: era1.steps } });
+    assert.equal(v.baselineSolvable, false, 'the first era has no prior public bank to transfer from');
+    assert.equal(v.targetEra, 1);
+  }
+});
+
+test('§17.44: era-3 bank-shape change SURVIVES the scoped spec-remap battery but NOT the topology probe (documented degenerate)', () => {
+  let specRemapFlagged = 0;
+  let probeFlagged = 0;
+  for (const era3 of programBankForEra(3)) {
+    const p = { branchLimit: era3.branchLimit, steps: era3.steps };
+    if (bestPublicBaselineSolves({ targetProgram: p }).baselineSolvable) specRemapFlagged += 1;
+    if (bestPublicBaselineSolves({ targetProgram: p, includeTopologyProbe: true }).baselineSolvable) probeFlagged += 1;
+  }
+  // spec-remap cannot fully transfer to era-3 (bank shape changed: all-4-step vs the
+  // 32 three-step era-1/2 programs) — only the marginal 4-step-arity matches leak.
+  assert.ok(specRemapFlagged < 36, `era-3 not fully spec-remap-transferable (${specRemapFlagged}/36 leak)`);
+  // but the arity-agnostic topology probe (the corpus publishes the solution) solves
+  // every era-3 target — era-3 is NOT genuine discovery-cost protection either.
+  assert.equal(probeFlagged, 36, 'topology probe defeats era-3 for all 36 (the whole task publishes its solution)');
+});
+
+test('§17.44: a non-era / malformed program has no spec-remap baseline (fail-open on the check, never a false novelty rejection)', () => {
+  const arbitrary = { branchLimit: 2, steps: [{ direction: 'incoming', edgeType: 'supports' }, { direction: 'outgoing', edgeType: 'co_occurs_with' }] };
+  const v = bestPublicBaselineSolves({ targetProgram: arbitrary });
+  assert.equal(v.baselineSolvable, false);
+  assert.equal(v.targetEra, null);
 });
